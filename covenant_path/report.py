@@ -98,6 +98,7 @@ class CovenantPathMember:
     friends_summary: str | None
     sex: str | None
     person_uuid: str | None = field(default=None)
+    unit_number: int | None = field(default=None)  # stable key for DB unit mapping
 
 
 # --- build -------------------------------------------------------------------
@@ -247,6 +248,7 @@ def build_stake_report(
                 stats["details_missing"] += 1
             birth = birth_map.get(person.get("personUuid")) or birth_map.get(person.get("id"))
             member = _assemble(person, details, unit.name, birth)
+            member.unit_number = unit.unit_number
             uuid = person.get("personUuid")
             if uuid:
                 seen_uuids.add(uuid)

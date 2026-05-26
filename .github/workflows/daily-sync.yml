@@ -1,0 +1,83 @@
+name: Daily covenant-path sync
+
+# Runs the headless pipeline daily: LCR -> report -> Google Sheets (+ Supabase).
+# No browser needed for login (pure-requests Okta). Chromium is installed only so the
+# rare action-id self-heal can run if LCR redeploys.
+
+on:
+  schedule:
+    - cron: "0 9 * * *"      # 09:00 UTC daily
+  workflow_dispatch:          # manual run button
+    inputs:
+      with_profile:
+        description: "Fetch profile fields (baptism/recommend/etc.)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      LCR_LOGIN: ${{ secrets.LCR_LOGIN }}
+      LCR_PASSWORD: ${{ secrets.LCR_PASSWORD }}
+      CP_TOKEN_KEY: ${{ secrets.CP_TOKEN_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      SHEETS_SERVICE_ACCOUNT: sheets_sync/service_account.json
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium   # only for rare self-heal
+
+      # Restore the incremental profile cache across runs (best-effort; Supabase
+      # members.updated_at is the durable incremental mechanism — see ADR-002).
+      - name: Restore profile cache
+        uses: actions/cache@v4
+        with:
+          path: tools/output/profile_cache.json
+          key: profile-cache-${{ github.run_id }}
+          restore-keys: profile-cache-
+
+      - name: Write Google service account (if configured)
+        if: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
+        run: |
+          mkdir -p sheets_sync
+          printf '%s' '${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}' > sheets_sync/service_account.json
+
+      - name: Run daily sync
+        run: |
+          ARGS="--with-profile"
+          [ -n "${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}" ] && ARGS="$ARGS --sheets"
+          [ -n "${{ secrets.SUPABASE_DB_URL }}" ] && ARGS="$ARGS --supabase"
+          [ -n "${{ secrets.SPREADSHEET_ID }}" ] && ARGS="$ARGS --spreadsheet-id ${{ secrets.SPREADSHEET_ID }}"
+          echo "running: python scripts/daily_sync.py $ARGS"
+          python scripts/daily_sync.py $ARGS
+
+      - name: Upload run artifacts (logs + summaries, no PII output)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-logs
+          path: |
+            tools/output/logs/
+            tools/output/health_report.json
+            output/covenant_path_access.json
+          if-no-files-found: ignore
+          retention-days: 14
