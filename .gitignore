@@ -1,0 +1,20 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+**/service_account.json
+**/*.key
+**/.token_key
+**/*.enc
+
+# Crawler + report outputs (may contain session tokens / member data / PII)
+tools/output/
+output/
+**/storage_state.json
+**/auth_token.txt
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/

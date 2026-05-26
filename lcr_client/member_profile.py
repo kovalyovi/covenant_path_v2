@@ -1,0 +1,204 @@
+"""
+Member-profile data via pure HTTP (no browser).
+
+The Member Tools profile page (/mlt) loads its data through a Next.js Server
+Action: an HTTP POST to the page URL carrying a `Next-Action` header. We replay
+that POST with the authenticated cookie session and parse the React-flight
+response. This yields baptism date, patriarchal blessing, ordinances, and a
+clean priesthood office — fields not exposed by the regular JSON APIs.
+
+The action ids are build-specific (change when LCR redeploys the /mlt app). They
+live in lcr_client.action_config (seeded by DEFAULTS, overridable by a local
+config file). On a shape miss we auto-discover fresh ids (action_discovery) once
+per process and retry — so the client self-heals across LCR redeploys.
+
+Provides: member record (baptism, patriarchal, ordinances, priesthood office),
+temple recommend, and outbound ministering assignment — all via pure HTTP.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from urllib.parse import quote
+
+from lcr_client import action_config
+from lcr_client.logging_setup import dump_debug, get_logger
+
+logger = get_logger()
+
+# Defaults kept as module attrs for convenience/back-compat; live values come
+# from action_config.load() at call time (so auto-discovered ids take effect).
+PROFILE_ACTION_ID = action_config.DEFAULTS["record"]
+RECOMMEND_ACTION_ID = action_config.DEFAULTS["recommend"]
+MINISTERING_ACTION_ID = action_config.DEFAULTS["ministering"]
+PROFILE_URL = "https://lcr.churchofjesuschrist.org/mlt/records/member-profile/{uuid}?lang=eng"
+
+_ROW_RE = re.compile(r"^[0-9a-f]+:(.*)$")
+_HEAL_ATTEMPTED = False
+
+
+def _heal_once(session, uuid: str) -> None:
+    """Run action-id auto-discovery at most once per process."""
+    global _HEAL_ATTEMPTED
+    if _HEAL_ATTEMPTED:
+        return
+    _HEAL_ATTEMPTED = True
+    try:
+        from lcr_client import action_discovery
+        logger.warning("profile action returned no data — attempting action-id auto-discovery")
+        action_discovery.heal(session, uuid)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"action-id discovery failed: {exc}")
+
+
+def _state_tree(uuid: str) -> str:
+    tree = ["", {"children": ["records", {"children": ["member-profile", {
+        "children": [["id", uuid, "d"], {"children": ["__PAGE__", {}, None, None]},
+                     None, None]}, None, None]}, None, None]}, None, None, True]
+    return quote(json.dumps(tree, separators=(",", ":")))
+
+
+def flight_objects(text: str) -> list:
+    """Parse every JSON object/array row out of a React-flight response."""
+    out = []
+    for line in text.split("\n"):
+        m = _ROW_RE.match(line)
+        if not m:
+            continue
+        payload = m.group(1)
+        if not (payload.startswith("{") or payload.startswith("[")):
+            continue
+        try:
+            out.append(json.loads(payload))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+def _find(objs: list, *keys: str) -> dict | None:
+    """Return the first dict row that contains all given keys."""
+    for o in objs:
+        if isinstance(o, dict) and all(k in o for k in keys):
+            return o
+    return None
+
+
+def parse_flight_record(text: str) -> dict | None:
+    """Find the member-record object in a React-flight response."""
+    return _find(flight_objects(text), "uuid", "ordinances")
+
+
+def _ordinance_date(record: dict, type_: str) -> str | None:
+    for o in record.get("ordinances") or []:
+        if o.get("type") == type_:
+            return o.get("dateDisplay")
+    return None
+
+
+def extract_fields(record: dict) -> dict:
+    """Pull the covenant-path-relevant fields out of the raw member record."""
+    birth = record.get("birth") or {}
+    return {
+        "birth_date": birth.get("dateDisplay"),
+        "baptism_date": _ordinance_date(record, "BAPTISM"),
+        "confirmation_date": _ordinance_date(record, "CONFIRMATION"),
+        "endowment_date": _ordinance_date(record, "ENDOWMENT"),
+        "sealed_to_parents_date": _ordinance_date(record, "SEALING_TO_PARENTS"),
+        "patriarchal_blessing": "Yes" if record.get("hasPatriarchalBlessing") else "No",
+        "priesthood_office": record.get("currentPriesthoodOfficeType"),
+    }
+
+
+def call_action(session, person_uuid: str, action_id: str, args: list) -> list:
+    """POST a member-profile server action and return the parsed flight rows."""
+    url = PROFILE_URL.format(uuid=person_uuid)
+    headers = {
+        "Accept": "text/x-component",
+        "Content-Type": "text/plain;charset=UTF-8",
+        "Next-Action": action_id,
+        "Next-Router-State-Tree": _state_tree(person_uuid),
+        "Origin": "https://lcr.churchofjesuschrist.org",
+        "Referer": url,
+    }
+    resp = session.session.post(
+        url, headers=headers, data=json.dumps(args, separators=(",", ":")),
+        timeout=60, allow_redirects=False,
+    )
+    return flight_objects(resp.text)
+
+
+def fetch_member_profile(session, person_uuid: str) -> dict:
+    """Replay the profile record action and return the raw member record dict."""
+    def call():
+        return _find(call_action(session, person_uuid, action_config.load()["record"],
+                                 [person_uuid, "eng"]), "uuid", "ordinances")
+
+    record = call()
+    if record is None:
+        _heal_once(session, person_uuid)
+        record = call()
+    if record is None:
+        dump_debug("profile_record_miss", uuid=person_uuid, action=action_config.load()["record"])
+        raise RuntimeError(
+            "No member record in profile response. Action id stale and auto-discovery "
+            "failed, or session expired — check tools/output/logs and debug."
+        )
+    return record
+
+
+def fetch_recommend(session, person_uuid: str) -> dict:
+    """Temple recommend: {status, expirationDateDisplay, isLimitedUse} or {} if none."""
+    def call():
+        # the recommend action always returns the `hasNewRecommendInProcess` key,
+        # even when the member has no recommend — use it to detect a valid action.
+        return _find(call_action(session, person_uuid, action_config.load()["recommend"],
+                                 [person_uuid]), "hasNewRecommendInProcess")
+
+    obj = call()
+    if obj is None:
+        _heal_once(session, person_uuid)
+        obj = call()
+    if obj is None:
+        # Often LEGITIMATE, not an error: LCR's recommend server action throws
+        # (returns an error/digest flight object) for members who simply have no
+        # recommend (e.g. new converts, minors) -> we map that to "No". A genuinely
+        # stale action id surfaces as a uniform "No" across *everyone*, which the
+        # report's post-run sanity check flags. So log quietly, don't dump per member.
+        logger.debug("no recommend data for %s (no recommend, or stale action id)", person_uuid)
+        return {}
+    return obj.get("recommend") or {}
+
+
+def fetch_ministering(session, person_uuid: str) -> dict:
+    """Outbound ministering: whether this person is assigned as a minister."""
+    def call():
+        objs = call_action(session, person_uuid, action_config.load()["ministering"], [person_uuid])
+        return _find(objs, "ministeringBrothersAssignments") or _find(objs, "ministeringSistersAssignments")
+
+    obj = call()
+    if obj is None:
+        _heal_once(session, person_uuid)
+        obj = call()
+    obj = obj or {}
+    companionships = (obj.get("ministeringBrothersAssignments") or []) + \
+                     (obj.get("ministeringSistersAssignments") or [])
+    has_outbound = any(c.get("assignments") for c in companionships)
+    return {"has_assignment": has_outbound, "companionships": companionships, "raw": obj}
+
+
+def _recommend_label(recommend: dict) -> str:
+    status = (recommend or {}).get("status")
+    if status == "ACTIVE":
+        return "Active"
+    if status == "EXPIRED":
+        return "Expired"
+    return "No"
+
+
+def profile_fields(session, person_uuid: str) -> dict:
+    """All profile-sourced covenant-path fields via the three server actions."""
+    fields = extract_fields(fetch_member_profile(session, person_uuid))
+    fields["temple_recommend"] = _recommend_label(fetch_recommend(session, person_uuid))
+    fields["ministering_assignment"] = "Yes" if fetch_ministering(session, person_uuid)["has_assignment"] else "No"
+    return fields
