@@ -28,10 +28,17 @@ covenant_path_v2/
     access.py           calling -> feature access matrix + runner self-check
     token_store.py      encrypted (Fernet) per-stake delegated-grant store
     delegated_login.py  leader authorizes via hosted login -> encrypted grant -> mint/verify/revoke
+    access.py / leadership.py   calling->feature matrix + leadership-directory name harvest
     models.py           typed dataclasses (Member, UnitOrg, ProgressRecord, ...)
   covenant_path/
     report.py           access-aware stake aggregator -> output/covenant_path_{stake,access}.{json,csv}
+    profile_cache.py    incremental cache (skip unchanged members on repeat runs) — ADR-002
+  sheets_sync/          Google Sheets updater (row_mapper, service, sync) — reference-spreadsheet-sync
+  backend/              Supabase: migrations/ (schema + RLS), db/sync/apply/test_rls — backend/README.md
+  scripts/daily_sync.py orchestrator: login -> report+cache -> Sheets + Supabase (self or delegated)
+  .github/workflows/daily-sync.yml   daily cron running scripts/daily_sync.py
   docs/DELEGATED_ACCESS.md   delegation + calling-authorization + security model
+  docs/DECISIONS.md          ADR log (pros/cons/drawbacks/wins) — read this for "why"
   output/               covenant_path_stake.{json,csv}, covenant_path_access.json (gitignored)
 ```
 
