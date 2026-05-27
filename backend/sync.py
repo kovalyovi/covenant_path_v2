@@ -47,9 +47,16 @@ def sync_stake(client: LcrClient, members: list[dict], conn) -> dict:
             if u.name:
                 unit_id_by_name[u.name] = uid
     written = db.upsert_members(conn, stake_id, members, unit_id_by_number, unit_id_by_name)
+    # rebuild access roles from current callings (no manual role assignment)
+    try:
+        from backend.roles import provision_roles
+        roles = provision_roles(conn, client, stake_id, unit_id_by_name)
+    except Exception as exc:  # noqa: BLE001 — never fail the data sync over role provisioning
+        logger.warning("role provisioning skipped for stake %s: %s", stake_id, exc)
+        roles = None
     db.touch_stake_synced(conn, stake_id)
     return {"stake": ctx.unit_name, "stake_unit": ctx.unit_number, "stake_id": stake_id,
-            "units": len(unit_id_by_number), "members_written": written}
+            "units": len(unit_id_by_number), "members_written": written, "roles": roles}
 
 
 def main() -> int:

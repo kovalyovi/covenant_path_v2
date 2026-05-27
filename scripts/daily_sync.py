@@ -23,6 +23,7 @@ secrets are configured (e.g. Sheets-only until Supabase creds land).
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -84,22 +85,39 @@ def run_self(args) -> int:
 
 
 def run_delegated(args) -> int:
-    from lcr_client import delegated_login, token_store
-    grants = [g for g in token_store.list_grants() if not g.get("revoked")]
-    if not grants:
-        logger.warning("no delegated grants; nothing to sync (onboard a stake first)")
+    """Multi-stake: pull each onboarded stake's encrypted session from Supabase,
+    re-mint its LCR session, and sync. One bad stake doesn't stop the others."""
+    from backend import credentials, db
+    from lcr_client import okta_login
+
+    args.supabase = True  # delegated mode targets the central store
+    conn = db.connect()
+    try:
+        stakes = credentials.list_active_stakes(conn)
+    finally:
+        conn.close()
+    if not stakes:
+        logger.warning("no active stake credentials in Supabase; onboard a stake first")
         return 0
+
     failures = 0
-    for g in grants:
-        stake = g["stake_unit"]
+    for st in stakes:
         try:
-            delegated_login.mint_session(stake)   # re-verifies calling, auto-revokes on change
+            conn = db.connect()
+            cred = credentials.get_credential(conn, st["stake_id"])
+            conn.close()
+            if not cred or cred.get("revoked"):
+                continue
+            session = okta_login.session_from_cookies(cred["cookies"])
+            okta_login.establish_lcr_session(session)   # re-mint LCR cookies from Okta session
+            okta_login.verify_session(session)
+            okta_login.write_storage_state(session, okta_login.DEFAULT_STORAGE_STATE)
             res = _sync_one(args)
-            print(f"[+] stake {stake} ({g.get('stake_name')}): {res['members']} members")
+            print(f"[+] {st['name']} ({st['unit_number']}): {res['members']} members synced")
         except Exception as exc:  # noqa: BLE001
             failures += 1
-            logger.error("stake %s sync failed: %s", stake, exc)
-            print(f"[!] stake {stake} failed: {exc}")
+            logger.error("stake %s (%s) sync failed: %s", st.get("name"), st.get("unit_number"), exc)
+            print(f"[!] {st.get('name')} failed (re-authorize may be needed): {exc}")
     return 1 if failures else 0
 
 
@@ -118,8 +136,16 @@ def main() -> int:
 
     mode = args.mode
     if mode == "auto":
-        from lcr_client import token_store
-        mode = "delegated" if [g for g in token_store.list_grants() if not g.get("revoked")] else "self"
+        mode = "self"
+        if os.getenv("SUPABASE_DB_URL"):
+            try:
+                from backend import credentials, db
+                conn = db.connect()
+                has = bool(credentials.list_active_stakes(conn))
+                conn.close()
+                mode = "delegated" if has else "self"
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("could not check Supabase credentials, defaulting to self: %s", exc)
     logger.info("daily_sync starting (mode=%s, sheets=%s, supabase=%s)",
                 mode, args.sheets, args.supabase)
     return run_delegated(args) if mode == "delegated" else run_self(args)
