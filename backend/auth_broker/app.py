@@ -8,7 +8,8 @@ logged. Each request gets a short id for troubleshooting.
 
 Run locally:  uvicorn backend.auth_broker.app:app --reload --port 8787
 Deploy: any container host (Render/Fly free tier). Set env: SUPABASE_URL,
-SUPABASE_SERVICE_ROLE_KEY, CP_TOKEN_KEY (unused here but shared), ALLOWED_ORIGINS.
+SUPABASE_SERVICE_ROLE_KEY, ALLOWED_ORIGINS. (No CP_TOKEN_KEY — the broker does live login
+and stores nothing encrypted; that key is only for the daily-sync credential vault.)
 """
 
 from __future__ import annotations
