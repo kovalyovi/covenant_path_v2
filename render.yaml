@@ -1,0 +1,19 @@
+# One-click Render blueprint for the Church-login auth broker (free tier).
+# Render -> New -> Blueprint -> point at this repo. Then set the secret env vars below
+# in the dashboard (they are marked sync:false so they are never committed).
+services:
+  - type: web
+    name: covenant-path-broker
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY   # the one secret still needed (Supabase -> Settings -> API)
+        sync: false
+      - key: ALLOWED_ORIGINS
+        value: https://app.membercovenantpath.org
+      - key: CP_TOKEN_KEY
+        sync: false
