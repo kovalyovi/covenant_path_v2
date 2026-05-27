@@ -131,6 +131,8 @@ def main() -> int:
     ap.add_argument("--spreadsheet-id", default=TEST_SPREADSHEET_ID)
     ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("--cache-max-age-days", type=float, default=7.0)
+    ap.add_argument("--email", action="store_true",
+                    help="after sync, send pending power-user invitations + daily digests (Resend)")
     ap.add_argument("--quiet", dest="verbose", action="store_false", default=True)
     args = ap.parse_args()
 
@@ -148,7 +150,18 @@ def main() -> int:
                 logger.warning("could not check Supabase credentials, defaulting to self: %s", exc)
     logger.info("daily_sync starting (mode=%s, sheets=%s, supabase=%s)",
                 mode, args.sheets, args.supabase)
-    return run_delegated(args) if mode == "delegated" else run_self(args)
+    rc = run_delegated(args) if mode == "delegated" else run_self(args)
+
+    if args.email and os.getenv("SUPABASE_DB_URL"):
+        from backend import db, mailer
+        conn = db.connect()
+        try:
+            inv = mailer.send_pending_invitations(conn)
+            dig = mailer.send_digests(conn)
+            print(f"[email] sent {inv} invitations, {dig} digests")
+        finally:
+            conn.close()
+    return rc
 
 
 if __name__ == "__main__":

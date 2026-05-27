@@ -108,3 +108,61 @@ def send_pending_invitations(conn, cap: int = DEFAULT_DAILY_CAP) -> int:
             sent += 1
     logger.info("sent %d/%d pending invitations", sent, len(rows))
     return sent
+
+
+def _digest_html(name: str, scope_label: str, total: int, by_milestone: list[tuple[str, int]]) -> str:
+    items = "".join(f"<li>{label}: {n}/{total}</li>" for label, n in by_milestone)
+    return (
+        f"<h2>Covenant Path — daily summary</h2>"
+        f"<p>{scope_label}: <b>{total}</b> new members.</p>"
+        f"<p>Golden Hour completion:</p><ul>{items}</ul>"
+        f"<p><a href=\"{_app_url()}\">Open the dashboard</a></p>"
+    )
+
+
+# milestone label -> SQL predicate over the members row (mirrors the app's Golden Hour)
+_DIGEST_MILESTONES = [
+    ("Friends", "friends='Yes'"), ("Calling", "calling='Yes'"),
+    ("Has ministers", "ministering_brothers_sisters='Yes'"),
+    ("Ministers", "ministering_assignment='Yes'"),
+    ("Temple recommend", "temple_recommend='Active'"),
+    ("Patriarchal", "patriarchal_blessing='Yes'"),
+]
+
+
+def send_digests(conn, cap: int = DEFAULT_DAILY_CAP) -> int:
+    """One digest per leader (by email), summarizing their RLS scope. Free-tier capped.
+
+    NOTE: Resend's shared test sender (onboarding@resend.dev) only delivers to the
+    account owner — real-recipient delivery needs a verified domain (RESEND_FROM).
+    """
+    with conn.cursor() as cur:
+        cur.execute("""select lower(email) as email, bool_or(unit_id is null) as stake_wide,
+                              array_remove(array_agg(distinct unit_id), null) as units,
+                              max(stake_id::text) as stake_id
+                       from user_roles where email is not null group by lower(email) limit %s""", (cap,))
+        leaders = cur.fetchall()
+    sent = 0
+    for email, stake_wide, units, stake_id in leaders:
+        with conn.cursor() as cur:
+            if stake_wide:
+                where, args = "stake_id=%s", (stake_id,)
+            elif units:
+                where, args = "unit_id = any(%s)", (units,)
+            else:
+                continue
+            cur.execute(f"select count(*) from members where {where}", args)
+            total = cur.fetchone()[0]
+            if total == 0:
+                continue
+            by = []
+            for label, pred in _DIGEST_MILESTONES:
+                cur.execute(f"select count(*) from members where {where} and {pred}", args)
+                by.append((label, cur.fetchone()[0]))
+        api_key, frm = stake_key(conn, stake_id)
+        scope = "Your stake" if stake_wide else "Your unit"
+        if send_email(email, "Covenant Path — daily summary",
+                      _digest_html(email, scope, total, by), api_key, frm):
+            sent += 1
+    logger.info("sent %d/%d digests", sent, len(leaders))
+    return sent
