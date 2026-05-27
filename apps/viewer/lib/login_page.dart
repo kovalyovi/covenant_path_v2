@@ -23,6 +23,15 @@ enum _Mode { church, email }
 class _LoginPageState extends State<LoginPage> {
   final _broker = BrokerClient();
   late _Mode _mode = _broker.available ? _Mode.church : _Mode.email;
+  String? _status; // transient progress note (e.g. "waking up the sign-in service")
+
+  @override
+  void initState() {
+    super.initState();
+    _broker.onStatus = (m) {
+      if (mounted) setState(() => _status = m);
+    };
+  }
 
   // Church-account fields
   final _username = TextEditingController();
@@ -54,6 +63,7 @@ class _LoginPageState extends State<LoginPage> {
     setState(() {
       _busy = true;
       _error = null;
+      _status = null;
     });
     try {
       await action();
@@ -146,6 +156,10 @@ class _LoginPageState extends State<LoginPage> {
                     const SizedBox(height: 20),
                   ],
                   if (_mode == _Mode.church) ..._churchFields() else ..._emailFields(),
+                  if (_busy && _status != null) ...[
+                    const SizedBox(height: 12),
+                    Text(_status!, style: TextStyle(color: Theme.of(context).colorScheme.primary)),
+                  ],
                   if (_error != null) ...[
                     const SizedBox(height: 12),
                     Text(_error!, style: const TextStyle(color: Colors.red)),

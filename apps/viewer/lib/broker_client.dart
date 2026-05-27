@@ -40,16 +40,40 @@ class BrokerResult {
 class BrokerClient {
   bool get available => brokerUrl.isNotEmpty;
 
+  /// Called when a network attempt fails and we're about to retry — lets the UI show a
+  /// "waking up the sign-in service…" message. Set once by the login page.
+  void Function(String message)? onStatus;
+
+  // Free hosting (Render) sleeps when idle; the first request after a sleep hits a holding
+  // page with no CORS header (browser reports "Failed to fetch"). Retry across ~60s so a
+  // cold start resolves itself instead of erroring out. Delays sum to ~63s.
+  static const _retryDelays = [Duration(seconds: 3), Duration(seconds: 6),
+      Duration(seconds: 9), Duration(seconds: 12), Duration(seconds: 15), Duration(seconds: 18)];
+
   Future<BrokerResult> _post(String path, Map<String, dynamic> body) async {
     if (!available) throw BrokerException('Church login is not configured (BROKER_URL).');
-    final http.Response resp;
-    try {
-      resp = await http
-          .post(Uri.parse('$brokerUrl$path'),
-              headers: const {'Content-Type': 'application/json'}, body: jsonEncode(body))
-          .timeout(const Duration(seconds: 90));
-    } catch (e) {
-      throw BrokerException('Could not reach the sign-in service. $e');
+    http.Response? resp;
+    Object? lastErr;
+    for (var attempt = 0; attempt <= _retryDelays.length; attempt++) {
+      try {
+        resp = await http
+            .post(Uri.parse('$brokerUrl$path'),
+                headers: const {'Content-Type': 'application/json'}, body: jsonEncode(body))
+            .timeout(const Duration(seconds: 30));
+        break; // got an HTTP response (success or error) — stop retrying
+      } catch (e) {
+        // Network failure (cold start / transient). Wait and retry within budget.
+        lastErr = e;
+        if (attempt < _retryDelays.length) {
+          onStatus?.call('Waking up the sign-in service… this can take up to a minute on first use.');
+          await Future.delayed(_retryDelays[attempt]);
+        }
+      }
+    }
+    if (resp == null) {
+      throw BrokerException(
+          'Could not reach the sign-in service after several tries. It may be starting up — '
+          'please try again in a minute. ($lastErr)');
     }
     Map<String, dynamic> data;
     try {
