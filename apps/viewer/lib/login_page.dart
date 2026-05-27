@@ -1,104 +1,256 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'broker_client.dart';
+import 'config.dart';
 import 'main.dart';
 
-/// Email one-time-code login — works identically on web/iOS/macOS/Android (no deep
-/// links). The verified email in the issued JWT is what RLS matches a role against,
-/// so sign in with the email LCR has on file for you. (Enable the {{ .Token }} code in
-/// Supabase → Auth → Email Templates so a 6-digit code is sent.)
+/// Two ways in, one resulting session:
+///  • **Church account** (username + password, MFA-aware) — for leaders. The browser can't
+///    talk to the Church's Okta directly (CORS), so it goes through the auth broker
+///    (backend/auth_broker), which authenticates server-side and returns a Supabase OTP we
+///    verify here. Only shown when [brokerUrl] is configured.
+///  • **Email code** — for power-user invitees who have no Church account. Supabase sends a
+///    6-digit code to the email LCR has on file; the verified email is what RLS scopes on.
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
   @override
   State<LoginPage> createState() => _LoginPageState();
 }
 
+enum _Mode { church, email }
+
 class _LoginPageState extends State<LoginPage> {
+  final _broker = BrokerClient();
+  late _Mode _mode = _broker.available ? _Mode.church : _Mode.email;
+
+  // Church-account fields
+  final _username = TextEditingController();
+  final _password = TextEditingController();
+  final _mfaCode = TextEditingController();
+  String? _loginId;
+  List<BrokerFactor> _factors = const [];
+  BrokerFactor? _factorSent;
+
+  // Email-code fields
   final _email = TextEditingController();
-  final _code = TextEditingController();
-  bool _codeSent = false;
+  final _emailCode = TextEditingController();
+  bool _emailCodeSent = false;
+
   bool _busy = false;
   String? _error;
 
-  Future<void> _sendCode() async {
-    setState(() { _busy = true; _error = null; });
+  void _reset() {
+    _loginId = null;
+    _factors = const [];
+    _factorSent = null;
+    _mfaCode.clear();
+    _emailCodeSent = false;
+    _emailCode.clear();
+    _error = null;
+  }
+
+  Future<void> _run(Future<void> Function() action) async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
     try {
-      await supabase.auth.signInWithOtp(email: _email.text.trim());
-      setState(() => _codeSent = true);
+      await action();
+    } on BrokerException catch (e) {
+      setState(() => _error = e.message);
     } on AuthException catch (e) {
       setState(() => _error = e.message);
+    } catch (e) {
+      setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _verify() async {
-    setState(() { _busy = true; _error = null; });
-    try {
-      await supabase.auth.verifyOTP(
-        email: _email.text.trim(),
-        token: _code.text.trim(),
-        type: OtpType.email,
-      );
-      // AuthGate switches to the dashboard automatically on the auth state change.
-    } on AuthException catch (e) {
-      setState(() => _error = e.message);
-    } finally {
-      if (mounted) setState(() => _busy = false);
+  /// Turn a broker-minted OTP into a real Supabase session (AuthGate then routes to the app).
+  Future<void> _consume(BrokerResult r) async {
+    if (r.email == null || r.otp == null) {
+      throw BrokerException('Sign-in service did not return a session.');
     }
+    await supabase.auth
+        .verifyOTP(email: r.email, token: r.otp!, type: OtpType.email);
   }
+
+  Future<void> _churchSignIn() => _run(() async {
+        final r = await _broker.password(_username.text.trim(), _password.text);
+        if (r.mfaRequired) {
+          setState(() {
+            _loginId = r.loginId;
+            _factors = r.factors;
+          });
+          // Auto-send if there's exactly one factor.
+          if (r.factors.length == 1) await _selectFactor(r.factors.first);
+          return;
+        }
+        await _consume(r);
+      });
+
+  Future<void> _selectFactor(BrokerFactor f) => _run(() async {
+        await _broker.selectFactor(_loginId!, f.id);
+        setState(() => _factorSent = f);
+      });
+
+  Future<void> _verifyMfa() => _run(() async {
+        final r = await _broker.verifyMfa(_loginId!, _mfaCode.text.trim());
+        await _consume(r);
+      });
+
+  Future<void> _sendEmailCode() => _run(() async {
+        await supabase.auth.signInWithOtp(email: _email.text.trim());
+        setState(() => _emailCodeSent = true);
+      });
+
+  Future<void> _verifyEmailCode() => _run(() async {
+        await supabase.auth.verifyOTP(
+          email: _email.text.trim(),
+          token: _emailCode.text.trim(),
+          type: OtpType.email,
+        );
+      });
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 380),
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text('Covenant Path', style: Theme.of(context).textTheme.headlineSmall),
-                const SizedBox(height: 8),
-                const Text('Sign in with the email your stake has on file.'),
-                const SizedBox(height: 24),
-                TextField(
-                  controller: _email,
-                  enabled: !_codeSent,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(labelText: 'Email', border: OutlineInputBorder()),
-                ),
-                if (_codeSent) ...[
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _code,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: '6-digit code', border: OutlineInputBorder()),
-                  ),
+        child: SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 380),
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('Covenant Path', style: Theme.of(context).textTheme.headlineSmall),
+                  const SizedBox(height: 16),
+                  if (_broker.available) ...[
+                    SegmentedButton<_Mode>(
+                      segments: const [
+                        ButtonSegment(value: _Mode.church, label: Text('Church account')),
+                        ButtonSegment(value: _Mode.email, label: Text('Email code')),
+                      ],
+                      selected: {_mode},
+                      onSelectionChanged: _busy
+                          ? null
+                          : (s) => setState(() {
+                                _mode = s.first;
+                                _reset();
+                              }),
+                    ),
+                    const SizedBox(height: 20),
+                  ],
+                  if (_mode == _Mode.church) ..._churchFields() else ..._emailFields(),
+                  if (_error != null) ...[
+                    const SizedBox(height: 12),
+                    Text(_error!, style: const TextStyle(color: Colors.red)),
+                  ],
                 ],
-                if (_error != null) ...[
-                  const SizedBox(height: 12),
-                  Text(_error!, style: const TextStyle(color: Colors.red)),
-                ],
-                const SizedBox(height: 16),
-                FilledButton(
-                  onPressed: _busy ? null : (_codeSent ? _verify : _sendCode),
-                  child: _busy
-                      ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                      : Text(_codeSent ? 'Verify & sign in' : 'Send code'),
-                ),
-                if (_codeSent)
-                  TextButton(
-                    onPressed: _busy ? null : () => setState(() => _codeSent = false),
-                    child: const Text('Use a different email'),
-                  ),
-              ],
+              ),
             ),
           ),
         ),
       ),
     );
+  }
+
+  Widget _spinnerOr(String label) => _busy
+      ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
+      : Text(label);
+
+  List<Widget> _churchFields() {
+    // Step 3: enter the MFA code that was sent.
+    if (_factorSent != null) {
+      return [
+        Text('Enter the code sent via ${_factorSent!.label}.'),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _mfaCode,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Verification code', border: OutlineInputBorder()),
+        ),
+        const SizedBox(height: 16),
+        FilledButton(onPressed: _busy ? null : _verifyMfa, child: _spinnerOr('Verify & sign in')),
+        TextButton(
+          onPressed: _busy ? null : () => setState(() => _factorSent = null),
+          child: const Text('Choose a different method'),
+        ),
+      ];
+    }
+    // Step 2: pick an MFA factor.
+    if (_loginId != null) {
+      return [
+        const Text('Choose how to receive your verification code:'),
+        const SizedBox(height: 8),
+        for (final f in _factors)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: OutlinedButton(
+              onPressed: _busy ? null : () => _selectFactor(f),
+              child: Text(f.label),
+            ),
+          ),
+        TextButton(
+          onPressed: _busy ? null : () => setState(_reset),
+          child: const Text('Back'),
+        ),
+      ];
+    }
+    // Step 1: username + password.
+    return [
+      const Text('Sign in with your Church account (same as LCR).'),
+      const SizedBox(height: 16),
+      TextField(
+        controller: _username,
+        autofillHints: const [AutofillHints.username],
+        decoration: const InputDecoration(labelText: 'Church username', border: OutlineInputBorder()),
+      ),
+      const SizedBox(height: 12),
+      TextField(
+        controller: _password,
+        obscureText: true,
+        autofillHints: const [AutofillHints.password],
+        onSubmitted: (_) => _busy ? null : _churchSignIn(),
+        decoration: const InputDecoration(labelText: 'Password', border: OutlineInputBorder()),
+      ),
+      const SizedBox(height: 16),
+      FilledButton(onPressed: _busy ? null : _churchSignIn, child: _spinnerOr('Sign in')),
+    ];
+  }
+
+  List<Widget> _emailFields() {
+    return [
+      const Text('Sign in with the email your stake has on file.'),
+      const SizedBox(height: 16),
+      TextField(
+        controller: _email,
+        enabled: !_emailCodeSent,
+        keyboardType: TextInputType.emailAddress,
+        decoration: const InputDecoration(labelText: 'Email', border: OutlineInputBorder()),
+      ),
+      if (_emailCodeSent) ...[
+        const SizedBox(height: 12),
+        TextField(
+          controller: _emailCode,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: '6-digit code', border: OutlineInputBorder()),
+        ),
+      ],
+      const SizedBox(height: 16),
+      FilledButton(
+        onPressed: _busy ? null : (_emailCodeSent ? _verifyEmailCode : _sendEmailCode),
+        child: _spinnerOr(_emailCodeSent ? 'Verify & sign in' : 'Send code'),
+      ),
+      if (_emailCodeSent)
+        TextButton(
+          onPressed: _busy ? null : () => setState(() => _emailCodeSent = false),
+          child: const Text('Use a different email'),
+        ),
+    ];
   }
 }
