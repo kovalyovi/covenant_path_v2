@@ -5,3 +5,5 @@ cryptography>=42.0
 google-api-python-client>=2.0   # sheets_sync
 google-auth>=2.0                # sheets_sync (service account)
 psycopg2-binary>=2.9            # backend (Supabase/Postgres)
+fastapi>=0.110                  # auth_broker (Church-login API)
+uvicorn>=0.29                   # auth_broker (ASGI server)
