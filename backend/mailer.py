@@ -1,78 +1,75 @@
 """
-Email via Resend — invitation emails + per-leader daily digests.
+Email via SMTP — invitation emails + per-leader daily digests.
 
-Free-tier aware (Resend free ≈ 100/day, 3000/mo): a per-run cap, and each stake can
-supply its OWN Resend key (stake_settings.resend_api_key_enc) so its mail draws on its
-own quota instead of the shared one. Falls back to the shared env RESEND_API_KEY.
+Provider-agnostic (one code path) so you can send WITHOUT owning a domain:
+  • Gmail  — smtp.gmail.com:587, user=your gmail, pass=an App Password (zero setup, ~500/day)
+  • Brevo  — smtp-relay.brevo.com:587, free 300/day, verify your gmail as a sender (no domain)
+  • Resend — smtp.resend.com:587 once you verify a domain (branded, scalable)
+A stake can override the From display via stake_settings.email_from. Per-stake SMTP creds
+can be added later for full quota isolation (see docs/CUSTOM_API_KEYS.md).
 
-Secrets: RESEND_API_KEY / RESEND_FROM / APP_URL from env; per-stake key Fernet-encrypted
-(same CP_TOKEN_KEY). Never logs keys.
+Env: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM, APP_URL. Never logs creds.
+Free-tier aware: a per-run cap. If SMTP isn't configured, sends are skipped (no crash) —
+invitations still work (the role is granted; the email is just a notification).
 """
 
 from __future__ import annotations
 
 import os
-
-import requests
-from cryptography.fernet import Fernet
+import re
+import smtplib
+from email.mime.text import MIMEText
 
 from lcr_client.logging_setup import get_logger
-from lcr_client.token_store import _load_key
 
 logger = get_logger()
-RESEND_URL = "https://api.resend.com/emails"
-DEFAULT_DAILY_CAP = 90  # stay under the shared free-tier 100/day
-# Resend's API is behind Cloudflare, which 403s (error 1010) on default urllib/requests
-# User-Agents — send a normal browser UA.
-_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-       "(KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36")
+DEFAULT_DAILY_CAP = 90
 
 
-def _shared_key() -> str | None:
-    return os.environ.get("RESEND_API_KEY") or None
+def _smtp_config():
+    return (os.environ.get("SMTP_HOST"), int(os.environ.get("SMTP_PORT", "587")),
+            os.environ.get("SMTP_USER"), os.environ.get("SMTP_PASS"),
+            os.environ.get("SMTP_FROM") or os.environ.get("RESEND_FROM")
+            or "Covenant Path <noreply@example.com>")
 
 
-def _from(stake_from: str | None = None) -> str:
-    return stake_from or os.environ.get("RESEND_FROM") or "Covenant Path <onboarding@resend.dev>"
+def _addr(from_header: str) -> str:
+    m = re.search(r"<([^>]+)>", from_header)
+    return m.group(1) if m else from_header
 
 
 def _app_url() -> str:
-    return os.environ.get("APP_URL", "https://your-viewer.example.com")  # placeholder until deployed
+    return os.environ.get("APP_URL", "https://your-viewer.example.com")
 
 
-def stake_key(conn, stake_id: str) -> tuple[str | None, str | None]:
-    """(api_key, from_email) for a stake — its own if set, else the shared defaults."""
+def stake_from(conn, stake_id: str) -> str | None:
+    """Per-stake From display, if configured (else the shared SMTP_FROM)."""
     try:
         with conn.cursor() as cur:
-            cur.execute("select resend_api_key_enc, email_from from stake_settings where stake_id=%s",
-                        (stake_id,))
+            cur.execute("select email_from from stake_settings where stake_id=%s", (stake_id,))
             row = cur.fetchone()
+        return row[0] if row and row[0] else None
     except Exception:
-        row = None
-    if row and row[0]:
-        try:
-            key = Fernet(_load_key()).decrypt(row[0].encode("ascii")).decode("utf-8")
-            return key, _from(row[1])
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("stake %s resend key decrypt failed, using shared: %s", stake_id, exc)
-    return _shared_key(), _from(row[1] if row else None)
+        return None
 
 
-def send_email(to: str, subject: str, html: str, api_key: str | None = None,
-               from_email: str | None = None) -> bool:
-    key = api_key or _shared_key()
-    if not key:
-        logger.warning("no Resend API key; skipping email to %s", to)
+def send_email(to: str, subject: str, html: str, from_email: str | None = None) -> bool:
+    host, port, user, password, default_from = _smtp_config()
+    if not (host and user and password):
+        logger.warning("SMTP not configured; skipping email to %s (set SMTP_* in env)", to)
         return False
+    sender = from_email or default_from
+    msg = MIMEText(html, "html", "utf-8")
+    msg["Subject"] = subject
+    msg["From"] = sender
+    msg["To"] = to
     try:
-        r = requests.post(RESEND_URL, json={"from": _from(from_email), "to": [to],
-                          "subject": subject, "html": html}, timeout=30,
-                          headers={"Authorization": f"Bearer {key}", "User-Agent": _UA})
-        if r.status_code in (200, 201):
-            logger.info("email -> %s: %s", to, r.status_code)
-            return True
-        logger.error("email -> %s failed: %s %s", to, r.status_code, r.text[:200])
-        return False
+        with smtplib.SMTP(host, port, timeout=30) as s:
+            s.starttls()
+            s.login(user, password)
+            s.sendmail(_addr(sender), [to], msg.as_string())
+        logger.info("email -> %s ok", to)
+        return True
     except Exception as exc:  # noqa: BLE001
         logger.error("email -> %s failed: %s", to, exc)
         return False
@@ -90,18 +87,16 @@ def _invite_html(stake_name: str, scope: str, invited_by: str | None) -> str:
 
 
 def send_pending_invitations(conn, cap: int = DEFAULT_DAILY_CAP) -> int:
-    """Email queued invitations (invitations.emailed=false). Returns #sent."""
     with conn.cursor() as cur:
-        cur.execute("""select i.id, i.invited_email, i.invited_by_email, s.name, i.stake_id, i.unit_id, i.role
+        cur.execute("""select i.id, i.invited_email, i.invited_by_email, s.name, i.stake_id, i.unit_id
                        from invitations i join stakes s on s.id=i.stake_id
                        where i.emailed=false and i.status<>'revoked' order by i.created_at limit %s""", (cap,))
         rows = cur.fetchall()
     sent = 0
-    for inv_id, email, by, stake_name, stake_id, unit_id, role in rows:
-        api_key, frm = stake_key(conn, stake_id)
+    for inv_id, email, by, stake_name, stake_id, unit_id in rows:
         scope = "whole stake" if unit_id is None else "your unit"
         if send_email(email, f"Access to {stake_name} — Covenant Path",
-                      _invite_html(stake_name, scope, by), api_key, frm):
+                      _invite_html(stake_name, scope, by), stake_from(conn, stake_id)):
             with conn.cursor() as cur:
                 cur.execute("update invitations set emailed=true, status='active' where id=%s", (inv_id,))
             conn.commit()
@@ -110,17 +105,6 @@ def send_pending_invitations(conn, cap: int = DEFAULT_DAILY_CAP) -> int:
     return sent
 
 
-def _digest_html(name: str, scope_label: str, total: int, by_milestone: list[tuple[str, int]]) -> str:
-    items = "".join(f"<li>{label}: {n}/{total}</li>" for label, n in by_milestone)
-    return (
-        f"<h2>Covenant Path — daily summary</h2>"
-        f"<p>{scope_label}: <b>{total}</b> new members.</p>"
-        f"<p>Golden Hour completion:</p><ul>{items}</ul>"
-        f"<p><a href=\"{_app_url()}\">Open the dashboard</a></p>"
-    )
-
-
-# milestone label -> SQL predicate over the members row (mirrors the app's Golden Hour)
 _DIGEST_MILESTONES = [
     ("Friends", "friends='Yes'"), ("Calling", "calling='Yes'"),
     ("Has ministers", "ministering_brothers_sisters='Yes'"),
@@ -130,12 +114,16 @@ _DIGEST_MILESTONES = [
 ]
 
 
-def send_digests(conn, cap: int = DEFAULT_DAILY_CAP) -> int:
-    """One digest per leader (by email), summarizing their RLS scope. Free-tier capped.
+def _digest_html(scope_label: str, total: int, by_milestone: list[tuple[str, int]]) -> str:
+    items = "".join(f"<li>{label}: {n}/{total}</li>" for label, n in by_milestone)
+    return (f"<h2>Covenant Path — daily summary</h2>"
+            f"<p>{scope_label}: <b>{total}</b> new members.</p>"
+            f"<p>Golden Hour completion:</p><ul>{items}</ul>"
+            f"<p><a href=\"{_app_url()}\">Open the dashboard</a></p>")
 
-    NOTE: Resend's shared test sender (onboarding@resend.dev) only delivers to the
-    account owner — real-recipient delivery needs a verified domain (RESEND_FROM).
-    """
+
+def send_digests(conn, cap: int = DEFAULT_DAILY_CAP) -> int:
+    """One digest per leader (by email), summarizing their RLS scope. Free-tier capped."""
     with conn.cursor() as cur:
         cur.execute("""select lower(email) as email, bool_or(unit_id is null) as stake_wide,
                               array_remove(array_agg(distinct unit_id), null) as units,
@@ -159,10 +147,9 @@ def send_digests(conn, cap: int = DEFAULT_DAILY_CAP) -> int:
             for label, pred in _DIGEST_MILESTONES:
                 cur.execute(f"select count(*) from members where {where} and {pred}", args)
                 by.append((label, cur.fetchone()[0]))
-        api_key, frm = stake_key(conn, stake_id)
         scope = "Your stake" if stake_wide else "Your unit"
         if send_email(email, "Covenant Path — daily summary",
-                      _digest_html(email, scope, total, by), api_key, frm):
+                      _digest_html(scope, total, by), stake_from(conn, stake_id)):
             sent += 1
     logger.info("sent %d/%d digests", sent, len(leaders))
     return sent
