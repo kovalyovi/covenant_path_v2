@@ -79,19 +79,29 @@ def upsert_unit(conn, stake_id: str, unit_number: int, name: str, unit_type: str
 
 
 def upsert_members(conn, stake_id: str, members: list[dict],
-                   unit_id_by_number: dict[int, str]) -> int:
-    """Idempotent upsert keyed by (stake_id, person_uuid). Returns rows written."""
+                   unit_id_by_number: dict[int, str],
+                   unit_id_by_name: dict[str, str] | None = None) -> int:
+    """Idempotent upsert keyed by (stake_id, person_uuid). Returns rows written.
+
+    unit_id resolves by unit_number first, then unit name (so reports generated before
+    `unit_number` existed still map to a unit). `unit_name` column ← the report's `unit`.
+    """
+    unit_id_by_name = unit_id_by_name or {}
     rows = []
     for m in members:
         if not m.get("person_uuid"):
             continue
-        unit_id = unit_id_by_number.get(m.get("unit_number"))
-        rows.append((stake_id, unit_id, *[m.get(c) for c in _MEMBER_COLUMNS]))
+        unit_name = m.get("unit") or m.get("unit_name")
+        unit_id = unit_id_by_number.get(m.get("unit_number")) or unit_id_by_name.get(unit_name)
+        vals = [unit_name if c == "unit_name" else m.get(c) for c in _MEMBER_COLUMNS]
+        rows.append((stake_id, unit_id, *vals))
     if not rows:
         return 0
     cols = "stake_id, unit_id, " + ", ".join(_MEMBER_COLUMNS)
-    updates = ", ".join(f"{c} = excluded.{c}" for c in (["unit_id", "unit_name"] + _MEMBER_COLUMNS)
-                        if c != "person_uuid")
+    # on conflict, refresh everything except the conflict key (person_uuid); unit_id
+    # isn't in _MEMBER_COLUMNS so add it once.
+    update_cols = ["unit_id"] + [c for c in _MEMBER_COLUMNS if c != "person_uuid"]
+    updates = ", ".join(f"{c} = excluded.{c}" for c in update_cols)
     sql = (f"insert into members ({cols}) values %s "
            f"on conflict (stake_id, person_uuid) do update set {updates}")
     with conn.cursor() as cur:
