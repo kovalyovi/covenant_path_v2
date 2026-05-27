@@ -39,11 +39,14 @@ def sync_stake(client: LcrClient, members: list[dict], conn) -> dict:
     ctx = client.user_context()
     stake_id = db.upsert_stake(conn, ctx.unit_number, ctx.unit_name)
     unit_id_by_number: dict[int, str] = {}
+    unit_id_by_name: dict[str, str] = {}
     for u in ctx.child_units:
         if u.unit_number:
-            unit_id_by_number[u.unit_number] = db.upsert_unit(
-                conn, stake_id, u.unit_number, u.name, u.type)
-    written = db.upsert_members(conn, stake_id, members, unit_id_by_number)
+            uid = db.upsert_unit(conn, stake_id, u.unit_number, u.name, u.type)
+            unit_id_by_number[u.unit_number] = uid
+            if u.name:
+                unit_id_by_name[u.name] = uid
+    written = db.upsert_members(conn, stake_id, members, unit_id_by_number, unit_id_by_name)
     db.touch_stake_synced(conn, stake_id)
     return {"stake": ctx.unit_name, "stake_unit": ctx.unit_number, "stake_id": stake_id,
             "units": len(unit_id_by_number), "members_written": written}
