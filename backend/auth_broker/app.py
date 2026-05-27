@@ -27,10 +27,21 @@ from backend.auth_broker import okta_flow, session_mint
 logger = get_logger()
 app = FastAPI(title="Covenant Path — Church login broker")
 
-_origins = [o.strip() for o in os.environ.get(
-    "ALLOWED_ORIGINS", "http://localhost:*,https://*.membercovenantpath.org").split(",") if o.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_methods=["*"],
-                   allow_headers=["*"], allow_credentials=False)
+# Starlette does NOT glob `allow_origins` (it's exact-match), so subdomains and *.pages.dev
+# must go through `allow_origin_regex`. The regex covers our custom domain (any subdomain),
+# Cloudflare Pages (production + preview deploys), and local dev — so the app works whether
+# served from app.membercovenantpath.org or covenant-path-app.pages.dev. ALLOWED_ORIGINS env
+# can still add extra exact origins.
+_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+_origin_regex = os.environ.get(
+    "ALLOWED_ORIGIN_REGEX",
+    r"https://([a-z0-9-]+\.)*membercovenantpath\.org"
+    r"|https://([a-z0-9-]+\.)*pages\.dev"
+    r"|http://localhost(:[0-9]+)?"
+    r"|http://127\.0\.0\.1(:[0-9]+)?")
+app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_origin_regex=_origin_regex,
+                   allow_methods=["*"], allow_headers=["*"], allow_credentials=False)
+logger.info("CORS: exact=%s regex=%s", _origins, _origin_regex)
 
 
 class PasswordReq(BaseModel):
