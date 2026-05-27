@@ -1,0 +1,31 @@
+name: Keep auth broker warm
+
+# Render's free tier sleeps the auth broker after ~15 min idle; the first request after a
+# sleep then fails in the browser (holding page has no CORS header). This pings /health to
+# keep it awake. NOTE: GitHub cron is best-effort and can be delayed under load, so this is
+# a free backstop only — for reliable keep-warm use an external monitor (UptimeRobot), see
+# docs/DEPLOYMENT.md. Override the URL with repo variable BROKER_URL if it ever changes.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 minutes (best-effort)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keep-broker-warm
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping /health
+        run: |
+          BASE="${{ vars.BROKER_URL || 'https://covenant-path-broker.onrender.com' }}"
+          echo "pinging $BASE/health"
+          # Render cold start can take ~60s; allow generous timeouts and one retry.
+          curl -fsS --max-time 90 --retry 2 --retry-delay 30 "$BASE/health" && echo "" && echo "ok"
