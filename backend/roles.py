@@ -73,13 +73,17 @@ def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]
 
     with conn.cursor() as cur:
         for row in fresh.values():
+            # auth_id is set to the LCR person uuid: an app login that authenticates via
+            # the member's Church identity (JWT sub = their LCR person uuid) is therefore
+            # already RLS-scoped — no separate "bind on first login" step. (LCR person
+            # uuids are valid UUIDs.)
             cur.execute("""
-                insert into user_roles (stake_id, unit_id, role, lcr_person_uuid, email, calling_name)
-                values (%s,%s,%s,%s,NULL,%s)
+                insert into user_roles (stake_id, unit_id, role, lcr_person_uuid, auth_id, calling_name)
+                values (%s,%s,%s,%s, nullif(%s,'')::uuid, %s)
                 on conflict (stake_id, coalesce(unit_id,'00000000-0000-0000-0000-000000000000'::uuid),
                              role, coalesce(lcr_person_uuid,''))
-                do update set calling_name=excluded.calling_name, email=coalesce(user_roles.email, excluded.email)
-            """, (row[0], row[1], row[2], row[3], row[5]))
+                do update set calling_name=excluded.calling_name, auth_id=excluded.auth_id
+            """, (row[0], row[1], row[2], row[3], row[3], row[5]))
         # revoke roles whose calling disappeared (rebuild), but keep this stake's rows only
         keep = [r[3] for r in fresh.values()]
         cur.execute("""delete from user_roles where stake_id=%s
