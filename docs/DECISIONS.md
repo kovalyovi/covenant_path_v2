@@ -6,6 +6,37 @@ Newest first.
 
 ---
 
+## ADR-005 — Client apps: one Flutter codebase reading the backend (2026-05-27)
+
+**Context.** Goal: backend separated from clients; iOS/macOS/Android/Web apps (one Flutter
+codebase) read data scoped by stake/login/permissions. Question raised: "why not Flutter for
+web and everything?"
+
+**Findings.** (1) A peer's app (github rickybloomfield/Mission-KPIs) is native Swift/iOS with
+our exact structure (LCRClient/OktaAuthSession/NextDataParser), talking to LCR directly on
+device — single-user, no backend. (2) Flutter for all platforms IS one codebase; the only
+constraint is that a **web build can't call LCR directly (browser CORS)** — native can.
+
+**Decision.** Clients read the **backend (Supabase)**, never LCR — so CORS is a non-issue and
+Flutter web works like every other platform. LCR scraping stays only in the backend (daily
+sync). Live on-device scraping is an optional native-only future add-on.
+
+**Client auth.** The project uses **asymmetric (ECC P-256) JWT signing keys**, so we CANNOT mint
+custom JWTs (no private key) and the legacy HS256 secret is being retired — the planned
+"auth-bridge mints a JWT with LCR identity" is dead. Instead: **Supabase Auth (email OTP / Google)**
+and **RLS matches the verified email claim** (`auth.jwt()->>'email'`) to a role. Roles are
+provisioned with email from LCR member data (0004 migration; roles.py). No shared secret, no
+Edge Function bridge, no client LCR creds.
+**Pros.** Standard, all-platform, nothing secret on the client, survives the key migration.
+**Cons.** Login email must match the email LCR has on file (else no scope) — acceptable; admin
+override possible later. **Verified:** a login with the Stake President's email → all 112 members.
+
+**Status.** `apps/viewer/` Flutter scaffold (login + RLS-scoped dashboard) committed; not run here
+(no Flutter SDK) — user runs `flutter create . && flutter run`. Onboarding app (#2) and email
+digests (#4) still ahead.
+
+---
+
 ## ADR-003 — Getting the daily GitHub Actions sync green (2026-05-27)
 
 **Context.** First live CI runs of `scripts/daily_sync.py` failed three times; each
