@@ -32,6 +32,8 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
       SHEETS_SERVICE_ACCOUNT: sheets_sync/service_account.json
     steps:
       - uses: actions/checkout@v4
@@ -56,17 +58,21 @@ jobs:
           restore-keys: profile-cache-
 
       - name: Write Google service account (if configured)
-        if: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
         run: |
-          mkdir -p sheets_sync
-          printf '%s' '${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}' > sheets_sync/service_account.json
+          if [ -n "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
+            mkdir -p sheets_sync
+            printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > sheets_sync/service_account.json
+            echo "wrote sheets_sync/service_account.json"
+          else
+            echo "no GOOGLE_SERVICE_ACCOUNT_JSON secret; Sheets push will be skipped"
+          fi
 
       - name: Run daily sync
         run: |
           ARGS="--with-profile"
-          [ -n "${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}" ] && ARGS="$ARGS --sheets"
-          [ -n "${{ secrets.SUPABASE_DB_URL }}" ] && ARGS="$ARGS --supabase"
-          [ -n "${{ secrets.SPREADSHEET_ID }}" ] && ARGS="$ARGS --spreadsheet-id ${{ secrets.SPREADSHEET_ID }}"
+          [ -n "$GOOGLE_SERVICE_ACCOUNT_JSON" ] && ARGS="$ARGS --sheets"
+          [ -n "$SUPABASE_DB_URL" ] && ARGS="$ARGS --supabase"
+          [ -n "$SPREADSHEET_ID" ] && ARGS="$ARGS --spreadsheet-id $SPREADSHEET_ID"
           echo "running: python scripts/daily_sync.py $ARGS"
           python scripts/daily_sync.py $ARGS
 
