@@ -18,11 +18,21 @@ class _InvitePageState extends State<InvitePage> {
   String? _msg;
   bool _ok = false;
   late Future<List<Map<String, dynamic>>> _invites;
+  List<Map<String, dynamic>> _units = [];
+  String? _unitId; // null => grant everything the inviter can see
 
   @override
   void initState() {
     super.initState();
     _invites = _load();
+    _loadUnits();
+  }
+
+  Future<void> _loadUnits() async {
+    try {
+      final rows = await supabase.from('units').select('id, name').order('name');
+      if (mounted) setState(() => _units = (rows as List).cast<Map<String, dynamic>>());
+    } catch (_) {/* RLS may allow none; the "everything" option still works */}
   }
 
   Future<List<Map<String, dynamic>>> _load() async {
@@ -38,7 +48,8 @@ class _InvitePageState extends State<InvitePage> {
     if (email.isEmpty) return;
     setState(() { _busy = true; _msg = null; });
     try {
-      final n = await supabase.rpc('invite_power_user', params: {'p_email': email});
+      final params = {'p_email': email, if (_unitId != null) 'p_unit': _unitId};
+      final n = await supabase.rpc('invite_power_user', params: params);
       _msg = 'Invited $email ($n scope${n == 1 ? '' : 's'}). They can sign in with that email.';
       _ok = true;
       _email.clear();
@@ -71,6 +82,20 @@ class _InvitePageState extends State<InvitePage> {
                 'email (a one-time code is sent — no Church account needed), see what you '
                 'see, and can invite others.'),
             const SizedBox(height: 12),
+            if (_units.length > 1)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: DropdownButtonFormField<String?>(
+                  initialValue: _unitId,
+                  decoration: const InputDecoration(labelText: 'Access to', border: OutlineInputBorder()),
+                  items: [
+                    const DropdownMenuItem(value: null, child: Text('Everything I can see')),
+                    for (final u in _units)
+                      DropdownMenuItem(value: u['id'].toString(), child: Text('${u['name']} only')),
+                  ],
+                  onChanged: (v) => setState(() => _unitId = v),
+                ),
+              ),
             Row(children: [
               Expanded(child: TextField(
                 controller: _email,
