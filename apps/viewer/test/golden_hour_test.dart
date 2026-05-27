@@ -1,0 +1,57 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:covenant_path_viewer/golden_hour.dart';
+
+// Pure-logic tests for the Golden Hour milestones — the single source of truth the
+// dashboard, detail page, and completion stats all read.
+void main() {
+  Map<String, dynamic> member({
+    String friends = 'No', String calling = 'No', String hasMin = 'No',
+    String givesMin = 'No', String baptism = '', String recommend = 'No',
+    String patriarchal = 'No', String endowed = 'No', String aaronic = 'N/A',
+    String melch = 'N/A', String sex = 'F',
+  }) => {
+        'friends': friends, 'calling': calling, 'ministering_brothers_sisters': hasMin,
+        'ministering_assignment': givesMin, 'baptism_date': baptism, 'temple_recommend': recommend,
+        'patriarchal_blessing': patriarchal, 'living_ordinance': endowed,
+        'aaronic_priesthood': aaronic, 'melchizedek_priesthood': melch, 'sex': sex,
+      };
+
+  group('milestone predicates', () {
+    test('friends Yes is complete, No is not', () {
+      final f = milestones.firstWhere((m) => m.abbr == 'F');
+      expect(f.complete(member(friends: 'Yes')), isTrue);
+      expect(f.complete(member(friends: 'No')), isFalse);
+    });
+
+    test('baptized requires a real date (not N/A/blank/needs-profile)', () {
+      final b = milestones.firstWhere((m) => m.abbr == 'B');
+      expect(b.complete(member(baptism: '6 Feb 2026')), isTrue);
+      expect(b.complete(member(baptism: '')), isFalse);
+      expect(b.complete(member(baptism: 'needs-profile-api')), isFalse);
+    });
+
+    test('temple recommend only Active counts', () {
+      final r = milestones.firstWhere((m) => m.abbr == 'R');
+      expect(r.complete(member(recommend: 'Active')), isTrue);
+      expect(r.complete(member(recommend: 'Expired')), isFalse);
+    });
+  });
+
+  group('milestonesFor (demographic filtering)', () {
+    test('priesthood chips only apply to males', () {
+      final abbrsF = milestonesFor(member(sex: 'F')).map((m) => m.abbr).toSet();
+      final abbrsM = milestonesFor(member(sex: 'M')).map((m) => m.abbr).toSet();
+      expect(abbrsF.contains('AP'), isFalse);
+      expect(abbrsF.contains('MP'), isFalse);
+      expect(abbrsM.contains('AP'), isTrue);
+      expect(abbrsM.contains('MP'), isTrue);
+    });
+  });
+
+  test('a fully-integrated member completes all applicable milestones', () {
+    final m = member(friends: 'Yes', calling: 'Yes', hasMin: 'Yes', givesMin: 'Yes',
+        baptism: '1 Jan 2025', recommend: 'Active', patriarchal: 'Yes', endowed: 'Yes', sex: 'F');
+    final applicable = milestonesFor(m);
+    expect(applicable.where((x) => x.complete(m)).length, applicable.length);
+  });
+}
