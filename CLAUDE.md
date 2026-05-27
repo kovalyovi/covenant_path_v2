@@ -3,7 +3,8 @@
 This file is the source of truth for **how to make changes consistently** across the
 backend and all client views (web / iOS / macOS / Android). Read it before editing.
 Companion docs: `PROGRESS.md` (status), `docs/DECISIONS.md` (ADR log — the *why*),
-`docs/DELEGATED_ACCESS.md`, `docs/CUSTOM_API_KEYS.md`, `apps/viewer/ARCHITECTURE.md`.
+`docs/DELEGATED_ACCESS.md`, `docs/CUSTOM_API_KEYS.md`, `docs/DEPLOYMENT.md` (broker +
+viewer hosting), `backend/auth_broker/README.md`, `apps/viewer/ARCHITECTURE.md`.
 
 ## The shape of the system
 
@@ -35,7 +36,8 @@ LCR (church data)
 3. **RLS is the only access gate.** Clients do no filtering; the DB returns only allowed
    rows. Any new client query is automatically scoped. Don't add app-side access checks.
 4. **Test before commit.** Backend: `python tools/test_suite.py` (+ `--live`),
-   `python -m backend.test_rls`, `python -m backend.test_power_users`. Flutter:
+   `python -m backend.test_rls`, `python -m backend.test_power_users`,
+   `python -m backend.test_broker` (CORS + broker units). Flutter:
    `D:/dev/flutter/bin/flutter analyze` (must be "No issues found"); `flutter build web`.
 5. **Migrations are additive + numbered** (`backend/migrations/000N_*.sql`), idempotent
    (`if not exists` / `drop policy ... ; create`). Apply with `python -m backend.apply`.
