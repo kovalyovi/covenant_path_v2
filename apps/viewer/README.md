@@ -54,7 +54,11 @@ flutter build web --dart-define=SUPABASE_URL=... --dart-define=SUPABASE_ANON_KEY
 
 - `lib/main.dart` — Supabase init + auth gate (login ↔ dashboard).
 - `lib/login_page.dart` — email one-time-code sign-in.
-- `lib/dashboard_page.dart` — reads `members` (RLS-scoped), grouped by unit + summary.
+- `lib/dashboard_page.dart` — reads `members` (RLS-scoped); two views:
+  **Golden Hour** (per-member integration-milestone chips — friends, calling, ministering,
+  baptized, recommend, patriarchal, endowed — + per-milestone completion %), and
+  **All data** (every covenant-path field = the full spreadsheet). We surface more than the
+  reference iOS app (e.g. baptism date, temple recommend, patriarchal, endowment).
 - `lib/config.dart` — `SUPABASE_URL` / `SUPABASE_ANON_KEY` via `--dart-define`.
 
 ## Roadmap
