@@ -248,7 +248,7 @@ def build_stake_report(
     # blocked endpoint and mark the rest as access-blocked.
     profile_blocked = False
     profile_fail_streak = 0
-    stats = {"units": 0, "units_failed": 0, "members": 0, "profile_ok": 0,
+    stats = {"units": 0, "units_failed": 0, "failed_units": [], "members": 0, "profile_ok": 0,
              "profile_cached": 0, "profile_blocked": 0, "profile_error": 0, "details_missing": 0}
 
     for unit in units:
@@ -258,6 +258,7 @@ def build_stake_report(
                     label=f"progress_record {unit.unit_number}")
         if pr is None:
             stats["units_failed"] += 1
+            stats["failed_units"].append(unit.name)
             if verbose:
                 print(f"    [!] skipped {unit.name}: progress-record unavailable after retries")
             continue

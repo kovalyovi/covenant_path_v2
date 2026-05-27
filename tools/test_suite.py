@@ -180,6 +180,22 @@ def test_leadership_harvest():
     return "recursive positionType harvest ok"
 
 
+def test_sheets_preserve_failed_units():
+    from sheets_sync.service import SheetsSync
+    m = object.__new__(SheetsSync)  # _merge uses no instance attrs
+    existing = {
+        "Alice": ["Alice", "Seabrook (Spanish)", "", "", "", "", "Yes"] + [""] * 8 + ["Yes"],
+        "Bob": ["Bob", "Bond Park", "", "", "", "", "Yes"] + [""] * 8,
+    }
+    members = [{"name": "Bob", "unit": "Bond Park", "friends": "Yes"}]  # Alice's unit failed
+    rows_no, ch_no = m._merge(members, dict(existing), [], preserve_units=set())
+    rows_p, ch_p = m._merge(members, dict(existing), [], preserve_units={"Seabrook (Spanish)"})
+    assert sum(c["field"] == "Removed" for c in ch_no) == 1, "Alice should be removed without preserve"
+    assert sum(c["field"] == "Removed" for c in ch_p) == 0, "Alice should be kept with preserve"
+    assert any(r[0] == "Alice" and r[-1] == "Yes" for r in rows_p), "Alice's manual P col must survive"
+    return "failed-unit rows preserved (with manual cols) ok"
+
+
 def test_clean_missing_filters_unnamed():
     from lcr_client import access
     row = {"label": "Stake leadership", "granting_roles": [
@@ -271,7 +287,7 @@ def main() -> int:
     offline = [test_token_store_roundtrip, test_token_store_key_mismatch,
                test_report_degradation_helpers, test_okta_building_blocks, test_access_humanize,
                test_name_cache_roundtrip, test_clean_missing_filters_unnamed,
-               test_leadership_harvest, test_profile_cache]
+               test_leadership_harvest, test_profile_cache, test_sheets_preserve_failed_units]
     for t in offline:
         check(t.__name__, t)
 
