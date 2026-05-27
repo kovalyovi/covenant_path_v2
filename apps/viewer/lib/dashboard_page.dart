@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'golden_hour.dart';
+import 'invite_page.dart';
 import 'main.dart';
 import 'person_detail_page.dart';
 
@@ -48,6 +49,12 @@ class _DashboardPageState extends State<DashboardPage> {
       appBar: AppBar(
         title: const Text('Covenant Path'),
         actions: [
+          IconButton(
+            onPressed: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const InvitePage())),
+            icon: const Icon(Icons.person_add_alt),
+            tooltip: 'Invite a power user',
+          ),
           IconButton(onPressed: _refresh, icon: const Icon(Icons.refresh)),
           IconButton(
             onPressed: () => supabase.auth.signOut(),
