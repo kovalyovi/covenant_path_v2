@@ -271,10 +271,22 @@ broker, with MFA factor pick/verify) and "Email code" (existing OTP, for power-u
 with no Church account). `broker_client.dart` wraps the endpoints; `config.dart` adds
 `brokerUrl` (`--dart-define=BROKER_URL`). analyze clean, build web OK, tests 5/5.
 
-Verified: server-side login returns the right identity (name+email+username); broker imports
-and all routes register; `/health` OK. **Outstanding:** set `SUPABASE_SERVICE_ROLE_KEY` on the
-broker host (the one secret still needed — minting fails without it), deploy, point the app at
-it with `--dart-define=BROKER_URL=...`. Until then the live mint path is untested.
+**LIVE (2026-05-27):** broker deployed to Render (`covenant-path-broker.onrender.com`),
+viewer deployed to Cloudflare Pages (`app.membercovenantpath.org` + `covenant-path-app.pages.dev`).
+Verified end-to-end against production: Church login → identity → Supabase mint → app-side
+`verifyOtp` → real `access_token`. `SUPABASE_SERVICE_ROLE_KEY` is set on Render.
+
+Hardening shipped same day:
+- **CORS fix** — `allow_origin_regex` for `*.membercovenantpath.org`, `*.pages.dev`, localhost
+  (Starlette doesn't glob `allow_origins`, so the Pages URL was being blocked). `backend/test_broker.py`
+  locks it in (11 checks: allow/deny preflight, /health, mint+MFA error paths).
+- **Cold-start tolerance** — Render free sleeps after ~15 min; `broker_client.dart` retries
+  network failures across ~60s and shows "Waking up the sign-in service…".
+- **Keep-warm** — `.github/workflows/keep-broker-warm.yml` pings /health every 10 min
+  (best-effort); `docs/DEPLOYMENT.md` documents UptimeRobot (reliable) + full deploy steps.
+
+All suites green: test_suite 10/10, test_broker 11/11, test_rls 3/3, test_power_users 5/5,
+flutter test 9/9, build web OK. MFA branch is coded but unexercised (account has no 2FA).
 
 ---
 
