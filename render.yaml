@@ -15,5 +15,3 @@ services:
         sync: false
       - key: ALLOWED_ORIGINS
         value: https://app.membercovenantpath.org
-      - key: CP_TOKEN_KEY
-        sync: false
