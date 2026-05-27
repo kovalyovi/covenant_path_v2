@@ -6,6 +6,46 @@ Newest first.
 
 ---
 
+## ADR-003 — Getting the daily GitHub Actions sync green (2026-05-27)
+
+**Context.** First live CI runs of `scripts/daily_sync.py` failed three times; each
+failure taught us something. Documented so we don't relearn it.
+
+**Failure 1 — one flaky unit crashed the whole run.** `progress-record` for unit 458821
+(Seabrook Branch, Spanish) returned HTTP 500 and the exception aborted the entire stake
+report. **Fix:** `report.py` now retries per-unit calls and *skips* a unit that keeps
+failing (records `failed_units`), so the run completes with the other units. NOTE: 458821
+500s **persistently right now (even locally)** — it's an LCR-side issue with that unit,
+not transient; the skip is the correct behavior until LCR recovers.
+
+**Failure 2 — missing dependency.** `ModuleNotFoundError: psycopg2`. It was pip-installed
+locally but never added to `requirements.txt`, so CI couldn't import the backend. **Fix:**
+added `psycopg2-binary`. Lesson: anything imported must be in requirements, not just local.
+
+**Failure 2b — Sheets is destructive on partial scrapes.** Sheets sync is a full A3:Z
+replace, so a skipped unit would *delete its rows*. (Run 2's Sheets push, before the
+psycopg2 crash, did drop Seabrook's 12 rows.) **Fix:** `sheets_sync` now takes
+`preserve_units` — existing rows for units that failed to scrape are kept as-is. Supabase
+upserts are already non-destructive (stale rows persist), so the two stores degrade safely.
+
+**Failure 3 — Supabase direct endpoint is IPv6-only.** `psycopg2.OperationalError: Network
+is unreachable` on an IPv6 address. Supabase's **direct** host `db.<ref>.supabase.co:5432`
+(and the *dedicated* pooler) are **IPv6-only**; **GitHub Actions runners are IPv4-only**.
+**Fix:** use the **shared pooler** `aws-1-us-east-1.pooler.supabase.com:5432`, user
+`postgres.<ref>` — **IPv4 and free on every tier** (the $4/mo "dedicated IPv4" add-on is
+NOT needed). Region derived from the DB IP via AWS `ip-ranges.json` (us-east-1); the project
+is on the `aws-1-` pooler generation (`aws-0-` returns "Tenant or user not found"). Local
+dev can still use the direct/IPv6 URL; **CI must use the pooler**.
+
+**Outcome (verified live).** Green run: headless Okta login from CI ✓, scrape (101 members,
+Seabrook skipped gracefully) ✓, Sheets updated (preserving skipped unit) ✓, Supabase upsert
+over IPv4 pooler ✓ — `stakes.last_synced_at` + `members.updated_at` stamped from the CI run.
+**Wins:** resilient to flaky units + partial scrapes, no paid add-ons, fully headless daily.
+**Drawback:** a persistently-failing unit (458821) won't refresh until LCR fixes it; its data
+stays as last-known-good in both stores (not lost).
+
+---
+
 ## ADR-002 — Cutting LCR call volume for the daily multi-stake job (2026-05-26)
 
 **Context.** The report's dominant cost is per-member: 1 `progress_details` call + 3
