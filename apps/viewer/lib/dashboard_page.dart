@@ -1,37 +1,23 @@
 import 'package:flutter/material.dart';
 
+import 'golden_hour.dart';
 import 'main.dart';
+import 'person_detail_page.dart';
 
 /// Reads `members` from Supabase — RLS returns ONLY what the signed-in user's calling
-/// allows (whole stake for stake leaders, their unit for ward leaders). Two views:
-///  • Golden Hour — at-a-glance integration milestones per new member (the chips).
-///  • All data — every covenant-path field we have (the full spreadsheet).
+/// allows. Two views, matching (and extending) the reference iOS app:
+///  • Golden Hour — person rows (avatar + milestone circle-chips) grouped by ward + stats.
+///  • Spreadsheet — every covenant-path field in a scrollable table (the full sheet).
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
   @override
   State<DashboardPage> createState() => _DashboardPageState();
 }
 
-// every covenant-path field we store; pulled in full so the "All data" view = spreadsheet.
 const _columns =
     'name, unit_name, baptism_date, birth_date, membership_duration, sex, friends, '
     'aaronic_priesthood, melchizedek_priesthood, calling, ministering_brothers_sisters, '
     'ministering_assignment, temple_recommend, patriarchal_blessing, living_ordinance';
-
-/// The Golden Hour milestones (label, field, "complete" predicate). Order = priority.
-final _milestones = <(String, String, bool Function(Map<String, dynamic>))>[
-  ('Friends', 'friends', (m) => m['friends'] == 'Yes'),
-  ('Calling', 'calling', (m) => m['calling'] == 'Yes'),
-  ('Has ministers', 'ministering_brothers_sisters', (m) => m['ministering_brothers_sisters'] == 'Yes'),
-  ('Ministers', 'ministering_assignment', (m) => m['ministering_assignment'] == 'Yes'),
-  ('Baptized', 'baptism_date', (m) => _has(m['baptism_date'])),
-  ('Recommend', 'temple_recommend', (m) => m['temple_recommend'] == 'Active'),
-  ('Patriarchal', 'patriarchal_blessing', (m) => m['patriarchal_blessing'] == 'Yes'),
-  ('Endowed', 'living_ordinance', (m) => m['living_ordinance'] == 'Yes'),
-];
-
-bool _has(dynamic v) => v != null && v.toString().trim().isNotEmpty &&
-    !{'N/A', 'No', 'needs-profile-api'}.contains(v.toString());
 
 class _DashboardPageState extends State<DashboardPage> {
   late Future<List<Map<String, dynamic>>> _future;
@@ -53,6 +39,9 @@ class _DashboardPageState extends State<DashboardPage> {
     await _future;
   }
 
+  void _open(Map<String, dynamic> m) => Navigator.of(context)
+      .push(MaterialPageRoute(builder: (_) => PersonDetailPage(member: m)));
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -73,7 +62,7 @@ class _DashboardPageState extends State<DashboardPage> {
             child: SegmentedButton<bool>(
               segments: const [
                 ButtonSegment(value: true, label: Text('Golden Hour'), icon: Icon(Icons.timelapse)),
-                ButtonSegment(value: false, label: Text('All data'), icon: Icon(Icons.table_rows)),
+                ButtonSegment(value: false, label: Text('Spreadsheet'), icon: Icon(Icons.grid_on)),
               ],
               selected: {_goldenHour},
               onSelectionChanged: (s) => setState(() => _goldenHour = s.first),
@@ -100,7 +89,9 @@ class _DashboardPageState extends State<DashboardPage> {
           }
           return RefreshIndicator(
             onRefresh: _refresh,
-            child: _goldenHour ? _GoldenHourView(rows: rows) : _AllDataView(rows: rows),
+            child: _goldenHour
+                ? _GoldenHourView(rows: rows, onTap: _open)
+                : _SpreadsheetView(rows: rows, onTap: _open),
           );
         },
       ),
@@ -108,11 +99,12 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 }
 
-// ---- Golden Hour view: milestone chips per member + completion summary ----
+// ---- Golden Hour: stats + ward groups + person rows (avatar + chips) ----
 
 class _GoldenHourView extends StatelessWidget {
-  const _GoldenHourView({required this.rows});
+  const _GoldenHourView({required this.rows, required this.onTap});
   final List<Map<String, dynamic>> rows;
+  final void Function(Map<String, dynamic>) onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -120,63 +112,44 @@ class _GoldenHourView extends StatelessWidget {
     for (final r in rows) {
       (byUnit[(r['unit_name'] ?? '—').toString()] ??= []).add(r);
     }
-    return ListView(
-      children: [
-        _CompletionSummary(rows: rows),
-        for (final unit in byUnit.keys)
-          ExpansionTile(
-            title: Text(unit),
-            subtitle: Text('${byUnit[unit]!.length} new members'),
-            initiallyExpanded: byUnit.length <= 2,
-            children: [for (final m in byUnit[unit]!) _MemberGoldenHourTile(m: m)],
-          ),
-        const SizedBox(height: 24),
-      ],
-    );
+    return ListView(children: [
+      _CompletionSummary(rows: rows),
+      for (final unit in byUnit.keys)
+        ExpansionTile(
+          title: Text(unit),
+          subtitle: Text('${byUnit[unit]!.length} new members'),
+          initiallyExpanded: byUnit.length <= 2,
+          children: [for (final m in byUnit[unit]!) _PersonRow(m: m, onTap: onTap)],
+        ),
+      const SizedBox(height: 24),
+    ]);
   }
 }
 
-class _MemberGoldenHourTile extends StatelessWidget {
-  const _MemberGoldenHourTile({required this.m});
+class _PersonRow extends StatelessWidget {
+  const _PersonRow({required this.m, required this.onTap});
   final Map<String, dynamic> m;
+  final void Function(Map<String, dynamic>) onTap;
 
   @override
   Widget build(BuildContext context) {
-    final done = _milestones.where((x) => x.$3(m)).length;
+    final done = milestonesFor(m).where((x) => x.complete(m)).length;
+    final total = milestonesFor(m).length;
+    final baptism = m['baptism_date'];
     return ListTile(
+      onTap: () => onTap(m),
+      leading: InitialsAvatar(name: m['name']?.toString() ?? '?'),
       title: Row(children: [
         Expanded(child: Text(m['name']?.toString() ?? '—')),
-        Text('$done/${_milestones.length}', style: Theme.of(context).textTheme.labelMedium),
+        Text('$done/$total', style: Theme.of(context).textTheme.labelMedium),
       ]),
-      subtitle: Padding(
-        padding: const EdgeInsets.only(top: 6),
-        child: Wrap(spacing: 6, runSpacing: 6, children: [
-          for (final ms in _milestones) _MilestoneChip(label: ms.$1, complete: ms.$3(m)),
-        ]),
-      ),
-    );
-  }
-}
-
-class _MilestoneChip extends StatelessWidget {
-  const _MilestoneChip({required this.label, required this.complete});
-  final String label;
-  final bool complete;
-  @override
-  Widget build(BuildContext context) {
-    final c = complete ? Colors.green : Colors.grey;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: c.withOpacity(0.12),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: c.withOpacity(0.4)),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(complete ? Icons.check_circle : Icons.radio_button_unchecked, size: 14, color: c),
-        const SizedBox(width: 4),
-        Text(label, style: TextStyle(fontSize: 12, color: c.shade800)),
+      subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (baptism != null && baptism.toString().isNotEmpty)
+          Text('Baptized $baptism', style: Theme.of(context).textTheme.bodySmall),
+        const SizedBox(height: 4),
+        GoldenHourChips(member: m),
       ]),
+      isThreeLine: true,
     );
   }
 }
@@ -196,8 +169,8 @@ class _CompletionSummary extends StatelessWidget {
               style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 10),
           Wrap(spacing: 16, runSpacing: 10, children: [
-            for (final ms in _milestones)
-              _PctStat(label: ms.$1, pct: n == 0 ? 0 : rows.where(ms.$3).length / n),
+            for (final ms in milestones)
+              _PctStat(label: ms.abbr, full: ms.label, pct: n == 0 ? 0 : rows.where(ms.complete).length / n),
           ]),
         ]),
       ),
@@ -206,58 +179,63 @@ class _CompletionSummary extends StatelessWidget {
 }
 
 class _PctStat extends StatelessWidget {
-  const _PctStat({required this.label, required this.pct});
+  const _PctStat({required this.label, required this.full, required this.pct});
   final String label;
+  final String full;
   final double pct;
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 92,
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('${(pct * 100).round()}%', style: Theme.of(context).textTheme.titleMedium),
-        Text(label, style: Theme.of(context).textTheme.bodySmall),
-        const SizedBox(height: 2),
-        LinearProgressIndicator(value: pct, minHeight: 4),
-      ]),
+    return Tooltip(
+      message: full,
+      child: SizedBox(
+        width: 88,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${(pct * 100).round()}%', style: Theme.of(context).textTheme.titleMedium),
+          Text(label, style: Theme.of(context).textTheme.bodySmall),
+          const SizedBox(height: 2),
+          LinearProgressIndicator(value: pct, minHeight: 4),
+        ]),
+      ),
     );
   }
 }
 
-// ---- All-data view: every field (the spreadsheet) ----
+// ---- Spreadsheet: every field, scrollable table (the full sheet) ----
 
-class _AllDataView extends StatelessWidget {
-  const _AllDataView({required this.rows});
+class _SpreadsheetView extends StatelessWidget {
+  const _SpreadsheetView({required this.rows, required this.onTap});
   final List<Map<String, dynamic>> rows;
+  final void Function(Map<String, dynamic>) onTap;
 
-  static const _fields = <(String, String)>[
-    ('Unit', 'unit_name'), ('Baptism', 'baptism_date'), ('Member for', 'membership_duration'),
-    ('Birth', 'birth_date'), ('Friends', 'friends'), ('Aaronic', 'aaronic_priesthood'),
-    ('Melchizedek', 'melchizedek_priesthood'), ('Calling', 'calling'),
-    ('Ministers (has)', 'ministering_brothers_sisters'), ('Ministers (gives)', 'ministering_assignment'),
-    ('Temple recommend', 'temple_recommend'), ('Patriarchal', 'patriarchal_blessing'),
-    ('Living ordinance', 'living_ordinance'),
+  static const _cols = <(String, String)>[
+    ('Member', 'name'), ('Unit', 'unit_name'), ('Baptism', 'baptism_date'),
+    ('Member for', 'membership_duration'), ('Birth', 'birth_date'), ('Friends', 'friends'),
+    ('Aaronic', 'aaronic_priesthood'), ('Melch.', 'melchizedek_priesthood'), ('Calling', 'calling'),
+    ('Min. (has)', 'ministering_brothers_sisters'), ('Min. (gives)', 'ministering_assignment'),
+    ('Recommend', 'temple_recommend'), ('Patriarchal', 'patriarchal_blessing'),
+    ('Living ord.', 'living_ordinance'),
   ];
 
   @override
   Widget build(BuildContext context) {
-    return ListView.separated(
-      itemCount: rows.length,
-      separatorBuilder: (_, __) => const Divider(height: 1),
-      itemBuilder: (context, i) {
-        final m = rows[i];
-        return ExpansionTile(
-          title: Text(m['name']?.toString() ?? '—'),
-          subtitle: Text('${m['unit_name'] ?? ''}'),
-          children: [
-            for (final f in _fields)
-              ListTile(
-                dense: true,
-                title: Text(f.$1),
-                trailing: Text('${m[f.$2] ?? '—'}'),
+    return SingleChildScrollView(
+      scrollDirection: Axis.vertical,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: DataTable(
+          headingRowHeight: 40,
+          dataRowMinHeight: 38,
+          dataRowMaxHeight: 46,
+          columns: [for (final c in _cols) DataColumn(label: Text(c.$1))],
+          rows: [
+            for (final m in rows)
+              DataRow(
+                onSelectChanged: (_) => onTap(m),
+                cells: [for (final c in _cols) DataCell(Text('${m[c.$2] ?? ''}'))],
               ),
           ],
-        );
-      },
+        ),
+      ),
     );
   }
 }
