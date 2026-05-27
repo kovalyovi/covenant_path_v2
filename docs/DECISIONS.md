@@ -6,6 +6,28 @@ Newest first.
 
 ---
 
+## ADR-006 — Power users: invitations that clone scope (2026-05-27)
+
+**Context.** Any leader (stake or ward) must be able to give someone else — possibly with
+no Church account (e.g. a missionary email) — the same view they have, recursively.
+
+**Decision.** `invite_power_user(email)` (SECURITY DEFINER RPC) clones the caller's exact
+`user_roles` (stake_id, unit_id, role) to the invited email with `source='invitation'`.
+The invitee signs in via Supabase email OTP (any email) and RLS-by-email grants the same
+scope; they can invite further. `revoke_power_user(email)` removes it within the caller's
+scope. An `invitations` table audits + queues emails.
+
+**Why safe.** You can only CLONE roles you already hold → no privilege escalation (a ward
+leader's invitee is scoped to that ward, verified: sees 5 not 112). Audited + revocable.
+RLS subject key is now `coalesce(lcr_person_uuid, email)` so many invited emails can share
+a scope. Email delivery via Resend; **real recipients need a verified Resend domain** (the
+shared `onboarding@resend.dev` only delivers to the account owner) — per-stake keys
+(`docs/CUSTOM_API_KEYS.md`) isolate quota. **Drawback/risk:** powerful by design — anyone
+with access can extend it to any email; mitigated by audit + revoke + scope-clone-only.
+**Verified:** `backend/test_power_users.py` (invite/recursive/no-escalation/revoke).
+
+---
+
 ## ADR-005 — Client apps: one Flutter codebase reading the backend (2026-05-27)
 
 **Context.** Goal: backend separated from clients; iOS/macOS/Android/Web apps (one Flutter
