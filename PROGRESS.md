@@ -251,6 +251,33 @@ converts/minors); `fetch_recommend` correctly maps that to "No". The per-member 
 dump was misleading noise — now a quiet debug log. A genuinely stale recommend id
 shows as uniform "No" across everyone → caught by the report sanity check.
 
+## Church login everywhere — auth broker (2026-05-27)
+
+Goal: let users sign in with their **Church account** (username/password, like LCR) on
+**web and native**, with MFA. A browser can't call the Church's Okta directly (CORS), so a
+small server does it. Built `backend/auth_broker/`:
+- `okta_flow.py` — resumable, MFA-aware IDX login reusing `lcr_client/okta_login` internals.
+  `start_login` → success+identity or `mfa_required`+factors; `select_factor`/`verify_mfa`;
+  `verify_captured_session` for the native-WebView path. Passwords/codes never logged;
+  failures `dump_debug` a redacted record.
+- `session_mint.py` — Supabase Admin `generate_link` → `email_otp` the app verifies (the
+  project's asymmetric JWT keys make custom minting impossible, so we go through Auth).
+- `app.py` — FastAPI: `/auth/password`, `/auth/mfa/select`, `/auth/mfa/verify`,
+  `/auth/session`, `/health`. CORS from `ALLOWED_ORIGINS`. Request ids in every log line.
+- Deploy: root `Dockerfile` (slim, no browser) + `render.yaml` (free-tier blueprint).
+
+Viewer (`apps/viewer/lib/login_page.dart`) now has **dual login**: "Church account" (via the
+broker, with MFA factor pick/verify) and "Email code" (existing OTP, for power-user invitees
+with no Church account). `broker_client.dart` wraps the endpoints; `config.dart` adds
+`brokerUrl` (`--dart-define=BROKER_URL`). analyze clean, build web OK, tests 5/5.
+
+Verified: server-side login returns the right identity (name+email+username); broker imports
+and all routes register; `/health` OK. **Outstanding:** set `SUPABASE_SERVICE_ROLE_KEY` on the
+broker host (the one secret still needed — minting fails without it), deploy, point the app at
+it with `--dart-define=BROKER_URL=...`. Until then the live mint path is untested.
+
+---
+
 ## Open problems / next steps
 1. Confirm the profile actions work with a *fresh crawler* `storage_state` (one that
    never visited /mlt) — may need a one-time /mlt session warm-up. (Not seen yet with
