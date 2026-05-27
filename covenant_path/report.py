@@ -116,6 +116,25 @@ def _details_with_retry(client: LcrClient, person_id: str, cmis_id: Any, attempt
     return None
 
 
+def _retry(fn, attempts: int = 3, delay: float = 2.0, label: str = ""):
+    """Retry a call on transient failures (LCR occasionally 500s). Returns None if all fail.
+
+    AuthExpiredError propagates (it's already handled with one relogin in LcrSession);
+    everything else (e.g. a 500) is retried so one flaky unit doesn't fail the whole run.
+    """
+    for i in range(attempts):
+        try:
+            return fn()
+        except AuthExpiredError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            if i == attempts - 1:
+                logger.warning("giving up on %s after %d attempts: %s", label, attempts, exc)
+                return None
+            time.sleep(delay)
+    return None
+
+
 def _build_birth_map(client: LcrClient, unit_number: int) -> dict[str, str]:
     birth_map: dict[str, str] = {}
     for m in client.member_list(unit_number):
@@ -229,14 +248,21 @@ def build_stake_report(
     # blocked endpoint and mark the rest as access-blocked.
     profile_blocked = False
     profile_fail_streak = 0
-    stats = {"units": 0, "members": 0, "profile_ok": 0, "profile_cached": 0,
-             "profile_blocked": 0, "profile_error": 0, "details_missing": 0}
+    stats = {"units": 0, "units_failed": 0, "members": 0, "profile_ok": 0,
+             "profile_cached": 0, "profile_blocked": 0, "profile_error": 0, "details_missing": 0}
 
     for unit in units:
         if verbose:
             print(f"[*] {unit.name} ({unit.unit_number})")
-        pr = client.progress_record(unit.unit_number)
-        birth_map = _build_birth_map(client, unit.unit_number)
+        pr = _retry(lambda u=unit: client.progress_record(u.unit_number),
+                    label=f"progress_record {unit.unit_number}")
+        if pr is None:
+            stats["units_failed"] += 1
+            if verbose:
+                print(f"    [!] skipped {unit.name}: progress-record unavailable after retries")
+            continue
+        birth_map = _retry(lambda u=unit: _build_birth_map(client, u.unit_number),
+                           label=f"member_list {unit.unit_number}") or {}
 
         people = list(pr.raw.get("newMemberList") or [])
         if include_returning:
