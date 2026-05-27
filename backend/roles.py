@@ -54,10 +54,28 @@ def _positions(objs) -> list[dict]:
     return out
 
 
+def _email_by_uuid(client) -> dict[str, str]:
+    """personUuid -> email across the stake's units (for matching app logins to roles)."""
+    out: dict[str, str] = {}
+    try:
+        for u in client.user_context().child_units:
+            if not u.unit_number:
+                continue
+            for m in client.member_list(u.unit_number):
+                pu = m.raw.get("personUuid") or m.raw.get("uuid")
+                em = m.raw.get("email") or m.raw.get("emailAddress")
+                if pu and em:
+                    out[pu] = em
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("email enrichment skipped: %s", exc)
+    return out
+
+
 def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]) -> dict:
     """Rebuild user_roles for one stake from its leadership directory. Returns counts."""
     matrix = fetch_access_matrix(client.session)
     allowed = set(matrix.feature_roles(_ACCESS_FEATURE))  # role ids with member-data access
+    email_by_uuid = _email_by_uuid(client)
 
     fresh = {}  # provision-key -> row, dedup
     for p in _positions(leadership.fetch_leadership(client.session)):
@@ -69,21 +87,21 @@ def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]
         if role == "ward_leader" and unit_id is None:
             continue  # ward calling we can't map to a known unit (e.g. a different stake)
         key = (role, unit_id, p["person_uuid"])
-        fresh[key] = (stake_id, unit_id, role, p["person_uuid"], p["name"], p["calling"])
+        fresh[key] = (stake_id, unit_id, role, p["person_uuid"], p["name"], p["calling"],
+                      email_by_uuid.get(p["person_uuid"]))
 
     with conn.cursor() as cur:
         for row in fresh.values():
-            # auth_id is set to the LCR person uuid: an app login that authenticates via
-            # the member's Church identity (JWT sub = their LCR person uuid) is therefore
-            # already RLS-scoped — no separate "bind on first login" step. (LCR person
-            # uuids are valid UUIDs.)
+            # auth_id = LCR person uuid (login via Church identity is auto-scoped); email
+            # lets a Supabase-Auth login (magic-link/Google) match a role by verified email.
             cur.execute("""
-                insert into user_roles (stake_id, unit_id, role, lcr_person_uuid, auth_id, calling_name)
-                values (%s,%s,%s,%s, nullif(%s,'')::uuid, %s)
+                insert into user_roles (stake_id, unit_id, role, lcr_person_uuid, auth_id, calling_name, email)
+                values (%s,%s,%s,%s, nullif(%s,'')::uuid, %s, %s)
                 on conflict (stake_id, coalesce(unit_id,'00000000-0000-0000-0000-000000000000'::uuid),
                              role, coalesce(lcr_person_uuid,''))
-                do update set calling_name=excluded.calling_name, auth_id=excluded.auth_id
-            """, (row[0], row[1], row[2], row[3], row[3], row[5]))
+                do update set calling_name=excluded.calling_name, auth_id=excluded.auth_id,
+                              email=coalesce(excluded.email, user_roles.email)
+            """, (row[0], row[1], row[2], row[3], row[3], row[5], row[6]))
         # revoke roles whose calling disappeared (rebuild), but keep this stake's rows only
         keep = [r[3] for r in fresh.values()]
         cur.execute("""delete from user_roles where stake_id=%s
