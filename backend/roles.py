@@ -98,7 +98,7 @@ def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]
                 insert into user_roles (stake_id, unit_id, role, lcr_person_uuid, auth_id, calling_name, email)
                 values (%s,%s,%s,%s, nullif(%s,'')::uuid, %s, %s)
                 on conflict (stake_id, coalesce(unit_id,'00000000-0000-0000-0000-000000000000'::uuid),
-                             role, coalesce(lcr_person_uuid,''))
+                             role, coalesce(lcr_person_uuid, lower(email), ''))
                 do update set calling_name=excluded.calling_name, auth_id=excluded.auth_id,
                               email=coalesce(excluded.email, user_roles.email)
             """, (row[0], row[1], row[2], row[3], row[3], row[5], row[6]))
