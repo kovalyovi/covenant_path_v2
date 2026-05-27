@@ -157,14 +157,13 @@ def fetch_recommend(session, person_uuid: str) -> dict:
 
     obj = call()
     if obj is None:
-        _heal_once(session, person_uuid)
-        obj = call()
-    if obj is None:
         # Often LEGITIMATE, not an error: LCR's recommend server action throws
         # (returns an error/digest flight object) for members who simply have no
-        # recommend (e.g. new converts, minors) -> we map that to "No". A genuinely
-        # stale action id surfaces as a uniform "No" across *everyone*, which the
-        # report's post-run sanity check flags. So log quietly, don't dump per member.
+        # recommend (e.g. new converts, minors) -> we map that to "No". We do NOT
+        # self-heal here: the record action (fetch_member_profile) is the reliable
+        # canary for a stale build; healing on a no-recommend member is a false alarm
+        # (it triggered a needless Playwright run in CI). A genuinely stale recommend
+        # id surfaces as a uniform "No" across everyone -> report sanity check flags it.
         logger.debug("no recommend data for %s (no recommend, or stale action id)", person_uuid)
         return {}
     return obj.get("recommend") or {}
@@ -176,11 +175,9 @@ def fetch_ministering(session, person_uuid: str) -> dict:
         objs = call_action(session, person_uuid, action_config.load()["ministering"], [person_uuid])
         return _find(objs, "ministeringBrothersAssignments") or _find(objs, "ministeringSistersAssignments")
 
-    obj = call()
-    if obj is None:
-        _heal_once(session, person_uuid)
-        obj = call()
-    obj = obj or {}
+    # no self-heal here either — a no-assignment member legitimately returns nothing;
+    # the record action is the canary for a stale build (see fetch_recommend).
+    obj = call() or {}
     companionships = (obj.get("ministeringBrothersAssignments") or []) + \
                      (obj.get("ministeringSistersAssignments") or [])
     has_outbound = any(c.get("assignments") for c in companionships)
