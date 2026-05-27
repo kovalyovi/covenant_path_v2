@@ -66,13 +66,20 @@ class SheetsSync:
                 "tabs": [s["properties"]["title"] for s in meta["sheets"]]}
 
     def sync(self, members: list[dict], write: bool = True, units: bool = True,
-             copy_formats: bool = False) -> dict:
-        """Merge `members` into the sheet. Returns a summary (also computed on dry-run)."""
+             copy_formats: bool = False, preserve_units: set[str] | None = None) -> dict:
+        """Merge `members` into the sheet. Returns a summary (also computed on dry-run).
+
+        preserve_units: full unit names that FAILED to scrape this run — their existing
+        rows are kept as-is (not deleted), so a flaky/erroring unit never wipes its
+        members from the full-replace sheet.
+        """
+        from sheets_sync.row_mapper import format_unit
+        preserve = {format_unit(u) for u in (preserve_units or set())}
         members = sorted(members, key=lambda m: (m.get("unit") or "", m.get("name") or ""))
         headers, existing = self._fetch_existing()
         existing_by_name = {str(r[0]): r for r in existing if r and r[0]}
 
-        merged, changes = self._merge(members, existing_by_name, headers)
+        merged, changes = self._merge(members, existing_by_name, headers, preserve)
         summary = {
             "title": None, "members": len(members),
             "added": sum(c["field"] == "Added" for c in changes),
@@ -107,8 +114,10 @@ class SheetsSync:
         existing = vr[1].get("values", []) if len(vr) > 1 else []
         return headers, existing
 
-    def _merge(self, members, existing_by_name, headers):
-        """Build merged rows; preserve P+ manual cols and gated cells on empty."""
+    def _merge(self, members, existing_by_name, headers, preserve_units=None):
+        """Build merged rows; preserve P+ manual cols, gated cells on empty, and the
+        rows of units that failed to scrape (preserve_units, stripped names)."""
+        preserve_units = preserve_units or set()
         merged, changes = [], []
         for m in members:
             row = to_row(m)
@@ -133,9 +142,15 @@ class SheetsSync:
             merged.append(row)
         new_names = {str(m.get("name") or "") for m in members}
         for name in existing_by_name.keys() - new_names:
-            changes.append({"name": name, "ward": existing_by_name[name][1]
-                            if len(existing_by_name[name]) > 1 else "",
-                            "field": "Removed", "old": "existing", "new": ""})
+            old = existing_by_name[name]
+            unit_b = old[1] if len(old) > 1 else ""
+            if unit_b in preserve_units:
+                merged.append(old)              # keep rows of units we couldn't scrape
+            else:
+                changes.append({"name": name, "ward": unit_b,
+                                "field": "Removed", "old": "existing", "new": ""})
+        # keep the sheet ordered by unit then name
+        merged.sort(key=lambda r: (r[1] if len(r) > 1 else "", r[0] if r else ""))
         return merged, changes
 
     def _write_main(self, merged: list[list]) -> None:

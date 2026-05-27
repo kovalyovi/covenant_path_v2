@@ -4,3 +4,4 @@ requests>=2.31
 cryptography>=42.0
 google-api-python-client>=2.0   # sheets_sync
 google-auth>=2.0                # sheets_sync (service account)
+psycopg2-binary>=2.9            # backend (Supabase/Postgres)

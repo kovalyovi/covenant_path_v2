@@ -49,11 +49,17 @@ def _sync_one(args) -> dict:
                               cache=cache, verbose=args.verbose)
     dicts = [asdict(r) for r in rows]
     export(rows, access=access, with_profile=args.with_profile)
-    result = {"members": len(dicts), "sheets": None, "supabase": None}
+    failed_units = set(access.get("_run_stats", {}).get("failed_units", []))
+    if failed_units:
+        logger.warning("units that failed to scrape (rows preserved in Sheets): %s", failed_units)
+    result = {"members": len(dicts), "failed_units": sorted(failed_units),
+              "sheets": None, "supabase": None}
 
     if args.sheets:
         from sheets_sync.service import SheetsSync
-        summary = SheetsSync(args.spreadsheet_id).sync(dicts)
+        # preserve_units keeps failed units' existing rows (Sheets is a full-replace);
+        # Supabase upserts are non-destructive so stale rows simply persist there.
+        summary = SheetsSync(args.spreadsheet_id).sync(dicts, preserve_units=failed_units)
         result["sheets"] = summary
         logger.info("sheets: %s", summary)
     if args.supabase:
