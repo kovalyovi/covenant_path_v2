@@ -18,3 +18,6 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# Cloudflare Wrangler local cache (Pages deploys)
+.wrangler/
