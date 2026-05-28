@@ -313,9 +313,23 @@ Full model: docs/DEPLOYMENT.md → "Admin / ops console". See [[project-admin-co
 Suites after this work: test_suite 10/10, test_rls 3/3, test_power_users 5/5, **test_admins 8/8**,
 **test_broker 19/19**, flutter test 11/11, analyze clean, build web OK.
 
-Pending: iOS tab parity (On Date / Golden Hour / KPIs — KPIs via `/api/dashboard/data`); member
-photo pipeline (`/api/avatar/{cmisId}/MEDIUM` → downsize → private Supabase bucket; `photo_path`
-column already added); ward-leader provisioning (#21).
+**iOS tab parity (DONE).** The dashboard is now a 4-tab bottom-nav (`dashboard_page.dart`):
+On Date (members grouped by baptismal date or unit), Golden Hour (recency filter week/month/year
++ group by unit/date, milestone chips), KPIs, and Table. KPIs come from LCR's `/api/dashboard/data`
+(`client.dashboard_data` → `sync.kpi_subtree` → `stakes.kpis` JSONB, migration 0011, read under
+the existing stakes_select RLS): new members, people being taught, monthly sacrament attendance,
+temple recommends, ministering interviews — plus new-member stats computed client-side from
+`members.details`. Verified live: stake KPIs populated (112 new / 27 being taught).
+
+**Member photos (DONE).** `backend/photos.py`: checks the manage-photos record (skips
+`nophoto`), fetches `/api/avatar/{cmisId}/MEDIUM`, downsizes to a ~96px JPEG (Pillow), uploads
+to a PRIVATE `member-photos` Storage bucket, and stores a 1-year **signed URL** on
+`members.photo_url` (migration 0012) — read under the same members RLS, so no Storage RLS is
+needed. Flutter `PhotoAvatar` shows it with an initials fallback. Verified live: bucket created,
+3 photos uploaded (98 members have none), signed URL serves image/jpeg 200.
+
+Pending: ward-leader provisioning (#21 — needs a captured per-ward leadership API call from the
+user; the daily sync provisions stake_leader roles but 0 ward_leader without that source).
 
 ---
 

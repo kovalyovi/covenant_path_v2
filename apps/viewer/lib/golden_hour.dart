@@ -72,6 +72,15 @@ class GoldenHourChips extends StatelessWidget {
   }
 }
 
+String initialsOf(String name) {
+  final parts = name.replaceAll(',', '').trim().split(RegExp(r'\s+'));
+  if (parts.isEmpty || parts.first.isEmpty) return '?';
+  final s = parts.length == 1
+      ? parts.first.characters.first
+      : '${parts.first.characters.first}${parts.last.characters.first}';
+  return s.toUpperCase();
+}
+
 class InitialsAvatar extends StatelessWidget {
   const InitialsAvatar({super.key, required this.name, this.size = 36});
   final String name;
@@ -79,14 +88,32 @@ class InitialsAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final parts = name.replaceAll(',', '').trim().split(RegExp(r'\s+'));
-    final initials = parts.isEmpty
-        ? '?'
-        : (parts.length == 1 ? parts.first.characters.first : '${parts.first.characters.first}${parts.last.characters.first}');
     return CircleAvatar(
       radius: size / 2,
       backgroundColor: Colors.indigo.shade100,
-      child: Text(initials.toUpperCase(),
+      child: Text(initialsOf(name),
+          style: TextStyle(fontSize: size * 0.36, color: Colors.indigo.shade900, fontWeight: FontWeight.bold)),
+    );
+  }
+}
+
+/// Member avatar: shows the stored LCR photo (signed URL) when present, else falls back to
+/// initials (also falls back if the image fails to load). Friends/ministers use initials.
+class PhotoAvatar extends StatelessWidget {
+  const PhotoAvatar({super.key, required this.name, this.photoUrl, this.size = 36});
+  final String name;
+  final String? photoUrl;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = photoUrl;
+    if (url == null || url.isEmpty) return InitialsAvatar(name: name, size: size);
+    return CircleAvatar(
+      radius: size / 2,
+      backgroundColor: Colors.indigo.shade100,
+      foregroundImage: NetworkImage(url), // child shows until it loads / if it errors
+      child: Text(initialsOf(name),
           style: TextStyle(fontSize: size * 0.36, color: Colors.indigo.shade900, fontWeight: FontWeight.bold)),
     );
   }

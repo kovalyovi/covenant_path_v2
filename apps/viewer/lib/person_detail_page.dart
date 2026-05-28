@@ -32,7 +32,7 @@ class PersonDetailPage extends StatelessWidget {
         children: [
           // header
           Row(children: [
-            InitialsAvatar(name: name, size: 56),
+            PhotoAvatar(name: name, photoUrl: member['photo_url']?.toString(), size: 56),
             const SizedBox(width: 14),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

@@ -21,7 +21,7 @@ class DashboardPage extends StatefulWidget {
 const _columns =
     'name, unit_name, baptism_date, birth_date, membership_duration, sex, friends, '
     'aaronic_priesthood, melchizedek_priesthood, calling, ministering_brothers_sisters, '
-    'ministering_assignment, temple_recommend, patriarchal_blessing, living_ordinance, details';
+    'ministering_assignment, temple_recommend, patriarchal_blessing, living_ordinance, details, photo_url';
 
 class _DashboardPageState extends State<DashboardPage> {
   late Future<List<Map<String, dynamic>>> _future;
@@ -254,7 +254,7 @@ class _PersonRow extends StatelessWidget {
     final baptism = m['baptism_date'];
     return ListTile(
       onTap: () => onTap(m),
-      leading: InitialsAvatar(name: m['name']?.toString() ?? '?'),
+      leading: PhotoAvatar(name: m['name']?.toString() ?? '?', photoUrl: m['photo_url']?.toString()),
       title: Row(children: [
         Expanded(child: Text(m['name']?.toString() ?? '—')),
         Text('$done/$total', style: Theme.of(context).textTheme.labelMedium),
