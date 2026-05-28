@@ -21,7 +21,8 @@ void main() {
     });
   });
 
-  test('fmtDate is human-readable', () {
-    expect(fmtDate(DateTime(2026, 2, 6)), '6 Feb 2026');
+  test('fmtLong is a full human-readable date', () {
+    expect(fmtLong(DateTime(2026, 2, 6)), 'Friday, February 6, 2026');
+    expect(fmtLong(null), '');
   });
 }

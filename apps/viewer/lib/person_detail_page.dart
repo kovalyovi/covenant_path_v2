@@ -32,19 +32,43 @@ class PersonDetailPage extends StatelessWidget {
         child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
         children: [
-          // header
-          Row(children: [
-            PhotoAvatar(name: name, photoUrl: member['photo_url']?.toString(), size: 56),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(name, style: Theme.of(context).textTheme.titleLarge),
-                if (memberSince != null && memberSince.isNotEmpty)
-                  Text(memberSince, style: Theme.of(context).textTheme.bodyMedium),
+          // header card (iOS-style): avatar + name + key date
+          Card(
+            elevation: 0,
+            color: Theme.of(context).colorScheme.primaryContainer,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(children: [
+                PhotoAvatar(name: name, photoUrl: member['photo_url']?.toString(), size: 60),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(name,
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                            color: Theme.of(context).colorScheme.onPrimaryContainer,
+                            fontWeight: FontWeight.bold)),
+                    if (memberSince != null && memberSince.isNotEmpty)
+                      Text(memberSince,
+                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: Theme.of(context).colorScheme.onPrimaryContainer)),
+                    if ((member['baptism_date'] ?? '').toString().isNotEmpty &&
+                        member['baptism_date'] != 'needs-profile-api')
+                      Text('Baptized ${member['baptism_date']}',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context).colorScheme.onPrimaryContainer)),
+                  ]),
+                ),
               ]),
             ),
-          ]),
-          const SizedBox(height: 16),
+          ),
+          const SizedBox(height: 8),
+
+          // our covenant-path milestones (data LCR's view lacks: baptism/recommend/etc.)
+          _Section(
+            title: 'Covenant Path',
+            child: GoldenHourChips(member: member, size: 30),
+          ),
 
           // our covenant-path milestones (data LCR's view lacks: baptism/recommend/etc.)
           _Section(
