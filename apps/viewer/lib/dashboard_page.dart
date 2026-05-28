@@ -500,7 +500,13 @@ class _KpiView extends StatefulWidget {
 }
 
 class _KpiViewState extends State<_KpiView> {
-  _Period _period = _Period.month;
+  _Period _period = _Period.week;
+
+  (String, String) get _compareLabels => switch (_period) {
+        _Period.week => ('2 weeks ago', 'Last week'),
+        _Period.month => ('Last month', 'This month'),
+        _Period.year => ('Last year', 'This year'),
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -514,18 +520,20 @@ class _KpiViewState extends State<_KpiView> {
 
     final cards = <Widget>[
       _MetricChartCard(
-        title: 'New Members at Sacrament',
-        icon: Icons.favorite,
-        color: Colors.redAccent.shade200,
-        series: newAtSac,
-        suffix: 'baptized members attending sacrament',
+        title: 'Investigators at Sacrament',
+        icon: Icons.groups,
+        color: Colors.orange.shade700,
+        series: friendsAtSac,
+        compare: _compareLabels,
+        suffix: 'people being taught attending sacrament',
       ),
       _MetricChartCard(
-        title: 'Friends at Sacrament',
-        icon: Icons.volunteer_activism,
-        color: Colors.teal.shade400,
-        series: friendsAtSac,
-        suffix: 'people being taught attending sacrament',
+        title: 'New Members at Sacrament',
+        icon: Icons.favorite,
+        color: const Color(0xFFB5532A),
+        series: newAtSac,
+        compare: _compareLabels,
+        suffix: 'baptized members attending sacrament',
       ),
       _StatGridCard(items: [
         ('New friends being taught', '${investigators.length}'),
@@ -560,69 +568,120 @@ class _KpiViewState extends State<_KpiView> {
 
 class _MetricChartCard extends StatelessWidget {
   const _MetricChartCard({required this.title, required this.icon, required this.color,
-      required this.series, required this.suffix});
+      required this.series, required this.compare, required this.suffix});
   final String title;
   final IconData icon;
   final Color color;
   final _Series series;
+  final (String, String) compare; // (prior label, latest label)
   final String suffix;
 
   @override
   Widget build(BuildContext context) {
     final values = series.current;
-    final total = values.fold<double>(0, (a, b) => a + b).round();
     final last = values.isNotEmpty ? values.last : null;
     final prior = values.length >= 2 ? values[values.length - 2] : null;
     final delta = (last != null && prior != null) ? (last - prior) : null;
     return SectionCard(
       title: title,
       leadingIcon: icon,
+      iconColor: color,
       trailing: delta == null ? null : _DeltaBadge(delta: delta),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('$total total',
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
-        const SizedBox(height: 12),
-        SizedBox(height: 160, child: _Line(values: values, prev: series.prev, labels: series.labels, color: color)),
-        const SizedBox(height: 8),
-        Row(children: [
-          _legendDot(color, 'this period'),
-          if (series.prev.isNotEmpty) ...[
-            const SizedBox(width: 14),
-            _legendDot(Colors.grey.shade400, 'previous'),
-          ],
-        ]),
-        const SizedBox(height: 4),
-        Text(suffix, style: Theme.of(context).textTheme.bodySmall),
+        if (last != null && prior != null) ...[
+          IntrinsicHeight(
+            child: Row(children: [
+              Expanded(child: _bigStat(context, compare.$1, prior)),
+              Container(
+                  width: 1,
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                  margin: const EdgeInsets.symmetric(horizontal: 14)),
+              Expanded(child: _bigStat(context, compare.$2, last)),
+            ]),
+          ),
+          const SizedBox(height: 16),
+        ],
+        SizedBox(height: 170, child: _Line(values: values, labels: series.labels, color: color)),
+        const SizedBox(height: 6),
+        Text(suffix,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey.shade600)),
       ]),
     );
   }
 
-  Widget _legendDot(Color c, String label) => Row(mainAxisSize: MainAxisSize.min, children: [
-        Container(width: 10, height: 10, decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
-        const SizedBox(width: 5),
-        Text(label, style: const TextStyle(fontSize: 11)),
-      ]);
+  Widget _bigStat(BuildContext context, String label, double v) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey.shade600)),
+          const SizedBox(height: 2),
+          Text(v == v.roundToDouble() ? '${v.round()}' : v.toStringAsFixed(1),
+              style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
+        ],
+      );
 }
 
+/// iOS-style trend line: smooth curve, gradient fill, open dots, and a value label above
+/// every point (always-on tooltips). Sparse gray x-axis labels.
 class _Line extends StatelessWidget {
-  const _Line({required this.values, required this.labels, required this.color, this.prev = const []});
+  const _Line({required this.values, required this.labels, required this.color});
   final List<double> values;
   final List<String> labels;
   final Color color;
-  final List<double> prev;
+
   @override
   Widget build(BuildContext context) {
     if (values.isEmpty) {
       return Center(child: Text('No data yet', style: TextStyle(color: Colors.grey.shade500)));
     }
-    final peak = [...values, ...prev].reduce((a, b) => a > b ? a : b);
-    final maxY = peak * 1.25 + 1;
+    final peak = values.reduce((a, b) => a > b ? a : b);
+    final maxY = peak * 1.35 + 1; // headroom so the value labels above points aren't clipped
+    final spots = [for (var i = 0; i < values.length; i++) FlSpot(i.toDouble(), values[i])];
+    final bar = LineChartBarData(
+      spots: spots,
+      isCurved: true,
+      curveSmoothness: 0.3,
+      preventCurveOverShooting: true,
+      color: color,
+      barWidth: 3,
+      dotData: FlDotData(
+        show: true,
+        getDotPainter: (spot, pct, b, i) => FlDotCirclePainter(
+            radius: 3.5, color: Colors.white, strokeWidth: 2, strokeColor: color),
+      ),
+      belowBarData: BarAreaData(
+        show: true,
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [color.withValues(alpha: 0.28), color.withValues(alpha: 0.02)],
+        ),
+      ),
+    );
+    final step = (values.length / 3).ceil().clamp(1, 999);
     return LineChart(LineChartData(
       minY: 0,
       maxY: maxY,
       gridData: const FlGridData(show: false),
       borderData: FlBorderData(show: false),
-      lineTouchData: const LineTouchData(enabled: false),
+      lineTouchData: LineTouchData(
+        enabled: false,
+        touchTooltipData: LineTouchTooltipData(
+          getTooltipColor: (_) => Colors.transparent,
+          tooltipPadding: EdgeInsets.zero,
+          tooltipMargin: 4,
+          getTooltipItems: (touched) => [
+            for (final t in touched)
+              LineTooltipItem(
+                t.y == t.y.roundToDouble() ? '${t.y.round()}' : t.y.toStringAsFixed(0),
+                TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 11),
+              ),
+          ],
+        ),
+      ),
+      showingTooltipIndicators: [
+        for (var i = 0; i < spots.length; i++) ShowingTooltipIndicators([LineBarSpot(bar, 0, spots[i])]),
+      ],
       titlesData: FlTitlesData(
         leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
         topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
@@ -631,39 +690,20 @@ class _Line extends StatelessWidget {
           sideTitles: SideTitles(
             showTitles: true,
             interval: 1,
+            reservedSize: 22,
             getTitlesWidget: (x, meta) {
               final i = x.toInt();
               if (i < 0 || i >= labels.length) return const SizedBox.shrink();
-              // thin out labels if many points
-              if (labels.length > 6 && i % 2 != 0) return const SizedBox.shrink();
-              return Padding(padding: const EdgeInsets.only(top: 6),
-                  child: Text(labels[i], style: const TextStyle(fontSize: 10)));
+              if (i % step != 0 && i != labels.length - 1) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(labels[i], style: TextStyle(fontSize: 10, color: Colors.grey.shade500)),
+              );
             },
           ),
         ),
       ),
-      lineBarsData: [
-        if (prev.isNotEmpty)
-          LineChartBarData(
-            spots: [for (var i = 0; i < prev.length; i++) FlSpot(i.toDouble(), prev[i])],
-            isCurved: true,
-            curveSmoothness: 0.3,
-            color: Colors.grey.shade400,
-            barWidth: 2,
-            dashArray: const [5, 4],
-            dotData: const FlDotData(show: false),
-            belowBarData: BarAreaData(show: false),
-          ),
-        LineChartBarData(
-          spots: [for (var i = 0; i < values.length; i++) FlSpot(i.toDouble(), values[i])],
-          isCurved: true,
-          curveSmoothness: 0.3,
-          color: color,
-          barWidth: 3,
-          dotData: FlDotData(show: values.length <= 12),
-          belowBarData: BarAreaData(show: true, color: color.withValues(alpha: 0.12)),
-        ),
-      ],
+      lineBarsData: [bar],
     ));
   }
 }
