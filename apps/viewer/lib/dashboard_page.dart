@@ -32,6 +32,7 @@ const _columns =
 const _tabs = [
   (icon: Icons.event, label: 'Upcoming'),
   (icon: Icons.timelapse, label: 'Golden Hour'),
+  (icon: Icons.checklist, label: 'Needs'),
   (icon: Icons.insights, label: 'KPIs'),
   (icon: Icons.grid_on, label: 'Table'),
 ];
@@ -280,7 +281,7 @@ class _Body extends StatelessWidget {
               child: Text('Could not load data:\n${snap.error}', textAlign: TextAlign.center)));
         }
         final rows = snap.data ?? [];
-        if (rows.isEmpty && tab != 2) {
+        if (rows.isEmpty && tab != 3) {
           return const Center(child: Padding(padding: EdgeInsets.all(24),
               child: Text('No members visible for your account.\n\nAccess is derived from your '
                   'LCR calling — sign in with the email your stake has on file.',
@@ -289,7 +290,8 @@ class _Body extends StatelessWidget {
         final view = switch (tab) {
           0 => _OnDateView(rows: rows, tier: tier, onOpen: onOpen),
           1 => _GoldenHourView(rows: rows, tier: tier, onOpen: onOpen),
-          2 => _KpiView(rows: rows, tier: tier),
+          2 => _NeedsView(rows: rows, tier: tier, onOpen: onOpen),
+          3 => _KpiView(rows: rows, tier: tier),
           _ => _SpreadsheetView(rows: rows, onOpen: onOpen),
         };
         return RefreshIndicator(onRefresh: onRefresh, child: view);
@@ -476,6 +478,53 @@ class _PctStat extends StatelessWidget {
         ClipRRect(borderRadius: BorderRadius.circular(4),
             child: LinearProgressIndicator(value: pct, minHeight: 5)),
       ]),
+    );
+  }
+}
+
+// ---- Needs Action -----------------------------------------------------------
+
+/// What's left to do: for each integration milestone, the *eligible* members still missing it
+/// (eligibility from golden_hour, so a child isn't listed as "needs a calling"). Unit shown as
+/// metadata so leaders can see both stake-wide and per-unit gaps.
+class _NeedsView extends StatelessWidget {
+  const _NeedsView({required this.rows, required this.tier, required this.onOpen});
+  final List<Map<String, dynamic>> rows;
+  final ScreenTier tier;
+  final void Function(Map<String, dynamic>) onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final baptized = rows.where((m) => m['kind'] != 'investigator').toList();
+    final sections = <Widget>[];
+    for (final ms in milestones) {
+      final missing = baptized
+          .where((m) => milestonesFor(m).contains(ms) && !ms.complete(m))
+          .toList()
+        ..sort((a, b) => (a['name'] ?? '').toString().compareTo((b['name'] ?? '').toString()));
+      if (missing.isEmpty) continue;
+      sections.add(SectionCard(
+        title: 'Needs ${ms.label}',
+        leadingIcon: Icons.flag_outlined,
+        trailing: _CountBadge(missing.length),
+        child: Column(children: [
+          for (var i = 0; i < missing.length; i++) ...[
+            if (i > 0) const Divider(height: 1),
+            _MemberRow(m: missing[i], onOpen: onOpen, showUnit: true),
+          ],
+        ]),
+      ));
+    }
+    return _Page(
+      tier: tier,
+      header: const _BigHeader(
+          text: 'Needs Action',
+          subtitle: 'Eligible members still missing each integration step'),
+      child: sections.isEmpty
+          ? const Padding(
+              padding: EdgeInsets.all(32),
+              child: Center(child: Text('Nothing outstanding — everyone eligible is on track.')))
+          : _Columns(cols: _cols(tier).clamp(1, 2), children: sections),
     );
   }
 }
