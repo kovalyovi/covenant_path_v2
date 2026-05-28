@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import 'golden_hour.dart';
+import 'main.dart';
 
 /// Full covenant-path detail for one member, laid out like LCR's "new member" record:
 /// sacrament-attendance dots, friends in the church, priesthood / calling / ministering,
@@ -86,6 +88,8 @@ class PersonDetailPage extends StatelessWidget {
             _RichBody(member: member, d: d)
           else
             _FlatFallback(member: member),
+
+          _CommentsSection(member: member),
         ],
       ),
       ),
@@ -547,6 +551,122 @@ class _FlatFallback extends StatelessWidget {
               style: const TextStyle(fontWeight: FontWeight.w500)),
         ),
     ]);
+  }
+}
+
+// ---- notes / comments -----------------------------------------------------
+
+/// Leader notes on a member (RLS-scoped to people you can see). Read + add; authors can't
+/// see others' across scope boundaries — the DB enforces it.
+class _CommentsSection extends StatefulWidget {
+  const _CommentsSection({required this.member});
+  final Map<String, dynamic> member;
+  @override
+  State<_CommentsSection> createState() => _CommentsSectionState();
+}
+
+class _CommentsSectionState extends State<_CommentsSection> {
+  late Future<List<Map<String, dynamic>>> _future;
+  final _ctrl = TextEditingController();
+  bool _posting = false;
+
+  String? get _uuid => widget.member['person_uuid']?.toString();
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  Future<List<Map<String, dynamic>>> _load() async {
+    final uuid = _uuid;
+    if (uuid == null || uuid.isEmpty) return [];
+    final rows = await supabase
+        .from('member_comments')
+        .select('author_email, author_name, body, created_at')
+        .eq('member_person_uuid', uuid)
+        .order('created_at');
+    return (rows as List).cast<Map<String, dynamic>>();
+  }
+
+  Future<void> _post() async {
+    final body = _ctrl.text.trim();
+    final uuid = _uuid;
+    if (body.isEmpty || uuid == null) return;
+    setState(() => _posting = true);
+    try {
+      await supabase.from('member_comments').insert({
+        'stake_id': widget.member['stake_id'],
+        'unit_id': widget.member['unit_id'],
+        'member_person_uuid': uuid,
+        'author_email': supabase.auth.currentUser?.email ?? '',
+        'body': body,
+      });
+      _ctrl.clear();
+      setState(() => _future = _load());
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not post note: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _posting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_uuid == null || _uuid!.isEmpty) return const SizedBox.shrink();
+    return SectionCard(
+      title: 'Notes',
+      leadingIcon: Icons.chat_bubble_outline,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        FutureBuilder<List<Map<String, dynamic>>>(
+          future: _future,
+          builder: (context, snap) {
+            if (snap.connectionState == ConnectionState.waiting) {
+              return const Padding(
+                  padding: EdgeInsets.all(8), child: Center(child: CircularProgressIndicator()));
+            }
+            final list = snap.data ?? [];
+            if (list.isEmpty) {
+              return Text('No notes yet.', style: TextStyle(color: Colors.grey.shade600));
+            }
+            return Column(children: [for (final c in list) _tile(context, c)]);
+          },
+        ),
+        const SizedBox(height: 8),
+        Row(children: [
+          Expanded(
+            child: TextField(
+              controller: _ctrl,
+              minLines: 1,
+              maxLines: 4,
+              decoration: const InputDecoration(hintText: 'Add a note…', border: OutlineInputBorder()),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _posting
+              ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
+              : IconButton.filled(onPressed: _post, icon: const Icon(Icons.send)),
+        ]),
+      ]),
+    );
+  }
+
+  Widget _tile(BuildContext context, Map<String, dynamic> c) {
+    final who = (c['author_name'] ?? c['author_email'] ?? '').toString();
+    final when = DateTime.tryParse('${c['created_at'] ?? ''}')?.toLocal();
+    final ws = when != null ? DateFormat('MMM d, y · h:mm a').format(when) : '';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(c['body']?.toString() ?? ''),
+        const SizedBox(height: 2),
+        Text('$who · $ws',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey.shade600)),
+        const Divider(height: 14),
+      ]),
+    );
   }
 }
 
