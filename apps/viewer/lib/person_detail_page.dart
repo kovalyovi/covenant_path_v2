@@ -24,6 +24,14 @@ class PersonDetailPage extends StatelessWidget {
     final d = _details;
     final memberSince =
         (d?['memberSince'] ?? member['membership_duration'])?.toString();
+    final isInvestigator = member['kind'] == 'investigator';
+    final goalDate = (member['baptism_goal_date'] ?? '').toString();
+    final baptismDate = (member['baptism_date'] ?? '').toString();
+    final baptismLine = isInvestigator
+        ? (goalDate.isNotEmpty ? 'Planned baptism $goalDate' : null)
+        : ((baptismDate.isNotEmpty && baptismDate != 'needs-profile-api')
+            ? 'Baptized $baptismDate'
+            : null);
 
     return Scaffold(
       appBar: AppBar(title: Text(name)),
@@ -52,9 +60,8 @@ class PersonDetailPage extends StatelessWidget {
                       Text(memberSince,
                           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                               color: Theme.of(context).colorScheme.onPrimaryContainer)),
-                    if ((member['baptism_date'] ?? '').toString().isNotEmpty &&
-                        member['baptism_date'] != 'needs-profile-api')
-                      Text('Baptized ${member['baptism_date']}',
+                    if (baptismLine != null)
+                      Text(baptismLine,
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                               color: Theme.of(context).colorScheme.onPrimaryContainer)),
                   ]),
@@ -67,13 +74,8 @@ class PersonDetailPage extends StatelessWidget {
           // our covenant-path milestones (data LCR's view lacks: baptism/recommend/etc.)
           _Section(
             title: 'Covenant Path',
-            child: GoldenHourChips(member: member, size: 30),
-          ),
-
-          // our covenant-path milestones (data LCR's view lacks: baptism/recommend/etc.)
-          _Section(
-            title: 'Covenant Path',
-            child: GoldenHourChips(member: member, size: 30),
+            leadingIcon: Icons.timeline,
+            child: GoldenHourChips(member: member, size: 30, highlightNext: true),
           ),
 
           if (d != null)
@@ -100,22 +102,26 @@ class _RichBody extends StatelessWidget {
       _FriendsSection(d: d),
       _ListTextSection(
         title: 'Priesthood Ordination',
+        icon: Icons.workspace_premium,
         lines: _strings(d['priesthoodOrdinations']),
         emptyText: 'No priesthood ordination on record.',
       ),
       _ListTextSection(
         title: 'Calling',
+        icon: Icons.assignment_ind,
         lines: _strings(d['callings']),
         emptyText: 'Not yet been given a calling.',
         emptyIsAlert: true,
       ),
       _ListTextSection(
         title: 'Ministering Assignment',
+        icon: Icons.volunteer_activism,
         lines: _strings(d['ministeringAssignments']),
         emptyText: 'Not yet received a ministering assignment.',
       ),
       _NamesSection(
         title: 'Ministering Brothers & Sisters',
+        icon: Icons.diversity_3,
         names: [..._strings(d['ministeringBrothers']), ..._strings(d['ministeringSisters'])],
         emptyText: 'No ministers assigned.',
       ),
@@ -125,6 +131,7 @@ class _RichBody extends StatelessWidget {
       _PrinciplesSection(d: d),
       _TogglesSection(
         title: 'Self-Reliance Classes Completed',
+        icon: Icons.school,
         items: _toggles(d['selfReliance']),
       ),
       _TagsSection(d: d),
@@ -146,29 +153,48 @@ class _RichBody extends StatelessWidget {
 // ---- sections -------------------------------------------------------------
 
 class _Section extends StatelessWidget {
-  const _Section({required this.title, required this.child, this.trailing});
+  const _Section({required this.title, required this.child, this.trailing, this.leadingIcon});
   final String title;
   final Widget child;
   final Widget? trailing;
+  final IconData? leadingIcon;
   @override
   Widget build(BuildContext context) =>
-      SectionCard(title: title, trailing: trailing, child: child);
+      SectionCard(title: title, trailing: trailing, leadingIcon: leadingIcon, child: child);
 }
 
-class _SacramentSection extends StatelessWidget {
+/// Sacrament dots. The stored list is newest-first; we show the most recent [_recent]
+/// Sundays (rendered oldest→newest so the timeline reads left-to-right) with a "View all"
+/// expander.
+class _SacramentSection extends StatefulWidget {
   const _SacramentSection({required this.d});
   final Map<String, dynamic> d;
   @override
+  State<_SacramentSection> createState() => _SacramentSectionState();
+}
+
+class _SacramentSectionState extends State<_SacramentSection> {
+  static const _recent = 6;
+  bool _expanded = false;
+
+  @override
   Widget build(BuildContext context) {
-    final list = (d['sacrament'] as List?)?.cast<Map>() ?? const [];
-    if (list.isEmpty) return const SizedBox.shrink();
-    final missed = _missedCount(d, list);
+    final all = (widget.d['sacrament'] as List?)?.cast<Map>() ?? const [];
+    if (all.isEmpty) return const SizedBox.shrink();
+    final shown = (_expanded ? all.toList() : all.take(_recent).toList()).reversed.toList();
+    final missed = _missedCount(widget.d, all);
     final green = Colors.green.shade700;
     return _Section(
       title: 'Attended Sacrament Meeting',
+      leadingIcon: Icons.event_available,
+      trailing: all.length > _recent
+          ? TextButton(
+              onPressed: () => setState(() => _expanded = !_expanded),
+              child: Text(_expanded ? 'Show recent' : 'View all (${all.length})'))
+          : null,
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Wrap(spacing: 14, runSpacing: 10, children: [
-          for (final s in list)
+          for (final s in shown)
             Column(children: [
               Text(s['label']?.toString() ?? '',
                   style: Theme.of(context).textTheme.bodySmall),
@@ -214,6 +240,7 @@ class _FriendsSection extends StatelessWidget {
     final friends = (d['friends'] as List?)?.cast<Map>() ?? const [];
     return _Section(
       title: 'Friends in the Church',
+      leadingIcon: Icons.people_outline,
       child: friends.isEmpty
           ? _muted(context, 'No friends recorded yet.')
           : Column(
@@ -255,15 +282,18 @@ class _ListTextSection extends StatelessWidget {
     required this.lines,
     required this.emptyText,
     this.emptyIsAlert = false,
+    this.icon,
   });
   final String title;
   final List<String> lines;
   final String emptyText;
   final bool emptyIsAlert;
+  final IconData? icon;
   @override
   Widget build(BuildContext context) {
     return _Section(
       title: title,
+      leadingIcon: icon,
       child: lines.isEmpty
           ? Text(emptyText,
               style: TextStyle(
@@ -283,14 +313,17 @@ class _ListTextSection extends StatelessWidget {
 }
 
 class _NamesSection extends StatelessWidget {
-  const _NamesSection({required this.title, required this.names, required this.emptyText});
+  const _NamesSection(
+      {required this.title, required this.names, required this.emptyText, this.icon});
   final String title;
   final List<String> names;
   final String emptyText;
+  final IconData? icon;
   @override
   Widget build(BuildContext context) {
     return _Section(
       title: title,
+      leadingIcon: icon,
       child: names.isEmpty
           ? _muted(context, emptyText)
           : Column(
@@ -321,6 +354,7 @@ class _TempleSection extends StatelessWidget {
     if (experiences.isEmpty && ordinances.isEmpty) return const SizedBox.shrink();
     return _Section(
       title: 'Temple Ordinances and Experiences',
+      leadingIcon: Icons.account_balance,
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         for (final t in experiences) _ToggleRow(label: t.$1, on: t.$2),
         if (ordinances.isNotEmpty) const SizedBox(height: 8),
@@ -344,6 +378,7 @@ class _PrinciplesSection extends StatelessWidget {
     final green = Colors.green.shade700;
     return _Section(
       title: 'Principles Taught',
+      leadingIcon: Icons.menu_book,
       trailing: Row(mainAxisSize: MainAxisSize.min, children: [
         Icon(Icons.person, size: 16, color: green),
         const SizedBox(width: 4),
@@ -409,14 +444,16 @@ class _PrincipleDot extends StatelessWidget {
 }
 
 class _TogglesSection extends StatelessWidget {
-  const _TogglesSection({required this.title, required this.items});
+  const _TogglesSection({required this.title, required this.items, this.icon});
   final String title;
   final List<(String, bool)> items;
+  final IconData? icon;
   @override
   Widget build(BuildContext context) {
     if (items.isEmpty) return const SizedBox.shrink();
     return _Section(
       title: title,
+      leadingIcon: icon,
       child: Column(children: [for (final t in items) _ToggleRow(label: t.$1, on: t.$2)]),
     );
   }
@@ -428,12 +465,24 @@ class _ToggleRow extends StatelessWidget {
   final bool on;
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+    final green = Colors.green.shade700;
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: on
+            ? green.withValues(alpha: 0.08)
+            : Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+        borderRadius: BorderRadius.circular(10),
+      ),
       child: Row(children: [
-        Expanded(child: Text(label)),
-        Icon(on ? Icons.check_circle : Icons.circle_outlined,
-            size: 22, color: on ? Colors.green.shade700 : Colors.grey.shade400),
+        Icon(on ? Icons.check_circle : Icons.radio_button_unchecked,
+            size: 20, color: on ? green : Colors.grey.shade400),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(label,
+              style: TextStyle(fontWeight: on ? FontWeight.w500 : FontWeight.normal)),
+        ),
       ]),
     );
   }
@@ -448,6 +497,7 @@ class _TagsSection extends StatelessWidget {
     if (tags.isEmpty) return const SizedBox.shrink();
     return _Section(
       title: 'Flags',
+      leadingIcon: Icons.flag,
       child: Wrap(spacing: 8, runSpacing: 8, children: [
         for (final t in tags)
           Chip(
