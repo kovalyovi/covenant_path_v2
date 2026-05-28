@@ -26,38 +26,46 @@ final milestones = <Milestone>[
 List<Milestone> milestonesFor(Map<String, dynamic> m) =>
     milestones.where((x) => !x.maleOnly || m['sex'] == 'M').toList();
 
-/// Row of small circle chips for one member (the iOS Golden Hour pattern).
+/// Row of small circle chips for one member (the iOS Golden Hour pattern). Filled = done.
+/// With [highlightNext], the first not-yet-complete milestone gets an amber ring as the
+/// suggested next step.
 class GoldenHourChips extends StatelessWidget {
-  const GoldenHourChips({super.key, required this.member, this.size = 24});
+  const GoldenHourChips({super.key, required this.member, this.size = 24, this.highlightNext = false});
   final Map<String, dynamic> member;
   final double size;
+  final bool highlightNext;
 
   @override
   Widget build(BuildContext context) {
+    final list = milestonesFor(member);
+    final nextIdx = highlightNext ? list.indexWhere((ms) => !ms.complete(member)) : -1;
     return Wrap(spacing: 5, runSpacing: 5, children: [
-      for (final ms in milestonesFor(member)) _chip(context, ms, ms.complete(member)),
+      for (var i = 0; i < list.length; i++)
+        _chip(context, list[i], list[i].complete(member), isNext: i == nextIdx),
     ]);
   }
 
-  Widget _chip(BuildContext context, Milestone ms, bool done) {
+  Widget _chip(BuildContext context, Milestone ms, bool done, {bool isNext = false}) {
     final green = Colors.green.shade600;
+    final amber = Colors.amber.shade700;
+    final border = done ? green : (isNext ? amber : Colors.grey.shade400);
     return Tooltip(
-      message: '${ms.label}: ${done ? "done" : "not yet"}',
+      message: '${ms.label}: ${done ? "done" : (isNext ? "next step" : "not yet")}',
       child: Container(
         width: size,
         height: size,
         alignment: Alignment.center,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: done ? green : Colors.transparent,
-          border: Border.all(color: done ? green : Colors.grey.shade400, width: 1.2),
+          color: done ? green : (isNext ? amber.withValues(alpha: 0.15) : Colors.transparent),
+          border: Border.all(color: border, width: isNext ? 2 : 1.2),
         ),
         child: Text(
           ms.abbr,
           style: TextStyle(
             fontSize: ms.abbr.length >= 2 ? 8.5 : 11,
             fontWeight: FontWeight.bold,
-            color: done ? Colors.white : Colors.grey.shade600,
+            color: done ? Colors.white : (isNext ? amber : Colors.grey.shade600),
           ),
         ),
       ),

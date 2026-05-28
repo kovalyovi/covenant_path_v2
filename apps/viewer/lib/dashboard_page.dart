@@ -9,8 +9,8 @@ import 'main.dart';
 import 'person_detail_page.dart';
 
 /// RLS-scoped dashboard. Four tabs mirroring the reference iOS app (+ our spreadsheet):
-///  • On Date     — members with a baptismal date, grouped by unit or sorted by date.
-///  • Golden Hour — integration milestones, recency-filtered, by unit or by date.
+///  • Upcoming    — prospective baptisms (people being taught), by planned baptism date.
+///  • Golden Hour — Being Taught + New-Member integration milestones (recency-filtered).
 ///  • KPIs        — stake metrics as line-chart cards.
 ///  • Table       — every covenant-path field, color-coded like the master sheet.
 ///
@@ -25,10 +25,11 @@ class DashboardPage extends StatefulWidget {
 const _columns =
     'name, unit_name, baptism_date, birth_date, membership_duration, sex, friends, '
     'aaronic_priesthood, melchizedek_priesthood, calling, ministering_brothers_sisters, '
-    'ministering_assignment, temple_recommend, patriarchal_blessing, living_ordinance, details, photo_url';
+    'ministering_assignment, temple_recommend, patriarchal_blessing, living_ordinance, details, photo_url, '
+    'kind, baptism_goal_date';
 
 const _tabs = [
-  (icon: Icons.event, label: 'On Date'),
+  (icon: Icons.event, label: 'Upcoming'),
   (icon: Icons.timelapse, label: 'Golden Hour'),
   (icon: Icons.insights, label: 'KPIs'),
   (icon: Icons.grid_on, label: 'Table'),
@@ -178,8 +179,10 @@ class _Body extends StatelessWidget {
   }
 }
 
-// ---- On Date ----------------------------------------------------------------
+// ---- Upcoming (prospective baptisms) ----------------------------------------
 
+/// People being taught who have a *planned* (future) baptism date — the missionary
+/// "baptismGoalDate". Sorted soonest-first; the date shown is the goal, not an actual baptism.
 class _OnDateView extends StatefulWidget {
   const _OnDateView({required this.rows, required this.tier, required this.onOpen});
   final List<Map<String, dynamic>> rows;
@@ -194,14 +197,21 @@ class _OnDateViewState extends State<_OnDateView> {
 
   @override
   Widget build(BuildContext context) {
-    final dated = widget.rows.where((m) => parseMemberDate(m['baptism_date']) != null).toList();
+    final dated = widget.rows
+        .where((m) => m['kind'] == 'investigator' && parseMemberDate(m['baptism_goal_date']) != null)
+        .toList();
     return _Page(
       tier: widget.tier,
-      header: _SectionTitle(title: 'Has Baptismal Date', count: dated.length, byDate: _byDate,
+      header: _SectionTitle(title: 'Prospective Baptisms', count: dated.length, byDate: _byDate,
           onToggle: (v) => setState(() => _byDate = v)),
-      child: _byDate
-          ? _DateList(rows: dated, tier: widget.tier, onOpen: widget.onOpen, chips: false)
-          : _UnitGrid(rows: dated, tier: widget.tier, onOpen: widget.onOpen, chips: false),
+      child: dated.isEmpty
+          ? const Padding(padding: EdgeInsets.all(32),
+              child: Center(child: Text('No prospective baptisms with a planned date.')))
+          : (_byDate
+              ? _DateList(rows: dated, tier: widget.tier, onOpen: widget.onOpen, chips: false,
+                  dateField: 'baptism_goal_date', datePrefix: 'Planned · ', ascending: true)
+              : _UnitGrid(rows: dated, tier: widget.tier, onOpen: widget.onOpen, chips: false,
+                  dateField: 'baptism_goal_date', datePrefix: 'Planned · ', ascending: true)),
     );
   }
 }
@@ -209,7 +219,10 @@ class _OnDateViewState extends State<_OnDateView> {
 // ---- Golden Hour ------------------------------------------------------------
 
 enum _Window { week, month, year, all }
+enum _GhSection { newMembers, beingTaught }
 
+/// Two sections: **Being Taught** (investigators with a planned baptism date) and
+/// **New Members** (baptized — integration milestone chips, next step highlighted).
 class _GoldenHourView extends StatefulWidget {
   const _GoldenHourView({required this.rows, required this.tier, required this.onOpen});
   final List<Map<String, dynamic>> rows;
@@ -220,6 +233,7 @@ class _GoldenHourView extends StatefulWidget {
 }
 
 class _GoldenHourViewState extends State<_GoldenHourView> {
+  _GhSection _section = _GhSection.newMembers;
   _Window _window = _Window.all;
   bool _byDate = false;
 
@@ -238,10 +252,51 @@ class _GoldenHourViewState extends State<_GoldenHourView> {
 
   @override
   Widget build(BuildContext context) {
-    final rows = widget.rows.where(_within).toList();
+    final newMembers = widget.rows.where((m) => m['kind'] != 'investigator').toList();
+    final beingTaught = widget.rows.where((m) => m['kind'] == 'investigator').toList();
+
+    final sectionToggle = Center(
+      child: SegmentedButton<_GhSection>(
+        showSelectedIcon: false,
+        segments: [
+          ButtonSegment(value: _GhSection.newMembers,
+              icon: const Icon(Icons.verified_user, size: 18),
+              label: Text('New Members (${newMembers.length})')),
+          ButtonSegment(value: _GhSection.beingTaught,
+              icon: const Icon(Icons.menu_book, size: 18),
+              label: Text('Being Taught (${beingTaught.length})')),
+        ],
+        selected: {_section},
+        onSelectionChanged: (s) => setState(() => _section = s.first),
+      ),
+    );
+
+    if (_section == _GhSection.beingTaught) {
+      return _Page(
+        tier: widget.tier,
+        header: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          sectionToggle,
+          const SizedBox(height: 8),
+          _SectionTitle(title: 'Being Taught', count: beingTaught.length, byDate: _byDate,
+              onToggle: (v) => setState(() => _byDate = v)),
+        ]),
+        child: beingTaught.isEmpty
+            ? const Padding(padding: EdgeInsets.all(32),
+                child: Center(child: Text('No one currently being taught.')))
+            : (_byDate
+                ? _DateList(rows: beingTaught, tier: widget.tier, onOpen: widget.onOpen, chips: false,
+                    dateField: 'baptism_goal_date', datePrefix: 'Planned · ', ascending: true)
+                : _UnitGrid(rows: beingTaught, tier: widget.tier, onOpen: widget.onOpen, chips: false,
+                    dateField: 'baptism_goal_date', datePrefix: 'Planned · ', ascending: true)),
+      );
+    }
+
+    final rows = newMembers.where(_within).toList();
     return _Page(
       tier: widget.tier,
       header: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        sectionToggle,
+        const SizedBox(height: 8),
         Center(
           child: SegmentedButton<_Window>(
             showSelectedIcon: false,
@@ -310,15 +365,19 @@ class _PctStat extends StatelessWidget {
 
 /// Cards grouped by unit (unit name as the card title) — laid out in 1/2/3 columns by tier.
 class _UnitGrid extends StatelessWidget {
-  const _UnitGrid({required this.rows, required this.tier, required this.onOpen, required this.chips});
+  const _UnitGrid({required this.rows, required this.tier, required this.onOpen, required this.chips,
+      this.dateField = 'baptism_date', this.datePrefix = '', this.ascending = false});
   final List<Map<String, dynamic>> rows;
   final ScreenTier tier;
   final void Function(Map<String, dynamic>) onOpen;
   final bool chips;
+  final String dateField;
+  final String datePrefix;
+  final bool ascending;
 
   @override
   Widget build(BuildContext context) {
-    final groups = _groupByUnit(rows);
+    final groups = _groupByUnit(rows, dateField: dateField, ascending: ascending);
     final cards = [
       for (final g in groups)
         SectionCard(
@@ -327,7 +386,8 @@ class _UnitGrid extends StatelessWidget {
           child: Column(children: [
             for (var i = 0; i < g.$2.length; i++) ...[
               if (i > 0) const Divider(height: 1),
-              _MemberRow(m: g.$2[i], onOpen: onOpen, chips: chips),
+              _MemberRow(m: g.$2[i], onOpen: onOpen, chips: chips,
+                  dateField: dateField, datePrefix: datePrefix),
             ],
           ]),
         ),
@@ -336,28 +396,34 @@ class _UnitGrid extends StatelessWidget {
   }
 }
 
-/// Flat list sorted by date (newest first); the unit is shown as right-side metadata.
+/// Flat list sorted by date; the unit is shown as right-side metadata. [ascending] puts the
+/// soonest planned date first (prospective baptisms); otherwise newest-first (recent baptisms).
 class _DateList extends StatelessWidget {
-  const _DateList({required this.rows, required this.tier, required this.onOpen, required this.chips});
+  const _DateList({required this.rows, required this.tier, required this.onOpen, required this.chips,
+      this.dateField = 'baptism_date', this.datePrefix = '', this.ascending = false});
   final List<Map<String, dynamic>> rows;
   final ScreenTier tier;
   final void Function(Map<String, dynamic>) onOpen;
   final bool chips;
+  final String dateField;
+  final String datePrefix;
+  final bool ascending;
 
   @override
   Widget build(BuildContext context) {
     final sorted = [...rows]..sort((a, b) {
-        final da = parseMemberDate(a['baptism_date']), db = parseMemberDate(b['baptism_date']);
+        final da = parseMemberDate(a[dateField]), db = parseMemberDate(b[dateField]);
         if (da == null) return 1;
         if (db == null) return -1;
-        return db.compareTo(da);
+        return ascending ? da.compareTo(db) : db.compareTo(da);
       });
     final card = SectionCard(
       title: 'By date',
       child: Column(children: [
         for (var i = 0; i < sorted.length; i++) ...[
           if (i > 0) const Divider(height: 1),
-          _MemberRow(m: sorted[i], onOpen: onOpen, chips: chips, showUnit: true),
+          _MemberRow(m: sorted[i], onOpen: onOpen, chips: chips, showUnit: true,
+              dateField: dateField, datePrefix: datePrefix),
         ],
       ]),
     );
@@ -367,16 +433,20 @@ class _DateList extends StatelessWidget {
 }
 
 class _MemberRow extends StatelessWidget {
-  const _MemberRow({required this.m, required this.onOpen, this.chips = false, this.showUnit = false});
+  const _MemberRow(
+      {required this.m, required this.onOpen, this.chips = false, this.showUnit = false,
+      this.dateField = 'baptism_date', this.datePrefix = ''});
   final Map<String, dynamic> m;
   final void Function(Map<String, dynamic>) onOpen;
   final bool chips;
   final bool showUnit;
+  final String dateField;
+  final String datePrefix;
 
   @override
   Widget build(BuildContext context) {
     final name = m['name']?.toString() ?? '—';
-    final date = parseMemberDate(m['baptism_date']);
+    final date = parseMemberDate(m[dateField]);
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
       onTap: () => onOpen(m),
@@ -384,8 +454,8 @@ class _MemberRow extends StatelessWidget {
       title: Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
       subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (date != null)
-          Text(fmtLong(date), style: Theme.of(context).textTheme.bodySmall),
-        if (chips) ...[const SizedBox(height: 6), GoldenHourChips(member: m, size: 22)],
+          Text('$datePrefix${fmtLong(date)}', style: Theme.of(context).textTheme.bodySmall),
+        if (chips) ...[const SizedBox(height: 6), GoldenHourChips(member: m, size: 22, highlightNext: true)],
       ]),
       trailing: showUnit
           ? SizedBox(
@@ -434,11 +504,13 @@ class _KpiViewState extends State<_KpiView> {
       builder: (context, snap) {
         final stake = snap.data;
         final kpis = (stake?['kpis'] as Map?)?.cast<String, dynamic>();
-        final sacrament = _weeklySacrament(widget.rows); // (labels, attended counts)
-        final members = widget.rows.length;
+        // Golden-Hour metrics track baptized members only — investigators aren't integrating yet.
+        final baptized = widget.rows.where((m) => m['kind'] != 'investigator').toList();
+        final sacrament = _weeklySacrament(baptized); // (labels, attended counts)
+        final members = baptized.length;
         final taught = kpis?['peopleBeingTaught'];
         final newMembers = kpis?['newMemberCount'];
-        final completion = _avgCompletion(widget.rows);
+        final completion = _avgCompletion(baptized);
 
         final cards = <Widget>[
           if (sacrament.$1.isNotEmpty)
@@ -692,6 +764,9 @@ class _SpreadsheetView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context);
+    // The table mirrors the master covenant-path sheet: baptized members only (investigators
+    // have no covenant-path progress yet — they live in Upcoming / Golden Hour › Being Taught).
+    final baptized = rows.where((m) => m['kind'] != 'investigator').toList();
     return SingleChildScrollView(
       scrollDirection: Axis.vertical,
       child: SingleChildScrollView(
@@ -705,7 +780,7 @@ class _SpreadsheetView extends StatelessWidget {
           columnSpacing: 18,
           columns: [for (final c in _cols) DataColumn(label: Text(c.$1))],
           rows: [
-            for (final m in rows)
+            for (final m in baptized)
               DataRow(
                 onSelectChanged: (_) => onOpen(m),
                 cells: [for (final c in _cols) _cell('${m[c.$2] ?? ''}', c.$3)],
@@ -852,17 +927,18 @@ int _cols(ScreenTier t) => switch (t) {
 final _longFmt = DateFormat('EEEE, MMMM d, y');
 String fmtLong(DateTime? d) => d == null ? '' : _longFmt.format(d);
 
-List<(String, List<Map<String, dynamic>>)> _groupByUnit(List<Map<String, dynamic>> rows) {
+List<(String, List<Map<String, dynamic>>)> _groupByUnit(List<Map<String, dynamic>> rows,
+    {String dateField = 'baptism_date', bool ascending = false}) {
   final by = <String, List<Map<String, dynamic>>>{};
   for (final m in rows) {
     (by[(m['unit_name'] ?? '—').toString()] ??= []).add(m);
   }
   for (final list in by.values) {
     list.sort((a, b) {
-      final da = parseMemberDate(a['baptism_date']), db = parseMemberDate(b['baptism_date']);
+      final da = parseMemberDate(a[dateField]), db = parseMemberDate(b[dateField]);
       if (da == null) return 1;
       if (db == null) return -1;
-      return db.compareTo(da);
+      return ascending ? da.compareTo(db) : db.compareTo(da);
     });
   }
   final keys = by.keys.toList()..sort();

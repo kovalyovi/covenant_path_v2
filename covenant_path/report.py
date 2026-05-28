@@ -161,6 +161,9 @@ class CovenantPathMember:
     sex: str | None
     person_uuid: str | None = field(default=None)
     unit_number: int | None = field(default=None)  # stable key for DB unit mapping
+    # 'new_member' (baptized), 'investigator' (being taught — has a planned baptism goal date),
+    # or 'returning'. Drives the app's "being taught" vs "new members" split.
+    kind: str = field(default="new_member")
     # full progress-only subtree (sacrament, friends, lessons, ministering, commitments)
     # for the rich member view — see _progress_subtree. None if details fetch failed.
     details: dict | None = field(default=None)
@@ -216,7 +219,8 @@ def _build_birth_map(client: LcrClient, unit_number: int) -> dict[str, str]:
     return birth_map
 
 
-def _assemble(person_raw: dict, details: dict | None, unit_name: str, birth: str | None) -> CovenantPathMember:
+def _assemble(person_raw: dict, details: dict | None, unit_name: str, birth: str | None,
+              kind: str = "new_member") -> CovenantPathMember:
     d = details or person_raw
     aaronic, melch = parse_priesthood(d.get("priesthoodOrdinations"))
     ministering = d.get("ministering") or {}
@@ -241,6 +245,7 @@ def _assemble(person_raw: dict, details: dict | None, unit_name: str, birth: str
         friends_summary=d.get("numberOfFriendsDisplayString") or person_raw.get("numberOfFriendsDisplayString"),
         sex=d.get("sex"),
         person_uuid=person_raw.get("personUuid") or person_raw.get("id"),
+        kind=kind,
         details=_progress_subtree(d),
     )
 
@@ -334,16 +339,19 @@ def build_stake_report(
         birth_map = _retry(lambda u=unit: _build_birth_map(client, u.unit_number),
                            label=f"member_list {unit.unit_number}") or {}
 
-        people = list(pr.raw.get("newMemberList") or [])
+        # newMemberList = baptized; investigatorList = people being taught (planned baptism
+        # date in baptismGoalDateString). Tag each so the app can split the two populations.
+        people = [(p, "new_member") for p in (pr.raw.get("newMemberList") or [])]
+        people += [(p, "investigator") for p in (pr.raw.get("investigatorList") or [])]
         if include_returning:
-            people += list(pr.raw.get("returningMemberList") or [])
+            people += [(p, "returning") for p in (pr.raw.get("returningMemberList") or [])]
 
-        for person in people:
+        for person, kind in people:
             details = _details_with_retry(client, person.get("id"), person.get("cmisId"))
             if details is None:
                 stats["details_missing"] += 1
             birth = birth_map.get(person.get("personUuid")) or birth_map.get(person.get("id"))
-            member = _assemble(person, details, unit.name, birth)
+            member = _assemble(person, details, unit.name, birth, kind=kind)
             member.unit_number = unit.unit_number
             uuid = person.get("personUuid")
             if uuid:
