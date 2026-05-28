@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'admin_page.dart';
 import 'golden_hour.dart';
 import 'invite_page.dart';
 import 'main.dart';
@@ -18,16 +19,27 @@ class DashboardPage extends StatefulWidget {
 const _columns =
     'name, unit_name, baptism_date, birth_date, membership_duration, sex, friends, '
     'aaronic_priesthood, melchizedek_priesthood, calling, ministering_brothers_sisters, '
-    'ministering_assignment, temple_recommend, patriarchal_blessing, living_ordinance';
+    'ministering_assignment, temple_recommend, patriarchal_blessing, living_ordinance, details';
 
 class _DashboardPageState extends State<DashboardPage> {
   late Future<List<Map<String, dynamic>>> _future;
   bool _goldenHour = true;
+  bool _isAdmin = false;
 
   @override
   void initState() {
     super.initState();
     _future = _load();
+    _checkAdmin();
+  }
+
+  Future<void> _checkAdmin() async {
+    try {
+      final v = await supabase.rpc('is_admin');
+      if (mounted && v == true) setState(() => _isAdmin = true);
+    } catch (_) {
+      // is_admin RPC missing or unreachable — just don't show the admin entry point.
+    }
   }
 
   Future<List<Map<String, dynamic>>> _load() async {
@@ -49,6 +61,13 @@ class _DashboardPageState extends State<DashboardPage> {
       appBar: AppBar(
         title: const Text('Covenant Path'),
         actions: [
+          if (_isAdmin)
+            IconButton(
+              onPressed: () => Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => const AdminPage())),
+              icon: const Icon(Icons.admin_panel_settings),
+              tooltip: 'Admin · Ops console',
+            ),
           IconButton(
             onPressed: () => Navigator.of(context)
                 .push(MaterialPageRoute(builder: (_) => const InvitePage())),

@@ -21,12 +21,37 @@ A `render.yaml` blueprint is committed at the repo root.
    - `SUPABASE_SERVICE_ROLE_KEY` = (Supabase → Settings → API → `service_role`)
    - `ALLOWED_ORIGINS` is prefilled to the custom domain; CORS also allows `*.pages.dev`
      and localhost via a built-in regex, so you don't have to list every origin.
+   - `GITHUB_TOKEN` *(optional)* — enables the admin console's Actions panel + flow
+     buttons (rescrape, re-run). Without it the console still loads but those are hidden.
+     See the admin-console section below for the exact PAT scopes.
 3. **Apply.** Confirm `https://<service>.onrender.com/health` returns `{"ok":true}`.
 
 Auto-deploy: Render redeploys on every push to `main` (blueprint default). To force one,
 use **Manual Deploy → Deploy latest commit**.
 
 Local run: `uvicorn backend.auth_broker.app:app --reload --port 8787`.
+
+### Admin / ops console
+
+The app shows an **Admin** button (gear) to anyone in the `app_admins` table. It calls the
+broker's `/admin/*` endpoints (the broker verifies your Supabase token belongs to an admin
+using the service-role key) and surfaces: system health, data freshness + row counts,
+recent GitHub Actions runs, the commit changelog, a **Rescrape + repopulate** button
+(dispatches `daily-sync.yml` → re-scrape LCR → Google Sheets + Supabase), per-run **re-run**,
+and admin invite/revoke (escalation-safe; you can't revoke yourself).
+
+To enable the Actions/flow features, set `GITHUB_TOKEN` on the broker to a **fine-grained
+PAT** (GitHub → Settings → Developer settings → Fine-grained tokens), scoped to **only the
+`covenant_path_v2` repo**, with these **Repository permissions**:
+
+| Permission | Access | Why |
+|---|---|---|
+| **Actions** | Read and write | list runs, dispatch `daily-sync.yml`, re-run failed runs |
+| **Contents** | Read-only | read the commit changelog |
+| **Metadata** | Read-only | mandatory baseline (auto-selected) |
+
+Override the repo with `GITHUB_REPO` env (default `kovalyovi/covenant_path_v2`). The token
+is only ever held server-side on the broker — never shipped to the app.
 
 ---
 
@@ -86,7 +111,7 @@ variables → Actions → Variables) and update the UptimeRobot monitor + the vi
 
 | Where | Needs |
 |---|---|
-| Render (broker) | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ALLOWED_ORIGINS` |
+| Render (broker) | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ALLOWED_ORIGINS`, `GITHUB_TOKEN` *(optional, admin console)* |
 | GitHub Actions (daily sync) | `LCR_LOGIN`, `LCR_PASSWORD`, `CP_TOKEN_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_DB_URL` (IPv4 pooler), `GOOGLE_SERVICE_ACCOUNT_JSON`, `SPREADSHEET_ID` |
 | Viewer build | `--dart-define`: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `BROKER_URL` |
 

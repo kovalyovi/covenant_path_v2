@@ -12,8 +12,8 @@ import os
 
 from fastapi.testclient import TestClient
 
-from backend.auth_broker.app import app
-from backend.auth_broker import session_mint, okta_flow
+from backend.auth_broker.app import app, require_admin
+from backend.auth_broker import admin, session_mint, okta_flow
 
 client = TestClient(app)
 _PASS = 0
@@ -103,6 +103,52 @@ def test_mfa_expiry() -> None:
     check("select_factor on unknown login_id -> AuthError", raised)
 
 
+def test_admin_requires_auth() -> None:
+    # No bearer token -> 403 before any network call (verify_admin short-circuits).
+    r = client.get("/admin/summary")
+    check("admin/summary without token -> 403", r.status_code == 403)
+    check("verify_admin('') raises NotAdmin", _raises(admin.NotAdmin, admin.verify_admin, ""))
+
+
+def test_admin_actions_graceful_without_github() -> None:
+    # An authenticated admin with no GITHUB_TOKEN still gets a (degraded) actions panel.
+    app.dependency_overrides[require_admin] = lambda: "admin@test"
+    saved = admin.GITHUB_TOKEN
+    admin.GITHUB_TOKEN = ""
+    try:
+        r = client.get("/admin/actions")
+        body = r.json()
+        check("admin/actions 200 when github unset", r.status_code == 200)
+        check("admin/actions reports configured:false", body.get("configured") is False)
+        check("github_configured() false when unset", admin.github_configured() is False)
+    finally:
+        admin.GITHUB_TOKEN = saved
+        app.dependency_overrides.clear()
+
+
+def test_dispatch_allowlist() -> None:
+    # Only known workflows may be dispatched — arbitrary input is rejected (400, no network).
+    app.dependency_overrides[require_admin] = lambda: "admin@test"
+    try:
+        r = client.post("/admin/actions/run", json={"workflow": "evil.yml"})
+        check("dispatch rejects unknown workflow -> 400", r.status_code == 400)
+        check("admin.dispatch('evil.yml') raises AdminError",
+              _raises(admin.AdminError, admin.dispatch, "evil.yml"))
+        check("daily-sync.yml is dispatchable", "daily-sync.yml" in admin.DISPATCHABLE)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def _raises(exc, fn, *args) -> bool:
+    try:
+        fn(*args)
+        return False
+    except exc:
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def main() -> int:
     print("broker tests")
     test_health()
@@ -110,6 +156,9 @@ def main() -> int:
     test_mint_misconfig()
     test_mint_empty_email()
     test_mfa_expiry()
+    test_admin_requires_auth()
+    test_admin_actions_graceful_without_github()
+    test_dispatch_allowlist()
     print(f"\n{_PASS} passed, {_FAIL} failed")
     return 1 if _FAIL else 0
 
