@@ -348,10 +348,17 @@ needed. Flutter `PhotoAvatar` shows it with an initials fallback. Verified live:
   backoff + jitter. First probe finding: the 500s are all on `progress-record` for ~3 units, each
   after a 20–40s server-side delay (overload → 500), recovering on retry.
 
-Pending: ward-leader provisioning (#21 — narrowed precisely: the stake `/mlt/orgs` leadership
-action has no ward bishoprics, member-list `positions` is null, and `/mlt/api/orgs?unitNumber` is
-template-only. Needs the per-ward "who-holds-each-calling" assignments endpoint — one XHR capture
-on the Callings→Ward Leadership page. `roles.provision_roles` already has the ward_leader logic).
+**Ward-leader provisioning (#21) — DONE (2026-05-28).** Source = `GET /mlt/api/orgs?unitNumber=X`
+(clean JSON, pure HTTP, stable REST — no build-specific action id). Each org's `positions[]`
+carries `person{uuid,name}` + `positionType{id,name,leadership}` + `positionStatus`. `roles.py`
+(`_ward_positions` + the per-ward loop in `provision_roles`) keeps ACTIVE positions whose calling
+grants member-data access (same access-matrix gate as stake leaders) and provisions `ward_leader`
+scoped to that unit, email-enriched from member-list. Verified live: **67 ward_leader** roles
+(Bishop, counselors, clerks, exec secs, ward mission leaders) across the stake (was 0), all with
+emails; RLS scopes each to their unit (`test_rls` "ward_leader sees only Ward A"). Earlier dead
+ends (all ruled out): the stake `/mlt/orgs` leadership action (stake-only), member-list `positions`
+(null), and the RSC page payload (not cleanly parseable) — the people are nested under
+`position.person` (keyed `uuid`/`name`), which a buggy walker had missed.
 
 ---
 

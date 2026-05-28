@@ -54,6 +54,33 @@ def _positions(objs) -> list[dict]:
     return out
 
 
+def _ward_positions(orgs_data: dict) -> list[dict]:
+    """Active leadership callings from a unit's /mlt/api/orgs (positions -> person).
+
+    Each position is {person:{uuid,name,currentUnitName}, positionType:{id,name,leadership},
+    positionStatus}. We keep ACTIVE ones with a real person; the access matrix decides which
+    callings actually grant member-data visibility (same gate as stake leaders)."""
+    out: list[dict] = []
+
+    def walk(orgs):
+        for org in orgs or []:
+            for p in (org.get("positions") or []):
+                pt = p.get("positionType") or {}
+                per = p.get("person") or {}
+                if p.get("positionStatus") == "ACTIVE_POSITION" and per.get("uuid") and pt.get("id"):
+                    out.append({
+                        "person_uuid": per.get("uuid"),
+                        "name": per.get("name"),
+                        "unit_name": per.get("currentUnitName"),
+                        "role_id": pt.get("id"),
+                        "calling": pt.get("name"),
+                    })
+            walk(org.get("children"))
+
+    walk(orgs_data.get("unitOrgs"))
+    return out
+
+
 def _email_by_uuid(client) -> dict[str, str]:
     """personUuid -> email across the stake's units (for matching app logins to roles)."""
     out: dict[str, str] = {}
@@ -89,6 +116,30 @@ def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]
         key = (role, unit_id, p["person_uuid"])
         fresh[key] = (stake_id, unit_id, role, p["person_uuid"], p["name"], p["calling"],
                       email_by_uuid.get(p["person_uuid"]))
+
+    # ward leaders: the stake leadership directory has no per-ward bishoprics, so pull each
+    # ward/branch's filled callings from /mlt/api/orgs (clean JSON, pure HTTP). A calling that
+    # grants member-data access -> ward_leader scoped to that unit. One bad unit is skipped.
+    ward_n_found = 0
+    for u in client.user_context().child_units:
+        if not u.unit_number or u.type not in ("WARD", "BRANCH"):
+            continue
+        unit_id = unit_id_by_name.get(u.name)
+        if unit_id is None:
+            continue
+        try:
+            positions = _ward_positions(client.org_callings(u.unit_number))
+        except Exception as exc:  # noqa: BLE001 — never fail provisioning over one unit
+            logger.warning("ward callings unavailable for %s (%s): %s", u.name, u.unit_number, exc)
+            continue
+        for p in positions:
+            if p["role_id"] not in allowed or not p["person_uuid"]:
+                continue
+            key = ("ward_leader", unit_id, p["person_uuid"])
+            fresh[key] = (stake_id, unit_id, "ward_leader", p["person_uuid"], p["name"],
+                          p["calling"], email_by_uuid.get(p["person_uuid"]))
+            ward_n_found += 1
+    logger.info("ward-leader positions found across units: %d", ward_n_found)
 
     with conn.cursor() as cur:
         for row in fresh.values():
