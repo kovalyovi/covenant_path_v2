@@ -92,13 +92,16 @@ class MaxWidthBody extends StatelessWidget {
 /// A titled section as a clean rounded card — the building block for detail + KPI pages.
 class SectionCard extends StatelessWidget {
   const SectionCard(
-      {super.key, required this.title, required this.child, this.trailing, this.leadingIcon});
+      {super.key, required this.title, required this.child, this.trailing, this.leadingIcon,
+      this.iconColor});
   final String title;
   final Widget child;
   final Widget? trailing;
   final IconData? leadingIcon;
+  final Color? iconColor;
   @override
   Widget build(BuildContext context) {
+    final accent = iconColor ?? Theme.of(context).colorScheme.primary;
     return Card(
       elevation: 0,
       margin: const EdgeInsets.symmetric(vertical: 6),
@@ -111,8 +114,15 @@ class SectionCard extends StatelessWidget {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
             if (leadingIcon != null) ...[
-              Icon(leadingIcon, size: 20, color: Theme.of(context).colorScheme.primary),
-              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.all(7),
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(leadingIcon, size: 18, color: accent),
+              ),
+              const SizedBox(width: 10),
             ],
             Expanded(
               child: Text(title,
