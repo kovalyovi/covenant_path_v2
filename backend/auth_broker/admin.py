@@ -145,6 +145,27 @@ def github_configured() -> bool:
     return bool(GITHUB_TOKEN)
 
 
+def tool_links() -> dict:
+    """External dashboards for the platform's services — admin-only (returned in /admin/summary,
+    which is gated by require_admin). Only includes a link when its config is present."""
+    import re
+    links: dict[str, str] = {}
+    if SUPABASE_URL:
+        m = re.match(r"https://([a-z0-9-]+)\.supabase\.co", SUPABASE_URL)
+        if m:
+            links["Supabase"] = f"https://supabase.com/dashboard/project/{m.group(1)}"
+    if GITHUB_REPO:
+        links["GitHub repo"] = f"https://github.com/{GITHUB_REPO}"
+        links["GitHub Actions"] = f"https://github.com/{GITHUB_REPO}/actions"
+    sid = os.environ.get("SPREADSHEET_ID")
+    if sid:
+        links["Google Sheet"] = f"https://docs.google.com/spreadsheets/d/{sid}"
+    app_url = os.environ.get("APP_URL")
+    if app_url:
+        links["App"] = app_url.rstrip("/")
+    return links
+
+
 def _gh_headers() -> dict:
     if not GITHUB_TOKEN:
         raise AdminError("github not configured (GITHUB_TOKEN)")
