@@ -50,10 +50,9 @@ def _sb_headers() -> dict:
     return {"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}"}
 
 
-def verify_admin(authorization: str) -> str:
-    """`authorization` = the app user's "Bearer <supabase access token>". Returns the
-    admin's email, or raises NotAdmin / AdminError. The token is verified by GoTrue;
-    admin membership is checked against app_admins with the service-role key."""
+def verify_user(authorization: str) -> str:
+    """`authorization` = "Bearer <supabase access token>". Returns the signed-in user's
+    verified email (GoTrue-checked), or raises NotAdmin / AdminError. No admin requirement."""
     token = (authorization or "").removeprefix("Bearer ").strip()
     if not token:
         raise NotAdmin("no bearer token")
@@ -72,6 +71,12 @@ def verify_admin(authorization: str) -> str:
     email = (u.json().get("email") or "").strip().lower()
     if not email:
         raise NotAdmin("token has no email")
+    return email
+
+
+def verify_admin(authorization: str) -> str:
+    """Like verify_user, but also requires app_admins membership (checked with the service key)."""
+    email = verify_user(authorization)
     a = requests.get(
         f"{SUPABASE_URL}/rest/v1/app_admins",
         headers=_sb_headers(), params={"select": "email", "email": f"eq.{email}"},
@@ -286,6 +291,33 @@ def rerun(run_id: int) -> None:
         headers=_gh_headers(), timeout=_TIMEOUT)
     if r.status_code not in (201, 204):
         raise AdminError(f"rerun failed ({r.status_code}): {r.text[:200]}")
+
+
+def create_feedback_issue(title: str, body: str, reporter: str) -> dict:
+    """File a GitHub issue from in-app feedback and best-effort hand it to Copilot's coding
+    agent. Requires the broker PAT to have Issues: write. Copilot assignment is optional —
+    the issue is filed regardless (auto-assign needs Copilot enabled on the repo)."""
+    if not GITHUB_TOKEN:
+        raise AdminError("github not configured (GITHUB_TOKEN)")
+    title = (title or "").strip()[:120] or "App feedback"
+    full = f"{(body or '').strip()}\n\n— filed via Covenant Path by {reporter}"
+    r = requests.post(f"https://api.github.com/repos/{GITHUB_REPO}/issues", headers=_gh_headers(),
+                      json={"title": title, "body": full, "labels": ["feedback"]}, timeout=_TIMEOUT)
+    if r.status_code >= 300:
+        raise AdminError(f"issue create failed ({r.status_code}): {r.text[:160]}")
+    issue = r.json()
+    num, url = issue.get("number"), issue.get("html_url")
+    copilot = False
+    assignee = os.environ.get("COPILOT_ASSIGNEE", "copilot-swe-agent")
+    try:  # best-effort — ignore if the Copilot agent login isn't assignable on this repo
+        a = requests.post(f"https://api.github.com/repos/{GITHUB_REPO}/issues/{num}/assignees",
+                          headers=_gh_headers(), json={"assignees": [assignee]}, timeout=_TIMEOUT)
+        copilot = a.status_code < 300 and any(
+            (x.get("login") or "").lower().startswith("copilot")
+            for x in (a.json().get("assignees") or []))
+    except requests.RequestException:
+        pass
+    return {"number": num, "url": url, "copilot": copilot}
 
 
 def recent_commits(limit: int = 10) -> list[dict]:

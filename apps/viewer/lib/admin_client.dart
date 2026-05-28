@@ -67,4 +67,6 @@ class AdminClient {
       _post('/admin/actions/run', {'workflow': workflow, if (inputs != null) 'inputs': inputs});
   Future<Map<String, dynamic>> rerun(int runId) => _post('/admin/actions/$runId/rerun');
   Future<Map<String, dynamic>> invite(String email) => _post('/admin/invite', {'email': email});
+  Future<Map<String, dynamic>> feedback(String title, String body) =>
+      _post('/feedback', {'title': title, 'body': body});
 }

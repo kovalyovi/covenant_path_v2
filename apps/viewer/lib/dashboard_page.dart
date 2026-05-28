@@ -2,6 +2,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import 'admin_client.dart';
 import 'admin_page.dart';
 import 'golden_hour.dart';
 import 'invite_page.dart';
@@ -93,6 +94,48 @@ class _DashboardPageState extends State<DashboardPage> {
   void _open(Map<String, dynamic> m) =>
       Navigator.of(context).push(MaterialPageRoute(builder: (_) => PersonDetailPage(member: m)));
 
+  Future<void> _sendFeedback() async {
+    final titleC = TextEditingController();
+    final bodyC = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Send feedback'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+              controller: titleC,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'Summary')),
+          const SizedBox(height: 8),
+          TextField(
+              controller: bodyC,
+              minLines: 3,
+              maxLines: 6,
+              decoration: const InputDecoration(labelText: 'Details (optional)')),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Send')),
+        ],
+      ),
+    );
+    if (ok != true || titleC.text.trim().isEmpty) return;
+    try {
+      final token = supabase.auth.currentSession?.accessToken ?? '';
+      final res = await AdminClient(token).feedback(titleC.text.trim(), bodyC.text.trim());
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Thanks! Filed issue #${res['number']}'
+                '${res['copilot'] == true ? ' — assigned to Copilot' : ''}')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Couldn\'t send feedback: $e')));
+      }
+    }
+  }
+
   List<Widget> _appBarActions(ScreenTier tier) => [
         if (_lastSynced != null)
           _LastUpdated(iso: _lastSynced!, compact: tier == ScreenTier.mobile),
@@ -110,6 +153,11 @@ class _DashboardPageState extends State<DashboardPage> {
           icon: const Icon(Icons.person_add_alt),
         ),
         IconButton(tooltip: 'Refresh', onPressed: _refresh, icon: const Icon(Icons.refresh)),
+        IconButton(
+          tooltip: 'Send feedback',
+          onPressed: _sendFeedback,
+          icon: const Icon(Icons.feedback_outlined),
+        ),
         IconButton(
           tooltip: 'Sign out (${supabase.auth.currentUser?.email ?? ''})',
           onPressed: () => supabase.auth.signOut(),
