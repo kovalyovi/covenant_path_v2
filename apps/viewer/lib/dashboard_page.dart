@@ -525,9 +525,11 @@ class _KpiViewState extends State<_KpiView> {
   Widget build(BuildContext context) {
     final rows = widget.rows;
     final baptized = rows.where((m) => m['kind'] != 'investigator').toList();
-    final investigators = rows.where((m) => m['kind'] == 'investigator').toList();
-    final newAtSac = _attendanceSeries(rows, kind: 'new_member', period: _period);
-    final friendsAtSac = _attendanceSeries(rows, kind: 'investigator', period: _period);
+    final investigators = rows.where((m) => m['kind'] == 'investigator');
+    // unique people per period (a member attending several Sundays in a month counts once)
+    final newAtSac = _uniqueSeries(baptized, datesOf: _attendedDates, period: _period);
+    final friendsAtSac = _uniqueSeries(investigators, datesOf: _attendedDates, period: _period);
+    final newFriends = _uniqueSeries(investigators, datesOf: _firstLessonDate, period: _period);
     final lessonsWithMember = _lessonsWithMember(rows);
     final completion = _avgCompletion(baptized);
 
@@ -538,7 +540,7 @@ class _KpiViewState extends State<_KpiView> {
         color: Colors.orange.shade700,
         series: friendsAtSac,
         compare: _compareLabels,
-        suffix: 'people being taught attending sacrament',
+        suffix: 'unique people being taught who attended sacrament',
       ),
       _MetricChartCard(
         title: 'New Members at Sacrament',
@@ -546,10 +548,18 @@ class _KpiViewState extends State<_KpiView> {
         color: const Color(0xFFB5532A),
         series: newAtSac,
         compare: _compareLabels,
-        suffix: 'baptized members attending sacrament',
+        suffix: 'unique baptized members who attended sacrament',
+      ),
+      _MetricChartCard(
+        title: 'New Friends Being Taught',
+        icon: Icons.local_library,
+        color: Colors.teal.shade600,
+        series: newFriends,
+        compare: _compareLabels,
+        suffix: 'people who started lessons in the period',
       ),
       _StatGridCard(items: [
-        ('New friends being taught', '${investigators.length}'),
+        ('Being taught now', '${investigators.length}'),
         ('Lessons w/ member present', '$lessonsWithMember'),
         ('New members tracked', '${baptized.length}'),
         ('Golden Hour', '${(completion * 100).round()}%'),
@@ -1075,38 +1085,51 @@ const _periodWindow = {_Period.week: 12, _Period.month: 12, _Period.year: 5};
   }
 }
 
-/// Sacrament attendance for one population (kind = new_member | investigator), counted per
-/// calendar [period], then sliced into the recent window vs the preceding window.
-_Series _attendanceSeries(List<Map<String, dynamic>> rows,
-    {required String kind, required _Period period}) {
-  final counts = <int, double>{};
+/// Unique-people series: for each member, [datesOf] yields the dates it counts toward; each
+/// bucket counts DISTINCT people (not total events, so a person attending many Sundays in a
+/// month counts once). Sliced into the recent window vs the preceding window.
+_Series _uniqueSeries(Iterable<Map<String, dynamic>> rows,
+    {required Iterable<DateTime> Function(Map<String, dynamic>) datesOf, required _Period period}) {
+  final sets = <int, Set<String>>{};
   final labels = <int, String>{};
   for (final m in rows) {
-    if (m['kind'] != kind) continue;
-    final d = m['details'];
-    final sac = (d is Map ? d['sacrament'] : null) as List?;
-    if (sac == null) continue;
-    for (final s in sac) {
-      if (s is! Map || s['attended'] != true) continue;
-      final dt = parseMemberDate(s['date']);
-      if (dt == null) continue;
+    final id = (m['person_uuid'] ?? m['name'] ?? identityHashCode(m)).toString();
+    for (final dt in datesOf(m)) {
       final (key, label) = _bucketOf(dt, period);
-      counts[key] = (counts[key] ?? 0) + 1;
       labels[key] = label;
+      (sets[key] ??= <String>{}).add(id);
     }
   }
-  if (counts.isEmpty) return (labels: [], current: [], prev: []);
-  final keys = counts.keys.toList()..sort();
+  if (sets.isEmpty) return (labels: [], current: [], prev: []);
+  final keys = sets.keys.toList()..sort();
   final n = _periodWindow[period]!;
   final start = (keys.length - n).clamp(0, keys.length);
   final cur = <double>[], prv = <double>[], lab = <String>[];
   for (var i = start; i < keys.length; i++) {
-    cur.add(counts[keys[i]]!);
+    cur.add(sets[keys[i]]!.length.toDouble());
     lab.add(labels[keys[i]]!);
     final pj = i - n; // same slot, one window earlier
-    prv.add(pj >= 0 ? counts[keys[pj]]! : 0);
+    prv.add(pj >= 0 ? sets[keys[pj]]!.length.toDouble() : 0);
   }
   return (labels: lab, current: cur, prev: keys.length > n ? prv : []);
+}
+
+/// Sundays this person was marked present at sacrament.
+Iterable<DateTime> _attendedDates(Map<String, dynamic> m) sync* {
+  final d = m['details'];
+  final sac = (d is Map ? d['sacrament'] : null) as List?;
+  if (sac == null) return;
+  for (final s in sac) {
+    if (s is! Map || s['attended'] != true) continue;
+    final dt = parseMemberDate(s['date']);
+    if (dt != null) yield dt;
+  }
+}
+
+/// The single date this person started being taught (missionary "first lesson").
+Iterable<DateTime> _firstLessonDate(Map<String, dynamic> m) sync* {
+  final fl = parseMemberDate((m['details'] as Map?)?['firstLesson']);
+  if (fl != null) yield fl;
 }
 
 /// Count of lessons taught (across all people) where a member was present for ≥1 principle.
