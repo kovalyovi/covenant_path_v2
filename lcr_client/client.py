@@ -80,6 +80,13 @@ class LcrClient:
         covenant-path progress, sacrament attendance, temple recommends, ministering."""
         return self.session.get_json(f"{LCR}/api/dashboard/data")
 
+    def org_callings(self, unit_number: int) -> dict:
+        """A unit's organizations with FILLED callings — each position carries the assigned
+        `person` ({uuid,name,sex}) + `positionType` ({id,name,leadership}). This is the clean
+        JSON behind member-tools' Ward Leadership view; used to provision ward_leader roles.
+        Stable REST endpoint (no build-specific action id)."""
+        return self.session.get_json(f"{LCR}/mlt/api/orgs", {"unitNumber": unit_number})
+
 
 if __name__ == "__main__":
     # Smoke test against the live session captured by the crawler.
