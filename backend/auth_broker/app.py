@@ -17,12 +17,12 @@ from __future__ import annotations
 import os
 import secrets
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from lcr_client.logging_setup import get_logger
-from backend.auth_broker import okta_flow, session_mint
+from backend.auth_broker import admin, okta_flow, session_mint
 
 logger = get_logger()
 app = FastAPI(title="Covenant Path — Church login broker")
@@ -63,8 +63,23 @@ class SessionReq(BaseModel):
     cookies: list[dict]
 
 
+class DispatchReq(BaseModel):
+    workflow: str = "daily-sync.yml"
+
+
 def _rid() -> str:
     return secrets.token_hex(4)
+
+
+def require_admin(authorization: str = Header(default="")) -> str:
+    """FastAPI dependency: the caller must present a Supabase access token belonging to
+    an app_admin. Returns the admin email; 403 if not an admin, 503 if misconfigured."""
+    try:
+        return admin.verify_admin(authorization)
+    except admin.NotAdmin as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 def _mint(identity: dict, rid: str) -> dict:
@@ -126,3 +141,55 @@ def auth_session(req: SessionReq) -> dict:
     except okta_flow.AuthError as e:
         raise HTTPException(status_code=401, detail=str(e))
     return {"status": "ok", "session": _mint(res["identity"], rid), "identity_name": res["identity"].get("name")}
+
+
+# --- admin / ops console (all gated by require_admin) -----------------------
+
+@app.get("/admin/summary")
+def admin_summary(email: str = Depends(require_admin)) -> dict:
+    """Health + data freshness in one place: broker up, Supabase counts + last sync."""
+    return {"admin": email, "broker": {"ok": True}, "supabase": admin.summary(),
+            "github_configured": admin.github_configured(),
+            "dispatchable": admin.DISPATCHABLE}
+
+
+@app.get("/admin/actions")
+def admin_actions(email: str = Depends(require_admin)) -> dict:
+    """Recent GitHub Actions runs + the commit changelog. Graceful when GITHUB_TOKEN unset."""
+    if not admin.github_configured():
+        return {"configured": False, "runs": [], "commits": []}
+    try:
+        return {"configured": True, "runs": admin.list_runs(), "commits": admin.recent_commits()}
+    except Exception as e:  # noqa: BLE001 — surface upstream GitHub errors as 503
+        logger.error("admin/actions failed: %s", e)
+        raise HTTPException(status_code=503, detail=f"github error: {e}")
+
+
+@app.post("/admin/actions/run")
+def admin_run(req: DispatchReq, email: str = Depends(require_admin)) -> dict:
+    """Kick off a flow — daily-sync = rescrape LCR + repopulate Sheets & Supabase."""
+    logger.info("admin %s dispatching %s", email, req.workflow)
+    try:
+        admin.dispatch(req.workflow)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "dispatched", "workflow": req.workflow}
+
+
+@app.post("/admin/actions/{run_id}/rerun")
+def admin_rerun(run_id: int, email: str = Depends(require_admin)) -> dict:
+    logger.info("admin %s re-running %s", email, run_id)
+    try:
+        admin.rerun(run_id)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "rerun", "run_id": run_id}
+
+
+@app.get("/admin/actions/{run_id}")
+def admin_run_status(run_id: int, email: str = Depends(require_admin)) -> dict:
+    """Poll one run's status (for live progress while a rescrape is in flight)."""
+    try:
+        return admin.run_status(run_id)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"github error: {e}")

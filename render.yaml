@@ -15,3 +15,7 @@ services:
         sync: false
       - key: ALLOWED_ORIGINS
         value: https://app.membercovenantpath.org
+      - key: GITHUB_TOKEN          # optional — enables the admin console's Actions panel
+        sync: false                # fine-grained PAT: Actions r/w + Contents r (see docs/DEPLOYMENT.md)
+      - key: GITHUB_REPO           # optional — defaults to kovalyovi/covenant_path_v2
+        sync: false

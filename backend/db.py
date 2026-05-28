@@ -28,6 +28,7 @@ _MEMBER_COLUMNS = [
     "aaronic_priesthood", "melchizedek_priesthood", "calling",
     "ministering_brothers_sisters", "ministering_assignment", "temple_recommend",
     "patriarchal_blessing", "living_ordinance", "membership_duration", "sex",
+    "details",  # jsonb — the rich progress subtree (dict; wrapped as Json on write)
 ]
 
 
@@ -93,7 +94,15 @@ def upsert_members(conn, stake_id: str, members: list[dict],
             continue
         unit_name = m.get("unit") or m.get("unit_name")
         unit_id = unit_id_by_number.get(m.get("unit_number")) or unit_id_by_name.get(unit_name)
-        vals = [unit_name if c == "unit_name" else m.get(c) for c in _MEMBER_COLUMNS]
+        vals = []
+        for c in _MEMBER_COLUMNS:
+            if c == "unit_name":
+                vals.append(unit_name)
+            elif c == "details":
+                v = m.get("details")
+                vals.append(psycopg2.extras.Json(v) if v is not None else None)
+            else:
+                vals.append(m.get(c))
         rows.append((stake_id, unit_id, *vals))
     if not rows:
         return 0

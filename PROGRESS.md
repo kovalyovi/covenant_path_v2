@@ -290,6 +290,35 @@ flutter test 9/9, build web OK. MFA branch is coded but unexercised (account has
 
 ---
 
+## Rich member view + admin ops console (2026-05-27)
+
+**Rich member detail (LCR-style).** The one-work details endpoint we already fetch has ~198
+fields; we kept ~13 and dropped the rest. Now `covenant_path/report.py` keeps a progress-only
+subtree (`_progress_subtree`: sacrament attendance, friends w/ units, callings, priesthood
+ordinations, ministering names + outbound assignments, temple/self-reliance commitments,
+lessons→principles, tags — **no contact PII**) into a new `members.details` JSONB
+(migration 0009). `apps/viewer/lib/person_detail_page.dart` rewritten into the sectioned
+two-column LCR layout (sacrament dots, friends, principles-taught circles, toggles), driven by
+that JSON with a graceful fallback to the flat fields. Live sync verified: 51/51 members have
+`details` populated. See [[feedback-ui-style]].
+
+**Admin / ops console.** `app_admins` model (migration 0008): `is_admin()` (SECURITY DEFINER —
+else the RLS policy recurses), `invite_admin`/`revoke_admin` (admin-gated, escalation-safe).
+Broker `/admin/*` (`backend/auth_broker/admin.py`): health + freshness + counts, GitHub Actions
+runs + changelog, **rescrape+repopulate** (dispatch `daily-sync.yml`), re-run; verifies the
+caller's Supabase token against `app_admins` via service-role REST; GitHub features need
+`GITHUB_TOKEN` (graceful without). Flutter `admin_page.dart` (gated by `is_admin`) + `admin_client.dart`.
+Full model: docs/DEPLOYMENT.md → "Admin / ops console". See [[project-admin-console]].
+
+Suites after this work: test_suite 10/10, test_rls 3/3, test_power_users 5/5, **test_admins 8/8**,
+**test_broker 19/19**, flutter test 11/11, analyze clean, build web OK.
+
+Pending: iOS tab parity (On Date / Golden Hour / KPIs — KPIs via `/api/dashboard/data`); member
+photo pipeline (`/api/avatar/{cmisId}/MEDIUM` → downsize → private Supabase bucket; `photo_path`
+column already added); ward-leader provisioning (#21).
+
+---
+
 ## Open problems / next steps
 1. Confirm the profile actions work with a *fresh crawler* `storage_state` (one that
    never visited /mlt) — may need a one-time /mlt session warm-up. (Not seen yet with

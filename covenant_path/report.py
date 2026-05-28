@@ -74,6 +74,68 @@ def yes_no(present: bool) -> str:
     return "Yes" if present else "No"
 
 
+def _progress_subtree(d: dict) -> dict:
+    """The covenant-path *progress* fields from a one-work details record, shaped for the
+    rich member view (sacrament dots, friends, lessons, ministering, commitments).
+
+    Deliberately drops contact PII — phoneNumbers / emailAddresses / socialMediaAccounts /
+    contactInformation are NOT included, so none of that lands in Supabase.
+    """
+    def names(lst) -> list[str]:
+        return [p.get("name") for p in (lst or []) if p.get("name")]
+
+    def outbound(assigns) -> list[str]:
+        out: list[str] = []
+        for a in assigns or []:
+            out += [x.get("name") for x in (a.get("assignments") or []) if x.get("name")]
+        return out
+
+    def commitments(lst) -> list[dict]:
+        return [{"name": c.get("name"), "done": bool(c.get("isKeeping"))}
+                for c in (lst or []) if c.get("name")]
+
+    m = d.get("ministering") or {}
+    return {
+        "memberSince": d.get("memberSinceDisplayString"),
+        "baptismGoalDate": d.get("baptismGoalDateString"),
+        "weeksSinceLastAttendance": d.get("weeksSinceLastAttendance"),
+        "sacramentMissed": d.get("sacramentMeetingMessage"),
+        "sacrament": [
+            {"label": s.get("dateDisplay"), "attended": bool(s.get("attended")),
+             "date": s.get("dateString") or s.get("date")}
+            for s in (d.get("sacramentMeetingAttendanceList") or [])
+        ],
+        "friends": [
+            {"name": f.get("name"), "unit": f.get("unitName"), "inStake": bool(f.get("inParentUnit"))}
+            for f in (d.get("friends") or []) if f.get("name")
+        ],
+        "priesthoodOrdinations": list(d.get("priesthoodOrdinations") or []),
+        "callings": list(d.get("callings") or []),
+        "ministeringBrothers": names(m.get("ministeringBrothers")),
+        "ministeringSisters": names(m.get("ministeringSisters")),
+        "ministeringAssignments": outbound(m.get("ministeringBrothersAssignments"))
+        + outbound(m.get("ministeringSistersAssignments")),
+        "templeOrdinances": list(d.get("templeOrdinances") or []),
+        "templeExperiences": commitments(d.get("newMemberOtherCommitments")),
+        "lessons": [
+            {
+                "name": le.get("name"),
+                "taught": le.get("numberTaughtDisplayString"),
+                "principles": [
+                    {"name": p.get("name"), "memberPresent": bool(p.get("memberPresent")),
+                     "taughtLevel": p.get("taughtLevel")}
+                    for p in (le.get("principles") or [])
+                ],
+            }
+            for le in (d.get("lessons") or [])
+        ],
+        "selfReliance": commitments(d.get("selfRelianceCourses")),
+        "tags": [(t.get("tagString") or {}).get("string")
+                 for t in (d.get("tags") or []) if (t.get("tagString") or {}).get("string")],
+        "cmisId": d.get("cmisId"),  # avatar/{cmisId} for the later photo pipeline
+    }
+
+
 # --- model -------------------------------------------------------------------
 
 @dataclass
@@ -99,6 +161,9 @@ class CovenantPathMember:
     sex: str | None
     person_uuid: str | None = field(default=None)
     unit_number: int | None = field(default=None)  # stable key for DB unit mapping
+    # full progress-only subtree (sacrament, friends, lessons, ministering, commitments)
+    # for the rich member view — see _progress_subtree. None if details fetch failed.
+    details: dict | None = field(default=None)
 
 
 # --- build -------------------------------------------------------------------
@@ -173,6 +238,7 @@ def _assemble(person_raw: dict, details: dict | None, unit_name: str, birth: str
         friends_summary=d.get("numberOfFriendsDisplayString") or person_raw.get("numberOfFriendsDisplayString"),
         sex=d.get("sex"),
         person_uuid=person_raw.get("personUuid") or person_raw.get("id"),
+        details=_progress_subtree(d),
     )
 
 
@@ -385,10 +451,12 @@ def export(rows: list[CovenantPathMember], access: dict | None = None,
         json.dumps(dicts, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     if dicts:
+        # the JSON keeps the nested `details` subtree; the CSV stays flat/human-readable.
+        flat_cols = [k for k in dicts[0].keys() if k != "details"]
         with (OUTPUT_DIR / "covenant_path_stake.csv").open(
             "w", newline="", encoding="utf-8-sig"
         ) as fh:
-            writer = csv.DictWriter(fh, fieldnames=list(dicts[0].keys()))
+            writer = csv.DictWriter(fh, fieldnames=flat_cols, extrasaction="ignore")
             writer.writeheader()
             writer.writerows(dicts)
     print(f"\n[+] {len(rows)} members -> {OUTPUT_DIR}")
