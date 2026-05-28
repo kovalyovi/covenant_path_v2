@@ -68,6 +68,12 @@ def _sync_one(args) -> dict:
         conn = db.connect()
         try:
             result["supabase"] = bsync.sync_stake(client, dicts, conn)
+            if args.photos:
+                from backend import photos as photopipe
+                s = result["supabase"]
+                result["photos"] = photopipe.sync_photos_for_stake(
+                    client, conn, s["stake_id"], s["stake_unit"])
+                logger.info("photos: %s", result["photos"])
         finally:
             conn.close()
         logger.info("supabase: %s", result["supabase"])
@@ -128,6 +134,8 @@ def main() -> int:
     ap.add_argument("--no-profile", dest="with_profile", action="store_false")
     ap.add_argument("--sheets", action="store_true", help="push to Google Sheets")
     ap.add_argument("--supabase", action="store_true", help="push to Supabase")
+    ap.add_argument("--photos", action="store_true",
+                    help="also fetch member avatars into Supabase Storage (requires --supabase)")
     ap.add_argument("--spreadsheet-id", default=TEST_SPREADSHEET_ID)
     ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("--cache-max-age-days", type=float, default=7.0)
