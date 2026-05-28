@@ -483,6 +483,14 @@ class _MemberRow extends StatelessWidget {
 
 // ---- KPIs (line-chart cards) ------------------------------------------------
 
+enum _Period { week, month, year }
+
+/// KPIs computed from this stake's own covenant-path data (not LCR membership stats):
+///   • New Members at Sacrament — baptized members attending, bucketed by the selected period
+///   • Friends at Sacrament     — people being taught attending
+///   • New friends being taught / Lessons with member present — current counts
+/// Each chart overlays the most recent window against the immediately-preceding window in a
+/// contrasting color, so you can see the change. Calendar week / month / year toggle.
 class _KpiView extends StatefulWidget {
   const _KpiView({required this.rows, required this.tier});
   final List<Map<String, dynamic>> rows;
@@ -492,135 +500,123 @@ class _KpiView extends StatefulWidget {
 }
 
 class _KpiViewState extends State<_KpiView> {
-  late Future<Map<String, dynamic>?> _kpis;
-
-  @override
-  void initState() {
-    super.initState();
-    _kpis = _load();
-  }
-
-  Future<Map<String, dynamic>?> _load() async {
-    final rows = await supabase.from('stakes').select('name, kpis, kpis_updated_at');
-    final list = (rows as List).cast<Map<String, dynamic>>();
-    for (final s in list) {
-      if (s['kpis'] is Map) return s;
-    }
-    return list.isNotEmpty ? list.first : null;
-  }
+  _Period _period = _Period.month;
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<Map<String, dynamic>?>(
-      future: _kpis,
-      builder: (context, snap) {
-        final stake = snap.data;
-        final kpis = (stake?['kpis'] as Map?)?.cast<String, dynamic>();
-        // Golden-Hour metrics track baptized members only — investigators aren't integrating yet.
-        final baptized = widget.rows.where((m) => m['kind'] != 'investigator').toList();
-        final sacrament = _weeklySacrament(baptized); // (labels, attended counts)
-        final members = baptized.length;
-        final taught = kpis?['peopleBeingTaught'];
-        final newMembers = kpis?['newMemberCount'];
-        final completion = _avgCompletion(baptized);
+    final rows = widget.rows;
+    final baptized = rows.where((m) => m['kind'] != 'investigator').toList();
+    final investigators = rows.where((m) => m['kind'] == 'investigator').toList();
+    final newAtSac = _attendanceSeries(rows, kind: 'new_member', period: _period);
+    final friendsAtSac = _attendanceSeries(rows, kind: 'investigator', period: _period);
+    final lessonsWithMember = _lessonsWithMember(rows);
+    final completion = _avgCompletion(baptized);
 
-        final cards = <Widget>[
-          if (sacrament.$1.isNotEmpty)
-            _LineCard(
-              title: 'New Members at Sacrament',
-              icon: Icons.favorite,
-              color: Colors.redAccent.shade200,
-              labels: sacrament.$1,
-              values: sacrament.$2,
-              suffix: 'attended (last ${sacrament.$1.length} weeks)',
-            ),
-          if (kpis?['sacramentByMonth'] is List && (kpis!['sacramentByMonth'] as List).isNotEmpty)
-            _LineCard(
-              title: 'Sacrament Attendance (stake)',
-              icon: Icons.groups,
-              color: Colors.indigo.shade400,
-              labels: [for (final m in kpis['sacramentByMonth']) '${m['month']}'],
-              values: [for (final m in kpis['sacramentByMonth']) ((m['attended'] as num?) ?? 0).toDouble()],
-              suffix: 'attended per month',
-            ),
-          _StatGridCard(items: [
-            if (newMembers != null) ('New members', '$newMembers'),
-            if (taught != null) ('Being taught', '$taught'),
-            ('Tracked here', '$members'),
-            ('Golden Hour', '${(completion * 100).round()}%'),
-          ]),
-          if (kpis != null) _RecommendCard(kpis: kpis),
-          if (kpis != null) _MinisteringCard(kpis: kpis),
-        ];
+    final cards = <Widget>[
+      _MetricChartCard(
+        title: 'New Members at Sacrament',
+        icon: Icons.favorite,
+        color: Colors.redAccent.shade200,
+        series: newAtSac,
+        suffix: 'baptized members attending sacrament',
+      ),
+      _MetricChartCard(
+        title: 'Friends at Sacrament',
+        icon: Icons.volunteer_activism,
+        color: Colors.teal.shade400,
+        series: friendsAtSac,
+        suffix: 'people being taught attending sacrament',
+      ),
+      _StatGridCard(items: [
+        ('New friends being taught', '${investigators.length}'),
+        ('Lessons w/ member present', '$lessonsWithMember'),
+        ('New members tracked', '${baptized.length}'),
+        ('Golden Hour', '${(completion * 100).round()}%'),
+      ]),
+    ];
 
-        return _Page(
-          tier: widget.tier,
-          header: _BigHeader(text: 'KPIs', subtitle: stake?['kpis_updated_at'] != null
-              ? 'Stake metrics · updated ${_ago(stake!['kpis_updated_at'])}'
-              : 'Stake metrics'),
-          child: kpis == null && snap.connectionState == ConnectionState.waiting
-              ? const Padding(padding: EdgeInsets.all(32), child: Center(child: CircularProgressIndicator()))
-              : _Columns(cols: _cols(widget.tier).clamp(1, 2), children: cards),
-        );
-      },
+    return _Page(
+      tier: widget.tier,
+      header: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const _BigHeader(text: 'KPIs', subtitle: "From this stake's covenant-path data"),
+        const SizedBox(height: 10),
+        Center(
+          child: SegmentedButton<_Period>(
+            showSelectedIcon: false,
+            segments: const [
+              ButtonSegment(value: _Period.week, label: Text('Week')),
+              ButtonSegment(value: _Period.month, label: Text('Month')),
+              ButtonSegment(value: _Period.year, label: Text('Year')),
+            ],
+            selected: {_period},
+            onSelectionChanged: (s) => setState(() => _period = s.first),
+          ),
+        ),
+      ]),
+      child: _Columns(cols: _cols(widget.tier).clamp(1, 2), children: cards),
     );
   }
 }
 
-class _LineCard extends StatelessWidget {
-  const _LineCard({required this.title, required this.icon, required this.color,
-      required this.labels, required this.values, required this.suffix});
+class _MetricChartCard extends StatelessWidget {
+  const _MetricChartCard({required this.title, required this.icon, required this.color,
+      required this.series, required this.suffix});
   final String title;
   final IconData icon;
   final Color color;
-  final List<String> labels;
-  final List<double> values;
+  final _Series series;
   final String suffix;
 
   @override
   Widget build(BuildContext context) {
+    final values = series.current;
+    final total = values.fold<double>(0, (a, b) => a + b).round();
     final last = values.isNotEmpty ? values.last : null;
-    final prev = values.length >= 2 ? values[values.length - 2] : null;
-    final delta = (last != null && prev != null) ? (last - prev) : null;
+    final prior = values.length >= 2 ? values[values.length - 2] : null;
+    final delta = (last != null && prior != null) ? (last - prior) : null;
     return SectionCard(
       title: title,
       leadingIcon: icon,
-      trailing: delta == null
-          ? null
-          : _DeltaBadge(delta: delta),
+      trailing: delta == null ? null : _DeltaBadge(delta: delta),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          if (prev != null) _bigNum(context, 'prior', prev),
-          if (prev != null) const SizedBox(width: 28),
-          if (last != null) _bigNum(context, 'latest', last),
-        ]),
+        Text('$total total',
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
         const SizedBox(height: 12),
-        SizedBox(height: 150, child: _Line(values: values, labels: labels, color: color)),
+        SizedBox(height: 160, child: _Line(values: values, prev: series.prev, labels: series.labels, color: color)),
+        const SizedBox(height: 8),
+        Row(children: [
+          _legendDot(color, 'this period'),
+          if (series.prev.isNotEmpty) ...[
+            const SizedBox(width: 14),
+            _legendDot(Colors.grey.shade400, 'previous'),
+          ],
+        ]),
         const SizedBox(height: 4),
         Text(suffix, style: Theme.of(context).textTheme.bodySmall),
       ]),
     );
   }
 
-  Widget _bigNum(BuildContext context, String label, double v) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: Theme.of(context).textTheme.bodySmall),
-          Text(v == v.roundToDouble() ? '${v.round()}' : v.toStringAsFixed(1),
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
-        ],
-      );
+  Widget _legendDot(Color c, String label) => Row(mainAxisSize: MainAxisSize.min, children: [
+        Container(width: 10, height: 10, decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
+        const SizedBox(width: 5),
+        Text(label, style: const TextStyle(fontSize: 11)),
+      ]);
 }
 
 class _Line extends StatelessWidget {
-  const _Line({required this.values, required this.labels, required this.color});
+  const _Line({required this.values, required this.labels, required this.color, this.prev = const []});
   final List<double> values;
   final List<String> labels;
   final Color color;
+  final List<double> prev;
   @override
   Widget build(BuildContext context) {
-    if (values.isEmpty) return const Center(child: Text('No data'));
-    final maxY = (values.reduce((a, b) => a > b ? a : b)) * 1.25 + 1;
+    if (values.isEmpty) {
+      return Center(child: Text('No data yet', style: TextStyle(color: Colors.grey.shade500)));
+    }
+    final peak = [...values, ...prev].reduce((a, b) => a > b ? a : b);
+    final maxY = peak * 1.25 + 1;
     return LineChart(LineChartData(
       minY: 0,
       maxY: maxY,
@@ -647,6 +643,17 @@ class _Line extends StatelessWidget {
         ),
       ),
       lineBarsData: [
+        if (prev.isNotEmpty)
+          LineChartBarData(
+            spots: [for (var i = 0; i < prev.length; i++) FlSpot(i.toDouble(), prev[i])],
+            isCurved: true,
+            curveSmoothness: 0.3,
+            color: Colors.grey.shade400,
+            barWidth: 2,
+            dashArray: const [5, 4],
+            dotData: const FlDotData(show: false),
+            belowBarData: BarAreaData(show: false),
+          ),
         LineChartBarData(
           spots: [for (var i = 0; i < values.length; i++) FlSpot(i.toDouble(), values[i])],
           isCurved: true,
@@ -690,60 +697,6 @@ class _StatGridCard extends StatelessWidget {
             Text(it.$2, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
             Text(it.$1, style: Theme.of(context).textTheme.bodySmall),
           ])),
-      ]),
-    );
-  }
-}
-
-class _RecommendCard extends StatelessWidget {
-  const _RecommendCard({required this.kpis});
-  final Map<String, dynamic> kpis;
-  @override
-  Widget build(BuildContext context) {
-    final r = (kpis['templeRecommend'] as Map?)?.cast<String, dynamic>() ?? const {};
-    if (r.isEmpty) return const SizedBox.shrink();
-    return SectionCard(title: 'Temple Recommends (stake)', child: Column(children: [
-      _Bar(label: 'Endowed with recommend', frac: _frac(r['endowedActual'], r['endowedTotal']),
-          trailing: '${r['endowedActual'] ?? '—'} / ${r['endowedTotal'] ?? '—'}'),
-      _Bar(label: 'Youth with recommend', frac: _frac(r['youthActual'], r['youthTotal']),
-          trailing: '${r['youthActual'] ?? '—'} / ${r['youthTotal'] ?? '—'}'),
-    ]));
-  }
-}
-
-class _MinisteringCard extends StatelessWidget {
-  const _MinisteringCard({required this.kpis});
-  final Map<String, dynamic> kpis;
-  @override
-  Widget build(BuildContext context) {
-    final m = (kpis['ministering'] as Map?)?.cast<String, dynamic>() ?? const {};
-    if (m.isEmpty) return const SizedBox.shrink();
-    return SectionCard(title: 'Ministering Interviews (stake)', child: Column(children: [
-      _Bar(label: 'Brother companionships', frac: _frac(m['brotherInterviewed'], m['brotherTotal']),
-          trailing: '${m['brotherInterviewed'] ?? '—'} / ${m['brotherTotal'] ?? '—'}'),
-      _Bar(label: 'Sister companionships', frac: _frac(m['sisterInterviewed'], m['sisterTotal']),
-          trailing: '${m['sisterInterviewed'] ?? '—'} / ${m['sisterTotal'] ?? '—'}'),
-    ]));
-  }
-}
-
-class _Bar extends StatelessWidget {
-  const _Bar({required this.label, required this.frac, required this.trailing});
-  final String label;
-  final double frac;
-  final String trailing;
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Expanded(child: Text(label)),
-          Text(trailing, style: const TextStyle(fontWeight: FontWeight.w500)),
-        ]),
-        const SizedBox(height: 4),
-        ClipRRect(borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(value: frac.clamp(0, 1), minHeight: 8)),
       ]),
     );
   }
@@ -1023,29 +976,72 @@ DateTime? parseMemberDate(dynamic v) {
   return null;
 }
 
-/// Weekly "new members at sacrament": across all members' details.sacrament, count attended
-/// per week label (ordered oldest->newest). Returns (labels, counts).
-(List<String>, List<double>) _weeklySacrament(List<Map<String, dynamic>> rows) {
-  final order = <String>[];
-  final attended = <String, int>{};
+/// A chart series: the most recent window of buckets ([current] + [labels]) overlaid against
+/// the immediately-preceding equal-length window ([prev], position-aligned; empty if none).
+typedef _Series = ({List<String> labels, List<double> current, List<double> prev});
+
+const _periodWindow = {_Period.week: 12, _Period.month: 12, _Period.year: 5};
+
+(int, String) _bucketOf(DateTime dt, _Period p) {
+  switch (p) {
+    case _Period.week:
+      final monday = dt.subtract(Duration(days: dt.weekday - 1)); // ISO week start
+      return (monday.year * 10000 + monday.month * 100 + monday.day, DateFormat('M/d').format(monday));
+    case _Period.month:
+      return (dt.year * 100 + dt.month, DateFormat('MMM').format(dt));
+    case _Period.year:
+      return (dt.year, '${dt.year}');
+  }
+}
+
+/// Sacrament attendance for one population (kind = new_member | investigator), counted per
+/// calendar [period], then sliced into the recent window vs the preceding window.
+_Series _attendanceSeries(List<Map<String, dynamic>> rows,
+    {required String kind, required _Period period}) {
+  final counts = <int, double>{};
+  final labels = <int, String>{};
   for (final m in rows) {
+    if (m['kind'] != kind) continue;
     final d = m['details'];
-    final sacr = (d is Map ? d['sacrament'] : null) as List?;
-    if (sacr == null) continue;
-    for (final s in sacr) {
-      if (s is! Map) continue;
-      final label = s['label']?.toString() ?? '';
-      if (label.isEmpty) continue;
-      if (!attended.containsKey(label)) {
-        attended[label] = 0;
-        order.add(label);
-      }
-      if (s['attended'] == true) attended[label] = attended[label]! + 1;
+    final sac = (d is Map ? d['sacrament'] : null) as List?;
+    if (sac == null) continue;
+    for (final s in sac) {
+      if (s is! Map || s['attended'] != true) continue;
+      final dt = parseMemberDate(s['date']);
+      if (dt == null) continue;
+      final (key, label) = _bucketOf(dt, period);
+      counts[key] = (counts[key] ?? 0) + 1;
+      labels[key] = label;
     }
   }
-  // details.sacrament is newest-first per member; reverse to oldest->newest for the trend.
-  final labels = order.reversed.toList();
-  return (labels, [for (final l in labels) attended[l]!.toDouble()]);
+  if (counts.isEmpty) return (labels: [], current: [], prev: []);
+  final keys = counts.keys.toList()..sort();
+  final n = _periodWindow[period]!;
+  final start = (keys.length - n).clamp(0, keys.length);
+  final cur = <double>[], prv = <double>[], lab = <String>[];
+  for (var i = start; i < keys.length; i++) {
+    cur.add(counts[keys[i]]!);
+    lab.add(labels[keys[i]]!);
+    final pj = i - n; // same slot, one window earlier
+    prv.add(pj >= 0 ? counts[keys[pj]]! : 0);
+  }
+  return (labels: lab, current: cur, prev: keys.length > n ? prv : []);
+}
+
+/// Count of lessons taught (across all people) where a member was present for ≥1 principle.
+int _lessonsWithMember(List<Map<String, dynamic>> rows) {
+  var c = 0;
+  for (final m in rows) {
+    final d = m['details'];
+    final lessons = (d is Map ? d['lessons'] : null) as List?;
+    if (lessons == null) continue;
+    for (final l in lessons) {
+      if (l is! Map) continue;
+      final ps = (l['principles'] as List?) ?? const [];
+      if (ps.any((p) => p is Map && p['memberPresent'] == true)) c++;
+    }
+  }
+  return c;
 }
 
 double _avgCompletion(List<Map<String, dynamic>> rows) {
@@ -1057,11 +1053,6 @@ double _avgCompletion(List<Map<String, dynamic>> rows) {
     sum += applicable.where((x) => x.complete(m)).length / applicable.length;
   }
   return sum / rows.length;
-}
-
-double _frac(dynamic a, dynamic b) {
-  final an = (a as num?)?.toDouble() ?? 0, bn = (b as num?)?.toDouble() ?? 0;
-  return bn == 0 ? 0 : an / bn;
 }
 
 String _ago(dynamic iso) {
