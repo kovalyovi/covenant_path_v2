@@ -98,6 +98,8 @@ def _progress_subtree(d: dict) -> dict:
     return {
         "memberSince": d.get("memberSinceDisplayString"),
         "baptismGoalDate": d.get("baptismGoalDateString"),
+        "firstLesson": d.get("firstLessonString"),
+        "nextScheduledEvent": d.get("nextScheduledEventDateString"),
         "weeksSinceLastAttendance": d.get("weeksSinceLastAttendance"),
         "sacramentMissed": d.get("sacramentMeetingMessage"),
         "sacrament": [
@@ -241,7 +243,7 @@ def _assemble(person_raw: dict, details: dict | None, unit_name: str, birth: str
         living_ordinance=parse_endowment(d.get("templeOrdinances")),
         membership_duration=d.get("memberSinceDisplayString") or person_raw.get("memberSinceDisplayString"),
         weeks_since_last_attendance=d.get("weeksSinceLastAttendance"),
-        baptism_goal_date=d.get("baptismGoalDateString"),
+        baptism_goal_date=d.get("baptismGoalDateString") or person_raw.get("baptismGoalDateString"),
         friends_summary=d.get("numberOfFriendsDisplayString") or person_raw.get("numberOfFriendsDisplayString"),
         sex=d.get("sex"),
         person_uuid=person_raw.get("personUuid") or person_raw.get("id"),
