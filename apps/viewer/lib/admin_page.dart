@@ -1,7 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'admin_client.dart';
+import 'golden_hour.dart';
 import 'main.dart';
+
+Future<void> _open(String? url) async {
+  if (url == null || url.isEmpty) return;
+  final uri = Uri.tryParse(url);
+  if (uri != null) await launchUrl(uri, mode: LaunchMode.externalApplication);
+}
 
 /// One place to monitor and operate the whole platform — gated server-side by app_admins.
 /// Panels: system health, data freshness, maintenance (kick off a rescrape that also
@@ -29,10 +37,19 @@ class _AdminPageState extends State<AdminPage> {
   Future<_AdminData> _load() async {
     final c = _client;
     final summary = await c.summary();
-    final actions = await c.actions();
+    // GitHub Actions is optional — a token/scope/repo issue must not stop the console from
+    // opening (this was the "ops console won't open / 404" bug). Load it best-effort.
+    Map<String, dynamic> actions = const {};
+    String? actionsError;
+    try {
+      actions = await c.actions();
+    } catch (e) {
+      actionsError = '$e';
+    }
     final diagnostics = await c.diagnostics();
     final admins = await supabase.from('app_admins').select('email, invited_by_email');
-    return _AdminData(summary, actions, diagnostics, (admins as List).cast<Map<String, dynamic>>());
+    return _AdminData(summary, actions, diagnostics,
+        (admins as List).cast<Map<String, dynamic>>(), actionsError);
   }
 
   Future<void> _refresh() async {
@@ -145,18 +162,34 @@ class _AdminPageState extends State<AdminPage> {
             final d = snap.data!;
             return RefreshIndicator(
               onRefresh: _refresh,
-              child: ListView(
-                padding: const EdgeInsets.all(12),
-                children: [
-                  _HealthCard(d: d),
-                  _FreshnessCard(d: d),
-                  _MaintenanceCard(onRun: _busy ? null : _dispatch, d: d),
-                  _DiagnosticsCard(d: d),
-                  _RunsCard(d: d, onRerun: _busy ? null : _rerun),
-                  _ChangelogCard(d: d),
-                  _AdminsCard(d: d, onInvite: _busy ? null : _inviteAdmin, onRevoke: _revokeAdmin),
-                  const SizedBox(height: 24),
-                ],
+              child: MaxWidthBody(
+                maxWidth: 900,
+                child: ListView(
+                  padding: const EdgeInsets.all(12),
+                  children: [
+                    _HealthCard(d: d),
+                    _FreshnessCard(d: d),
+                    _MaintenanceCard(onRun: _busy ? null : _dispatch, d: d),
+                    _DiagnosticsCard(d: d),
+                    if (d.actionsError != null)
+                      _Card(
+                        title: 'GitHub Actions',
+                        child: Text(
+                          'Unavailable: ${d.actionsError}\n\nThe rest of the console works. To '
+                          'enable runs + changelog, set GITHUB_TOKEN on the broker (fine-grained '
+                          'PAT with Actions: read & write, Contents: read) scoped to the repo.',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      )
+                    else ...[
+                      _RunsCard(d: d, onRerun: _busy ? null : _rerun),
+                      _ChangelogCard(d: d),
+                    ],
+                    _LinksCard(d: d),
+                    _AdminsCard(d: d, onInvite: _busy ? null : _inviteAdmin, onRevoke: _revokeAdmin),
+                    const SizedBox(height: 24),
+                  ],
+                ),
               ),
             );
           },
@@ -174,11 +207,12 @@ class _AdminPageState extends State<AdminPage> {
 }
 
 class _AdminData {
-  _AdminData(this.summary, this.actions, this.diagnostics, this.admins);
+  _AdminData(this.summary, this.actions, this.diagnostics, this.admins, [this.actionsError]);
   final Map<String, dynamic> summary;
   final Map<String, dynamic> actions;
   final Map<String, dynamic> diagnostics;
   final List<Map<String, dynamic>> admins;
+  final String? actionsError;
 
   List<Map<String, dynamic>> get diagRuns =>
       ((diagnostics['runs'] as List?) ?? const []).cast<Map<String, dynamic>>();
@@ -196,6 +230,31 @@ class _AdminData {
       ((actions['runs'] as List?) ?? const []).cast<Map<String, dynamic>>();
   List<Map<String, dynamic>> get commits =>
       ((actions['commits'] as List?) ?? const []).cast<Map<String, dynamic>>();
+  Map<String, String> get links =>
+      ((summary['links'] as Map?) ?? const {}).map((k, v) => MapEntry('$k', '$v'));
+}
+
+/// Quick links to the platform's external dashboards (admin-only; URLs come from the
+/// broker's gated /admin/summary so nothing sensitive is hardcoded in the client).
+class _LinksCard extends StatelessWidget {
+  const _LinksCard({required this.d});
+  final _AdminData d;
+  @override
+  Widget build(BuildContext context) {
+    final links = d.links;
+    if (links.isEmpty) return const SizedBox.shrink();
+    return _Card(
+      title: 'Tools & dashboards',
+      child: Wrap(spacing: 8, runSpacing: 8, children: [
+        for (final e in links.entries)
+          ActionChip(
+            avatar: const Icon(Icons.open_in_new, size: 16),
+            label: Text(e.key),
+            onPressed: () => _open(e.value),
+          ),
+      ]),
+    );
+  }
 }
 
 // ---- cards -----------------------------------------------------------------
@@ -470,6 +529,7 @@ class _RunsCard extends StatelessWidget {
                   ListTile(
                     dense: true,
                     contentPadding: EdgeInsets.zero,
+                    onTap: r['html_url'] != null ? () => _open('${r['html_url']}') : null,
                     leading: _RunStatus(status: '${r['status']}', conclusion: '${r['conclusion']}'),
                     title: Text('${r['name']} #${r['run_number']}'),
                     subtitle: Text('${r['event']} · ${_ago(r['created_at'])}'),
@@ -521,9 +581,11 @@ class _ChangelogCard extends StatelessWidget {
             ListTile(
               dense: true,
               contentPadding: EdgeInsets.zero,
+              onTap: c['html_url'] != null ? () => _open('${c['html_url']}') : null,
               leading: const Icon(Icons.commit, size: 18),
               title: Text('${c['message']}'),
               subtitle: Text('${c['sha']} · ${c['author'] ?? ''} · ${_ago(c['date'])}'),
+              trailing: c['html_url'] != null ? const Icon(Icons.open_in_new, size: 14) : null,
             ),
         ],
       ),

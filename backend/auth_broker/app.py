@@ -151,7 +151,7 @@ def admin_summary(email: str = Depends(require_admin)) -> dict:
     """Health + data freshness in one place: broker up, Supabase counts + last sync."""
     return {"admin": email, "broker": {"ok": True}, "supabase": admin.summary(),
             "github_configured": admin.github_configured(),
-            "dispatchable": admin.DISPATCHABLE}
+            "dispatchable": admin.DISPATCHABLE, "links": admin.tool_links()}
 
 
 @app.get("/admin/diagnostics")
