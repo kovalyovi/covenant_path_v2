@@ -95,9 +95,14 @@ it the admin console still loads — the Actions/Changelog panels and Rescrape b
   principles-taught progress, self-reliance. Driven by the `members.details` JSONB subtree the
   sync keeps (contact PII deliberately excluded).
 - **Admin / ops console** (`admin_page.dart`, gear icon, admins only) — system health, data
-  freshness + row counts, GitHub Actions runs + changelog, **Rescrape + repopulate** (dispatch
-  `daily-sync.yml`), re-run, and invite/revoke admins (escalation-safe). Server side =
-  broker `/admin/*`; gated by the `app_admins` table.
+  freshness + row counts, GitHub Actions runs + changelog, **targeted maintenance flows**
+  (Full sync / Supabase only / Sheets only / Refresh photos — `daily-sync.yml` dispatch inputs),
+  re-run, a **Diagnostics** panel (request success %, failing units, field parity, endpoint
+  latency), and invite/revoke admins (escalation-safe). Server side = broker `/admin/*`; gated by
+  the `app_admins` table.
+- **Observability** — `lcr_client/metrics.py` times every LCR JSON call; each sync writes a
+  `sync_diagnostics` row, and `backend/probe.py` (`probe-lcr.yml`, every 4h) profiles the flaky
+  endpoints between syncs so the console can trend where 500s/timeouts happen.
 - **Dual login** — Church account (broker → Okta IDX, MFA-aware) or email OTP (invitees).
 - **Power users** — `invite_power_user(email)` clones the caller's exact scope to any email
   (recursive, audited, revocable). See [docs/DELEGATED_ACCESS.md](docs/DELEGATED_ACCESS.md).
