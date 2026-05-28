@@ -59,7 +59,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Future<void> _loadStakeName() async {
     try {
-      final rows = await supabase.from('stakes').select('name, last_synced_at, sync_state');
+      final rows = await supabase.from('stakes').select('name, last_synced_at, sync_state, sync_started_at');
       final list = (rows as List).cast<Map<String, dynamic>>();
       if (list.isEmpty || !mounted) return;
       // freshest stake first, so the chip reflects the most recent scrape the user can see
@@ -69,7 +69,13 @@ class _DashboardPageState extends State<DashboardPage> {
       setState(() {
         _stakeName = list.first['name'];
         _lastSynced = list.first['last_synced_at']?.toString();
-        _syncing = list.any((s) => s['sync_state'] == 'running');
+        // only treat as syncing if it started recently — guards against a crashed run that
+        // never got to mark itself 'done' leaving a permanently stuck banner.
+        _syncing = list.any((s) {
+          if (s['sync_state'] != 'running') return false;
+          final started = DateTime.tryParse('${s['sync_started_at'] ?? ''}');
+          return started != null && DateTime.now().toUtc().difference(started.toUtc()).inMinutes < 30;
+        });
       });
     } catch (_) {}
   }
