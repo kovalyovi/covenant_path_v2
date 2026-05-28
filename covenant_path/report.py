@@ -187,6 +187,7 @@ def _retry(fn, attempts: int = 3, delay: float = 2.0, label: str = ""):
     AuthExpiredError propagates (it's already handled with one relogin in LcrSession);
     everything else (e.g. a 500) is retried so one flaky unit doesn't fail the whole run.
     """
+    import random
     for i in range(attempts):
         try:
             return fn()
@@ -196,7 +197,9 @@ def _retry(fn, attempts: int = 3, delay: float = 2.0, label: str = ""):
             if i == attempts - 1:
                 logger.warning("giving up on %s after %d attempts: %s", label, attempts, exc)
                 return None
-            time.sleep(delay)
+            # exponential backoff + jitter — LCR 500s are often transient overload, so
+            # spacing retries out (rather than hammering) recovers more of them.
+            time.sleep(delay * (2 ** i) + random.uniform(0, delay))
     return None
 
 

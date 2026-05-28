@@ -328,8 +328,30 @@ to a PRIVATE `member-photos` Storage bucket, and stores a 1-year **signed URL** 
 needed. Flutter `PhotoAvatar` shows it with an initials fallback. Verified live: bucket created,
 3 photos uploaded (98 members have none), signed URL serves image/jpeg 200.
 
-Pending: ward-leader provisioning (#21 — needs a captured per-ward leadership API call from the
-user; the daily sync provisions stake_leader roles but 0 ward_leader without that source).
+## Polish + observability (2026-05-28)
+
+- **UI polish**: `SectionCard` (clean rounded cards) + `MaxWidthBody` (content no longer stretches
+  edge-to-edge); member detail is responsive 1-col/2-col within a capped width; tabs centered.
+- **Password autofill** (web): login fields in an `AutofillGroup` + `finishAutofillContext()` so
+  the browser offers to save/fill.
+- **Cache busting**: `apps/viewer/web/_headers` (no-cache on index.html + flutter_service_worker.js)
+  so a deploy is picked up on reload instead of the SW serving a stale build (force-tracked since
+  `web/` is gitignored).
+- **Targeted maintenance flows**: `daily-sync.yml` takes `targets` (both/supabase/sheets) + `photos`
+  dispatch inputs; the broker passes them; admin console exposes Full sync / Supabase only / Sheets
+  only / Refresh photos.
+- **Observability**: `lcr_client/metrics.py` times every JSON request; each sync writes a
+  `sync_diagnostics` row (migration 0013) with per-endpoint latency + status histogram, units
+  ok/failed, and field-coverage parity. `backend/probe.py` + `.github/workflows/probe-lcr.yml`
+  (every 4h) profile the flaky endpoints between syncs. Admin console **Diagnostics** panel shows
+  success %, failing units, parity bars, endpoint perf. `report._retry` now uses exponential
+  backoff + jitter. First probe finding: the 500s are all on `progress-record` for ~3 units, each
+  after a 20–40s server-side delay (overload → 500), recovering on retry.
+
+Pending: ward-leader provisioning (#21 — narrowed precisely: the stake `/mlt/orgs` leadership
+action has no ward bishoprics, member-list `positions` is null, and `/mlt/api/orgs?unitNumber` is
+template-only. Needs the per-ward "who-holds-each-calling" assignments endpoint — one XHR capture
+on the Callings→Ward Leadership page. `roles.provision_roles` already has the ward_leader logic).
 
 ---
 
