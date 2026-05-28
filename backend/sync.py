@@ -91,6 +91,7 @@ def sync_stake(client: LcrClient, members: list[dict], conn) -> dict:
         logger.warning("role provisioning skipped for stake %s: %s", stake_id, exc)
         roles = None
     db.touch_stake_synced(conn, stake_id)
+    db.set_sync_state(conn, stake_id, "done")
     return {"stake": ctx.unit_name, "stake_unit": ctx.unit_number, "stake_id": stake_id,
             "units": len(unit_id_by_number), "members_written": written, "roles": roles}
 

@@ -45,6 +45,18 @@ def _sync_one(args) -> dict:
 
     metrics.reset()  # isolate this stake's request metrics for the diagnostics row
     client = LcrClient()
+    # Mark the stake "running" before the long scrape so the app can show a syncing banner
+    # (and a brand-new stake gets a row immediately). Best-effort — never block the sync.
+    if args.supabase:
+        try:
+            from backend import db as _db
+            ctx = client.user_context()
+            _c = _db.connect()
+            _sid = _db.upsert_stake(_c, ctx.unit_number, ctx.unit_name)
+            _db.set_sync_state(_c, _sid, "running")
+            _c.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not mark sync running: %s", exc)
     access = covenant_path_access(client)
     cache = ProfileCache(max_age_days=args.cache_max_age_days, enabled=not args.no_cache)
     rows = build_stake_report(client, with_profile=args.with_profile, access=access,
