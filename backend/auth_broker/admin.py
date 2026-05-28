@@ -111,6 +111,17 @@ def _one(table: str, params: dict) -> dict | None:
     return rows[0] if rows else None
 
 
+def recent_diagnostics(limit: int = 12) -> list[dict]:
+    """Recent sync/probe diagnostics rows (latest first)."""
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/sync_diagnostics", headers=_sb_headers(),
+                         params={"select": "run_at,kind,stake_id,payload",
+                                 "order": "run_at.desc", "limit": limit}, timeout=_TIMEOUT)
+    except requests.RequestException:
+        return []
+    return r.json() if r.status_code == 200 else []
+
+
 def summary() -> dict:
     """Row counts + data freshness from Supabase (service-role REST)."""
     last = _one("members", {"select": "updated_at", "order": "updated_at.desc", "limit": 1})

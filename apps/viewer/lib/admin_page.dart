@@ -30,8 +30,9 @@ class _AdminPageState extends State<AdminPage> {
     final c = _client;
     final summary = await c.summary();
     final actions = await c.actions();
+    final diagnostics = await c.diagnostics();
     final admins = await supabase.from('app_admins').select('email, invited_by_email');
-    return _AdminData(summary, actions, (admins as List).cast<Map<String, dynamic>>());
+    return _AdminData(summary, actions, diagnostics, (admins as List).cast<Map<String, dynamic>>());
   }
 
   Future<void> _refresh() async {
@@ -54,24 +55,22 @@ class _AdminPageState extends State<AdminPage> {
     }
   }
 
-  Future<void> _rescrape() async {
+  Future<void> _dispatch(String label, String body, Map<String, dynamic> inputs) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Rescrape now?'),
-        content: const Text(
-            'This dispatches the daily sync on GitHub: re-scrapes LCR and repopulates '
-            'Google Sheets + Supabase. It runs in the cloud and takes a few minutes.'),
+        title: Text('$label?'),
+        content: Text('$body It runs in the cloud (GitHub Actions) and takes a few minutes.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Rescrape')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(label)),
         ],
       ),
     );
     if (ok != true) return;
     await _guard(() async {
-      await _client.run('daily-sync.yml');
-      _snack('Rescrape dispatched. Refresh in a minute to see the run.');
+      await _client.run('daily-sync.yml', inputs: inputs);
+      _snack('$label dispatched. Refresh in a minute to see the run.');
       await _refresh();
     });
   }
@@ -151,7 +150,8 @@ class _AdminPageState extends State<AdminPage> {
                 children: [
                   _HealthCard(d: d),
                   _FreshnessCard(d: d),
-                  _MaintenanceCard(onRescrape: _busy ? null : _rescrape, d: d),
+                  _MaintenanceCard(onRun: _busy ? null : _dispatch, d: d),
+                  _DiagnosticsCard(d: d),
                   _RunsCard(d: d, onRerun: _busy ? null : _rerun),
                   _ChangelogCard(d: d),
                   _AdminsCard(d: d, onInvite: _busy ? null : _inviteAdmin, onRevoke: _revokeAdmin),
@@ -174,10 +174,20 @@ class _AdminPageState extends State<AdminPage> {
 }
 
 class _AdminData {
-  _AdminData(this.summary, this.actions, this.admins);
+  _AdminData(this.summary, this.actions, this.diagnostics, this.admins);
   final Map<String, dynamic> summary;
   final Map<String, dynamic> actions;
+  final Map<String, dynamic> diagnostics;
   final List<Map<String, dynamic>> admins;
+
+  List<Map<String, dynamic>> get diagRuns =>
+      ((diagnostics['runs'] as List?) ?? const []).cast<Map<String, dynamic>>();
+  Map<String, dynamic>? get latestSync {
+    for (final r in diagRuns) {
+      if (r['kind'] == 'sync') return r;
+    }
+    return null;
+  }
 
   Map<String, dynamic> get sb =>
       (summary['supabase'] as Map?)?.cast<String, dynamic>() ?? const {};
@@ -291,31 +301,152 @@ class _FreshnessCard extends StatelessWidget {
 }
 
 class _MaintenanceCard extends StatelessWidget {
-  const _MaintenanceCard({required this.onRescrape, required this.d});
-  final VoidCallback? onRescrape;
+  const _MaintenanceCard({required this.onRun, required this.d});
+  final void Function(String label, String body, Map<String, dynamic> inputs)? onRun;
   final _AdminData d;
+
   @override
   Widget build(BuildContext context) {
+    final on = d.githubConfigured ? onRun : null;
     return _Card(
       title: 'Maintenance',
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Re-scrape LCR and repopulate Google Sheets + Supabase. '
-            'Runs in the cloud via GitHub Actions.'),
-        const SizedBox(height: 10),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: FilledButton.icon(
-            onPressed: d.githubConfigured ? onRescrape : null,
+        const Text('Each flow re-scrapes LCR (required for fresh data); the choice controls '
+            'where it writes.'),
+        const SizedBox(height: 12),
+        Wrap(spacing: 10, runSpacing: 10, children: [
+          FilledButton.icon(
+            onPressed: on == null ? null : () => on('Full sync',
+                'Re-scrapes LCR and repopulates both Google Sheets and Supabase.',
+                {'targets': 'both'}),
             icon: const Icon(Icons.cloud_sync),
-            label: const Text('Rescrape + repopulate'),
+            label: const Text('Full sync'),
           ),
-        ),
+          OutlinedButton.icon(
+            onPressed: on == null ? null : () => on('Supabase only',
+                'Re-scrapes LCR and repopulates Supabase (the app data) only.',
+                {'targets': 'supabase'}),
+            icon: const Icon(Icons.storage),
+            label: const Text('Supabase only'),
+          ),
+          OutlinedButton.icon(
+            onPressed: on == null ? null : () => on('Google Sheets only',
+                'Re-scrapes LCR and repopulates the Google Sheet only.',
+                {'targets': 'sheets'}),
+            icon: const Icon(Icons.table_chart),
+            label: const Text('Sheets only'),
+          ),
+          OutlinedButton.icon(
+            onPressed: on == null ? null : () => on('Refresh photos',
+                'Re-scrapes LCR, updates Supabase, and refreshes member avatars in Storage.',
+                {'targets': 'supabase', 'photos': 'true'}),
+            icon: const Icon(Icons.photo_camera),
+            label: const Text('Refresh photos'),
+          ),
+        ]),
         if (!d.githubConfigured)
           Padding(
             padding: const EdgeInsets.only(top: 8),
             child: Text('Link GitHub (set GITHUB_TOKEN on the broker) to enable flows.',
                 style: Theme.of(context).textTheme.bodySmall),
           ),
+      ]),
+    );
+  }
+}
+
+class _DiagnosticsCard extends StatelessWidget {
+  const _DiagnosticsCard({required this.d});
+  final _AdminData d;
+  @override
+  Widget build(BuildContext context) {
+    final run = d.latestSync;
+    if (run == null) {
+      return const _Card(title: 'Diagnostics', child: Text('No sync diagnostics yet.'));
+    }
+    final p = (run['payload'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final req = (p['requests'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final stats = (p['run_stats'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final coverage = (p['field_coverage'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final endpoints = ((req['endpoints'] as List?) ?? const []).cast<Map>();
+    final failed = ((stats['failed_units'] as List?) ?? const []).cast<dynamic>();
+    final successPct = (req['success_pct'] as num?)?.toDouble() ?? 100.0;
+
+    return _Card(
+      title: 'Diagnostics',
+      trailing: Text(_ago(run['run_at']), style: Theme.of(context).textTheme.bodySmall),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Wrap(spacing: 10, runSpacing: 10, children: [
+          _Pill(label: 'Requests ${successPct.toStringAsFixed(0)}%', ok: successPct >= 99),
+          _Pill(label: 'Units ${(stats['units'] ?? '—')} ok', ok: failed.isEmpty,
+              offText: '${failed.length} failed'),
+          _Pill(label: '${req['total_errors'] ?? 0} request errors', ok: (req['total_errors'] ?? 0) == 0),
+        ]),
+        if (failed.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text('Failed units: ${failed.join(', ')}',
+                style: TextStyle(color: Colors.orange.shade800)),
+          ),
+
+        if (coverage.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          Text('Field parity (filled / blocked / pending)',
+              style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 6),
+          for (final e in coverage.entries) _ParityRow(field: e.key, c: (e.value as Map).cast<String, dynamic>()),
+        ],
+
+        if (endpoints.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          Text('Endpoint performance', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 6),
+          for (final ep in endpoints)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(children: [
+                Expanded(child: Text('${ep['endpoint']}',
+                    style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                    overflow: TextOverflow.ellipsis)),
+                Text('${ep['calls']} calls · ${ep['avg_ms']}ms avg'
+                    '${(ep['errors'] ?? 0) != 0 ? ' · ${ep['errors']} err' : ''}',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: (ep['errors'] ?? 0) != 0 ? Colors.red.shade700 : null)),
+              ]),
+            ),
+        ],
+      ]),
+    );
+  }
+}
+
+class _ParityRow extends StatelessWidget {
+  const _ParityRow({required this.field, required this.c});
+  final String field;
+  final Map<String, dynamic> c;
+  @override
+  Widget build(BuildContext context) {
+    final filled = (c['filled'] as num?)?.toInt() ?? 0;
+    final blocked = (c['blocked'] as num?)?.toInt() ?? 0;
+    final pending = (c['pending'] as num?)?.toInt() ?? 0;
+    final total = (filled + blocked + pending).clamp(1, 1 << 30);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(children: [
+        SizedBox(width: 150, child: Text(field, overflow: TextOverflow.ellipsis)),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: Row(children: [
+              if (filled > 0) Expanded(flex: filled, child: Container(height: 10, color: Colors.green.shade500)),
+              if (blocked > 0) Expanded(flex: blocked, child: Container(height: 10, color: Colors.red.shade400)),
+              if (pending > 0) Expanded(flex: pending, child: Container(height: 10, color: Colors.grey.shade400)),
+            ]),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text('$filled/$total', style: Theme.of(context).textTheme.bodySmall),
       ]),
     );
   }

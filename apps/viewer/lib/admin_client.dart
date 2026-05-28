@@ -62,7 +62,8 @@ class AdminClient {
 
   Future<Map<String, dynamic>> summary() => _get('/admin/summary');
   Future<Map<String, dynamic>> actions() => _get('/admin/actions');
-  Future<Map<String, dynamic>> run(String workflow) =>
-      _post('/admin/actions/run', {'workflow': workflow});
+  Future<Map<String, dynamic>> diagnostics() => _get('/admin/diagnostics');
+  Future<Map<String, dynamic>> run(String workflow, {Map<String, dynamic>? inputs}) =>
+      _post('/admin/actions/run', {'workflow': workflow, if (inputs != null) 'inputs': inputs});
   Future<Map<String, dynamic>> rerun(int runId) => _post('/admin/actions/$runId/rerun');
 }

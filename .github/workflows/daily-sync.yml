@@ -7,12 +7,21 @@ name: Daily covenant-path sync
 on:
   schedule:
     - cron: "0 9 * * *"      # 09:00 UTC daily
-  workflow_dispatch:          # manual run button
+  workflow_dispatch:          # manual run button (also how the admin console triggers flows)
     inputs:
       with_profile:
         description: "Fetch profile fields (baptism/recommend/etc.)"
         type: boolean
         default: true
+      targets:
+        description: "Where to write"
+        type: choice
+        options: ["both", "supabase", "sheets"]
+        default: "both"
+      photos:
+        description: "Also refresh member avatars (needs Supabase)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -68,10 +77,20 @@ jobs:
           fi
 
       - name: Run daily sync
+        env:
+          TARGETS: ${{ github.event.inputs.targets || 'both' }}
+          PHOTOS: ${{ github.event.inputs.photos || 'false' }}
         run: |
           ARGS="--with-profile"
-          [ -n "$GOOGLE_SERVICE_ACCOUNT_JSON" ] && ARGS="$ARGS --sheets"
-          [ -n "$SUPABASE_DB_URL" ] && ARGS="$ARGS --supabase"
+          # Sheets unless the dispatch asked for supabase-only (and only if configured).
+          if [ "$TARGETS" != "supabase" ] && [ -n "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
+            ARGS="$ARGS --sheets"
+          fi
+          # Supabase unless the dispatch asked for sheets-only (and only if configured).
+          if [ "$TARGETS" != "sheets" ] && [ -n "$SUPABASE_DB_URL" ]; then
+            ARGS="$ARGS --supabase"
+          fi
+          [ "$PHOTOS" = "true" ] && ARGS="$ARGS --photos"
           [ -n "$SPREADSHEET_ID" ] && ARGS="$ARGS --spreadsheet-id $SPREADSHEET_ID"
           echo "running: python scripts/daily_sync.py $ARGS"
           python scripts/daily_sync.py $ARGS
