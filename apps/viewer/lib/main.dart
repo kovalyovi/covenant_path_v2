@@ -27,6 +27,9 @@ class ViewerApp extends StatelessWidget {
       title: 'Covenant Path',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
+      // Make all text selectable app-wide (text fields manage their own selection and are
+      // excluded automatically); taps/buttons still work inside a SelectionArea.
+      builder: (context, child) => SelectionArea(child: child ?? const SizedBox.shrink()),
       home: const AuthGate(),
     );
   }

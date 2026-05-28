@@ -40,6 +40,7 @@ class _DashboardPageState extends State<DashboardPage> {
   int _tab = 0;
   bool _isAdmin = false;
   String? _stakeName;
+  String? _lastSynced;
 
   @override
   void initState() {
@@ -57,8 +58,17 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Future<void> _loadStakeName() async {
     try {
-      final rows = await supabase.from('stakes').select('name').limit(1);
-      if ((rows as List).isNotEmpty && mounted) setState(() => _stakeName = rows.first['name']);
+      final rows = await supabase.from('stakes').select('name, last_synced_at');
+      final list = (rows as List).cast<Map<String, dynamic>>();
+      if (list.isEmpty || !mounted) return;
+      // freshest stake first, so the chip reflects the most recent scrape the user can see
+      list.sort((a, b) => (b['last_synced_at'] ?? '')
+          .toString()
+          .compareTo((a['last_synced_at'] ?? '').toString()));
+      setState(() {
+        _stakeName = list.first['name'];
+        _lastSynced = list.first['last_synced_at']?.toString();
+      });
     } catch (_) {}
   }
 
@@ -75,7 +85,9 @@ class _DashboardPageState extends State<DashboardPage> {
   void _open(Map<String, dynamic> m) =>
       Navigator.of(context).push(MaterialPageRoute(builder: (_) => PersonDetailPage(member: m)));
 
-  List<Widget> _appBarActions() => [
+  List<Widget> _appBarActions(ScreenTier tier) => [
+        if (_lastSynced != null)
+          _LastUpdated(iso: _lastSynced!, compact: tier == ScreenTier.mobile),
         if (_isAdmin)
           IconButton(
             tooltip: 'Admin · Ops console',
@@ -101,7 +113,7 @@ class _DashboardPageState extends State<DashboardPage> {
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, c) {
       final tier = tierFor(c.maxWidth);
-      final appBar = AppBar(title: Text(_stakeName ?? 'Covenant Path'), actions: _appBarActions());
+      final appBar = AppBar(title: Text(_stakeName ?? 'Covenant Path'), actions: _appBarActions(tier));
       final body = _Body(tab: _tab, tier: tier, future: _future, onRefresh: _refresh, onOpen: _open);
 
       if (tier == ScreenTier.mobile) {
@@ -876,6 +888,50 @@ class _BigHeader extends StatelessWidget {
       Text(text, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
       Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
     ]);
+  }
+}
+
+/// AppBar chip showing data freshness. Shows "Updated 2h ago" (icon-only when [compact]);
+/// hover tooltip and tap both reveal the exact local date/time + timezone of the last scrape.
+class _LastUpdated extends StatelessWidget {
+  const _LastUpdated({required this.iso, this.compact = false});
+  final String iso;
+  final bool compact;
+
+  String get _exact {
+    final dt = DateTime.tryParse(iso)?.toLocal();
+    if (dt == null) return iso;
+    return '${DateFormat('MMM d, y · h:mm a').format(dt)} ${dt.timeZoneName}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Tooltip(
+        message: 'Data last updated:\n$_exact',
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: () => showDialog<void>(
+            context: context,
+            builder: (_) => AlertDialog(
+              title: const Text('Data freshness'),
+              content: Text('Last scraped from LCR:\n\n$_exact'),
+              actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK'))],
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.history, size: 18),
+              if (!compact) ...[
+                const SizedBox(width: 4),
+                Text('Updated ${_ago(iso)}', style: const TextStyle(fontSize: 12)),
+              ],
+            ]),
+          ),
+        ),
+      ),
+    );
   }
 }
 
