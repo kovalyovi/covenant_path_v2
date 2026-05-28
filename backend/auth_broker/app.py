@@ -19,6 +19,7 @@ import secrets
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from lcr_client.logging_setup import get_logger
@@ -152,6 +153,34 @@ def admin_summary(email: str = Depends(require_admin)) -> dict:
     return {"admin": email, "broker": {"ok": True}, "supabase": admin.summary(),
             "github_configured": admin.github_configured(),
             "dispatchable": admin.DISPATCHABLE, "links": admin.tool_links()}
+
+
+class InviteReq(BaseModel):
+    email: str
+
+
+@app.post("/admin/invite")
+def admin_invite(body: InviteReq, email: str = Depends(require_admin)) -> dict:
+    """Admin requests a new admin; the owner must approve by email before access is granted."""
+    try:
+        return admin.request_admin_invite(body.email, requested_by=email)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/admin/approve", response_class=HTMLResponse)
+def admin_approve(token: str = "") -> str:
+    """Token-gated approval link (clicked by the owner from their email — no login)."""
+    style = "font-family:system-ui,sans-serif;max-width:480px;margin:60px auto;padding:0 20px"
+    try:
+        res = admin.approve_admin_invite(token)
+    except admin.AdminError as e:
+        return f"<html><body style='{style}'><h2>Approval failed</h2><p>{e}</p></body></html>"
+    if res["status"] == "approved":
+        return (f"<html><body style='{style}'><h2>Approved ✓</h2>"
+                f"<p><b>{res['email']}</b> is now an admin.</p></body></html>")
+    return (f"<html><body style='{style}'><h2>Already handled</h2>"
+            f"<p>{res['email']}: {res['status']}</p></body></html>")
 
 
 @app.get("/admin/diagnostics")

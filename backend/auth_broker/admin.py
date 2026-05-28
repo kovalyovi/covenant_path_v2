@@ -139,6 +139,77 @@ def summary() -> dict:
     }
 
 
+# --- admin invitations (owner-approved) -------------------------------------
+
+OWNER_EMAIL = "ilia.kovaliov@gmail.com"  # hardcoded approver for every new admin grant
+MAIL_FROM = os.environ.get("MAIL_FROM", "Covenant Path <noreply@membercovenantpath.org>")
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+BROKER_PUBLIC_URL = os.environ.get(
+    "BROKER_PUBLIC_URL", "https://covenant-path-broker.onrender.com").rstrip("/")
+
+
+def _send_email(to: str, subject: str, html: str) -> None:
+    if not RESEND_API_KEY:
+        raise AdminError("email not configured (RESEND_API_KEY)")
+    r = requests.post("https://api.resend.com/emails",
+                      headers={"Authorization": f"Bearer {RESEND_API_KEY}",
+                               "Content-Type": "application/json"},
+                      json={"from": MAIL_FROM, "to": [to], "subject": subject, "html": html},
+                      timeout=_TIMEOUT)
+    if r.status_code >= 300:
+        raise AdminError(f"email send failed ({r.status_code}): {r.text[:160]}")
+
+
+def request_admin_invite(email: str, requested_by: str) -> dict:
+    """Record a pending admin-invite + email the owner an approve link. Nobody is granted
+    until the owner clicks it (the random token is the un-spoofable gate)."""
+    import secrets as _secrets
+    email = (email or "").strip().lower()
+    if not email or "@" not in email:
+        raise AdminError("a valid email is required")
+    if _one("app_admins", {"select": "email", "email": f"eq.{email}"}):
+        return {"status": "already_admin", "email": email}
+    token = _secrets.token_urlsafe(32)
+    r = requests.post(f"{SUPABASE_URL}/rest/v1/admin_invite_requests",
+                      headers={**_sb_headers(), "Content-Type": "application/json"},
+                      json={"email": email, "requested_by_email": requested_by,
+                            "token": token, "status": "pending"}, timeout=_TIMEOUT)
+    if r.status_code >= 300:
+        raise AdminError(f"could not record request ({r.status_code}): {r.text[:160]}")
+    link = f"{BROKER_PUBLIC_URL}/admin/approve?token={token}"
+    _send_email(OWNER_EMAIL, f"Approve admin access for {email}?",
+                f"<p><b>{requested_by}</b> requested admin access for <b>{email}</b> on "
+                f"Covenant Path.</p><p><a href=\"{link}\">Approve {email} as an admin</a></p>"
+                f"<p>If you didn't expect this, ignore it — no access is granted unless you "
+                f"click the link.</p>")
+    return {"status": "pending_owner_approval", "email": email, "owner": OWNER_EMAIL}
+
+
+def approve_admin_invite(token: str) -> dict:
+    """Owner clicked the approve link → grant the admin (token-gated, idempotent)."""
+    from datetime import datetime, timezone
+    req = _one("admin_invite_requests",
+               {"select": "id,email,requested_by_email,status", "token": f"eq.{(token or '').strip()}"})
+    if not req:
+        raise AdminError("invalid or expired approval link")
+    if req["status"] != "pending":
+        return {"status": req["status"], "email": req["email"]}
+    email = req["email"]
+    g = requests.post(f"{SUPABASE_URL}/rest/v1/app_admins",
+                      headers={**_sb_headers(), "Content-Type": "application/json",
+                               "Prefer": "resolution=merge-duplicates"},
+                      json={"email": email, "invited_by_email": req.get("requested_by_email")},
+                      timeout=_TIMEOUT)
+    if g.status_code >= 300:
+        raise AdminError(f"grant failed ({g.status_code}): {g.text[:160]}")
+    requests.patch(f"{SUPABASE_URL}/rest/v1/admin_invite_requests",
+                   headers={**_sb_headers(), "Content-Type": "application/json"},
+                   params={"id": f"eq.{req['id']}"},
+                   json={"status": "approved", "decided_at": datetime.now(timezone.utc).isoformat()},
+                   timeout=_TIMEOUT)
+    return {"status": "approved", "email": email}
+
+
 # --- GitHub Actions ---------------------------------------------------------
 
 def github_configured() -> bool:
