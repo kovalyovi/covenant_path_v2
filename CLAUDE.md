@@ -37,8 +37,9 @@ LCR (church data)
    rows. Any new client query is automatically scoped. Don't add app-side access checks.
 4. **Test before commit.** Backend: `python tools/test_suite.py` (+ `--live`),
    `python -m backend.test_rls`, `python -m backend.test_power_users`,
-   `python -m backend.test_broker` (CORS + broker units). Flutter:
-   `D:/dev/flutter/bin/flutter analyze` (must be "No issues found"); `flutter build web`.
+   `python -m backend.test_admins`, `python -m backend.test_broker` (CORS + broker +
+   admin API units). Flutter: `D:/dev/flutter/bin/flutter analyze` (must be "No issues
+   found"); `flutter test`; `flutter build web`.
 5. **Migrations are additive + numbered** (`backend/migrations/000N_*.sql`), idempotent
    (`if not exists` / `drop policy ... ; create`). Apply with `python -m backend.apply`.
 6. **`cd /d <path>` is a cmd.exe idiom that SILENTLY FAILS in the bash tool** — use plain

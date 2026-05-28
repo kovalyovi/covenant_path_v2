@@ -88,8 +88,11 @@ it the admin console still loads — the Actions/Changelog panels and Rescrape b
 
 ## Features
 
-- **RLS-scoped dashboard** — Golden Hour view + spreadsheet view; every query is auto-scoped
-  by the signed-in user's calling. No app-side access checks.
+- **RLS-scoped dashboard** — four tabs (On Date / Golden Hour / KPIs / Table); every query is
+  auto-scoped by the signed-in user's calling. No app-side access checks. **Responsive**: bottom
+  nav + single column on phones; a side rail + multi-column cards on tablet/desktop (the browser
+  feels like a real app). KPIs are `fl_chart` line-chart cards; the Table is color-coded like the
+  master spreadsheet.
 - **LCR-style member detail** (`person_detail_page.dart`) — sacrament-attendance dots, friends
   (names + ward), priesthood / calling / ministering names, temple ordinances & experiences,
   principles-taught progress, self-reliance. Driven by the `members.details` JSONB subtree the
@@ -131,6 +134,13 @@ D:/dev/flutter/bin/flutter run -d chrome `
   --dart-define=SUPABASE_URL=https://ntbrzjihhyvzvvzvwowq.supabase.co `
   --dart-define=SUPABASE_ANON_KEY=sb_publishable_hiAGDv7bMCm5C5O_RbGP5A_8tskAiBF `
   --dart-define=BROKER_URL=http://localhost:8787
+
+# 6. Android APK (installable build) — same dart-defines, pointed at prod broker
+D:/dev/flutter/bin/flutter build apk --release `
+  --dart-define=SUPABASE_URL=https://ntbrzjihhyvzvvzvwowq.supabase.co `
+  --dart-define=SUPABASE_ANON_KEY=sb_publishable_hiAGDv7bMCm5C5O_RbGP5A_8tskAiBF `
+  --dart-define=BROKER_URL=https://covenant-path-broker.onrender.com
+# -> apps/viewer/build/app/outputs/flutter-apk/app-release.apk  (sideload on Android)
 ```
 
 ### Tests (run before committing)

@@ -362,6 +362,35 @@ ends (all ruled out): the stake `/mlt/orgs` leadership action (stake-only), memb
 
 ---
 
+## Responsive UI overhaul + Android (2026-05-28)
+
+Reworked the viewer to match the reference iOS app and feel like a real app on the browser:
+- **No dropdowns** — On Date + Golden Hour render **cards** (a card per unit with the unit as
+  title + member rows; or a flat list **sorted by date** with the unit as right-side metadata).
+  Full long dates (`intl`), full names, count badges.
+- **Golden Hour** drops Baptized — completion is integration milestones only (Friends, Calling,
+  Ministering ×2, Aaronic, Melchizedek). Week/Month/Year/All recency filter.
+- **KPIs** = iOS-style **line-chart cards** (`fl_chart`): "New Members at Sacrament" weekly trend
+  computed from `members.details.sacrament`, plus stake sacrament/recommend/ministering and an
+  overview stat card, each with delta badges.
+- **Table** mimics the master spreadsheet — color-coded cells (Yes=green / No=red / N/A=grey;
+  recommend Active=green·Expired=amber) + styled header row.
+- **Responsive, 3 breakpoints** (`tierFor`): phone = bottom nav + 1 col; tablet/desktop = side
+  `NavigationRail` + 2/3-column cards, width-capped & centered. Detail page = iOS-style header card.
+- **Login** offers browser password autofill (`AutofillGroup` + `finishAutofillContext`).
+- `web/_headers` (force-tracked) sets no-cache on index/SW so deploys aren't served stale.
+
+**Android app:** `flutter build apk --release` (prod dart-defines) → installable APK at
+`apps/viewer/build/app/outputs/flutter-apk/app-release.apk`. Pinned the generated `android/`
+toolchain to AGP 8.7.3 / Kotlin 2.1.0 / Gradle 8.11.1 (the `flutter create` default AGP 9.0.1 +
+Gradle 9.1 broke plugins with a `DefaultAndroidSourceSet` cast error). `android/` is gitignored;
+re-pin after any `flutter create`.
+
+Suites after this work: flutter analyze clean, flutter test 15/15, backend rls/power_users/admins
++ broker + offline all green.
+
+---
+
 ## Open problems / next steps
 1. Confirm the profile actions work with a *fresh crawler* `storage_state` (one that
    never visited /mlt) — may need a one-time /mlt session warm-up. (Not seen yet with

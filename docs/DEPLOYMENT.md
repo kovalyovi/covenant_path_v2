@@ -84,6 +84,28 @@ DNS is already at Cloudflare, so the record + HTTPS are provisioned automaticall
 
 ---
 
+## 2b. Android app (APK)
+
+Same codebase, same `--dart-define` config (pointed at the prod broker):
+
+```powershell
+cd D:/dev/covenant_path_v2/apps/viewer
+D:/dev/flutter/bin/flutter build apk --release `
+  --dart-define=SUPABASE_URL=https://ntbrzjihhyvzvvzvwowq.supabase.co `
+  --dart-define=SUPABASE_ANON_KEY=sb_publishable_hiAGDv7bMCm5C5O_RbGP5A_8tskAiBF `
+  --dart-define=BROKER_URL=https://covenant-path-broker.onrender.com
+```
+Output: `apps/viewer/build/app/outputs/flutter-apk/app-release.apk`. Copy it to an Android
+device and install (enable "install from unknown sources"). For a smaller per-device download
+use `--split-per-abi`; for the Play Store build an `.aab` (`flutter build appbundle`).
+
+**Toolchain note:** the generated `android/` is gitignored. If you re-run `flutter create`, it
+may scaffold a bleeding-edge AGP (9.x) that breaks plugins with a `DefaultAndroidSourceSet` cast
+error. Pin a stable combo: AGP **8.7.3** + Kotlin **2.1.0** in `android/settings.gradle.kts`, and
+Gradle **8.11.1** in `android/gradle/wrapper/gradle-wrapper.properties`.
+
+---
+
 ## 3. Keep the broker warm (avoid cold-start login failures)
 
 Render free sleeps after ~15 min idle; the first request after a sleep hits a holding page
