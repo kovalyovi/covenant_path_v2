@@ -72,6 +72,52 @@ class GoldenHourChips extends StatelessWidget {
   }
 }
 
+/// Centers content and caps its width so pages don't stretch edge-to-edge on wide screens.
+class MaxWidthBody extends StatelessWidget {
+  const MaxWidthBody({super.key, required this.child, this.maxWidth = 1000});
+  final Widget child;
+  final double maxWidth;
+  @override
+  Widget build(BuildContext context) =>
+      Center(child: ConstrainedBox(constraints: BoxConstraints(maxWidth: maxWidth), child: child));
+}
+
+/// A titled section as a clean rounded card — the building block for detail + KPI pages.
+class SectionCard extends StatelessWidget {
+  const SectionCard({super.key, required this.title, required this.child, this.trailing});
+  final String title;
+  final Widget child;
+  final Widget? trailing;
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 0,
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(
+              child: Text(title,
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(fontWeight: FontWeight.bold)),
+            ),
+            if (trailing != null) trailing!,
+          ]),
+          const SizedBox(height: 12),
+          child,
+        ]),
+      ),
+    );
+  }
+}
+
 String initialsOf(String name) {
   final parts = name.replaceAll(',', '').trim().split(RegExp(r'\s+'));
   if (parts.isEmpty || parts.first.isEmpty) return '?';
