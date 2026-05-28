@@ -133,6 +133,19 @@ def update_stake_kpis(conn, stake_id: str, kpis: dict) -> None:
     conn.commit()
 
 
+def set_sync_state(conn, stake_id: str, state: str) -> None:
+    """Coarse live status for the app banner. 'running' stamps sync_started_at; any other
+    state ('done'/'error') just updates the flag."""
+    with conn.cursor() as cur:
+        if state == "running":
+            cur.execute(
+                "update stakes set sync_state=%s, sync_started_at=now() where id=%s",
+                (state, stake_id))
+        else:
+            cur.execute("update stakes set sync_state=%s where id=%s", (state, stake_id))
+    conn.commit()
+
+
 def insert_diagnostics(conn, stake_id: str | None, kind: str, payload: dict) -> None:
     with conn.cursor() as cur:
         cur.execute("insert into sync_diagnostics (stake_id, kind, payload) values (%s,%s,%s)",

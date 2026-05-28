@@ -41,6 +41,7 @@ class _DashboardPageState extends State<DashboardPage> {
   bool _isAdmin = false;
   String? _stakeName;
   String? _lastSynced;
+  bool _syncing = false;
 
   @override
   void initState() {
@@ -58,7 +59,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Future<void> _loadStakeName() async {
     try {
-      final rows = await supabase.from('stakes').select('name, last_synced_at');
+      final rows = await supabase.from('stakes').select('name, last_synced_at, sync_state');
       final list = (rows as List).cast<Map<String, dynamic>>();
       if (list.isEmpty || !mounted) return;
       // freshest stake first, so the chip reflects the most recent scrape the user can see
@@ -68,6 +69,7 @@ class _DashboardPageState extends State<DashboardPage> {
       setState(() {
         _stakeName = list.first['name'];
         _lastSynced = list.first['last_synced_at']?.toString();
+        _syncing = list.any((s) => s['sync_state'] == 'running');
       });
     } catch (_) {}
   }
@@ -114,7 +116,12 @@ class _DashboardPageState extends State<DashboardPage> {
     return LayoutBuilder(builder: (context, c) {
       final tier = tierFor(c.maxWidth);
       final appBar = AppBar(title: Text(_stakeName ?? 'Covenant Path'), actions: _appBarActions(tier));
-      final body = _Body(tab: _tab, tier: tier, future: _future, onRefresh: _refresh, onOpen: _open);
+      final body = Column(children: [
+        if (_syncing) const _SyncingBanner(),
+        Expanded(
+          child: _Body(tab: _tab, tier: tier, future: _future, onRefresh: _refresh, onOpen: _open),
+        ),
+      ]);
 
       if (tier == ScreenTier.mobile) {
         return Scaffold(
@@ -881,6 +888,34 @@ class _BigHeader extends StatelessWidget {
       Text(text, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
       Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
     ]);
+  }
+}
+
+/// Shown across the top while a scrape is running for the user's stake (coarse status from
+/// stakes.sync_state). Covers the new-stake "first sync" case too — the row exists the moment
+/// the run starts, so a freshly-onboarded stake sees this instead of an empty screen.
+class _SyncingBanner extends StatelessWidget {
+  const _SyncingBanner();
+  @override
+  Widget build(BuildContext context) {
+    final c = Theme.of(context).colorScheme;
+    return Material(
+      color: c.secondaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(children: [
+          SizedBox(
+            width: 16, height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2, color: c.onSecondaryContainer),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text('Syncing your stake from LCR — fresh data in a few minutes.',
+                style: TextStyle(color: c.onSecondaryContainer)),
+          ),
+        ]),
+      ),
+    );
   }
 }
 
