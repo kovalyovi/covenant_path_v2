@@ -114,9 +114,9 @@ class _DashboardPageState extends State<DashboardPage> {
           return RefreshIndicator(
             onRefresh: _refresh,
             child: switch (_tab) {
-              0 => _OnDateView(rows: rows, onTap: _open),
-              1 => _GoldenHourView(rows: rows, onTap: _open),
-              2 => _KpiView(rows: rows),
+              0 => MaxWidthBody(maxWidth: 760, child: _OnDateView(rows: rows, onTap: _open)),
+              1 => MaxWidthBody(maxWidth: 760, child: _GoldenHourView(rows: rows, onTap: _open)),
+              2 => MaxWidthBody(child: _KpiView(rows: rows)),
               _ => _SpreadsheetView(rows: rows, onTap: _open),
             },
           );

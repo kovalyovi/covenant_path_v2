@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'broker_client.dart';
@@ -85,6 +86,8 @@ class _LoginPageState extends State<LoginPage> {
     }
     await supabase.auth
         .verifyOTP(email: r.email, token: r.otp!, type: OtpType.email);
+    // Tell the browser the credential flow is done so it offers to save the password.
+    TextInput.finishAutofillContext();
   }
 
   Future<void> _churchSignIn() => _run(() async {
@@ -133,7 +136,8 @@ class _LoginPageState extends State<LoginPage> {
             constraints: const BoxConstraints(maxWidth: 380),
             child: Padding(
               padding: const EdgeInsets.all(24),
-              child: Column(
+              child: AutofillGroup(
+                child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -165,6 +169,7 @@ class _LoginPageState extends State<LoginPage> {
                     Text(_error!, style: const TextStyle(color: Colors.red)),
                   ],
                 ],
+              ),
               ),
             ),
           ),
@@ -245,6 +250,7 @@ class _LoginPageState extends State<LoginPage> {
         controller: _email,
         enabled: !_emailCodeSent,
         keyboardType: TextInputType.emailAddress,
+        autofillHints: const [AutofillHints.email],
         decoration: const InputDecoration(labelText: 'Email', border: OutlineInputBorder()),
       ),
       if (_emailCodeSent) ...[

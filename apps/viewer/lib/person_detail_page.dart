@@ -27,7 +27,9 @@ class PersonDetailPage extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(title: Text(name)),
-      body: ListView(
+      body: MaxWidthBody(
+        maxWidth: 1000,
+        child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
         children: [
           // header
@@ -55,6 +57,7 @@ class PersonDetailPage extends StatelessWidget {
           else
             _FlatFallback(member: member),
         ],
+      ),
       ),
     );
   }
@@ -124,25 +127,8 @@ class _Section extends StatelessWidget {
   final Widget child;
   final Widget? trailing;
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 18),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Expanded(
-            child: Text(title,
-                style: Theme.of(context)
-                    .textTheme
-                    .titleMedium
-                    ?.copyWith(fontWeight: FontWeight.bold)),
-          ),
-          if (trailing != null) trailing!,
-        ]),
-        const SizedBox(height: 10),
-        child,
-      ]),
-    );
-  }
+  Widget build(BuildContext context) =>
+      SectionCard(title: title, trailing: trailing, child: child);
 }
 
 class _SacramentSection extends StatelessWidget {
