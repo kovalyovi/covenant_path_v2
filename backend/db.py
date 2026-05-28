@@ -28,6 +28,7 @@ _MEMBER_COLUMNS = [
     "aaronic_priesthood", "melchizedek_priesthood", "calling",
     "ministering_brothers_sisters", "ministering_assignment", "temple_recommend",
     "patriarchal_blessing", "living_ordinance", "membership_duration", "sex",
+    "kind", "baptism_goal_date",  # new_member|investigator|returning + planned baptism date
     "details",  # jsonb — the rich progress subtree (dict; wrapped as Json on write)
 ]
 
