@@ -140,6 +140,28 @@ def run_delegated(args) -> int:
     return 1 if failures else 0
 
 
+def _should_run_now() -> tuple[bool, str]:
+    """Scheduled runs proceed only at the intended ET times (7:00 daily, 8:20 Thursday), so
+    DST shifts never move the run off its morning slot. Manual workflow_dispatch always runs.
+
+    The workflow fires candidate UTC crons for both EST and EDT; this gate keeps the one that
+    lands on the right ET wall-clock time and skips the duplicate.
+    """
+    if os.getenv("GITHUB_EVENT_NAME") != "schedule":
+        return True, "manual run"
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("America/New_York"))
+    except Exception as exc:  # noqa: BLE001  — never let a tz lookup block the daily sync
+        return True, f"tz lookup failed ({exc}); running anyway"
+    if now.hour == 7:
+        return True, f"daily 7:00 ET ({now:%a %H:%M %Z})"
+    if now.weekday() == 3 and now.hour == 8 and 15 <= now.minute <= 30:
+        return True, f"Thursday 8:20 ET ({now:%a %H:%M %Z})"
+    return False, f"off-target ET time ({now:%a %H:%M %Z})"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Daily covenant-path sync")
     ap.add_argument("--mode", choices=["self", "delegated", "auto"], default="auto")
@@ -156,6 +178,12 @@ def main() -> int:
                     help="after sync, send pending power-user invitations + daily digests (Resend)")
     ap.add_argument("--quiet", dest="verbose", action="store_false", default=True)
     args = ap.parse_args()
+
+    run_ok, why = _should_run_now()
+    logger.info("schedule gate: %s", why)
+    if not run_ok:
+        print(f"[skip] schedule gate: {why}")
+        return 0
 
     mode = args.mode
     if mode == "auto":
