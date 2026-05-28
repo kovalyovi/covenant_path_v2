@@ -20,8 +20,9 @@ DEFAULTS = {
     "recommend": "7f17b3fc0f8bfa0f970314557b20af32fb0e0346b5",
     "ministering": "7fbf523f92fbc2ee6ce8e2384cd3413a82c1bdbf8b",
     # /mlt/orgs leadership-directory action (args ["eng"]) — names every calling +
-    # who holds it; used to enrich the role-name catalog (lcr_client/leadership.py).
-    "leadership": "7fd95d267e8d08de09a673e270e4d0bc5f384ce7d8",
+    # who holds it; used to enrich the role-name catalog (lcr_client/leadership.py) and as the
+    # fallback for stake-leader provisioning. Build-specific; rotates on LCR redeploys.
+    "leadership": "40cd2d72827a201fcf11e15751b6e76283d1019c2c",
 }
 
 

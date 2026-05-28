@@ -105,25 +105,33 @@ def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]
     email_by_uuid = _email_by_uuid(client)
 
     fresh = {}  # provision-key -> row, dedup
-    # If the stake leadership directory comes back empty/failed we must NOT treat that as
-    # "every stake leader was released" — that would revoke everyone's stake access (it did
-    # once). Track whether we actually got the directory and gate the revoke on it.
+    ctx = client.user_context()
+
+    # Stake leaders from the STABLE /mlt/api/orgs on the stake unit (same clean JSON endpoint
+    # wards use) — no rotating server-action id to go stale. Fall back to the leadership
+    # directory action only if orgs returns nothing. We keep stake-prefixed callings (Stake
+    # Presidency / clerks / stake auxiliaries); ward callings come from the per-unit loop below.
+    stake_positions: list[dict] = []
     try:
-        stake_positions = _positions(leadership.fetch_leadership(client.session))
+        stake_positions = [p for p in _ward_positions(client.org_callings(ctx.unit_number))
+                           if (p["calling"] or "").startswith(_STAKE_PREFIXES)]
     except Exception as exc:  # noqa: BLE001
-        logger.warning("stake leadership fetch failed: %s", exc)
-        stake_positions = []
+        logger.warning("stake org callings unavailable: %s", exc)
+    if not stake_positions:
+        try:
+            stake_positions = [p for p in _positions(leadership.fetch_leadership(client.session))
+                               if (p["calling"] or "").startswith(_STAKE_PREFIXES)]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("stake leadership fallback failed: %s", exc)
+    # If BOTH sources come back empty we must NOT treat that as "every stake leader was
+    # released" — that once revoked everyone's stake access. Gate the revoke on stake_ok.
     stake_ok = len(stake_positions) > 0
+    logger.info("stake positions found: %d", len(stake_positions))
     for p in stake_positions:
         if p["role_id"] not in allowed or not p["person_uuid"]:
             continue
-        is_stake = (p["calling"] or "").startswith(_STAKE_PREFIXES)
-        role = "stake_leader" if is_stake else "ward_leader"
-        unit_id = None if is_stake else unit_id_by_name.get(p["unit_name"])
-        if role == "ward_leader" and unit_id is None:
-            continue  # ward calling we can't map to a known unit (e.g. a different stake)
-        key = (role, unit_id, p["person_uuid"])
-        fresh[key] = (stake_id, unit_id, role, p["person_uuid"], p["name"], p["calling"],
+        key = ("stake_leader", None, p["person_uuid"])
+        fresh[key] = (stake_id, None, "stake_leader", p["person_uuid"], p["name"], p["calling"],
                       email_by_uuid.get(p["person_uuid"]))
 
     # ward leaders: the stake leadership directory has no per-ward bishoprics, so pull each
