@@ -8,12 +8,13 @@ void main() {
     String friends = 'No', String calling = 'No', String hasMin = 'No',
     String givesMin = 'No', String baptism = '', String recommend = 'No',
     String patriarchal = 'No', String endowed = 'No', String aaronic = 'N/A',
-    String melch = 'N/A', String sex = 'F',
+    String melch = 'N/A', String sex = 'F', String birth = '1 Jan 1990',
   }) => {
         'friends': friends, 'calling': calling, 'ministering_brothers_sisters': hasMin,
         'ministering_assignment': givesMin, 'baptism_date': baptism, 'temple_recommend': recommend,
         'patriarchal_blessing': patriarchal, 'living_ordinance': endowed,
         'aaronic_priesthood': aaronic, 'melchizedek_priesthood': melch, 'sex': sex,
+        'birth_date': birth,
       };
 
   group('milestone predicates', () {
@@ -34,20 +35,38 @@ void main() {
     });
   });
 
-  group('milestonesFor (demographic filtering)', () {
+  group('milestonesFor (eligibility filtering)', () {
     test('priesthood chips only apply to males', () {
       final abbrsF = milestonesFor(member(sex: 'F')).map((m) => m.abbr).toSet();
-      final abbrsM = milestonesFor(member(sex: 'M')).map((m) => m.abbr).toSet();
+      // male, adult, long-tenured -> Melchizedek eligible too
+      final abbrsM = milestonesFor(member(sex: 'M', baptism: '1 Jan 2000')).map((m) => m.abbr).toSet();
       expect(abbrsF.contains('AP'), isFalse);
       expect(abbrsF.contains('MP'), isFalse);
       expect(abbrsM.contains('AP'), isTrue);
       expect(abbrsM.contains('MP'), isTrue);
     });
+
+    test('a young child only has the everyone milestones (friends, has-ministers)', () {
+      final child = member(sex: 'M', birth: '1 Jan ${DateTime.now().year - 8}');
+      expect(milestonesFor(child).map((m) => m.abbr).toSet(), {'F', 'M'});
+    });
+
+    test('an 11-year-old who turns 12 this year is eligible for calling + Aaronic', () {
+      final turning12 = member(sex: 'M', birth: '1 Jan ${DateTime.now().year - 12}');
+      final abbrs = milestonesFor(turning12).map((m) => m.abbr).toSet();
+      expect(abbrs.containsAll({'C', 'MA', 'AP'}), isTrue);
+      expect(abbrs.contains('MP'), isFalse); // not 18 yet
+    });
+
+    test('Melchizedek needs 18+ AND 1+ year of membership', () {
+      final newAdult = member(sex: 'M', baptism: '1 Jan ${DateTime.now().year}'); // <1yr member
+      expect(milestonesFor(newAdult).map((m) => m.abbr).contains('MP'), isFalse);
+    });
   });
 
   test('a fully-integrated member completes all applicable milestones', () {
     final m = member(friends: 'Yes', calling: 'Yes', hasMin: 'Yes', givesMin: 'Yes',
-        baptism: '1 Jan 2025', recommend: 'Active', patriarchal: 'Yes', endowed: 'Yes', sex: 'F');
+        baptism: '1 Jan 2000', aaronic: 'Yes', melch: 'Yes', sex: 'M');
     final applicable = milestonesFor(m);
     expect(applicable.where((x) => x.complete(m)).length, applicable.length);
   });

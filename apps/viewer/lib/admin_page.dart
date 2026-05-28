@@ -36,7 +36,10 @@ class _AdminPageState extends State<AdminPage> {
 
   Future<_AdminData> _load() async {
     final c = _client;
-    final summary = await c.summary();
+    // Kick off all panels in parallel so a slow one doesn't serialize the whole page.
+    final summaryF = c.summary();
+    final diagF = c.diagnostics();
+    final adminsF = supabase.from('app_admins').select('email, invited_by_email');
     // GitHub Actions is optional — a token/scope/repo issue must not stop the console from
     // opening (this was the "ops console won't open / 404" bug). Load it best-effort.
     Map<String, dynamic> actions = const {};
@@ -46,10 +49,10 @@ class _AdminPageState extends State<AdminPage> {
     } catch (e) {
       actionsError = '$e';
     }
-    final diagnostics = await c.diagnostics();
-    final admins = await supabase.from('app_admins').select('email, invited_by_email');
-    return _AdminData(summary, actions, diagnostics,
-        (admins as List).cast<Map<String, dynamic>>(), actionsError);
+    final summary = await summaryF;
+    final diagnostics = await diagF;
+    final admins = (await adminsF as List).cast<Map<String, dynamic>>();
+    return _AdminData(summary, actions, diagnostics, admins, actionsError);
   }
 
   Future<void> _refresh() async {
