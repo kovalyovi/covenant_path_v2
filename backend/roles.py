@@ -105,7 +105,16 @@ def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]
     email_by_uuid = _email_by_uuid(client)
 
     fresh = {}  # provision-key -> row, dedup
-    for p in _positions(leadership.fetch_leadership(client.session)):
+    # If the stake leadership directory comes back empty/failed we must NOT treat that as
+    # "every stake leader was released" — that would revoke everyone's stake access (it did
+    # once). Track whether we actually got the directory and gate the revoke on it.
+    try:
+        stake_positions = _positions(leadership.fetch_leadership(client.session))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stake leadership fetch failed: %s", exc)
+        stake_positions = []
+    stake_ok = len(stake_positions) > 0
+    for p in stake_positions:
         if p["role_id"] not in allowed or not p["person_uuid"]:
             continue
         is_stake = (p["calling"] or "").startswith(_STAKE_PREFIXES)
@@ -139,6 +148,7 @@ def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]
             fresh[key] = (stake_id, unit_id, "ward_leader", p["person_uuid"], p["name"],
                           p["calling"], email_by_uuid.get(p["person_uuid"]))
             ward_n_found += 1
+    ward_ok = ward_n_found > 0
     logger.info("ward-leader positions found across units: %d", ward_n_found)
 
     with conn.cursor() as cur:
@@ -153,11 +163,15 @@ def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]
                 do update set calling_name=excluded.calling_name, auth_id=excluded.auth_id,
                               email=coalesce(excluded.email, user_roles.email)
             """, (row[0], row[1], row[2], row[3], row[3], row[5], row[6]))
-        # revoke roles whose calling disappeared (rebuild), but keep this stake's rows only
+        # Revoke released leaders (calling-derived rows only — email/manual grants have a NULL
+        # lcr_person_uuid and are preserved). Crucially, only revoke a role TYPE if we actually
+        # got its directory this run, so an empty/failed stake or ward fetch can't wipe access.
         keep = [r[3] for r in fresh.values()]
         cur.execute("""delete from user_roles where stake_id=%s
                        and lcr_person_uuid is not null
-                       and lcr_person_uuid <> all(%s)""", (stake_id, keep or [""]))
+                       and lcr_person_uuid <> all(%s)
+                       and ((role = 'stake_leader' and %s) or (role = 'ward_leader' and %s))""",
+                    (stake_id, keep or [""], stake_ok, ward_ok))
         removed = cur.rowcount
     conn.commit()
     stake_n = sum(1 for r in fresh.values() if r[2] == "stake_leader")
