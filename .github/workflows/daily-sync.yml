@@ -6,7 +6,11 @@ name: Daily covenant-path sync
 
 on:
   schedule:
-    - cron: "0 9 * * *"      # 09:00 UTC daily
+    # Times below are ET. Cron is UTC and can't do DST, so we fire the candidate UTC hours
+    # for both EST and EDT; daily_sync.py (_should_run_now) runs only at the intended ET
+    # time — 7:00 ET daily, plus 8:20 ET Thursdays (before the 8:30 meeting).
+    - cron: "0 11,12 * * *"   # 07:00 ET daily  (11:00 UTC during EDT / 12:00 UTC during EST)
+    - cron: "20 12,13 * * 4"  # 08:20 ET Thu    (12:20 UTC during EDT / 13:20 UTC during EST)
   workflow_dispatch:          # manual run button (also how the admin console triggers flows)
     inputs:
       with_profile:
