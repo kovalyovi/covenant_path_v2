@@ -85,11 +85,13 @@ def verify_admin(authorization: str) -> str:
 # --- health / freshness -----------------------------------------------------
 
 def _count(table: str) -> int | None:
+    # No `select` column — count=exact is independent of the projection, and not every
+    # table has an `id` (e.g. app_admins is keyed by email).
     try:
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/{table}",
             headers={**_sb_headers(), "Prefer": "count=exact", "Range": "0-0"},
-            params={"select": "id"}, timeout=_TIMEOUT,
+            timeout=_TIMEOUT,
         )
     except requests.RequestException:
         return None
