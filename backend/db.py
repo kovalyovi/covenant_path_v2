@@ -130,3 +130,10 @@ def update_stake_kpis(conn, stake_id: str, kpis: dict) -> None:
         cur.execute("update stakes set kpis = %s, kpis_updated_at = now() where id = %s",
                     (psycopg2.extras.Json(kpis), stake_id))
     conn.commit()
+
+
+def insert_diagnostics(conn, stake_id: str | None, kind: str, payload: dict) -> None:
+    with conn.cursor() as cur:
+        cur.execute("insert into sync_diagnostics (stake_id, kind, payload) values (%s,%s,%s)",
+                    (stake_id, kind, psycopg2.extras.Json(payload)))
+    conn.commit()

@@ -38,11 +38,12 @@ TEST_SPREADSHEET_ID = "1JD9EC_SafClaY8cOcRzi5ZI4fUnjOxa-xXJA0lxgJaA"
 
 def _sync_one(args) -> dict:
     """Report + export + optional Sheets/Supabase for the CURRENT session/stake."""
-    from lcr_client import LcrClient
+    from lcr_client import LcrClient, metrics
     from lcr_client.access import covenant_path_access
     from covenant_path.profile_cache import ProfileCache
     from covenant_path.report import build_stake_report, export
 
+    metrics.reset()  # isolate this stake's request metrics for the diagnostics row
     client = LcrClient()
     access = covenant_path_access(client)
     cache = ProfileCache(max_age_days=args.cache_max_age_days, enabled=not args.no_cache)
@@ -74,6 +75,18 @@ def _sync_one(args) -> dict:
                 result["photos"] = photopipe.sync_photos_for_stake(
                     client, conn, s["stake_id"], s["stake_unit"])
                 logger.info("photos: %s", result["photos"])
+            # persist a diagnostics row: run stats + field parity + request metrics
+            try:
+                from lcr_client import metrics
+                from covenant_path.report import _field_coverage
+                db.insert_diagnostics(conn, result["supabase"]["stake_id"], "sync", {
+                    "run_stats": access.get("_run_stats"),
+                    "field_coverage": _field_coverage(dicts),
+                    "requests": metrics.snapshot(),
+                    "members": len(dicts),
+                })
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("diagnostics write skipped: %s", exc)
         finally:
             conn.close()
         logger.info("supabase: %s", result["supabase"])

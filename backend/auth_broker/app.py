@@ -65,6 +65,7 @@ class SessionReq(BaseModel):
 
 class DispatchReq(BaseModel):
     workflow: str = "daily-sync.yml"
+    inputs: dict | None = None  # workflow_dispatch inputs (e.g. {"targets":"supabase","photos":"true"})
 
 
 def _rid() -> str:
@@ -153,6 +154,12 @@ def admin_summary(email: str = Depends(require_admin)) -> dict:
             "dispatchable": admin.DISPATCHABLE}
 
 
+@app.get("/admin/diagnostics")
+def admin_diagnostics(email: str = Depends(require_admin)) -> dict:
+    """Recent sync/probe diagnostics: success %, failing units, field parity, latency."""
+    return {"runs": admin.recent_diagnostics()}
+
+
 @app.get("/admin/actions")
 def admin_actions(email: str = Depends(require_admin)) -> dict:
     """Recent GitHub Actions runs + the commit changelog. Graceful when GITHUB_TOKEN unset."""
@@ -168,12 +175,12 @@ def admin_actions(email: str = Depends(require_admin)) -> dict:
 @app.post("/admin/actions/run")
 def admin_run(req: DispatchReq, email: str = Depends(require_admin)) -> dict:
     """Kick off a flow — daily-sync = rescrape LCR + repopulate Sheets & Supabase."""
-    logger.info("admin %s dispatching %s", email, req.workflow)
+    logger.info("admin %s dispatching %s inputs=%s", email, req.workflow, req.inputs)
     try:
-        admin.dispatch(req.workflow)
+        admin.dispatch(req.workflow, inputs=req.inputs)
     except admin.AdminError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return {"status": "dispatched", "workflow": req.workflow}
+    return {"status": "dispatched", "workflow": req.workflow, "inputs": req.inputs}
 
 
 @app.post("/admin/actions/{run_id}/rerun")

@@ -1,0 +1,37 @@
+name: Probe LCR endpoints
+
+# Lightweight watchdog: every few hours, log in and probe each unit's progress-record +
+# member-list (the endpoints that intermittently 500) and the dashboard, recording latency
+# + success into sync_diagnostics. The admin console trends this to pinpoint timeouts.
+# Pure-requests login — no browser needed.
+
+on:
+  schedule:
+    - cron: "30 */4 * * *"   # every 4 hours, offset from the daily sync
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: probe-lcr
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      LCR_LOGIN: ${{ secrets.LCR_LOGIN }}
+      LCR_PASSWORD: ${{ secrets.LCR_PASSWORD }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt   # no Playwright: probe never hits profile actions
+      - name: Probe
+        run: python -m backend.probe
