@@ -136,34 +136,80 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
-  List<Widget> _appBarActions(ScreenTier tier) => [
-        if (_lastSynced != null)
-          _LastUpdated(iso: _lastSynced!, compact: tier == ScreenTier.mobile),
-        if (_isAdmin)
-          IconButton(
-            tooltip: 'Admin · Ops console',
-            onPressed: () =>
-                Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AdminPage())),
-            icon: const Icon(Icons.admin_panel_settings),
-          ),
-        IconButton(
-          tooltip: 'Invite a power user',
-          onPressed: () =>
-              Navigator.of(context).push(MaterialPageRoute(builder: (_) => const InvitePage())),
-          icon: const Icon(Icons.person_add_alt),
-        ),
+  void _openAdmin() =>
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AdminPage()));
+  void _openInvite() =>
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => const InvitePage()));
+
+  List<Widget> _appBarActions(ScreenTier tier) {
+    final chip = _lastSynced != null
+        ? _LastUpdated(iso: _lastSynced!, compact: tier == ScreenTier.mobile)
+        : null;
+    // Phones: stake title + a single "⋯" overflow for options (like the iOS app). Wider
+    // screens keep the inline icon row.
+    if (tier == ScreenTier.mobile) {
+      return [
+        if (chip != null) chip,
         IconButton(tooltip: 'Refresh', onPressed: _refresh, icon: const Icon(Icons.refresh)),
-        IconButton(
-          tooltip: 'Send feedback',
-          onPressed: _sendFeedback,
-          icon: const Icon(Icons.feedback_outlined),
-        ),
-        IconButton(
-          tooltip: 'Sign out (${supabase.auth.currentUser?.email ?? ''})',
-          onPressed: () => supabase.auth.signOut(),
-          icon: const Icon(Icons.logout),
+        PopupMenuButton<String>(
+          tooltip: 'Options',
+          icon: const Icon(Icons.more_horiz),
+          onSelected: (v) {
+            switch (v) {
+              case 'admin':
+                _openAdmin();
+              case 'invite':
+                _openInvite();
+              case 'feedback':
+                _sendFeedback();
+              case 'signout':
+                supabase.auth.signOut();
+            }
+          },
+          itemBuilder: (_) => [
+            if (_isAdmin)
+              const PopupMenuItem(
+                  value: 'admin',
+                  child: ListTile(
+                      leading: Icon(Icons.admin_panel_settings),
+                      title: Text('Admin · Ops console'))),
+            const PopupMenuItem(
+                value: 'invite',
+                child: ListTile(
+                    leading: Icon(Icons.person_add_alt), title: Text('Invite a power user'))),
+            const PopupMenuItem(
+                value: 'feedback',
+                child: ListTile(
+                    leading: Icon(Icons.feedback_outlined), title: Text('Send feedback'))),
+            const PopupMenuItem(
+                value: 'signout',
+                child: ListTile(leading: Icon(Icons.logout), title: Text('Sign out'))),
+          ],
         ),
       ];
+    }
+    return [
+      if (chip != null) chip,
+      if (_isAdmin)
+        IconButton(
+            tooltip: 'Admin · Ops console',
+            onPressed: _openAdmin,
+            icon: const Icon(Icons.admin_panel_settings)),
+      IconButton(
+          tooltip: 'Invite a power user',
+          onPressed: _openInvite,
+          icon: const Icon(Icons.person_add_alt)),
+      IconButton(tooltip: 'Refresh', onPressed: _refresh, icon: const Icon(Icons.refresh)),
+      IconButton(
+          tooltip: 'Send feedback',
+          onPressed: _sendFeedback,
+          icon: const Icon(Icons.feedback_outlined)),
+      IconButton(
+          tooltip: 'Sign out (${supabase.auth.currentUser?.email ?? ''})',
+          onPressed: () => supabase.auth.signOut(),
+          icon: const Icon(Icons.logout)),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {

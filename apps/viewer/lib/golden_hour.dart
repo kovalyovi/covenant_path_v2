@@ -6,25 +6,66 @@ class Milestone {
   final String label; // full name (detail + accessibility)
   final String abbr;  // chip label (1-2 chars)
   final bool Function(Map<String, dynamic>) complete;
-  final bool maleOnly;
-  const Milestone(this.label, this.abbr, this.complete, {this.maleOnly = false});
+  final bool Function(Map<String, dynamic>) eligible; // who this milestone can apply to
+  const Milestone(this.label, this.abbr, this.complete, {this.eligible = _everyone});
 }
 
-// Golden Hour = a new member's first-year *integration* milestones. Baptism is intentionally
-// NOT a milestone (a new member is already baptized; it doesn't measure integration). The
-// longer-horizon ordinances (recommend / patriarchal / endowment) are shown on the detail
-// page but are not part of Golden Hour completion.
+bool _everyone(Map<String, dynamic> m) => true;
+
+int? _yearOf(dynamic v) {
+  final mt = RegExp(r'(\d{4})').firstMatch(v?.toString() ?? '');
+  return mt != null ? int.parse(mt.group(1)!) : null;
+}
+
+DateTime? _dateOf(dynamic v) {
+  final s = (v?.toString() ?? '').trim();
+  if (s.isEmpty || s == 'N/A' || s == 'needs-profile-api') return null;
+  final iso = DateTime.tryParse(s);
+  if (iso != null) return iso;
+  final m = RegExp(r'^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})$').firstMatch(s);
+  if (m != null) {
+    const mo = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+    final i = mo.indexOf(m.group(2)!.toLowerCase().substring(0, 3));
+    if (i >= 0) return DateTime(int.parse(m.group(3)!), i + 1, int.parse(m.group(1)!));
+  }
+  return null;
+}
+
+/// "Turns at least [age] by the end of this calendar year" — matches the Church's by-year
+/// quorum/advancement rule (an 11-year-old turning 12 this year counts). Unknown birth →
+/// not eligible for age-gated milestones (so we don't ding someone we can't assess).
+bool _turnsAtLeast(Map<String, dynamic> m, int age) {
+  final by = _yearOf(m['birth_date']);
+  return by != null && (DateTime.now().year - by) >= age;
+}
+
+bool _memberOneYearPlus(Map<String, dynamic> m) {
+  final b = _dateOf(m['baptism_date']);
+  if (b != null) return DateTime.now().difference(b).inDays >= 365;
+  final ym = RegExp(r'(\d+)\s*year').firstMatch((m['membership_duration'] ?? '').toString().toLowerCase());
+  return ym != null && int.parse(ym.group(1)!) >= 1;
+}
+
+bool _male(Map<String, dynamic> m) => m['sex'] == 'M';
+
+// Golden Hour = a new member's first-year *integration* milestones, each gated to who it can
+// actually apply to (age / sex / tenure) so completion stats don't penalize the ineligible.
+// Baptism is intentionally NOT a milestone; the longer-horizon ordinances live on the detail page.
 final milestones = <Milestone>[
-  Milestone('Friends', 'F', (m) => m['friends'] == 'Yes'),
-  Milestone('Calling', 'C', (m) => m['calling'] == 'Yes'),
-  Milestone('Has ministers', 'M', (m) => m['ministering_brothers_sisters'] == 'Yes'),
-  Milestone('Ministers to others', 'MA', (m) => m['ministering_assignment'] == 'Yes'),
-  Milestone('Aaronic Priesthood', 'AP', (m) => m['aaronic_priesthood'] == 'Yes', maleOnly: true),
-  Milestone('Melchizedek Priesthood', 'MP', (m) => m['melchizedek_priesthood'] == 'Yes', maleOnly: true),
+  Milestone('Friends', 'F', (m) => m['friends'] == 'Yes'), // everyone
+  Milestone('Calling', 'C', (m) => m['calling'] == 'Yes',
+      eligible: (m) => _turnsAtLeast(m, 12)),
+  Milestone('Has ministers', 'M', (m) => m['ministering_brothers_sisters'] == 'Yes'), // everyone
+  Milestone('Ministers to others', 'MA', (m) => m['ministering_assignment'] == 'Yes',
+      eligible: (m) => _turnsAtLeast(m, 12)),
+  Milestone('Aaronic Priesthood', 'AP', (m) => m['aaronic_priesthood'] == 'Yes',
+      eligible: (m) => _male(m) && _turnsAtLeast(m, 12)),
+  Milestone('Melchizedek Priesthood', 'MP', (m) => m['melchizedek_priesthood'] == 'Yes',
+      eligible: (m) => _male(m) && _turnsAtLeast(m, 18) && _memberOneYearPlus(m)),
 ];
 
 List<Milestone> milestonesFor(Map<String, dynamic> m) =>
-    milestones.where((x) => !x.maleOnly || m['sex'] == 'M').toList();
+    milestones.where((x) => x.eligible(m)).toList();
 
 /// Row of small circle chips for one member (the iOS Golden Hour pattern). Filled = done.
 /// With [highlightNext], the first not-yet-complete milestone gets an amber ring as the
@@ -51,6 +92,7 @@ class GoldenHourChips extends StatelessWidget {
     final border = done ? green : (isNext ? amber : Colors.grey.shade400);
     return Tooltip(
       message: '${ms.label}: ${done ? "done" : (isNext ? "next step" : "not yet")}',
+      triggerMode: TooltipTriggerMode.tap, // mobile: tap a pill to see what it means
       child: Container(
         width: size,
         height: size,

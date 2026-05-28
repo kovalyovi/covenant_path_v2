@@ -56,6 +56,10 @@ class PersonDetailPage extends StatelessWidget {
                         style: Theme.of(context).textTheme.titleLarge?.copyWith(
                             color: Theme.of(context).colorScheme.onPrimaryContainer,
                             fontWeight: FontWeight.bold)),
+                    if ((member['unit_name'] ?? '').toString().isNotEmpty)
+                      Text(member['unit_name'].toString(),
+                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: Theme.of(context).colorScheme.onPrimaryContainer)),
                     if (memberSince != null && memberSince.isNotEmpty)
                       Text(memberSince,
                           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
