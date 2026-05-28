@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 
 /// "Golden Hour" = a new member's first-year integration milestones. Modeled after the
-/// reference iOS app's circle-chip row, extended with the data we have that it lacks
-/// (baptism, recommend, patriarchal, endowment). Filled chip = complete.
+/// reference iOS app's circle-chip row. Filled chip = complete.
 class Milestone {
   final String label; // full name (detail + accessibility)
   final String abbr;  // chip label (1-2 chars)
@@ -11,12 +10,10 @@ class Milestone {
   const Milestone(this.label, this.abbr, this.complete, {this.maleOnly = false});
 }
 
-bool _filled(dynamic v) =>
-    v != null &&
-    v.toString().trim().isNotEmpty &&
-    !{'N/A', 'No', 'needs-profile-api', 'blocked: insufficient calling access'}
-        .contains(v.toString());
-
+// Golden Hour = a new member's first-year *integration* milestones. Baptism is intentionally
+// NOT a milestone (a new member is already baptized; it doesn't measure integration). The
+// longer-horizon ordinances (recommend / patriarchal / endowment) are shown on the detail
+// page but are not part of Golden Hour completion.
 final milestones = <Milestone>[
   Milestone('Friends', 'F', (m) => m['friends'] == 'Yes'),
   Milestone('Calling', 'C', (m) => m['calling'] == 'Yes'),
@@ -24,10 +21,6 @@ final milestones = <Milestone>[
   Milestone('Ministers to others', 'MA', (m) => m['ministering_assignment'] == 'Yes'),
   Milestone('Aaronic Priesthood', 'AP', (m) => m['aaronic_priesthood'] == 'Yes', maleOnly: true),
   Milestone('Melchizedek Priesthood', 'MP', (m) => m['melchizedek_priesthood'] == 'Yes', maleOnly: true),
-  Milestone('Baptized', 'B', (m) => _filled(m['baptism_date'])),
-  Milestone('Temple recommend', 'R', (m) => m['temple_recommend'] == 'Active'),
-  Milestone('Patriarchal blessing', 'P', (m) => m['patriarchal_blessing'] == 'Yes'),
-  Milestone('Endowed', 'E', (m) => m['living_ordinance'] == 'Yes'),
 ];
 
 List<Milestone> milestonesFor(Map<String, dynamic> m) =>
@@ -72,6 +65,12 @@ class GoldenHourChips extends StatelessWidget {
   }
 }
 
+/// Layout tiers — just three breakpoints (phone / tablet / desktop) drive the responsive UI.
+enum ScreenTier { mobile, tablet, desktop }
+
+ScreenTier tierFor(double width) =>
+    width < 600 ? ScreenTier.mobile : (width < 1100 ? ScreenTier.tablet : ScreenTier.desktop);
+
 /// Centers content and caps its width so pages don't stretch edge-to-edge on wide screens.
 class MaxWidthBody extends StatelessWidget {
   const MaxWidthBody({super.key, required this.child, this.maxWidth = 1000});
@@ -84,10 +83,12 @@ class MaxWidthBody extends StatelessWidget {
 
 /// A titled section as a clean rounded card — the building block for detail + KPI pages.
 class SectionCard extends StatelessWidget {
-  const SectionCard({super.key, required this.title, required this.child, this.trailing});
+  const SectionCard(
+      {super.key, required this.title, required this.child, this.trailing, this.leadingIcon});
   final String title;
   final Widget child;
   final Widget? trailing;
+  final IconData? leadingIcon;
   @override
   Widget build(BuildContext context) {
     return Card(
@@ -101,6 +102,10 @@ class SectionCard extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
+            if (leadingIcon != null) ...[
+              Icon(leadingIcon, size: 20, color: Theme.of(context).colorScheme.primary),
+              const SizedBox(width: 8),
+            ],
             Expanded(
               child: Text(title,
                   style: Theme.of(context)

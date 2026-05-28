@@ -23,17 +23,14 @@ void main() {
       expect(f.complete(member(friends: 'No')), isFalse);
     });
 
-    test('baptized requires a real date (not N/A/blank/needs-profile)', () {
-      final b = milestones.firstWhere((m) => m.abbr == 'B');
-      expect(b.complete(member(baptism: '6 Feb 2026')), isTrue);
-      expect(b.complete(member(baptism: '')), isFalse);
-      expect(b.complete(member(baptism: 'needs-profile-api')), isFalse);
+    test('baptism is NOT a Golden Hour milestone (integration only)', () {
+      // A new member is already baptized; it doesn't measure integration.
+      expect(milestones.any((m) => m.abbr == 'B'), isFalse);
+      expect(milestones.any((m) => m.label == 'Baptized'), isFalse);
     });
 
-    test('temple recommend only Active counts', () {
-      final r = milestones.firstWhere((m) => m.abbr == 'R');
-      expect(r.complete(member(recommend: 'Active')), isTrue);
-      expect(r.complete(member(recommend: 'Expired')), isFalse);
+    test('milestones are the integration set', () {
+      expect(milestones.map((m) => m.abbr).toSet(), {'F', 'C', 'M', 'MA', 'AP', 'MP'});
     });
   });
 
