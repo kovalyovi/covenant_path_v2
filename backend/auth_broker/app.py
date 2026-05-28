@@ -84,6 +84,16 @@ def require_admin(authorization: str = Header(default="")) -> str:
         raise HTTPException(status_code=503, detail=str(e))
 
 
+def require_user(authorization: str = Header(default="")) -> str:
+    """FastAPI dependency: any signed-in app user (verified Supabase token). Returns email."""
+    try:
+        return admin.verify_user(authorization)
+    except admin.NotAdmin as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 def _mint(identity: dict, rid: str) -> dict:
     """Turn a verified identity into a Supabase OTP the app verifies into a session."""
     try:
@@ -153,6 +163,20 @@ def admin_summary(email: str = Depends(require_admin)) -> dict:
     return {"admin": email, "broker": {"ok": True}, "supabase": admin.summary(),
             "github_configured": admin.github_configured(),
             "dispatchable": admin.DISPATCHABLE, "links": admin.tool_links()}
+
+
+class FeedbackReq(BaseModel):
+    title: str
+    body: str = ""
+
+
+@app.post("/feedback")
+def feedback(body: FeedbackReq, email: str = Depends(require_user)) -> dict:
+    """Any signed-in user files in-app feedback as a GitHub issue (+ best-effort Copilot)."""
+    try:
+        return admin.create_feedback_issue(body.title, body.body, reporter=email)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 class InviteReq(BaseModel):
