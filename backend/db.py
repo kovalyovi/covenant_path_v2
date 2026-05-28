@@ -123,3 +123,10 @@ def touch_stake_synced(conn, stake_id: str) -> None:
     with conn.cursor() as cur:
         cur.execute("update stakes set last_synced_at = now() where id = %s", (stake_id,))
     conn.commit()
+
+
+def update_stake_kpis(conn, stake_id: str, kpis: dict) -> None:
+    with conn.cursor() as cur:
+        cur.execute("update stakes set kpis = %s, kpis_updated_at = now() where id = %s",
+                    (psycopg2.extras.Json(kpis), stake_id))
+    conn.commit()

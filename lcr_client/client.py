@@ -75,6 +75,11 @@ class LcrClient:
         params = {"unitNumber": unit_number} if unit_number else None
         return self.session.get_json(f"{LCR}/api/cld/reports/quarterly-report", params)
 
+    def dashboard_data(self) -> dict:
+        """The LCR dashboard widgets for the active unit (stake for a stake calling):
+        covenant-path progress, sacrament attendance, temple recommends, ministering."""
+        return self.session.get_json(f"{LCR}/api/dashboard/data")
+
 
 if __name__ == "__main__":
     # Smoke test against the live session captured by the crawler.
