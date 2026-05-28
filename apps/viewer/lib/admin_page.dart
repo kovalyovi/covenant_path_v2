@@ -122,8 +122,13 @@ class _AdminPageState extends State<AdminPage> {
     );
     if (email == null || email.isEmpty) return;
     await _guard(() async {
-      await supabase.rpc('invite_admin', params: {'p_email': email});
-      _snack('$email is now an admin.');
+      final res = await _client.invite(email);
+      final status = res['status'];
+      _snack(status == 'already_admin'
+          ? '$email is already an admin.'
+          : status == 'pending_owner_approval'
+              ? 'Request sent — the owner must approve $email by email.'
+              : '$email: $status');
       await _refresh();
     });
   }
