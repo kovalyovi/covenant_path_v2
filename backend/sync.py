@@ -35,6 +35,37 @@ def _load_members(scrape: bool, with_profile: bool) -> list[dict]:
     return json.loads(REPORT_JSON.read_text(encoding="utf-8"))
 
 
+def kpi_subtree(dash: dict) -> dict:
+    """Pick the stake KPIs the viewer's KPIs tab shows from /api/dashboard/data."""
+    cp = dash.get("covenantPathProgressWidgetDto") or {}
+    att = dash.get("attendanceWidgetDto") or {}
+    rec = dash.get("templeRecommendWidgetDto") or {}
+    minw = dash.get("ministeringInterviewWidgetDto") or {}
+
+    def months(key):
+        return [{"month": m.get("monthLabel"), "attended": m.get("attended"),
+                 "potential": m.get("potential")} for m in (att.get(key) or [])]
+
+    return {
+        "newMemberCount": cp.get("newMemberCount"),
+        "peopleBeingTaught": cp.get("peopleBeingTaughtCount"),
+        "sacramentByMonth": months("sacramentMeetingAttendance"),
+        "classQuorumByMonth": months("classAndQuorumAttendance"),
+        "templeRecommend": {
+            "endowedActual": rec.get("endowedWithRecommendActual"),
+            "endowedTotal": rec.get("endowedWithRecommendTotal"),
+            "youthActual": rec.get("youthWithRecommendActual"),
+            "youthTotal": rec.get("youthWithRecommendTotal"),
+        },
+        "ministering": {
+            "brotherInterviewed": minw.get("brotherCompanionshipsInterviewed"),
+            "brotherTotal": minw.get("brotherCompanionshipsTotal"),
+            "sisterInterviewed": minw.get("sisterCompanionshipsInterviewed"),
+            "sisterTotal": minw.get("sisterCompanionshipsTotal"),
+        },
+    }
+
+
 def sync_stake(client: LcrClient, members: list[dict], conn) -> dict:
     ctx = client.user_context()
     stake_id = db.upsert_stake(conn, ctx.unit_number, ctx.unit_name)
@@ -47,6 +78,11 @@ def sync_stake(client: LcrClient, members: list[dict], conn) -> dict:
             if u.name:
                 unit_id_by_name[u.name] = uid
     written = db.upsert_members(conn, stake_id, members, unit_id_by_number, unit_id_by_name)
+    # stake-level KPIs for the viewer's KPIs tab (never fail the data sync over them)
+    try:
+        db.update_stake_kpis(conn, stake_id, kpi_subtree(client.dashboard_data()))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("KPI dashboard fetch skipped for stake %s: %s", stake_id, exc)
     # rebuild access roles from current callings (no manual role assignment)
     try:
         from backend.roles import provision_roles
