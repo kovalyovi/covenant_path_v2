@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'admin_client.dart';
 import 'admin_page.dart';
 import 'biometric_gate.dart';
+import 'disclaimer.dart';
 import 'golden_hour.dart';
 import 'invite_page.dart';
 import 'main.dart';
@@ -182,6 +183,8 @@ class _DashboardPageState extends State<DashboardPage> {
                 _openInvite();
               case 'feedback':
                 _sendFeedback();
+              case 'about':
+                showAboutDisclaimer(context);
               case 'lock':
                 _toggleLock();
               case 'signout':
@@ -203,6 +206,10 @@ class _DashboardPageState extends State<DashboardPage> {
                 value: 'feedback',
                 child: ListTile(
                     leading: Icon(Icons.feedback_outlined), title: Text('Send feedback'))),
+            const PopupMenuItem(
+                value: 'about',
+                child: ListTile(
+                    leading: Icon(Icons.info_outline), title: Text('About & privacy'))),
             if (_lockAvailable)
               PopupMenuItem(
                   value: 'lock',
@@ -232,6 +239,10 @@ class _DashboardPageState extends State<DashboardPage> {
           tooltip: 'Send feedback',
           onPressed: _sendFeedback,
           icon: const Icon(Icons.feedback_outlined)),
+      IconButton(
+          tooltip: 'About & privacy',
+          onPressed: () => showAboutDisclaimer(context),
+          icon: const Icon(Icons.info_outline)),
       if (_lockAvailable)
         IconButton(
             tooltip: 'App lock (biometrics): ${_lockOn ? 'on' : 'off'}',
