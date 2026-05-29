@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 
 import 'admin_client.dart';
 import 'admin_page.dart';
+import 'biometric_gate.dart';
 import 'golden_hour.dart';
 import 'invite_page.dart';
 import 'main.dart';
@@ -44,6 +45,8 @@ class _DashboardPageState extends State<DashboardPage> {
   String? _stakeName;
   String? _lastSynced;
   bool _syncing = false;
+  bool _lockAvailable = false;
+  bool _lockOn = false;
 
   @override
   void initState() {
@@ -51,6 +54,22 @@ class _DashboardPageState extends State<DashboardPage> {
     _future = _load();
     _checkAdmin();
     _loadStakeName();
+    _checkLock();
+  }
+
+  Future<void> _checkLock() async {
+    final avail = await BiometricLock.available();
+    final on = await BiometricLock.enabled();
+    if (mounted) setState(() { _lockAvailable = avail; _lockOn = on; });
+  }
+
+  Future<void> _toggleLock() async {
+    await BiometricLock.setEnabled(!_lockOn);
+    if (mounted) {
+      setState(() => _lockOn = !_lockOn);
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Biometric app lock ${_lockOn ? 'on' : 'off'}')));
+    }
   }
 
   Future<void> _checkAdmin() async {
@@ -163,6 +182,8 @@ class _DashboardPageState extends State<DashboardPage> {
                 _openInvite();
               case 'feedback':
                 _sendFeedback();
+              case 'lock':
+                _toggleLock();
               case 'signout':
                 supabase.auth.signOut();
             }
@@ -182,6 +203,12 @@ class _DashboardPageState extends State<DashboardPage> {
                 value: 'feedback',
                 child: ListTile(
                     leading: Icon(Icons.feedback_outlined), title: Text('Send feedback'))),
+            if (_lockAvailable)
+              PopupMenuItem(
+                  value: 'lock',
+                  child: ListTile(
+                      leading: const Icon(Icons.fingerprint),
+                      title: Text('App lock: ${_lockOn ? 'On' : 'Off'}'))),
             const PopupMenuItem(
                 value: 'signout',
                 child: ListTile(leading: Icon(Icons.logout), title: Text('Sign out'))),
@@ -205,6 +232,11 @@ class _DashboardPageState extends State<DashboardPage> {
           tooltip: 'Send feedback',
           onPressed: _sendFeedback,
           icon: const Icon(Icons.feedback_outlined)),
+      if (_lockAvailable)
+        IconButton(
+            tooltip: 'App lock (biometrics): ${_lockOn ? 'on' : 'off'}',
+            onPressed: _toggleLock,
+            icon: Icon(_lockOn ? Icons.lock : Icons.lock_open)),
       IconButton(
           tooltip: 'Sign out (${supabase.auth.currentUser?.email ?? ''})',
           onPressed: () => supabase.auth.signOut(),
