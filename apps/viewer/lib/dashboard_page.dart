@@ -657,6 +657,7 @@ class _KpiView extends StatefulWidget {
 
 class _KpiViewState extends State<_KpiView> {
   _Period _period = _Period.week;
+  String? _unit; // null = whole stake; else drill into one unit
 
   (String, String) get _compareLabels => switch (_period) {
         _Period.week => ('2 weeks ago', 'Last week'),
@@ -666,7 +667,11 @@ class _KpiViewState extends State<_KpiView> {
 
   @override
   Widget build(BuildContext context) {
-    final rows = widget.rows;
+    final units = (widget.rows.map((m) => '${m['unit_name'] ?? ''}').where((u) => u.isNotEmpty).toSet().toList()
+      ..sort());
+    final rows = _unit == null
+        ? widget.rows
+        : widget.rows.where((m) => m['unit_name'] == _unit).toList();
     final baptized = rows.where((m) => m['kind'] != 'investigator').toList();
     final investigators = rows.where((m) => m['kind'] == 'investigator');
     // unique people per period (a member attending several Sundays in a month counts once)
@@ -712,7 +717,20 @@ class _KpiViewState extends State<_KpiView> {
     return _Page(
       tier: widget.tier,
       header: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const _BigHeader(text: 'KPIs', subtitle: "From this stake's covenant-path data"),
+        Row(children: [
+          const Expanded(
+              child: _BigHeader(text: 'KPIs', subtitle: "From this stake's covenant-path data")),
+          if (units.length > 1)
+            DropdownButton<String?>(
+              value: _unit,
+              hint: const Text('All units'),
+              items: [
+                const DropdownMenuItem(value: null, child: Text('All units')),
+                for (final u in units) DropdownMenuItem(value: u, child: Text(u)),
+              ],
+              onChanged: (v) => setState(() => _unit = v),
+            ),
+        ]),
         const SizedBox(height: 10),
         Center(
           child: SegmentedButton<_Period>(
