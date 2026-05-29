@@ -100,12 +100,12 @@ class BrokerClient {
     );
   }
 
-  Future<BrokerResult> password(String username, String password) =>
-      _post('/auth/password', {'username': username, 'password': password});
+  Future<BrokerResult> password(String username, String password, {bool enroll = false}) =>
+      _post('/auth/password', {'username': username, 'password': password, 'enroll': enroll});
 
   Future<void> selectFactor(String loginId, String factorId) =>
       _post('/auth/mfa/select', {'login_id': loginId, 'factor_id': factorId});
 
-  Future<BrokerResult> verifyMfa(String loginId, String code) =>
-      _post('/auth/mfa/verify', {'login_id': loginId, 'code': code});
+  Future<BrokerResult> verifyMfa(String loginId, String code, {bool enroll = false}) =>
+      _post('/auth/mfa/verify', {'login_id': loginId, 'code': code, 'enroll': enroll});
 }

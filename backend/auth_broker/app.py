@@ -48,6 +48,7 @@ logger.info("CORS: exact=%s regex=%s", _origins, _origin_regex)
 class PasswordReq(BaseModel):
     username: str
     password: str
+    enroll: bool = False  # leader consented to store their session for ongoing stake sync
 
 
 class FactorReq(BaseModel):
@@ -58,10 +59,12 @@ class FactorReq(BaseModel):
 class MfaReq(BaseModel):
     login_id: str
     code: str
+    enroll: bool = False
 
 
 class SessionReq(BaseModel):
     cookies: list[dict]
+    enroll: bool = False
 
 
 class DispatchReq(BaseModel):
@@ -94,6 +97,21 @@ def require_user(authorization: str = Header(default="")) -> str:
         raise HTTPException(status_code=503, detail=str(e))
 
 
+def _try_enroll(res: dict, want: bool, rid: str) -> dict | None:
+    """If the leader consented, persist their captured session as the stake credential. Always
+    guarded — a failure here must never break the login that just succeeded."""
+    if not want or not res.get("cookies"):
+        return None
+    try:
+        from backend.auth_broker import enroll
+        out = enroll.persist(res["cookies"], res["identity"])
+        logger.info("[req %s] enrolled stake (complete=%s)", rid, out.get("complete"))
+        return out
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[req %s] enroll persist failed (login still ok): %s", rid, exc)
+        return {"error": str(exc)}
+
+
 def _mint(identity: dict, rid: str) -> dict:
     """Turn a verified identity into a Supabase OTP the app verifies into a session."""
     try:
@@ -119,7 +137,9 @@ def auth_password(req: PasswordReq) -> dict:
         raise HTTPException(status_code=401, detail=str(e))
     if res["status"] == "mfa_required":
         return {"status": "mfa_required", "login_id": res["login_id"], "factors": res["factors"]}
-    return {"status": "ok", "session": _mint(res["identity"], rid), "identity_name": res["identity"].get("name")}
+    enrolled = _try_enroll(res, req.enroll, rid)
+    return {"status": "ok", "session": _mint(res["identity"], rid),
+            "identity_name": res["identity"].get("name"), "enroll": enrolled}
 
 
 @app.post("/auth/mfa/select")
@@ -140,7 +160,9 @@ def auth_mfa_verify(req: MfaReq) -> dict:
         res = okta_flow.verify_mfa(req.login_id, req.code.strip())
     except okta_flow.AuthError as e:
         raise HTTPException(status_code=401, detail=str(e))
-    return {"status": "ok", "session": _mint(res["identity"], rid), "identity_name": res["identity"].get("name")}
+    enrolled = _try_enroll(res, req.enroll, rid)
+    return {"status": "ok", "session": _mint(res["identity"], rid),
+            "identity_name": res["identity"].get("name"), "enroll": enrolled}
 
 
 @app.post("/auth/session")
@@ -152,7 +174,9 @@ def auth_session(req: SessionReq) -> dict:
         res = okta_flow.verify_captured_session(req.cookies)
     except okta_flow.AuthError as e:
         raise HTTPException(status_code=401, detail=str(e))
-    return {"status": "ok", "session": _mint(res["identity"], rid), "identity_name": res["identity"].get("name")}
+    enrolled = _try_enroll(res, req.enroll, rid)
+    return {"status": "ok", "session": _mint(res["identity"], rid),
+            "identity_name": res["identity"].get("name"), "enroll": enrolled}
 
 
 # --- admin / ops console (all gated by require_admin) -----------------------
