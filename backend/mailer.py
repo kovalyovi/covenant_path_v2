@@ -289,6 +289,138 @@ _REMINDER_OWNER = os.environ.get("REMINDER_OWNER", "ilia.kovaliov@gmail.com").lo
 _REMINDERS_OWNER_ONLY = os.environ.get("REMINDER_ALL") != "1"
 
 
+# --- responsibility handoff pings (#72: missionary/WML -> Elders Quorum / Relief Society) ------
+
+def _handoff_thresholds() -> list[int]:
+    """Months-post-baptism at which fellowship responsibility hands off. Configurable via env
+    HANDOFF_MONTHS (default '6,12'). The Church convention: missionaries + the ward mission leader
+    fellowship a new convert, then the Elders Quorum / Relief Society take over at 6–12 months."""
+    raw = os.environ.get("HANDOFF_MONTHS", "6,12")
+    out = [int(p.strip()) for p in raw.split(",") if p.strip().isdigit()]
+    return sorted(set(out)) or [6, 12]
+
+
+def _handoff_window() -> int:
+    """Only converts baptized within this many months are in scope (keeps lifelong members from
+    being flagged as 'handoffs'). Default 24 — the app's new-member window."""
+    try:
+        return int(os.environ.get("HANDOFF_WINDOW_MONTHS", "24"))
+    except ValueError:
+        return 24
+
+
+def _months_since(date_str) -> int | None:
+    """Whole months between a YYYY-MM(-DD) date and now; year-only falls back to year*12."""
+    m = re.search(r"(\d{4})-(\d{1,2})", str(date_str or ""))
+    if m:
+        y, mo = int(m.group(1)), int(m.group(2))
+        now = datetime.now()
+        return (now.year - y) * 12 + (now.month - mo)
+    y = _year(date_str)
+    return (datetime.now().year - y) * 12 if y else None
+
+
+def _crossed_phase(months: int, thresholds: list[int]) -> str | None:
+    """The highest threshold this convert has reached, as a phase label (e.g. '12mo'), or None."""
+    crossed = [t for t in thresholds if months >= t]
+    return f"{max(crossed)}mo" if crossed else None
+
+
+def _new_handoffs(conn) -> dict:
+    """Per stake: recent converts that have NEWLY crossed a responsibility threshold (the phase is
+    not yet recorded in handoff_pings). Returns {stake_id: [{person_uuid,name,unit_id,quorum,
+    phase,missing[]}]}. Long-tenured members are excluded by the baptism window."""
+    thresholds, window = _handoff_thresholds(), _handoff_window()
+    out: dict = {}
+    with conn.cursor() as cur:
+        cur.execute("select id from stakes")
+        stake_ids = [r[0] for r in cur.fetchall()]
+    for sid in stake_ids:
+        with conn.cursor() as cur:
+            cur.execute(
+                """select person_uuid, name, unit_id, sex, birth_date, baptism_date, friends,
+                          calling, ministering_brothers_sisters, ministering_assignment,
+                          aaronic_priesthood, melchizedek_priesthood
+                   from members where stake_id=%s and coalesce(kind,'new_member') <> 'investigator'""",
+                (sid,))
+            cols = [d[0] for d in cur.description]
+            members = [dict(zip(cols, r)) for r in cur.fetchall()]
+            cur.execute("select person_uuid, phase from handoff_pings where stake_id=%s", (sid,))
+            already = {(r[0], r[1]) for r in cur.fetchall()}
+        new = []
+        for m in members:
+            uuid = m.get("person_uuid")
+            months = _months_since(m.get("baptism_date"))
+            if not uuid or months is None or months > window:
+                continue
+            phase = _crossed_phase(months, thresholds)
+            if not phase or (uuid, phase) in already:
+                continue
+            new.append({
+                "person_uuid": uuid,
+                "name": m.get("name"),
+                "unit_id": str(m["unit_id"]) if m.get("unit_id") else None,
+                "quorum": "Relief Society" if m.get("sex") == "F" else "Elders Quorum",
+                "phase": phase,
+                "missing": _member_missing(m),
+            })
+        out[sid] = new
+    return out
+
+
+def _handoff_html(handoffs: list[dict]) -> str:
+    rows = "".join(
+        f"<li><b>{h['name']}</b> has reached {h['phase'].replace('mo', ' months')} since baptism — "
+        f"primary fellowship now moves to <b>{h['quorum']}</b>."
+        + (f" Still needs: {', '.join(h['missing'])}." if h["missing"] else " They're on track! 🎉")
+        + "</li>"
+        for h in handoffs)
+    return (f"<h2>Covenant Path — convert responsibility handoff</h2>"
+            f"<p>These new members have reached a fellowship handoff point. Please make sure the "
+            f"receiving quorum / Relief Society knows them and what's still needed:</p>"
+            f"<ul>{rows}</ul>"
+            f"<p><a href=\"{_app_url()}\">Open the dashboard</a> for details.</p>")
+
+
+def send_handoff_pings(conn, cap: int = DEFAULT_DAILY_CAP) -> int:
+    """Ping leaders when a convert crosses a responsibility threshold (6/12 months), with what's
+    still missing. Each transition fires exactly once (recorded in handoff_pings only after it's
+    actually emailed). Owner-only preview until REMINDER_ALL=1 (same gate as weekly reminders)."""
+    by_stake = _new_handoffs(conn)
+    if not any(by_stake.values()):
+        logger.info("no new responsibility handoffs")
+        return 0
+    with conn.cursor() as cur:
+        cur.execute("""select lower(email) as email, bool_or(unit_id is null) as stake_wide,
+                              array_remove(array_agg(distinct unit_id), null) as units,
+                              max(stake_id::text) as stake_id
+                       from user_roles where email is not null group by lower(email) limit %s""", (cap,))
+        leaders = cur.fetchall()
+    sent = 0
+    delivered: set = set()  # (stake_id, uuid, phase) actually emailed — only these get recorded
+    for email, stake_wide, units, stake_id in leaders:
+        if _REMINDERS_OWNER_ONLY and email != _REMINDER_OWNER:
+            continue  # WIP preview — don't reach real leaders until reviewed
+        items = by_stake.get(stake_id, [])
+        unit_strs = {str(u) for u in (units or [])}
+        scoped = [h for h in items if stake_wide or h["unit_id"] in unit_strs]
+        if not scoped:
+            continue
+        if send_email(email, "Covenant Path — convert responsibility handoff",
+                      _handoff_html(scoped), stake_from(conn, stake_id)):
+            sent += 1
+            for h in scoped:
+                delivered.add((stake_id, h["person_uuid"], h["phase"]))
+    if delivered:
+        with conn.cursor() as cur:
+            for sid, uuid, phase in delivered:
+                cur.execute("""insert into handoff_pings (stake_id, person_uuid, phase)
+                               values (%s,%s,%s) on conflict do nothing""", (sid, uuid, phase))
+        conn.commit()
+    logger.info("sent %d handoff ping(s); recorded %d transition(s)", sent, len(delivered))
+    return sent
+
+
 def send_weekly_reminders(conn, cap: int = DEFAULT_DAILY_CAP) -> int:
     """One weekly digest per leader (RLS scope) of converts with outstanding *eligible* steps,
     plus congratulations for steps finished since last week. Suppressed when there's nothing to
