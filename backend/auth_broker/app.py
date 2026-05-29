@@ -276,6 +276,25 @@ def admin_diagnostics(email: str = Depends(require_admin)) -> dict:
     return {"runs": admin.recent_diagnostics()}
 
 
+@app.get("/admin/enrolled-stakes")
+def admin_enrolled_stakes(email: str = Depends(require_admin)) -> dict:
+    """Cross-stake ops: every stake with credential state, coverage, freshness, member count."""
+    try:
+        return {"stakes": admin.enrolled_stakes()}
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.post("/admin/stakes/{stake_id}/revoke")
+def admin_revoke_stake(stake_id: str, email: str = Depends(require_admin)) -> dict:
+    """Admin override: revoke any stake's sync credential (ops support — no provider check)."""
+    logger.info("admin %s revoking stake credential %s", email, stake_id)
+    try:
+        return admin.admin_revoke_stake(stake_id)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 @app.get("/admin/actions")
 def admin_actions(email: str = Depends(require_admin)) -> dict:
     """Recent GitHub Actions runs + the commit changelog. Graceful when GITHUB_TOKEN unset."""

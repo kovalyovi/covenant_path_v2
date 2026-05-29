@@ -77,5 +77,41 @@ def persist(cookies: list[dict], identity: dict) -> dict:
         raise RuntimeError(f"enroll RPC failed ({r.status_code}): {r.text[:160]}")
     logger.info("enrolled stake %s (%s): coverage_complete=%s rank=%s",
                 ctx.unit_name, ctx.unit_number, coverage["complete"], rank)
+    initial_sync = _kickoff_initial_sync(ctx.unit_number)
     return {"stake": ctx.unit_name, "unit_number": ctx.unit_number,
-            "complete": coverage["complete"], "missing": coverage["missing"]}
+            "complete": coverage["complete"], "missing": coverage["missing"],
+            "initial_sync": initial_sync}
+
+
+def _kickoff_initial_sync(unit_number: int) -> bool:
+    """For a brand-new stake (no data scraped yet), mark it 'running' and dispatch the
+    daily-sync workflow so the leader doesn't wait for the next scheduled run. The app then
+    shows the "setting up your stake" syncing state until the run lands. Best-effort: if
+    GitHub isn't configured or the stake already has data, this is a no-op."""
+    from datetime import datetime, timezone
+    try:
+        from backend.auth_broker import admin
+        if not admin.github_configured():
+            return False
+        sb = {"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}"}
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/stakes", headers=sb,
+                         params={"select": "id", "unit_number": f"eq.{unit_number}", "limit": "1"},
+                         timeout=30)
+        rows = r.json() if r.status_code == 200 else []
+        if not rows:
+            return False
+        stake_id = rows[0]["id"]
+        if (admin._count_where("members", {"stake_id": f"eq.{stake_id}"}) or 0) > 0:
+            return False  # already has data — the daily run keeps it fresh
+        requests.patch(f"{SUPABASE_URL}/rest/v1/stakes",
+                       headers={**sb, "Content-Type": "application/json", "Prefer": "return=minimal"},
+                       params={"id": f"eq.{stake_id}"},
+                       json={"sync_state": "running",
+                             "sync_started_at": datetime.now(timezone.utc).isoformat()},
+                       timeout=30)
+        admin.dispatch("daily-sync.yml", inputs={"targets": "supabase"})
+        logger.info("kicked off initial sync for new stake unit=%s", unit_number)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("initial-sync kickoff skipped (non-fatal): %s", exc)
+        return False
