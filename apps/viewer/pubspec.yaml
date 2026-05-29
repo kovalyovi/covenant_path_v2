@@ -14,6 +14,8 @@ dependencies:
   http: ^1.2.0          # calls the Church-login auth broker (backend/auth_broker)
   fl_chart: ^0.69.0     # KPI line charts (iOS-app-style graphs)
   url_launcher: ^6.3.2
+  local_auth: ^3.0.1
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_lints: ^4.0.0

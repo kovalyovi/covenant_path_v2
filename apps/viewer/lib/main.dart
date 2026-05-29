@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'biometric_gate.dart';
 import 'config.dart';
 import 'dashboard_page.dart';
 import 'login_page.dart';
@@ -46,7 +47,9 @@ class AuthGate extends StatelessWidget {
       stream: supabase.auth.onAuthStateChange,
       builder: (context, _) {
         final session = supabase.auth.currentSession;
-        return session == null ? const LoginPage() : const DashboardPage();
+        return session == null
+            ? const LoginPage()
+            : const BiometricGate(child: DashboardPage());
       },
     );
   }
