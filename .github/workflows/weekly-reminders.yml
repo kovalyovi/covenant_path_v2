@@ -1,0 +1,36 @@
+name: Weekly reminders
+
+# Saturday 9pm ET nudge of what's missing per convert (+ congratulations for progress).
+# Reads Supabase only (no LCR login). Times are ET; cron is UTC and can't do DST, so we fire
+# both candidate UTC hours and let weekly_reminders.py run only at 21:00 ET.
+
+on:
+  schedule:
+    - cron: "0 1 * * 0"   # 21:00 ET Sat during EDT (01:00 UTC Sun)
+    - cron: "0 2 * * 0"   # 21:00 ET Sat during EST (02:00 UTC Sun)
+  workflow_dispatch:       # manual "send now" (also lets the app trigger ad-hoc later)
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly-reminders
+  cancel-in-progress: false
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      MAIL_FROM: "Covenant Path <noreply@membercovenantpath.org>"
+      APP_URL: ${{ vars.APP_URL || 'https://app.membercovenantpath.org' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python scripts/weekly_reminders.py
