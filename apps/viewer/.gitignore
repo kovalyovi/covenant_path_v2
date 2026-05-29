@@ -12,7 +12,7 @@ ios/
 linux/
 macos/
 windows/
-web/
+# web/ is committed — it contains custom _headers, favicon, and index.html
 
 # IDE
 .idea/
