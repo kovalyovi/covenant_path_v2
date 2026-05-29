@@ -282,10 +282,20 @@ def _reminder_html(outstanding: list[dict], completed: int) -> str:
             f"<p><a href=\"{_app_url()}\">Open the dashboard</a> to see details.</p>")
 
 
+# NOTE: the reminder engine is still in development. For now it emails ONLY the owner so we can
+# review the weekly digest before it ever reaches ward/stake leaders — set REMINDER_ALL=1 (env)
+# to fan out to every leader once we're happy with the content/cadence.
+_REMINDER_OWNER = os.environ.get("REMINDER_OWNER", "ilia.kovaliov@gmail.com").lower()
+_REMINDERS_OWNER_ONLY = os.environ.get("REMINDER_ALL") != "1"
+
+
 def send_weekly_reminders(conn, cap: int = DEFAULT_DAILY_CAP) -> int:
     """One weekly digest per leader (RLS scope) of converts with outstanding *eligible* steps,
     plus congratulations for steps finished since last week. Suppressed when there's nothing to
-    nudge and nothing to celebrate. History lives in reminder_snapshots."""
+    nudge and nothing to celebrate. History lives in reminder_snapshots.
+
+    WORK IN PROGRESS: gated to the owner only (see _REMINDERS_OWNER_ONLY) until the content is
+    reviewed; the owner is a stake leader so the digest covers the whole stake."""
     diffs = _snapshot_and_diff(conn)
     with conn.cursor() as cur:
         cur.execute("""select lower(email) as email, bool_or(unit_id is null) as stake_wide,
@@ -295,6 +305,8 @@ def send_weekly_reminders(conn, cap: int = DEFAULT_DAILY_CAP) -> int:
         leaders = cur.fetchall()
     sent = 0
     for email, stake_wide, units, stake_id in leaders:
+        if _REMINDERS_OWNER_ONLY and email != _REMINDER_OWNER:
+            continue  # WIP — owner-only preview
         data = diffs.get(stake_id, {})
         unit_strs = {str(u) for u in (units or [])}
         scoped = [v for v in data.values() if stake_wide or v["unit_id"] in unit_strs]
