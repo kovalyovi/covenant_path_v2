@@ -25,39 +25,39 @@ class _AdminPageState extends State<AdminPage> {
   AdminClient get _client =>
       AdminClient(supabase.auth.currentSession?.accessToken ?? '');
 
-  late Future<_AdminData> _future;
   bool _busy = false;
+  // Each panel loads independently so the page renders immediately and a slow/failed section
+  // (e.g. GitHub Actions) only spins/errors in its own card — never blocks the whole console.
+  late Future<Map<String, dynamic>> _summaryF;
+  late Future<Map<String, dynamic>> _diagF;
+  late Future<Map<String, dynamic>> _actionsF;
+  late Future<List<Map<String, dynamic>>> _adminsF;
 
   @override
   void initState() {
     super.initState();
-    _future = _load();
+    _loadAll();
   }
 
-  Future<_AdminData> _load() async {
+  void _loadAll() {
     final c = _client;
-    // Kick off all panels in parallel so a slow one doesn't serialize the whole page.
-    final summaryF = c.summary();
-    final diagF = c.diagnostics();
-    final adminsF = supabase.from('app_admins').select('email, invited_by_email');
-    // GitHub Actions is optional — a token/scope/repo issue must not stop the console from
-    // opening (this was the "ops console won't open / 404" bug). Load it best-effort.
-    Map<String, dynamic> actions = const {};
-    String? actionsError;
-    try {
-      actions = await c.actions();
-    } catch (e) {
-      actionsError = '$e';
-    }
-    final summary = await summaryF;
-    final diagnostics = await diagF;
-    final admins = (await adminsF as List).cast<Map<String, dynamic>>();
-    return _AdminData(summary, actions, diagnostics, admins, actionsError);
+    _summaryF = c.summary();
+    _diagF = c.diagnostics();
+    _actionsF = c.actions();
+    _adminsF = supabase
+        .from('app_admins')
+        .select('email, invited_by_email')
+        .then((r) => (r as List).cast<Map<String, dynamic>>());
   }
 
   Future<void> _refresh() async {
-    setState(() => _future = _load());
-    await _future;
+    setState(_loadAll);
+    await Future.wait([
+      _summaryF.catchError((_) => <String, dynamic>{}),
+      _diagF.catchError((_) => <String, dynamic>{}),
+      _actionsF.catchError((_) => <String, dynamic>{}),
+      _adminsF.catchError((_) => <Map<String, dynamic>>[]),
+    ]);
   }
 
   void _snack(String msg) {
@@ -152,55 +152,41 @@ class _AdminPageState extends State<AdminPage> {
         ],
       ),
       body: Stack(children: [
-        FutureBuilder<_AdminData>(
-          future: _future,
-          builder: (context, snap) {
-            if (snap.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (snap.hasError) {
-              return Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Text('Could not load the console:\n${snap.error}',
-                      textAlign: TextAlign.center),
-                ),
-              );
-            }
-            final d = snap.data!;
-            return RefreshIndicator(
-              onRefresh: _refresh,
-              child: MaxWidthBody(
-                maxWidth: 900,
-                child: ListView(
-                  padding: const EdgeInsets.all(12),
-                  children: [
+        RefreshIndicator(
+          onRefresh: _refresh,
+          child: MaxWidthBody(
+            maxWidth: 900,
+            child: ListView(
+              padding: const EdgeInsets.all(12),
+              children: [
+                // System + freshness + maintenance + links (from /admin/summary)
+                _section<Map<String, dynamic>>(_summaryF, 'System', (s) {
+                  final d = _AdminData(s, const {}, const {}, const []);
+                  return Column(children: [
                     _HealthCard(d: d),
                     _FreshnessCard(d: d),
                     _MaintenanceCard(onRun: _busy ? null : _dispatch, d: d),
-                    _DiagnosticsCard(d: d),
-                    if (d.actionsError != null)
-                      _Card(
-                        title: 'GitHub Actions',
-                        child: Text(
-                          'Unavailable: ${d.actionsError}\n\nThe rest of the console works. To '
-                          'enable runs + changelog, set GITHUB_TOKEN on the broker (fine-grained '
-                          'PAT with Actions: read & write, Contents: read) scoped to the repo.',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      )
-                    else ...[
-                      _RunsCard(d: d, onRerun: _busy ? null : _rerun),
-                      _ChangelogCard(d: d),
-                    ],
                     _LinksCard(d: d),
-                    _AdminsCard(d: d, onInvite: _busy ? null : _inviteAdmin, onRevoke: _revokeAdmin),
-                    const SizedBox(height: 24),
-                  ],
-                ),
-              ),
-            );
-          },
+                  ]);
+                }),
+                _section<Map<String, dynamic>>(_diagF, 'Diagnostics', (s) =>
+                    _DiagnosticsCard(d: _AdminData(const {}, const {}, s, const []))),
+                // GitHub Actions: its own card so a token/repo error only affects this section.
+                _section<Map<String, dynamic>>(_actionsF, 'GitHub Actions', (a) {
+                  final d = _AdminData({'github_configured': a['configured'] == true}, a, const {}, const []);
+                  return Column(children: [
+                    _RunsCard(d: d, onRerun: _busy ? null : _rerun),
+                    _ChangelogCard(d: d),
+                  ]);
+                }, errorHint: 'Set GITHUB_TOKEN on the broker (Actions: read & write, Contents: '
+                    'read) to enable runs + the changelog. The rest of the console still works.'),
+                _section<List<Map<String, dynamic>>>(_adminsF, 'Admins', (a) =>
+                    _AdminsCard(d: _AdminData(const {}, const {}, const {}, a),
+                        onInvite: _busy ? null : _inviteAdmin, onRevoke: _revokeAdmin)),
+                const SizedBox(height: 24),
+              ],
+            ),
+          ),
         ),
         if (_busy)
           const Positioned.fill(
@@ -212,15 +198,42 @@ class _AdminPageState extends State<AdminPage> {
       ]),
     );
   }
+
+  /// A panel that renders immediately as a titled card: spinner while its future loads, a
+  /// friendly error (with optional hint) on failure, else the built content.
+  Widget _section<T>(Future<T> future, String title, Widget Function(T data) build,
+      {String? errorHint}) {
+    return FutureBuilder<T>(
+      future: future,
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return _Card(
+              title: '$title…',
+              child: const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Center(child: CircularProgressIndicator())));
+        }
+        if (snap.hasError) {
+          return _Card(
+            title: title,
+            child: Text(
+              "Couldn't load: ${snap.error}${errorHint != null ? '\n\n$errorHint' : ''}",
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          );
+        }
+        return build(snap.data as T);
+      },
+    );
+  }
 }
 
 class _AdminData {
-  _AdminData(this.summary, this.actions, this.diagnostics, this.admins, [this.actionsError]);
+  _AdminData(this.summary, this.actions, this.diagnostics, this.admins);
   final Map<String, dynamic> summary;
   final Map<String, dynamic> actions;
   final Map<String, dynamic> diagnostics;
   final List<Map<String, dynamic>> admins;
-  final String? actionsError;
 
   List<Map<String, dynamic>> get diagRuns =>
       ((diagnostics['runs'] as List?) ?? const []).cast<Map<String, dynamic>>();
