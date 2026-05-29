@@ -47,9 +47,10 @@ def main() -> int:
     conn = db.connect()
     try:
         sent = mailer.send_weekly_reminders(conn)
+        handoffs = mailer.send_handoff_pings(conn)
     finally:
         conn.close()
-    print(f"[+] sent {sent} weekly reminder(s)")
+    print(f"[+] sent {sent} weekly reminder(s), {handoffs} handoff ping(s)")
     return 0
 
 
