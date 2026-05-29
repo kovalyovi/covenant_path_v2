@@ -215,11 +215,12 @@ def revoke_credential(stake_id: str, email: str) -> dict:
         return {"status": "already_revoked"}
     if (cred.get("principal_name") or "").lower() != email.lower():
         raise NotAdmin("only the credential provider can revoke")
+    from datetime import datetime, timezone
     r = requests.patch(
         f"{SUPABASE_URL}/rest/v1/stake_credentials",
         headers={**headers, "Prefer": "return=minimal"},
         params={"stake_id": f"eq.{stake_id}"},
-        json={"revoked": True, "revoked_at": "now()"},
+        json={"revoked": True, "revoked_at": datetime.now(timezone.utc).isoformat()},
         timeout=_TIMEOUT)
     if r.status_code >= 300:
         raise AdminError(f"revoke failed ({r.status_code}): {r.text[:160]}")
