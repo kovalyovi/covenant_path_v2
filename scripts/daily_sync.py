@@ -11,10 +11,13 @@ Supabase. Two modes:
                session (delegated_login), which re-verifies the authorizing leader's
                calling and auto-revokes on change. Many stakes.
 
-  default mode = delegated if any grants exist, else self.
+  auto       — (default) run the self baseline THEN delegated for the other stakes. With
+               --no-self-baseline (or env DELEGATED_ONLY=1) it skips the self pass and syncs
+               EVERY stake — including the operator's own — via its delegated credential (#79).
 
   python scripts/daily_sync.py --with-profile --sheets --supabase
   python scripts/daily_sync.py --mode self --no-supabase
+  python scripts/daily_sync.py --no-self-baseline --supabase   # delegated-only cutover (#79)
 
 Each feature is independent and lazily imported, so the job runs with whatever
 secrets are configured (e.g. Sheets-only until Supabase creds land).
@@ -205,8 +208,16 @@ def main() -> int:
     ap.add_argument("--cache-max-age-days", type=float, default=7.0)
     ap.add_argument("--email", action="store_true",
                     help="after sync, send pending power-user invitations + daily digests (Resend)")
+    ap.add_argument("--no-self-baseline", dest="self_baseline", action="store_false", default=True,
+                    help="auto mode: skip the LCR_LOGIN self pass and sync EVERY stake (including "
+                         "the operator's own) via its delegated credential. Use after migrating "
+                         "your own stake to delegated (#79). Env DELEGATED_ONLY=1 has the same effect.")
     ap.add_argument("--quiet", dest="verbose", action="store_false", default=True)
     args = ap.parse_args()
+    # Env switch mirrors --no-self-baseline so the GitHub workflow can flip the cutover without
+    # editing the command line (set repo variable DELEGATED_ONLY=1).
+    if os.getenv("DELEGATED_ONLY", "").lower() in ("1", "true", "yes"):
+        args.self_baseline = False
 
     run_ok, why = _should_run_now()
     logger.info("schedule gate: %s", why)
@@ -216,14 +227,23 @@ def main() -> int:
 
     mode = args.mode
     if mode == "auto":
-        # Decision B: always run the self baseline (operator's stake + shared self-healing such
-        # as the calling cache / action-id repair), AND run delegated for any enrolled stakes.
-        logger.info("daily_sync starting (mode=auto: self baseline + delegated)")
+        # Two shapes of auto mode:
+        #  • self_baseline (default, Decision B): run the LCR_LOGIN self pass for the operator's
+        #    stake + shared self-healing (calling cache / action-id repair), THEN delegated for the
+        #    other enrolled stakes (skipping the operator's so it isn't synced twice).
+        #  • delegated-only (--no-self-baseline / DELEGATED_ONLY=1, the #79 cutover): the operator
+        #    migrated their own stake to a delegated credential, so EVERY stake — including theirs —
+        #    syncs via its credential. Self-healing still happens during those delegated scrapes
+        #    (it's shared global state). LCR_LOGIN is no longer required (kept only as a manual
+        #    fallback: unset the flag to restore the self baseline).
+        logger.info("daily_sync starting (mode=auto: %s)",
+                    "delegated-only" if not args.self_baseline else "self baseline + delegated")
         self_unit = None
-        try:
-            self_unit = run_self(args)
-        except Exception as exc:  # noqa: BLE001 — a self failure must not stop delegated stakes
-            logger.error("self baseline sync failed: %s", exc)
+        if args.self_baseline:
+            try:
+                self_unit = run_self(args)
+            except Exception as exc:  # noqa: BLE001 — a self failure must not stop delegated stakes
+                logger.error("self baseline sync failed: %s", exc)
         rc = 0
         if os.getenv("SUPABASE_DB_URL"):
             try:
@@ -235,7 +255,9 @@ def main() -> int:
                 logger.warning("could not check Supabase credentials: %s", exc)
                 has = False
             if has:
-                rc = run_delegated(args, skip_unit=self_unit)
+                rc = run_delegated(args, skip_unit=self_unit)  # skip_unit is None in delegated-only
+            elif not args.self_baseline:
+                logger.warning("delegated-only set but no active credentials — nothing was synced")
     elif mode == "delegated":
         logger.info("daily_sync starting (mode=delegated)")
         rc = run_delegated(args)
