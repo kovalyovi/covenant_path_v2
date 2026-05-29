@@ -116,6 +116,21 @@ def _one(table: str, params: dict) -> dict | None:
     return rows[0] if rows else None
 
 
+def _count_where(table: str, params: dict) -> int | None:
+    """count=exact with a filter (e.g. members for one stake_id). Like _count but scoped."""
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/{table}",
+                         headers={**_sb_headers(), "Prefer": "count=exact", "Range": "0-0"},
+                         params=params, timeout=_TIMEOUT)
+    except requests.RequestException:
+        return None
+    cr = r.headers.get("Content-Range", "")  # e.g. "0-0/112"
+    if "/" in cr:
+        total = cr.rsplit("/", 1)[-1]
+        return None if total in ("*", "") else int(total)
+    return None
+
+
 def recent_diagnostics(limit: int = 12) -> list[dict]:
     """Recent sync/probe diagnostics rows (latest first)."""
     try:
@@ -215,6 +230,10 @@ def revoke_credential(stake_id: str, email: str) -> dict:
         return {"status": "already_revoked"}
     if (cred.get("principal_name") or "").lower() != email.lower():
         raise NotAdmin("only the credential provider can revoke")
+    return _patch_revoke(stake_id, headers)
+
+
+def _patch_revoke(stake_id: str, headers: dict) -> dict:
     from datetime import datetime, timezone
     r = requests.patch(
         f"{SUPABASE_URL}/rest/v1/stake_credentials",
@@ -225,6 +244,48 @@ def revoke_credential(stake_id: str, email: str) -> dict:
     if r.status_code >= 300:
         raise AdminError(f"revoke failed ({r.status_code}): {r.text[:160]}")
     return {"status": "revoked"}
+
+
+def enrolled_stakes() -> list[dict]:
+    """Every stake + its credential state + member count + freshness — the admin cross-stake
+    ops view. Includes stakes with no credential (so admins see who still needs to enroll)."""
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/stakes",
+        headers=_sb_headers(),
+        params={"select": "id,name,unit_number,last_synced_at,sync_state,onboarded_at,"
+                          "stake_credentials(principal_name,revoked,coverage,access_rank,updated_at)",
+                "order": "name.asc"},
+        timeout=_TIMEOUT)
+    if r.status_code != 200:
+        raise AdminError(f"could not list stakes ({r.status_code}): {r.text[:160]}")
+    out = []
+    for s in r.json():
+        creds = s.get("stake_credentials") or []
+        cred = creds[0] if creds else None
+        cov = (cred or {}).get("coverage") or {}
+        out.append({
+            "stake_id": s["id"],
+            "name": s.get("name"),
+            "unit_number": s.get("unit_number"),
+            "last_synced_at": s.get("last_synced_at"),
+            "sync_state": s.get("sync_state"),
+            "onboarded_at": s.get("onboarded_at"),
+            "member_count": _count_where("members", {"stake_id": f"eq.{s['id']}"}) or 0,
+            "credential": None if not cred else {
+                "state": "revoked" if cred.get("revoked") else "active",
+                "principal_name": cred.get("principal_name"),
+                "complete": bool(cov.get("complete")),
+                "missing": cov.get("missing") or [],
+                "access_rank": cred.get("access_rank"),
+                "updated_at": cred.get("updated_at"),
+            },
+        })
+    return out
+
+
+def admin_revoke_stake(stake_id: str) -> dict:
+    """Admin override: revoke any stake's credential (no provider check). For ops support."""
+    return _patch_revoke(stake_id, _sb_headers())
 
 
 def summary() -> dict:

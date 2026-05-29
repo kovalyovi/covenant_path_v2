@@ -31,6 +31,7 @@ class _AdminPageState extends State<AdminPage> {
   late Future<Map<String, dynamic>> _summaryF;
   late Future<Map<String, dynamic>> _diagF;
   late Future<Map<String, dynamic>> _actionsF;
+  late Future<Map<String, dynamic>> _stakesF;
   late Future<List<Map<String, dynamic>>> _adminsF;
 
   @override
@@ -44,6 +45,7 @@ class _AdminPageState extends State<AdminPage> {
     _summaryF = c.summary();
     _diagF = c.diagnostics();
     _actionsF = c.actions();
+    _stakesF = c.enrolledStakes();
     _adminsF = supabase
         .from('app_admins')
         .select('email, invited_by_email')
@@ -56,8 +58,30 @@ class _AdminPageState extends State<AdminPage> {
       _summaryF.catchError((_) => <String, dynamic>{}),
       _diagF.catchError((_) => <String, dynamic>{}),
       _actionsF.catchError((_) => <String, dynamic>{}),
+      _stakesF.catchError((_) => <String, dynamic>{}),
       _adminsF.catchError((_) => <Map<String, dynamic>>[]),
     ]);
+  }
+
+  Future<void> _revokeStake(String stakeId, String name) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('Revoke sync for $name?'),
+        content: const Text('Daily sync for this stake will stop until a leader re-enrolls. '
+            'You can do this to support a stake whose credential is stale or compromised.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Revoke')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await _guard(() async {
+      await _client.revokeStake(stakeId);
+      _snack('Revoked sync for $name.');
+      await _refresh();
+    });
   }
 
   void _snack(String msg) {
@@ -171,6 +195,11 @@ class _AdminPageState extends State<AdminPage> {
                 }),
                 _section<Map<String, dynamic>>(_diagF, 'Diagnostics', (s) =>
                     _DiagnosticsCard(d: _AdminData(const {}, const {}, s, const []))),
+                // Enrolled stakes: cross-stake ops view (who's onboarded, coverage, freshness).
+                _section<Map<String, dynamic>>(_stakesF, 'Enrolled stakes', (s) =>
+                    _EnrolledStakesCard(
+                        stakes: ((s['stakes'] as List?) ?? const []).cast<Map<String, dynamic>>(),
+                        onRevoke: _busy ? null : _revokeStake)),
                 // GitHub Actions: its own card so a token/repo error only affects this section.
                 _section<Map<String, dynamic>>(_actionsF, 'GitHub Actions', (a) {
                   final d = _AdminData({'github_configured': a['configured'] == true}, a, const {}, const []);
@@ -499,6 +528,95 @@ class _DiagnosticsCard extends StatelessWidget {
       ]),
     );
   }
+}
+
+/// Cross-stake ops view: every stake's enrollment, coverage, freshness + member count, with an
+/// admin revoke for support. "Sync now" reuses the shared daily-sync dispatch (runs all stakes).
+class _EnrolledStakesCard extends StatelessWidget {
+  const _EnrolledStakesCard({required this.stakes, required this.onRevoke});
+  final List<Map<String, dynamic>> stakes;
+  final void Function(String stakeId, String name)? onRevoke;
+
+  @override
+  Widget build(BuildContext context) {
+    if (stakes.isEmpty) {
+      return const _Card(title: 'Enrolled stakes', child: Text('No stakes yet.'));
+    }
+    return _Card(
+      title: 'Enrolled stakes (${stakes.length})',
+      child: Column(children: [
+        for (final s in stakes) _stakeTile(context, s),
+      ]),
+    );
+  }
+
+  Widget _stakeTile(BuildContext context, Map<String, dynamic> s) {
+    final cred = (s['credential'] as Map?)?.cast<String, dynamic>();
+    final name = '${s['name'] ?? '—'}';
+    final stakeId = '${s['stake_id']}';
+    final members = s['member_count'] ?? 0;
+    final running = s['sync_state'] == 'running';
+
+    final String credLabel;
+    final Color credColor;
+    if (cred == null) {
+      credLabel = 'No credential';
+      credColor = Colors.grey.shade600;
+    } else if (cred['state'] == 'revoked') {
+      credLabel = 'Revoked';
+      credColor = Colors.orange.shade700;
+    } else if (cred['complete'] == true) {
+      credLabel = 'Active · full coverage';
+      credColor = Colors.green.shade600;
+    } else {
+      credLabel = 'Active · partial';
+      credColor = Colors.blue.shade600;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: Text(name, style: const TextStyle(fontWeight: FontWeight.w600))),
+          if (running)
+            const Padding(
+              padding: EdgeInsets.only(right: 8),
+              child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+            ),
+          if (cred != null && cred['state'] == 'active' && onRevoke != null)
+            IconButton(
+              tooltip: 'Revoke sync (support)',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.link_off, size: 18),
+              onPressed: () => onRevoke!(stakeId, name),
+            ),
+        ]),
+        Wrap(spacing: 8, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          _tag(credLabel, credColor),
+          Text('$members members', style: Theme.of(context).textTheme.bodySmall),
+          Text('· synced ${_ago(s['last_synced_at'])}', style: Theme.of(context).textTheme.bodySmall),
+          if (cred?['principal_name'] != null)
+            Text('· by ${cred!['principal_name']}', style: Theme.of(context).textTheme.bodySmall),
+        ]),
+        if (cred != null && cred['complete'] != true && (cred['missing'] as List?)?.isNotEmpty == true)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text('Missing: ${(cred['missing'] as List).join(', ')}',
+                style: TextStyle(fontSize: 12, color: Colors.orange.shade800)),
+          ),
+        const Divider(height: 14),
+      ]),
+    );
+  }
+
+  Widget _tag(String text, Color c) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(
+            color: c.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: c)),
+        child: Text(text, style: TextStyle(color: c, fontSize: 12)),
+      );
 }
 
 class _ParityRow extends StatelessWidget {
