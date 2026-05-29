@@ -58,7 +58,28 @@ is only ever held server-side on the broker — never shipped to the app.
 ## 2. Viewer → Cloudflare Pages
 
 Config is baked at build time via `--dart-define` (the anon key is safe on clients; RLS
-gates data). Build locally, then upload.
+gates data).
+
+### Auto-deploy (default — GitHub Actions)
+
+`.github/workflows/deploy-web.yml` builds the Flutter web app and deploys it to Cloudflare
+Pages on **every push to `main` that touches `apps/viewer/**`** (and on manual
+`workflow_dispatch`). Backend-only commits skip the build via the `paths` filter.
+
+Why GitHub Actions and not Cloudflare's native git integration: Cloudflare's build image
+has no Flutter SDK, so the native integration would need a brittle per-build SDK-download
+script. The Actions runner uses `subosito/flutter-action` (SDK cached) — the standard,
+reliable path. The Pages project stays in **direct-upload** mode; do **not** also connect
+git in the Cloudflare dashboard or you'll get competing deploys.
+
+Required GitHub secrets (Settings → Secrets and variables → Actions):
+`CLOUDFLARE_API_TOKEN` (Edit Cloudflare Pages template), `CLOUDFLARE_ACCOUNT_ID`,
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `BROKER_URL`. The `projectName` in the workflow must
+match the Pages project (`covenant-path-app`).
+
+Force a deploy: GitHub → Actions → "Deploy web app to Cloudflare Pages" → Run workflow.
+
+### Manual deploy (fallback)
 
 ```powershell
 cd D:/dev/covenant_path_v2/apps/viewer
@@ -67,11 +88,9 @@ D:/dev/flutter/bin/flutter build web --release `
   --dart-define=SUPABASE_ANON_KEY=sb_publishable_hiAGDv7bMCm5C5O_RbGP5A_8tskAiBF `
   --dart-define=BROKER_URL=https://covenant-path-broker.onrender.com
 ```
-Output: `apps/viewer/build/web`.
-
-Deploy (either):
-- **Dashboard:** Cloudflare → Workers & Pages → Create → Pages → *Upload assets* → name
-  `covenant-path-app` → drag the `build/web` folder → Deploy.
+Output: `apps/viewer/build/web`. Then either:
+- **Dashboard:** Cloudflare → Workers & Pages → `covenant-path-app` → *Upload assets* →
+  drag the `build/web` folder → Deploy.
 - **CLI:** `npx wrangler pages deploy build/web --project-name covenant-path-app --branch main`
   (create the project once in the dashboard first — wrangler's auto-create can fail with
   Cloudflare API `code: 8000000`).
