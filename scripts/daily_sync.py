@@ -105,19 +105,22 @@ def _sync_one(args) -> dict:
     return result
 
 
-def run_self(args) -> int:
+def run_self(args) -> int | None:
+    """Sync the LCR_LOGIN account's own stake. Returns that stake's unit number (so the
+    delegated pass can skip it and avoid a double sync)."""
     from lcr_client import okta_login
     logger.info("daily_sync mode=self: minting session via okta_login")
     okta_login.login()
     res = _sync_one(args)
     print(f"[+] self sync: {res['members']} members "
           f"(sheets={'ok' if res['sheets'] else 'off'}, supabase={'ok' if res['supabase'] else 'off'})")
-    return 0
+    return (res.get("supabase") or {}).get("stake_unit")
 
 
-def run_delegated(args) -> int:
+def run_delegated(args, skip_unit: int | None = None) -> int:
     """Multi-stake: pull each onboarded stake's encrypted session from Supabase,
-    re-mint its LCR session, and sync. One bad stake doesn't stop the others."""
+    re-mint its LCR session, and sync. One bad stake doesn't stop the others.
+    [skip_unit] is already handled by the self pass (avoids syncing it twice)."""
     from backend import credentials, db
     from lcr_client import okta_login
 
@@ -133,6 +136,9 @@ def run_delegated(args) -> int:
 
     failures = 0
     for st in stakes:
+        if skip_unit is not None and st.get("unit_number") == skip_unit:
+            logger.info("delegated: skipping %s (already synced by self baseline)", st.get("name"))
+            continue
         try:
             conn = db.connect()
             cred = credentials.get_credential(conn, st["stake_id"])
@@ -199,19 +205,33 @@ def main() -> int:
 
     mode = args.mode
     if mode == "auto":
-        mode = "self"
+        # Decision B: always run the self baseline (operator's stake + shared self-healing such
+        # as the calling cache / action-id repair), AND run delegated for any enrolled stakes.
+        logger.info("daily_sync starting (mode=auto: self baseline + delegated)")
+        self_unit = None
+        try:
+            self_unit = run_self(args)
+        except Exception as exc:  # noqa: BLE001 — a self failure must not stop delegated stakes
+            logger.error("self baseline sync failed: %s", exc)
+        rc = 0
         if os.getenv("SUPABASE_DB_URL"):
             try:
                 from backend import credentials, db
                 conn = db.connect()
                 has = bool(credentials.list_active_stakes(conn))
                 conn.close()
-                mode = "delegated" if has else "self"
             except Exception as exc:  # noqa: BLE001
-                logger.warning("could not check Supabase credentials, defaulting to self: %s", exc)
-    logger.info("daily_sync starting (mode=%s, sheets=%s, supabase=%s)",
-                mode, args.sheets, args.supabase)
-    rc = run_delegated(args) if mode == "delegated" else run_self(args)
+                logger.warning("could not check Supabase credentials: %s", exc)
+                has = False
+            if has:
+                rc = run_delegated(args, skip_unit=self_unit)
+    elif mode == "delegated":
+        logger.info("daily_sync starting (mode=delegated)")
+        rc = run_delegated(args)
+    else:
+        logger.info("daily_sync starting (mode=self)")
+        run_self(args)
+        rc = 0
 
     if args.email and os.getenv("SUPABASE_DB_URL"):
         from backend import db, mailer
