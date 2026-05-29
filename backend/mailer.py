@@ -18,7 +18,11 @@ from __future__ import annotations
 import os
 import re
 import smtplib
+from datetime import datetime
 from email.mime.text import MIMEText
+
+import psycopg2.extras
+import requests
 
 from lcr_client.logging_setup import get_logger
 
@@ -26,11 +30,35 @@ logger = get_logger()
 DEFAULT_DAILY_CAP = 90
 
 
+def _default_from() -> str:
+    return (os.environ.get("SMTP_FROM") or os.environ.get("RESEND_FROM")
+            or os.environ.get("MAIL_FROM") or "Covenant Path <noreply@membercovenantpath.org>")
+
+
 def _smtp_config():
     return (os.environ.get("SMTP_HOST"), int(os.environ.get("SMTP_PORT", "587")),
-            os.environ.get("SMTP_USER"), os.environ.get("SMTP_PASS"),
-            os.environ.get("SMTP_FROM") or os.environ.get("RESEND_FROM")
-            or "Covenant Path <noreply@example.com>")
+            os.environ.get("SMTP_USER"), os.environ.get("SMTP_PASS"), _default_from())
+
+
+def _send_resend(to: str, subject: str, html: str, sender: str) -> bool | None:
+    """Send via Resend's HTTP API when RESEND_API_KEY is set (the key the broker already uses).
+    Returns True/False on attempt, or None if Resend isn't configured (caller tries SMTP)."""
+    key = os.environ.get("RESEND_API_KEY")
+    if not key:
+        return None
+    try:
+        r = requests.post("https://api.resend.com/emails",
+                          headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                          json={"from": sender, "to": [to], "subject": subject, "html": html},
+                          timeout=30)
+        if r.status_code < 300:
+            logger.info("email(resend) -> %s ok", to)
+            return True
+        logger.error("email(resend) -> %s failed %s: %s", to, r.status_code, r.text[:160])
+        return False
+    except Exception as exc:  # noqa: BLE001
+        logger.error("email(resend) -> %s error: %s", to, exc)
+        return False
 
 
 def _addr(from_header: str) -> str:
@@ -55,10 +83,15 @@ def stake_from(conn, stake_id: str) -> str | None:
 
 def send_email(to: str, subject: str, html: str, from_email: str | None = None) -> bool:
     host, port, user, password, default_from = _smtp_config()
-    if not (host and user and password):
-        logger.warning("SMTP not configured; skipping email to %s (set SMTP_* in env)", to)
-        return False
     sender = from_email or default_from
+    # Prefer Resend's HTTP API (one key, no SMTP setup); fall back to SMTP if not configured.
+    resend = _send_resend(to, subject, html, sender)
+    if resend is not None:
+        return resend
+    if not (host and user and password):
+        logger.warning("no email transport configured; skipping email to %s "
+                       "(set RESEND_API_KEY or SMTP_*)", to)
+        return False
     msg = MIMEText(html, "html", "utf-8")
     msg["Subject"] = subject
     msg["From"] = sender
@@ -152,4 +185,125 @@ def send_digests(conn, cap: int = DEFAULT_DAILY_CAP) -> int:
                       _digest_html(scope, total, by), stake_from(conn, stake_id)):
             sent += 1
     logger.info("sent %d/%d digests", sent, len(leaders))
+    return sent
+
+
+# --- weekly "what's missing" reminders (eligibility-aware, with week-over-week diff) --------
+
+def _year(v) -> int | None:
+    m = re.search(r"(\d{4})", str(v or ""))
+    return int(m.group(1)) if m else None
+
+
+def _turns_at_least(m: dict, age: int) -> bool:
+    """Turns at least [age] by the end of this calendar year (the Church's by-year rule)."""
+    y = _year(m.get("birth_date"))
+    return y is not None and (datetime.now().year - y) >= age
+
+
+def _member_one_year(m: dict) -> bool:
+    y = _year(m.get("baptism_date"))
+    return y is not None and (datetime.now().year - y) >= 1
+
+
+# (label, is-complete, is-eligible) — mirrors the app's golden_hour milestones + eligibility.
+_MILESTONES = [
+    ("a friend in the ward", lambda m: m.get("friends") == "Yes", lambda m: True),
+    ("a calling", lambda m: m.get("calling") == "Yes", lambda m: _turns_at_least(m, 12)),
+    ("ministers assigned to them", lambda m: m.get("ministering_brothers_sisters") == "Yes", lambda m: True),
+    ("a ministering assignment", lambda m: m.get("ministering_assignment") == "Yes", lambda m: _turns_at_least(m, 12)),
+    ("the Aaronic Priesthood", lambda m: m.get("aaronic_priesthood") == "Yes",
+     lambda m: m.get("sex") == "M" and _turns_at_least(m, 12)),
+    ("the Melchizedek Priesthood", lambda m: m.get("melchizedek_priesthood") == "Yes",
+     lambda m: m.get("sex") == "M" and _turns_at_least(m, 18) and _member_one_year(m)),
+]
+
+
+def _member_missing(m: dict) -> list[str]:
+    return [label for label, complete, elig in _MILESTONES if elig(m) and not complete(m)]
+
+
+def _snapshot_and_diff(conn) -> dict:
+    """Per stake: compute each baptized member's missing-eligible steps, diff against last week's
+    snapshot (so we can congratulate newly-finished steps), then save this week's snapshot.
+    Returns {stake_id: {uuid: {name, unit_id, missing[], completed_since[]}}}."""
+    out: dict = {}
+    with conn.cursor() as cur:
+        cur.execute("select id from stakes")
+        stake_ids = [r[0] for r in cur.fetchall()]
+    for sid in stake_ids:
+        with conn.cursor() as cur:
+            cur.execute(
+                """select person_uuid, name, unit_id, sex, birth_date, baptism_date, friends,
+                          calling, ministering_brothers_sisters, ministering_assignment,
+                          aaronic_priesthood, melchizedek_priesthood
+                   from members where stake_id=%s and coalesce(kind,'new_member') <> 'investigator'""",
+                (sid,))
+            cols = [d[0] for d in cur.description]
+            members = [dict(zip(cols, r)) for r in cur.fetchall()]
+            cur.execute("""select snapshot from reminder_snapshots where stake_id=%s
+                           order by created_at desc limit 1""", (sid,))
+            row = cur.fetchone()
+            prev = (row[0] if row else {}) or {}
+        cur_map, snap = {}, {}
+        for m in members:
+            uuid = m.get("person_uuid")
+            if not uuid:
+                continue
+            missing = _member_missing(m)
+            snap[uuid] = missing
+            completed_since = sorted(set(prev.get(uuid, [])) - set(missing))
+            cur_map[uuid] = {
+                "name": m.get("name"),
+                "unit_id": str(m["unit_id"]) if m.get("unit_id") else None,
+                "missing": missing,
+                "completed_since": completed_since,
+            }
+        with conn.cursor() as cur:
+            cur.execute("insert into reminder_snapshots (stake_id, snapshot) values (%s,%s)",
+                        (sid, psycopg2.extras.Json(snap)))
+        conn.commit()
+        out[sid] = cur_map
+    return out
+
+
+def _reminder_html(outstanding: list[dict], completed: int) -> str:
+    congrats = (f"<p>🎉 <b>{completed} step{'s' if completed != 1 else ''} completed</b> since last "
+                f"week — nice work!</p>") if completed else ""
+    if not outstanding:
+        return (f"<h2>Covenant Path — weekly update</h2>{congrats}"
+                f"<p>Everyone in your scope is on track. Nothing needs attention this week.</p>"
+                f"<p><a href=\"{_app_url()}\">Open the dashboard</a></p>")
+    items = "".join(
+        f"<li><b>{o['name']}</b> still needs: {', '.join(o['missing'])}</li>" for o in outstanding)
+    return (f"<h2>Covenant Path — this week's next steps</h2>{congrats}"
+            f"<p>{len(outstanding)} new member{'s' if len(outstanding) != 1 else ''} have outstanding "
+            f"integration steps:</p><ul>{items}</ul>"
+            f"<p><a href=\"{_app_url()}\">Open the dashboard</a> to see details.</p>")
+
+
+def send_weekly_reminders(conn, cap: int = DEFAULT_DAILY_CAP) -> int:
+    """One weekly digest per leader (RLS scope) of converts with outstanding *eligible* steps,
+    plus congratulations for steps finished since last week. Suppressed when there's nothing to
+    nudge and nothing to celebrate. History lives in reminder_snapshots."""
+    diffs = _snapshot_and_diff(conn)
+    with conn.cursor() as cur:
+        cur.execute("""select lower(email) as email, bool_or(unit_id is null) as stake_wide,
+                              array_remove(array_agg(distinct unit_id), null) as units,
+                              max(stake_id::text) as stake_id
+                       from user_roles where email is not null group by lower(email) limit %s""", (cap,))
+        leaders = cur.fetchall()
+    sent = 0
+    for email, stake_wide, units, stake_id in leaders:
+        data = diffs.get(stake_id, {})
+        unit_strs = {str(u) for u in (units or [])}
+        scoped = [v for v in data.values() if stake_wide or v["unit_id"] in unit_strs]
+        outstanding = sorted([v for v in scoped if v["missing"]], key=lambda v: v["name"] or "")
+        completed = sum(len(v["completed_since"]) for v in scoped)
+        if not outstanding and completed == 0:
+            continue  # nothing to nudge, nothing to celebrate -> don't send
+        if send_email(email, "Covenant Path — this week's next steps",
+                      _reminder_html(outstanding, completed), stake_from(conn, stake_id)):
+            sent += 1
+    logger.info("sent %d/%d weekly reminders", sent, len(leaders))
     return sent
