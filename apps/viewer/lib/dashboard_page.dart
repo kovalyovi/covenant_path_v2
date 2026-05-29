@@ -323,7 +323,7 @@ class _Body extends StatelessWidget {
           0 => _OnDateView(rows: rows, tier: tier, onOpen: onOpen),
           1 => _GoldenHourView(rows: rows, tier: tier, onOpen: onOpen),
           2 => _NeedsView(rows: rows, tier: tier, onOpen: onOpen),
-          3 => _KpiView(rows: rows, tier: tier),
+          3 => _KpiView(rows: rows, tier: tier, onOpen: onOpen),
           _ => _SpreadsheetView(rows: rows, onOpen: onOpen),
         };
         return RefreshIndicator(onRefresh: onRefresh, child: view);
@@ -680,9 +680,10 @@ enum _Period { week, month, year }
 /// Each chart overlays the most recent window against the immediately-preceding window in a
 /// contrasting color, so you can see the change. Calendar week / month / year toggle.
 class _KpiView extends StatefulWidget {
-  const _KpiView({required this.rows, required this.tier});
+  const _KpiView({required this.rows, required this.tier, required this.onOpen});
   final List<Map<String, dynamic>> rows;
   final ScreenTier tier;
+  final void Function(Map<String, dynamic>) onOpen;
   @override
   State<_KpiView> createState() => _KpiViewState();
 }
@@ -690,6 +691,7 @@ class _KpiView extends StatefulWidget {
 class _KpiViewState extends State<_KpiView> {
   _Period _period = _Period.week;
   String? _unit; // null = whole stake; else drill into one unit
+  bool _compare = false; // overlay the previous equal period
 
   (String, String) get _compareLabels => switch (_period) {
         _Period.week => ('2 weeks ago', 'Last week'),
@@ -705,44 +707,65 @@ class _KpiViewState extends State<_KpiView> {
         ? widget.rows
         : widget.rows.where((m) => m['unit_name'] == _unit).toList();
     final baptized = rows.where((m) => m['kind'] != 'investigator').toList();
-    final investigators = rows.where((m) => m['kind'] == 'investigator');
+    final investigators = rows.where((m) => m['kind'] == 'investigator').toList();
+    final allUnits = rows.map((m) => '${m['unit_name'] ?? '—'}').toSet();
+    final onOpen = widget.onOpen;
     // unique people per period (a member attending several Sundays in a month counts once)
-    final newAtSac = _uniqueSeries(baptized, datesOf: _attendedDates, period: _period);
-    final friendsAtSac = _uniqueSeries(investigators, datesOf: _attendedDates, period: _period);
-    final newFriends = _uniqueSeries(investigators, datesOf: _firstLessonDate, period: _period);
+    final friendsAtSac = _metricData(investigators, datesOf: _attendedDates, period: _period);
+    final newAtSac = _metricData(baptized, datesOf: _attendedDates, period: _period);
+    final newFriends = _metricData(investigators, datesOf: _firstLessonDate, period: _period);
     final lessonsWithMember = _lessonsWithMember(rows);
     final completion = _avgCompletion(baptized);
+    // overview drills: list the people behind a number (one entry each, dated for the chrono view)
+    List<_Ev> evs(Iterable<Map<String, dynamic>> ms, String dateField) =>
+        [for (final m in ms) _Ev(m, parseMemberDate(m[dateField]) ?? DateTime.now(), 0)];
 
     final cards = <Widget>[
       _MetricChartCard(
         title: 'Investigators at Sacrament',
         icon: Icons.groups,
         color: Colors.orange.shade700,
-        series: friendsAtSac,
+        series: friendsAtSac.series,
+        events: friendsAtSac.events,
+        allUnits: allUnits,
+        onOpen: onOpen,
         compare: _compareLabels,
-        suffix: 'unique people being taught who attended sacrament',
+        showCompare: _compare,
+        suffix: 'people being taught who attended sacrament',
       ),
       _MetricChartCard(
         title: 'New Members at Sacrament',
         icon: Icons.favorite,
         color: const Color(0xFFB5532A),
-        series: newAtSac,
+        series: newAtSac.series,
+        events: newAtSac.events,
+        allUnits: allUnits,
+        onOpen: onOpen,
         compare: _compareLabels,
-        suffix: 'unique baptized members who attended sacrament',
+        showCompare: _compare,
+        suffix: 'baptized members who attended sacrament',
       ),
       _MetricChartCard(
         title: 'New Friends Being Taught',
         icon: Icons.local_library,
         color: Colors.teal.shade600,
-        series: newFriends,
+        series: newFriends.series,
+        events: newFriends.events,
+        allUnits: allUnits,
+        onOpen: onOpen,
         compare: _compareLabels,
+        showCompare: _compare,
         suffix: 'people who started lessons in the period',
       ),
       _StatGridCard(items: [
-        ('Being taught now', '${investigators.length}'),
-        ('Lessons w/ member present', '$lessonsWithMember'),
-        ('New members tracked', '${baptized.length}'),
-        ('Golden Hour', '${(completion * 100).round()}%'),
+        ('Being taught now', '${investigators.length}', () => _showDrill(context,
+            title: 'Being taught now', events: evs(investigators, 'baptism_goal_date'),
+            allUnits: allUnits, onOpen: onOpen)),
+        ('Lessons w/ member present', '$lessonsWithMember', null),
+        ('New members tracked', '${baptized.length}', () => _showDrill(context,
+            title: 'New members tracked', events: evs(baptized, 'baptism_date'),
+            allUnits: allUnits, onOpen: onOpen)),
+        ('Golden Hour', '${(completion * 100).round()}%', null),
       ]),
     ];
 
@@ -776,6 +799,16 @@ class _KpiViewState extends State<_KpiView> {
             onSelectionChanged: (s) => setState(() => _period = s.first),
           ),
         ),
+        const SizedBox(height: 8),
+        Center(
+          child: FilterChip(
+            avatar: Icon(Icons.compare_arrows,
+                size: 18, color: _compare ? Theme.of(context).colorScheme.primary : null),
+            label: const Text('Compare to previous'),
+            selected: _compare,
+            onSelected: (v) => setState(() => _compare = v),
+          ),
+        ),
       ]),
       child: _Columns(cols: _cols(widget.tier).clamp(1, 2), children: cards),
     );
@@ -784,13 +817,18 @@ class _KpiViewState extends State<_KpiView> {
 
 class _MetricChartCard extends StatelessWidget {
   const _MetricChartCard({required this.title, required this.icon, required this.color,
-      required this.series, required this.compare, required this.suffix});
+      required this.series, required this.compare, required this.suffix,
+      required this.events, required this.allUnits, required this.onOpen, this.showCompare = false});
   final String title;
   final IconData icon;
   final Color color;
   final _Series series;
   final (String, String) compare; // (prior label, latest label)
   final String suffix;
+  final List<_Ev> events;
+  final Set<String> allUnits;
+  final void Function(Map<String, dynamic>) onOpen;
+  final bool showCompare;
 
   @override
   Widget build(BuildContext context) {
@@ -817,10 +855,35 @@ class _MetricChartCard extends StatelessWidget {
           ),
           const SizedBox(height: 16),
         ],
-        SizedBox(height: 170, child: _Line(values: values, labels: series.labels, color: color)),
-        const SizedBox(height: 6),
-        Text(suffix,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey.shade600)),
+        SizedBox(
+          height: 170,
+          child: _Line(
+            values: values,
+            labels: series.labels,
+            color: color,
+            prev: showCompare ? series.prev : const [],
+            onBucketTap: (i) => _showDrill(context,
+                title: title,
+                events: events.where((e) => e.bucket == i).toList(),
+                allUnits: allUnits,
+                onOpen: onOpen,
+                bucketLabel: i < series.labels.length ? series.labels[i] : null),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Row(children: [
+          Expanded(
+            child: Text(suffix,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey.shade600)),
+          ),
+          TextButton.icon(
+            onPressed: () => _showDrill(context,
+                title: title, events: events, allUnits: allUnits, onOpen: onOpen),
+            icon: const Icon(Icons.groups, size: 16),
+            label: const Text('By unit'),
+            style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+          ),
+        ]),
       ]),
     );
   }
@@ -840,17 +903,21 @@ class _MetricChartCard extends StatelessWidget {
 /// iOS-style trend line: smooth curve, gradient fill, open dots, and a value label above
 /// every point (always-on tooltips). Sparse gray x-axis labels.
 class _Line extends StatelessWidget {
-  const _Line({required this.values, required this.labels, required this.color});
+  const _Line(
+      {required this.values, required this.labels, required this.color,
+      this.prev = const [], this.onBucketTap});
   final List<double> values;
   final List<String> labels;
   final Color color;
+  final List<double> prev; // previous-period overlay (drawn faded/dashed when non-empty)
+  final void Function(int bucketIndex)? onBucketTap;
 
   @override
   Widget build(BuildContext context) {
     if (values.isEmpty) {
       return Center(child: Text('No data yet', style: TextStyle(color: Colors.grey.shade500)));
     }
-    final peak = values.reduce((a, b) => a > b ? a : b);
+    final peak = [...values, ...prev].reduce((a, b) => a > b ? a : b);
     final maxY = peak * 1.35 + 1; // headroom so the value labels above points aren't clipped
     final spots = [for (var i = 0; i < values.length; i++) FlSpot(i.toDouble(), values[i])];
     final bar = LineChartBarData(
@@ -874,6 +941,18 @@ class _Line extends StatelessWidget {
         ),
       ),
     );
+    final prevBar = prev.isEmpty
+        ? null
+        : LineChartBarData(
+            spots: [for (var i = 0; i < prev.length; i++) FlSpot(i.toDouble(), prev[i])],
+            isCurved: true,
+            curveSmoothness: 0.3,
+            color: Colors.grey.shade400,
+            barWidth: 2,
+            dashArray: const [5, 4],
+            dotData: const FlDotData(show: false),
+            belowBarData: BarAreaData(show: false),
+          );
     final step = (values.length / 3).ceil().clamp(1, 999);
     return LineChart(LineChartData(
       minY: 0,
@@ -881,22 +960,33 @@ class _Line extends StatelessWidget {
       gridData: const FlGridData(show: false),
       borderData: FlBorderData(show: false),
       lineTouchData: LineTouchData(
-        enabled: false,
+        enabled: onBucketTap != null,
+        handleBuiltInTouches: false, // don't draw a built-in tooltip (keeps the always-on labels)
+        touchCallback: (event, resp) {
+          if (onBucketTap != null &&
+              event is FlTapUpEvent &&
+              (resp?.lineBarSpots?.isNotEmpty ?? false)) {
+            onBucketTap!(resp!.lineBarSpots!.first.x.toInt());
+          }
+        },
         touchTooltipData: LineTouchTooltipData(
           getTooltipColor: (_) => Colors.transparent,
           tooltipPadding: EdgeInsets.zero,
           tooltipMargin: 4,
           getTooltipItems: (touched) => [
             for (final t in touched)
-              LineTooltipItem(
-                t.y == t.y.roundToDouble() ? '${t.y.round()}' : t.y.toStringAsFixed(0),
-                TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 11),
-              ),
+              t.barIndex == 0 && prevBar != null
+                  ? null
+                  : LineTooltipItem(
+                      t.y == t.y.roundToDouble() ? '${t.y.round()}' : t.y.toStringAsFixed(0),
+                      TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 11),
+                    ),
           ],
         ),
       ),
       showingTooltipIndicators: [
-        for (var i = 0; i < spots.length; i++) ShowingTooltipIndicators([LineBarSpot(bar, 0, spots[i])]),
+        for (var i = 0; i < spots.length; i++)
+          ShowingTooltipIndicators([LineBarSpot(bar, prevBar != null ? 1 : 0, spots[i])]),
       ],
       titlesData: FlTitlesData(
         leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
@@ -919,8 +1009,148 @@ class _Line extends StatelessWidget {
           ),
         ),
       ),
-      lineBarsData: [bar],
+      lineBarsData: [if (prevBar != null) prevBar, bar],
     ));
+  }
+}
+
+/// Opens the people behind a metric: distribution **by unit** (every unit in scope, including
+/// those with 0) expandable to names, or **chronologically** by their date (with unit shown).
+void _showDrill(BuildContext context,
+    {required String title,
+    required List<_Ev> events,
+    required Set<String> allUnits,
+    required void Function(Map<String, dynamic>) onOpen,
+    String? bucketLabel}) {
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    constraints: const BoxConstraints(maxWidth: 640),
+    builder: (_) => _DrillSheet(
+        title: title, events: events, allUnits: allUnits, onOpen: onOpen, bucketLabel: bucketLabel),
+  );
+}
+
+class _DrillSheet extends StatefulWidget {
+  const _DrillSheet(
+      {required this.title,
+      required this.events,
+      required this.allUnits,
+      required this.onOpen,
+      this.bucketLabel});
+  final String title;
+  final List<_Ev> events;
+  final Set<String> allUnits;
+  final void Function(Map<String, dynamic>) onOpen;
+  final String? bucketLabel;
+  @override
+  State<_DrillSheet> createState() => _DrillSheetState();
+}
+
+class _DrillSheetState extends State<_DrillSheet> {
+  bool _byUnit = true;
+  String _unit(Map<String, dynamic> m) => (m['unit_name'] ?? '—').toString();
+  String _id(Map<String, dynamic> m) => (m['person_uuid'] ?? m['name'] ?? '').toString();
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.7,
+      minChildSize: 0.4,
+      maxChildSize: 0.95,
+      builder: (context, scroll) => ListView(
+        controller: scroll,
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+        children: [
+          Text(widget.title + (widget.bucketLabel != null ? ' · ${widget.bucketLabel}' : ''),
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 10),
+          Center(
+            child: SegmentedButton<bool>(
+              showSelectedIcon: false,
+              segments: const [
+                ButtonSegment(value: true, icon: Icon(Icons.groups, size: 18), label: Text('By unit')),
+                ButtonSegment(value: false, icon: Icon(Icons.schedule, size: 18), label: Text('By date')),
+              ],
+              selected: {_byUnit},
+              onSelectionChanged: (s) => setState(() => _byUnit = s.first),
+            ),
+          ),
+          const SizedBox(height: 12),
+          ...(_byUnit ? _byUnitTiles(context) : _chronoTiles(context)),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _byUnitTiles(BuildContext context) {
+    final byUnit = <String, Map<String, Map<String, dynamic>>>{for (final u in widget.allUnits) u: {}};
+    for (final e in widget.events) {
+      (byUnit[_unit(e.m)] ??= {})[_id(e.m)] = e.m;
+    }
+    final units = byUnit.keys.toList()..sort();
+    return [
+      for (final u in units)
+        Builder(builder: (context) {
+          final members = byUnit[u]!.values.toList()
+            ..sort((a, b) => (a['name'] ?? '').toString().compareTo((b['name'] ?? '').toString()));
+          final card = Card(
+            elevation: 0,
+            margin: const EdgeInsets.symmetric(vertical: 4),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant)),
+            child: members.isEmpty
+                ? ListTile(
+                    dense: true,
+                    title: Text(u, style: TextStyle(color: Colors.grey.shade600)),
+                    trailing: Text('0', style: TextStyle(color: Colors.grey.shade500)))
+                : ExpansionTile(
+                    title: Text(u),
+                    trailing: _CountBadge(members.length),
+                    children: [
+                      for (final m in members)
+                        ListTile(
+                          dense: true,
+                          leading: PhotoAvatar(
+                              name: m['name']?.toString() ?? '?',
+                              photoUrl: m['photo_url']?.toString(),
+                              size: 32),
+                          title: Text(m['name']?.toString() ?? '—'),
+                          onTap: () {
+                            Navigator.pop(context);
+                            widget.onOpen(m);
+                          },
+                        ),
+                    ],
+                  ),
+          );
+          return card;
+        }),
+    ];
+  }
+
+  List<Widget> _chronoTiles(BuildContext context) {
+    final sorted = [...widget.events]..sort((a, b) => b.date.compareTo(a.date));
+    if (sorted.isEmpty) {
+      return [Padding(padding: const EdgeInsets.all(16), child: Text('No one in this view.', style: TextStyle(color: Colors.grey.shade600)))];
+    }
+    return [
+      for (final e in sorted)
+        ListTile(
+          dense: true,
+          leading: PhotoAvatar(
+              name: e.m['name']?.toString() ?? '?', photoUrl: e.m['photo_url']?.toString(), size: 32),
+          title: Text(e.m['name']?.toString() ?? '—'),
+          subtitle: Text('${_unit(e.m)} · ${fmtLong(e.date)}'),
+          onTap: () {
+            Navigator.pop(context);
+            widget.onOpen(e.m);
+          },
+        ),
+    ];
   }
 }
 
@@ -942,17 +1172,30 @@ class _DeltaBadge extends StatelessWidget {
 
 class _StatGridCard extends StatelessWidget {
   const _StatGridCard({required this.items});
-  final List<(String, String)> items;
+  final List<(String, String, VoidCallback?)> items; // (label, value, onTap?)
   @override
   Widget build(BuildContext context) {
     return SectionCard(
       title: 'Overview',
       child: Wrap(spacing: 24, runSpacing: 16, children: [
         for (final it in items)
-          SizedBox(width: 120, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(it.$2, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
-            Text(it.$1, style: Theme.of(context).textTheme.bodySmall),
-          ])),
+          InkWell(
+            onTap: it.$3,
+            borderRadius: BorderRadius.circular(8),
+            child: SizedBox(
+                width: 124,
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    Text(it.$2,
+                        style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
+                    if (it.$3 != null) ...[
+                      const SizedBox(width: 3),
+                      Icon(Icons.chevron_right, size: 18, color: Colors.grey.shade500),
+                    ],
+                  ]),
+                  Text(it.$1, style: Theme.of(context).textTheme.bodySmall),
+                ])),
+          ),
       ]),
     );
   }
@@ -1328,33 +1571,49 @@ const _periodWindow = {_Period.week: 12, _Period.month: 12, _Period.year: 5};
   }
 }
 
-/// Unique-people series: for each member, [datesOf] yields the dates it counts toward; each
-/// bucket counts DISTINCT people (not total events, so a person attending many Sundays in a
-/// month counts once). Sliced into the recent window vs the preceding window.
-_Series _uniqueSeries(Iterable<Map<String, dynamic>> rows,
+/// One matching event for the drill-down: a member counted toward a metric on a date, mapped to
+/// the displayed-window bucket index (the x-position on the chart).
+class _Ev {
+  const _Ev(this.m, this.date, this.bucket);
+  final Map<String, dynamic> m;
+  final DateTime date;
+  final int bucket;
+}
+
+/// Series for the chart (unique people per bucket, recent window vs the preceding one) PLUS the
+/// underlying events so a tap can show *who* (with their unit), by unit or chronologically.
+({_Series series, List<_Ev> events}) _metricData(Iterable<Map<String, dynamic>> rows,
     {required Iterable<DateTime> Function(Map<String, dynamic>) datesOf, required _Period period}) {
   final sets = <int, Set<String>>{};
   final labels = <int, String>{};
+  final raw = <(Map<String, dynamic>, DateTime, int)>[]; // (member, date, bucketKey)
   for (final m in rows) {
     final id = (m['person_uuid'] ?? m['name'] ?? identityHashCode(m)).toString();
     for (final dt in datesOf(m)) {
       final (key, label) = _bucketOf(dt, period);
       labels[key] = label;
       (sets[key] ??= <String>{}).add(id);
+      raw.add((m, dt, key));
     }
   }
-  if (sets.isEmpty) return (labels: [], current: [], prev: []);
+  if (sets.isEmpty) return (series: (labels: [], current: [], prev: []), events: []);
   final keys = sets.keys.toList()..sort();
   final n = _periodWindow[period]!;
   final start = (keys.length - n).clamp(0, keys.length);
+  final windowKeys = keys.sublist(start);
+  final idxOf = {for (var i = 0; i < windowKeys.length; i++) windowKeys[i]: i};
   final cur = <double>[], prv = <double>[], lab = <String>[];
   for (var i = start; i < keys.length; i++) {
     cur.add(sets[keys[i]]!.length.toDouble());
     lab.add(labels[keys[i]]!);
-    final pj = i - n; // same slot, one window earlier
+    final pj = i - n;
     prv.add(pj >= 0 ? sets[keys[pj]]!.length.toDouble() : 0);
   }
-  return (labels: lab, current: cur, prev: keys.length > n ? prv : []);
+  final events = [
+    for (final r in raw)
+      if (idxOf.containsKey(r.$3)) _Ev(r.$1, r.$2, idxOf[r.$3]!),
+  ];
+  return (series: (labels: lab, current: cur, prev: keys.length > n ? prv : []), events: events);
 }
 
 /// Sundays this person was marked present at sacrament.
