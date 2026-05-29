@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'broker_client.dart';
 import 'config.dart';
+import 'disclaimer.dart';
 import 'main.dart';
 
 /// Two ways in, one resulting session:
@@ -142,6 +143,12 @@ class _LoginPageState extends State<LoginPage> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text('Covenant Path', style: Theme.of(context).textTheme.headlineSmall),
+                  const SizedBox(height: 8),
+                  Text(kDisclaimerLong,
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodySmall
+                          ?.copyWith(color: Colors.grey.shade600)),
                   const SizedBox(height: 16),
                   if (_broker.available) ...[
                     SegmentedButton<_Mode>(
@@ -168,6 +175,8 @@ class _LoginPageState extends State<LoginPage> {
                     const SizedBox(height: 12),
                     Text(_error!, style: const TextStyle(color: Colors.red)),
                   ],
+                  const SizedBox(height: 20),
+                  const DisclaimerFooter(),
                 ],
               ),
               ),
