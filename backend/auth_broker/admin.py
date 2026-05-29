@@ -127,6 +127,105 @@ def recent_diagnostics(limit: int = 12) -> list[dict]:
     return r.json() if r.status_code == 200 else []
 
 
+def _jwt_sub(token: str) -> str:
+    """Extract the 'sub' (auth_id UUID) from a Supabase JWT without re-verifying.
+    Caller must have already verified the token via verify_user() before calling this."""
+    import base64, json as _json  # noqa: E401
+    try:
+        parts = token.split(".")
+        pad = parts[1] + "=" * (-len(parts[1]) % 4)
+        return _json.loads(base64.urlsafe_b64decode(pad)).get("sub", "")
+    except Exception:
+        return ""
+
+
+def enrollment_status(email: str, auth_id: str) -> dict:
+    """Return stake enrollment status for a signed-in user (email + auth_id from JWT).
+    Queries user_roles -> stakes -> stake_credentials via service-role REST."""
+    headers = _sb_headers()
+    # 1. Find user's role → stake_id
+    roles_r = requests.get(f"{SUPABASE_URL}/rest/v1/user_roles", headers=headers,
+                           params={"select": "stake_id,role", "auth_id": f"eq.{auth_id}",
+                                   "limit": "10"}, timeout=_TIMEOUT)
+    roles = roles_r.json() if roles_r.status_code == 200 else []
+    if not roles:
+        return {"status": "no_role", "has_data": False, "credential": {"state": "none"}}
+    stake_id = roles[0].get("stake_id")
+
+    # 2. Get stake info
+    stakes_r = requests.get(f"{SUPABASE_URL}/rest/v1/stakes", headers=headers,
+                            params={"select": "name,last_synced_at", "id": f"eq.{stake_id}",
+                                    "limit": "1"}, timeout=_TIMEOUT)
+    stake = (stakes_r.json() or [{}])[0] if stakes_r.status_code == 200 else {}
+
+    # 3. Count members in this stake (service-role bypasses RLS — count all)
+    members_r = requests.get(f"{SUPABASE_URL}/rest/v1/members",
+                             headers={**headers, "Prefer": "count=exact", "Range": "0-0"},
+                             params={"stake_id": f"eq.{stake_id}"}, timeout=_TIMEOUT)
+    member_count = 0
+    if members_r.status_code in (200, 206):
+        cr = members_r.headers.get("Content-Range", "")
+        if "/" in cr:
+            total = cr.rsplit("/", 1)[-1]
+            if total not in ("*", ""):
+                member_count = int(total)
+
+    # 4. Get credential state
+    cred_r = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=headers,
+                          params={"select": "principal_name,revoked,coverage,access_rank,updated_at",
+                                  "stake_id": f"eq.{stake_id}", "limit": "1"}, timeout=_TIMEOUT)
+    creds = cred_r.json() if cred_r.status_code == 200 else []
+    cred = creds[0] if creds else None
+
+    cred_info: dict
+    if not cred:
+        cred_info = {"state": "none"}
+    else:
+        coverage = cred.get("coverage") or {}
+        cred_info = {
+            "state": "revoked" if cred.get("revoked") else "active",
+            "complete": bool(coverage.get("complete")),
+            "principal_name": cred.get("principal_name"),
+            "is_provider": (cred.get("principal_name") or "").lower() == email.lower(),
+            "enrolled_at": cred.get("updated_at"),
+        }
+    return {
+        "stake_name": stake.get("name"),
+        "stake_id": stake_id,
+        "last_synced_at": stake.get("last_synced_at"),
+        "member_count": member_count,
+        "has_data": member_count > 0,
+        "credential": cred_info,
+    }
+
+
+def revoke_credential(stake_id: str, email: str) -> dict:
+    """Revoke the stake credential on behalf of the signed-in user.
+    Only succeeds if the user is the active principal (is_provider check)."""
+    headers = _sb_headers()
+    # Verify the caller is actually the provider for this stake
+    cred_r = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=headers,
+                          params={"select": "principal_name,revoked", "stake_id": f"eq.{stake_id}",
+                                  "limit": "1"}, timeout=_TIMEOUT)
+    creds = cred_r.json() if cred_r.status_code == 200 else []
+    cred = creds[0] if creds else None
+    if not cred:
+        raise AdminError("no credential on file for this stake")
+    if cred.get("revoked"):
+        return {"status": "already_revoked"}
+    if (cred.get("principal_name") or "").lower() != email.lower():
+        raise NotAdmin("only the credential provider can revoke")
+    r = requests.patch(
+        f"{SUPABASE_URL}/rest/v1/stake_credentials",
+        headers={**headers, "Prefer": "return=minimal"},
+        params={"stake_id": f"eq.{stake_id}"},
+        json={"revoked": True, "revoked_at": "now()"},
+        timeout=_TIMEOUT)
+    if r.status_code >= 300:
+        raise AdminError(f"revoke failed ({r.status_code}): {r.text[:160]}")
+    return {"status": "revoked"}
+
+
 def summary() -> dict:
     """Row counts + data freshness from Supabase (service-role REST)."""
     last = _one("members", {"select": "updated_at", "order": "updated_at.desc", "limit": 1})

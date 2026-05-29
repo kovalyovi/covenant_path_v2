@@ -269,6 +269,68 @@ def verify_session(session: requests.Session) -> dict[str, Any]:
     return _verify(session)
 
 
+def try_silent_sso(session: requests.Session, id_token: str) -> bool:
+    """Re-establish an LCR session via OAuth prompt=none with id_token_hint — no MFA needed.
+    Intercepts LCR's auth redirect, adds prompt=none+id_token_hint, follows back to LCR.
+    Returns True if new LCR session cookies were set, False on any failure (never raises)."""
+    try:
+        from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+        resp1 = session.get(f"{LCR}/api/auth/login", params={"returnTo": "/"},
+                            allow_redirects=False, timeout=30)
+        if resp1.status_code not in (301, 302, 303, 307, 308):
+            return False
+        okta_url = resp1.headers.get("Location", "")
+        if not okta_url or "id.churchofjesuschrist.org" not in okta_url:
+            return False
+        parsed = urlparse(okta_url)
+        params = {k: v[0] for k, v in parse_qs(parsed.query, keep_blank_values=True).items()}
+        params.update({"prompt": "none", "id_token_hint": id_token})
+        new_url = urlunparse(parsed._replace(query=urlencode(params)))
+        resp2 = session.get(new_url, allow_redirects=True, timeout=60)
+        final_host = urlparse(resp2.url).hostname or ""
+        if final_host.startswith("id."):
+            return False  # still on Okta — SSO didn't complete
+        logger.info("silent SSO succeeded via id_token_hint")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.info("silent SSO failed (non-fatal): %s", exc)
+        return False
+
+
+def try_refresh_session(session: requests.Session, refresh_token: str | None) -> bool:
+    """Renew an expired LCR session using a stored OAuth refresh_token. Exchanges the
+    refresh_token for a new id_token, then attempts silent SSO to get fresh LCR cookies.
+    Returns True only if verify_session would now succeed, False on any failure (never raises)."""
+    if not refresh_token:
+        return False
+    try:
+        resp = session.post(f"{ISSUER}/v1/token", data={
+            "grant_type": "refresh_token",
+            "client_id": CLIENT_ID,
+            "refresh_token": refresh_token,
+            "scope": SCOPE,
+        }, headers={"Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "application/json"}, timeout=30)
+        if resp.status_code != 200:
+            logger.info("refresh_token exchange failed (%s) — credential needs re-enrollment",
+                        resp.status_code)
+            return False
+        tokens = resp.json()
+        id_token = tokens.get("id_token")
+        if not id_token:
+            logger.info("refresh_token exchange returned no id_token")
+            return False
+        if not try_silent_sso(session, id_token):
+            logger.info("silent SSO after token refresh failed — credential needs re-enrollment")
+            return False
+        _verify(session)  # confirm the new LCR session works
+        logger.info("LCR session renewed via refresh_token + silent SSO")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.info("try_refresh_session failed (non-fatal): %s", exc)
+        return False
+
+
 def login(
     identifier: str | None = None,
     password: str | None = None,

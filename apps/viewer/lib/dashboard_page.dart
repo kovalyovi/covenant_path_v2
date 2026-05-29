@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'admin_client.dart';
 import 'admin_page.dart';
 import 'biometric_gate.dart';
+import 'broker_client.dart';
 import 'disclaimer.dart';
 import 'golden_hour.dart';
 import 'invite_page.dart';
@@ -48,14 +49,27 @@ class _DashboardPageState extends State<DashboardPage> {
   bool _syncing = false;
   bool _lockAvailable = false;
   bool _lockOn = false;
+  EnrollmentStatus? _enrollStatus;
 
   @override
   void initState() {
     super.initState();
     _future = _load();
+    _future.then((rows) {
+      if (rows.isEmpty && mounted) _loadEnrollStatus();
+    }).catchError((_) {});
     _checkAdmin();
     _loadStakeName();
     _checkLock();
+  }
+
+  Future<void> _loadEnrollStatus() async {
+    final broker = BrokerClient();
+    if (!broker.available) return;
+    try {
+      final s = await broker.enrollmentStatus();
+      if (mounted) setState(() => _enrollStatus = s);
+    } catch (_) {}
   }
 
   Future<void> _checkLock() async {
@@ -162,6 +176,76 @@ class _DashboardPageState extends State<DashboardPage> {
   void _openInvite() =>
       Navigator.of(context).push(MaterialPageRoute(builder: (_) => const InvitePage()));
 
+  Future<void> _openSyncSettings() async {
+    final status = _enrollStatus;
+    if (status == null) {
+      // Load on demand if not yet fetched
+      final broker = BrokerClient();
+      if (!broker.available) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Sync settings require Church account login.')));
+        return;
+      }
+      try {
+        final s = await broker.enrollmentStatus();
+        if (mounted) setState(() => _enrollStatus = s);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Could not load sync settings: $e')));
+        }
+        return;
+      }
+    }
+    if (mounted) { _showSyncSettingsSheet(); }
+  }
+
+  void _showSyncSettingsSheet() {
+    final status = _enrollStatus;
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => _SyncSettingsSheet(
+          status: status,
+          onRevoke: status?.credential.isProvider == true ? _revokeCredential : null),
+    );
+  }
+
+  Future<void> _revokeCredential() async {
+    final stakeId = _enrollStatus?.stakeId;
+    if (stakeId == null) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Revoke sync access?'),
+        content: const Text(
+            'Daily sync for your stake will stop. Re-enroll anytime by signing in again.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Revoke')),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    try {
+      await BrokerClient().revoke(stakeId);
+      if (mounted) {
+        Navigator.pop(context); // close sheet
+        setState(() {
+          _enrollStatus = null; // will reload on next open
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Sync access revoked. Data will not update until re-enrolled.')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Could not revoke: $e')));
+      }
+    }
+  }
+
   List<Widget> _appBarActions(ScreenTier tier) {
     final chip = _lastSynced != null
         ? _LastUpdated(iso: _lastSynced!, compact: tier == ScreenTier.mobile)
@@ -181,6 +265,8 @@ class _DashboardPageState extends State<DashboardPage> {
                 _openAdmin();
               case 'invite':
                 _openInvite();
+              case 'sync':
+                _openSyncSettings();
               case 'feedback':
                 _sendFeedback();
               case 'about':
@@ -202,6 +288,10 @@ class _DashboardPageState extends State<DashboardPage> {
                 value: 'invite',
                 child: ListTile(
                     leading: Icon(Icons.person_add_alt), title: Text('Invite a power user'))),
+            const PopupMenuItem(
+                value: 'sync',
+                child: ListTile(
+                    leading: Icon(Icons.sync), title: Text('Sync settings'))),
             const PopupMenuItem(
                 value: 'feedback',
                 child: ListTile(
@@ -234,6 +324,7 @@ class _DashboardPageState extends State<DashboardPage> {
           tooltip: 'Invite a power user',
           onPressed: _openInvite,
           icon: const Icon(Icons.person_add_alt)),
+      IconButton(tooltip: 'Sync settings', onPressed: _openSyncSettings, icon: const Icon(Icons.sync)),
       IconButton(tooltip: 'Refresh', onPressed: _refresh, icon: const Icon(Icons.refresh)),
       IconButton(
           tooltip: 'Send feedback',
@@ -260,10 +351,13 @@ class _DashboardPageState extends State<DashboardPage> {
     return LayoutBuilder(builder: (context, c) {
       final tier = tierFor(c.maxWidth);
       final appBar = AppBar(title: Text(_stakeName ?? 'Covenant Path'), actions: _appBarActions(tier));
+      final staleCred = _enrollStatus?.credential.isRevoked == true;
       final body = Column(children: [
         if (_syncing) const _SyncingBanner(),
+        if (staleCred) _StaleBanner(onReenroll: () => supabase.auth.signOut()),
         Expanded(
-          child: _Body(tab: _tab, tier: tier, future: _future, onRefresh: _refresh, onOpen: _open),
+          child: _Body(tab: _tab, tier: tier, future: _future, onRefresh: _refresh,
+              onOpen: _open, enrollStatus: _enrollStatus),
         ),
       ]);
 
@@ -304,12 +398,13 @@ class _DashboardPageState extends State<DashboardPage> {
 
 class _Body extends StatelessWidget {
   const _Body({required this.tab, required this.tier, required this.future,
-      required this.onRefresh, required this.onOpen});
+      required this.onRefresh, required this.onOpen, this.enrollStatus});
   final int tab;
   final ScreenTier tier;
   final Future<List<Map<String, dynamic>>> future;
   final Future<void> Function() onRefresh;
   final void Function(Map<String, dynamic>) onOpen;
+  final EnrollmentStatus? enrollStatus;
 
   @override
   Widget build(BuildContext context) {
@@ -325,10 +420,7 @@ class _Body extends StatelessWidget {
         }
         final rows = snap.data ?? [];
         if (rows.isEmpty && tab != 3) {
-          return const Center(child: Padding(padding: EdgeInsets.all(24),
-              child: Text('No members visible for your account.\n\nAccess is derived from your '
-                  'LCR calling — sign in with the email your stake has on file.',
-                  textAlign: TextAlign.center)));
+          return _EmptyState(enrollStatus: enrollStatus);
         }
         final view = switch (tab) {
           0 => _OnDateView(rows: rows, tier: tier, onOpen: onOpen),
@@ -341,6 +433,194 @@ class _Body extends StatelessWidget {
       },
     );
   }
+}
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState({this.enrollStatus});
+  final EnrollmentStatus? enrollStatus;
+
+  @override
+  Widget build(BuildContext context) {
+    final broker = BrokerClient();
+    final cred = enrollStatus?.credential;
+    final hasNoRole = enrollStatus?.noRole == true;
+    final isChurchLoginAvailable = broker.available;
+
+    String title;
+    String body;
+    Widget? action;
+
+    if (enrollStatus == null) {
+      // Still loading status or broker unavailable
+      title = 'No members visible';
+      body = 'Access is scoped to your LCR calling. Sign in with the email your stake has on file.';
+    } else if (hasNoRole && cred?.isNone == true) {
+      if (isChurchLoginAvailable) {
+        title = 'Set up stake sync';
+        body = 'Your stake hasn\'t set up Covenant Path yet. Sign in with your Church account '
+            'and check "Keep my stake synced" to start daily data updates.';
+        action = FilledButton.icon(
+          onPressed: () => supabase.auth.signOut(),
+          icon: const Icon(Icons.login),
+          label: const Text('Sign in to enable sync'),
+        );
+      } else {
+        title = 'Stake not set up';
+        body = 'Ask your stake leader to enable Covenant Path by signing in with their '
+            'Church account. Once set up, sign in with your email code for access.';
+      }
+    } else if (cred?.isRevoked == true) {
+      title = 'Sync paused';
+      body = 'The daily sync credential for your stake has been revoked. '
+          'Re-enroll to resume data updates.';
+      if (isChurchLoginAvailable) {
+        action = OutlinedButton.icon(
+          onPressed: () => supabase.auth.signOut(),
+          icon: const Icon(Icons.refresh),
+          label: const Text('Re-enroll'),
+        );
+      }
+    } else if (cred?.isActive == true) {
+      title = 'Data syncing…';
+      body = 'Your stake has a sync credential on file. Data will appear after the next daily run (7 am ET).';
+    } else {
+      title = 'No members visible';
+      body = 'Access is derived from your LCR calling. Sign in with the email your stake has on file.';
+    }
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.group_outlined, size: 56,
+                color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.4)),
+            const SizedBox(height: 16),
+            Text(title, style: Theme.of(context).textTheme.titleMedium,
+                textAlign: TextAlign.center),
+            const SizedBox(height: 8),
+            Text(body, textAlign: TextAlign.center,
+                style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+            if (action != null) ...[const SizedBox(height: 20), action],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StaleBanner extends StatelessWidget {
+  const _StaleBanner({required this.onReenroll});
+  final VoidCallback onReenroll;
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialBanner(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      content: const Text('Sync paused — credential expired. Re-enroll to resume daily updates.'),
+      leading: const Icon(Icons.sync_problem, color: Colors.orange),
+      actions: [
+        TextButton(onPressed: onReenroll, child: const Text('Re-enroll')),
+        TextButton(
+            onPressed: () =>
+                ScaffoldMessenger.of(context).clearMaterialBanners(),
+            child: const Text('Dismiss')),
+      ],
+    );
+  }
+}
+
+class _SyncSettingsSheet extends StatelessWidget {
+  const _SyncSettingsSheet({this.status, this.onRevoke});
+  final EnrollmentStatus? status;
+  final VoidCallback? onRevoke;
+
+  @override
+  Widget build(BuildContext context) {
+    final cred = status?.credential;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Sync settings', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 16),
+          if (status == null)
+            const Text('Loading…')
+          else ...[
+            _Row(label: 'Stake', value: status!.stakeName ?? '—'),
+            _Row(
+                label: 'Last synced',
+                value: status!.lastSyncedAt != null
+                    ? _fmt(status!.lastSyncedAt!)
+                    : 'Never'),
+            _Row(label: 'Members', value: '${status!.memberCount}'),
+            const Divider(height: 24),
+            if (cred == null || cred.isNone) ...[
+              const ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.warning_amber_outlined, color: Colors.orange),
+                  title: Text('No sync credential'),
+                  subtitle: Text('Sign in with your Church account and check '
+                      '"Keep my stake synced" to enable daily updates.')),
+            ] else ...[
+              _Row(
+                  label: 'Status',
+                  value: cred.isRevoked ? 'Revoked' : 'Active',
+                  color: cred.isRevoked ? Colors.orange : Colors.green),
+              if (cred.principalName != null)
+                _Row(label: 'Provided by', value: cred.principalName!),
+              if (cred.enrolledAt != null)
+                _Row(label: 'Enrolled', value: _fmt(cred.enrolledAt!)),
+              _Row(
+                  label: 'Coverage',
+                  value: cred.complete ? 'Complete' : 'Partial'),
+            ],
+            const SizedBox(height: 8),
+            const Text(
+                'Credentials are encrypted and stored server-side. '
+                'Your password is never stored.',
+                style: TextStyle(fontSize: 12)),
+            if (onRevoke != null) ...[
+              const SizedBox(height: 16),
+              OutlinedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    onRevoke!();
+                  },
+                  icon: const Icon(Icons.link_off),
+                  label: const Text('Revoke my sync access')),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _fmt(String iso) {
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return iso;
+    return DateFormat('MMM d, y · h:mm a').format(dt.toLocal());
+  }
+}
+
+class _Row extends StatelessWidget {
+  const _Row({required this.label, required this.value, this.color});
+  final String label;
+  final String value;
+  final Color? color;
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(children: [
+          SizedBox(width: 110, child: Text(label,
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant))),
+          Expanded(child: Text(value,
+              style: color != null ? TextStyle(color: color, fontWeight: FontWeight.w500) : null)),
+        ]),
+      );
 }
 
 // ---- Upcoming (prospective baptisms) ----------------------------------------

@@ -126,6 +126,45 @@ def health() -> dict:
     return {"ok": True, "service": "church-login-broker"}
 
 
+class RevokeReq(BaseModel):
+    stake_id: str
+
+
+@app.get("/auth/enrollment-status")
+def auth_enrollment_status(authorization: str = Header(default="")) -> dict:
+    """Return stake enrollment/credential status for the signed-in user.
+    Used by the app to show enroll prompts, stale warnings, and sync settings."""
+    try:
+        email = admin.verify_user(authorization)
+    except admin.NotAdmin as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    token = (authorization or "").removeprefix("Bearer ").strip()
+    auth_id = admin._jwt_sub(token)
+    try:
+        return admin.enrollment_status(email, auth_id)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.post("/auth/revoke")
+def auth_revoke(req: RevokeReq, authorization: str = Header(default="")) -> dict:
+    """Revoke the caller's stake credential (provider only — validated server-side)."""
+    try:
+        email = admin.verify_user(authorization)
+    except admin.NotAdmin as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    try:
+        return admin.revoke_credential(req.stake_id, email)
+    except admin.NotAdmin as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 @app.post("/auth/password")
 def auth_password(req: PasswordReq) -> dict:
     rid = _rid()
