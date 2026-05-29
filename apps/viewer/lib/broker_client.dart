@@ -177,22 +177,49 @@ class BrokerClient {
   }
 
   Future<void> revoke(String stakeId) async {
+    await _authed('POST', '/auth/revoke', body: {'stake_id': stakeId});
+  }
+
+  /// Support form (#74): email the owner a message from the signed-in user.
+  Future<void> contact(String subject, String message) async {
+    await _authed('POST', '/contact', body: {'subject': subject, 'message': message});
+  }
+
+  /// Ad-hoc leader report (#73): structured convert-integration status for the caller's scope.
+  Future<Map<String, dynamic>> report() async {
+    return await _authed('GET', '/report');
+  }
+
+  /// Email the caller's scope report (default: to themselves; or a chosen recipient).
+  Future<Map<String, dynamic>> emailReport({String? toEmail}) async {
+    return await _authed('POST', '/report/email',
+        body: {if (toEmail != null && toEmail.isNotEmpty) 'to_email': toEmail});
+  }
+
+  /// Shared authed request carrying the signed-in user's Supabase token. Returns the decoded
+  /// JSON body (empty map if none). Throws BrokerException on transport/HTTP error.
+  Future<Map<String, dynamic>> _authed(String method, String path,
+      {Map<String, dynamic>? body}) async {
     if (!available) throw BrokerException('Broker not configured.');
     final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
     if (token.isEmpty) throw BrokerException('Not signed in.');
-    final resp = await http
-        .post(Uri.parse('$brokerUrl/auth/revoke'),
-            headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
-            body: jsonEncode({'stake_id': stakeId}))
-        .timeout(const Duration(seconds: 20));
-    if (resp.statusCode >= 400) {
-      Map<String, dynamic> data;
+    final uri = Uri.parse('$brokerUrl$path');
+    final headers = {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'};
+    final resp = await (method == 'GET'
+            ? http.get(uri, headers: headers)
+            : http.post(uri, headers: headers, body: jsonEncode(body ?? const {})))
+        .timeout(const Duration(seconds: 30));
+    Map<String, dynamic> data = const {};
+    if (resp.body.isNotEmpty) {
       try {
         data = jsonDecode(resp.body) as Map<String, dynamic>;
       } catch (_) {
-        throw BrokerException('Revoke failed (${resp.statusCode}).');
+        if (resp.statusCode >= 400) throw BrokerException('Request failed (${resp.statusCode}).');
       }
-      throw BrokerException((data['detail'] ?? 'Revoke failed.').toString());
     }
+    if (resp.statusCode >= 400) {
+      throw BrokerException((data['detail'] ?? 'Request failed (${resp.statusCode}).').toString());
+    }
+    return data;
   }
 }

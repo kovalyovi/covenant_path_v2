@@ -326,6 +326,21 @@ def _send_email(to: str, subject: str, html: str) -> None:
         raise AdminError(f"email send failed ({r.status_code}): {r.text[:160]}")
 
 
+def send_contact(reporter: str, subject: str, message: str) -> dict:
+    """Support / contact form (#74): email the owner a message from a signed-in user so they can
+    follow up. Distinct from feedback→GitHub issue (#58) — this is a direct human support channel."""
+    subject = (subject or "").strip()[:140] or "Covenant Path — support request"
+    body = (message or "").strip()
+    if not body:
+        raise AdminError("a message is required")
+    html = (f"<h2>Support request</h2>"
+            f"<p><b>From:</b> {reporter}</p>"
+            f"<p><b>Subject:</b> {subject}</p>"
+            f"<hr><p style='white-space:pre-wrap'>{body}</p>")
+    _send_email(OWNER_EMAIL, f"[Covenant Path support] {subject}", html)
+    return {"status": "sent", "to": OWNER_EMAIL}
+
+
 def request_admin_invite(email: str, requested_by: str) -> dict:
     """Record a pending admin-invite + email the owner an approve link. Nobody is granted
     until the owner clicks it (the random token is the un-spoofable gate)."""

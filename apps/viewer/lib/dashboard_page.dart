@@ -171,6 +171,95 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
+  Future<void> _contactSupport() async {
+    final subjectC = TextEditingController();
+    final bodyC = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Contact support'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text('Send a message to the app owner. They\'ll reply to your sign-in email.',
+              style: TextStyle(fontSize: 13)),
+          const SizedBox(height: 8),
+          TextField(
+              controller: subjectC,
+              decoration: const InputDecoration(labelText: 'Subject (optional)')),
+          const SizedBox(height: 8),
+          TextField(
+              controller: bodyC,
+              autofocus: true,
+              minLines: 3,
+              maxLines: 6,
+              decoration: const InputDecoration(labelText: 'How can we help?')),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Send')),
+        ],
+      ),
+    );
+    if (ok != true || bodyC.text.trim().isEmpty) return;
+    try {
+      await BrokerClient().contact(subjectC.text.trim(), bodyC.text.trim());
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Message sent — thank you!')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Couldn\'t send: $e')));
+      }
+    }
+  }
+
+  Future<void> _generateReport() async {
+    final broker = BrokerClient();
+    if (!broker.available) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Reports need Church-account login configured.')));
+      return;
+    }
+    showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(child: CircularProgressIndicator()));
+    Map<String, dynamic>? rep;
+    try {
+      rep = await broker.report();
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context); // spinner
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Couldn\'t build report: $e')));
+      }
+      return;
+    }
+    if (!mounted) return;
+    Navigator.pop(context); // spinner
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => _ReportSheet(report: rep!, onEmail: _emailReport),
+    );
+  }
+
+  Future<void> _emailReport() async {
+    try {
+      final res = await BrokerClient().emailReport();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Report emailed to ${res['to'] ?? 'you'}.')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Couldn\'t email report: $e')));
+      }
+    }
+  }
+
   void _openAdmin() =>
       Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AdminPage()));
   void _openInvite() =>
@@ -265,8 +354,12 @@ class _DashboardPageState extends State<DashboardPage> {
                 _openAdmin();
               case 'invite':
                 _openInvite();
+              case 'report':
+                _generateReport();
               case 'sync':
                 _openSyncSettings();
+              case 'contact':
+                _contactSupport();
               case 'feedback':
                 _sendFeedback();
               case 'about':
@@ -285,6 +378,10 @@ class _DashboardPageState extends State<DashboardPage> {
                       leading: Icon(Icons.admin_panel_settings),
                       title: Text('Admin · Ops console'))),
             const PopupMenuItem(
+                value: 'report',
+                child: ListTile(
+                    leading: Icon(Icons.summarize_outlined), title: Text('Generate report'))),
+            const PopupMenuItem(
                 value: 'invite',
                 child: ListTile(
                     leading: Icon(Icons.person_add_alt), title: Text('Invite a power user'))),
@@ -292,6 +389,10 @@ class _DashboardPageState extends State<DashboardPage> {
                 value: 'sync',
                 child: ListTile(
                     leading: Icon(Icons.sync), title: Text('Sync settings'))),
+            const PopupMenuItem(
+                value: 'contact',
+                child: ListTile(
+                    leading: Icon(Icons.support_agent), title: Text('Contact support'))),
             const PopupMenuItem(
                 value: 'feedback',
                 child: ListTile(
@@ -324,8 +425,12 @@ class _DashboardPageState extends State<DashboardPage> {
           tooltip: 'Invite a power user',
           onPressed: _openInvite,
           icon: const Icon(Icons.person_add_alt)),
+      IconButton(tooltip: 'Generate report', onPressed: _generateReport,
+          icon: const Icon(Icons.summarize_outlined)),
       IconButton(tooltip: 'Sync settings', onPressed: _openSyncSettings, icon: const Icon(Icons.sync)),
       IconButton(tooltip: 'Refresh', onPressed: _refresh, icon: const Icon(Icons.refresh)),
+      IconButton(tooltip: 'Contact support', onPressed: _contactSupport,
+          icon: const Icon(Icons.support_agent)),
       IconButton(
           tooltip: 'Send feedback',
           onPressed: _sendFeedback,
@@ -521,6 +626,85 @@ class _StaleBanner extends StatelessWidget {
       content: const Text('Sync paused — credential revoked. Re-enroll to resume daily updates.'),
       leading: const Icon(Icons.sync_problem, color: Colors.orange),
       actions: [TextButton(onPressed: onReenroll, child: const Text('Re-enroll'))],
+    );
+  }
+}
+
+class _ReportSheet extends StatelessWidget {
+  const _ReportSheet({required this.report, required this.onEmail});
+  final Map<String, dynamic> report;
+  final Future<void> Function() onEmail;
+
+  @override
+  Widget build(BuildContext context) {
+    final total = report['total'] ?? 0;
+    final onTrack = report['on_track'] ?? 0;
+    final outstanding = ((report['outstanding'] as List?) ?? const [])
+        .cast<Map<String, dynamic>>();
+    final byMilestone = ((report['by_milestone'] as List?) ?? const []).cast<List>();
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.7,
+      maxChildSize: 0.95,
+      builder: (_, scroll) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(
+                child: Text(report['stake_name']?.toString() ?? 'Convert report',
+                    style: Theme.of(context).textTheme.titleLarge)),
+            FilledButton.icon(
+                onPressed: () async {
+                  await onEmail();
+                  if (context.mounted) Navigator.pop(context);
+                },
+                icon: const Icon(Icons.email_outlined, size: 18),
+                label: const Text('Email to me')),
+          ]),
+          const SizedBox(height: 4),
+          Text('$total new members · $onTrack on track · ${outstanding.length} need attention',
+              style: Theme.of(context).textTheme.bodyMedium),
+          const Divider(height: 20),
+          Expanded(
+            child: ListView(controller: scroll, children: [
+              if (byMilestone.isNotEmpty) ...[
+                Text('Most-needed steps', style: Theme.of(context).textTheme.titleSmall),
+                const SizedBox(height: 6),
+                for (final kv in byMilestone)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                      Flexible(child: Text('${kv[0]}')),
+                      Text('${kv[1]}', style: const TextStyle(fontWeight: FontWeight.w600)),
+                    ]),
+                  ),
+                const Divider(height: 20),
+              ],
+              if (outstanding.isEmpty)
+                const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 20),
+                    child: Center(child: Text('Everyone in scope is on track. 🎉')))
+              else ...[
+                Text('Outstanding by member', style: Theme.of(context).textTheme.titleSmall),
+                const SizedBox(height: 6),
+                for (final o in outstanding)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(
+                          '${o['name']}'
+                          '${o['unit'] != null ? ' · ${o['unit']}' : ''}',
+                          style: const TextStyle(fontWeight: FontWeight.w600)),
+                      Text(((o['missing'] as List?) ?? const []).join(', '),
+                          style: TextStyle(
+                              fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                    ]),
+                  ),
+              ],
+            ]),
+          ),
+        ]),
+      ),
     );
   }
 }

@@ -242,6 +242,47 @@ def feedback(body: FeedbackReq, email: str = Depends(require_user)) -> dict:
         raise HTTPException(status_code=503, detail=str(e))
 
 
+class ContactReq(BaseModel):
+    subject: str = ""
+    message: str
+
+
+@app.post("/contact")
+def contact(body: ContactReq, email: str = Depends(require_user)) -> dict:
+    """Support form (#74): a signed-in user emails the owner directly for help."""
+    try:
+        return admin.send_contact(email, body.subject, body.message)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+class ReportEmailReq(BaseModel):
+    to_email: str | None = None
+
+
+@app.get("/report")
+def report(email: str = Depends(require_user), authorization: str = Header(default="")) -> dict:
+    """Ad-hoc leader report (#73): structured convert-integration status for the caller's scope."""
+    from backend.auth_broker import reports
+    auth_id = admin._jwt_sub((authorization or "").removeprefix("Bearer ").strip())
+    try:
+        return reports.build_report(auth_id)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.post("/report/email")
+def report_email(body: ReportEmailReq, email: str = Depends(require_user),
+                 authorization: str = Header(default="")) -> dict:
+    """Email the caller's scope report (default: to themselves; or to a chosen recipient)."""
+    from backend.auth_broker import reports
+    auth_id = admin._jwt_sub((authorization or "").removeprefix("Bearer ").strip())
+    try:
+        return reports.email_report(auth_id, email, body.to_email)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 class InviteReq(BaseModel):
     email: str
 

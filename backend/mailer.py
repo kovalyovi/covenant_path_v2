@@ -189,38 +189,10 @@ def send_digests(conn, cap: int = DEFAULT_DAILY_CAP) -> int:
 
 
 # --- weekly "what's missing" reminders (eligibility-aware, with week-over-week diff) --------
+# Milestone eligibility lives in backend.milestones (pure, no-DB) so the broker's report builder
+# (slim image, no psycopg2) can share it. Thin aliases keep the existing call sites unchanged.
 
-def _year(v) -> int | None:
-    m = re.search(r"(\d{4})", str(v or ""))
-    return int(m.group(1)) if m else None
-
-
-def _turns_at_least(m: dict, age: int) -> bool:
-    """Turns at least [age] by the end of this calendar year (the Church's by-year rule)."""
-    y = _year(m.get("birth_date"))
-    return y is not None and (datetime.now().year - y) >= age
-
-
-def _member_one_year(m: dict) -> bool:
-    y = _year(m.get("baptism_date"))
-    return y is not None and (datetime.now().year - y) >= 1
-
-
-# (label, is-complete, is-eligible) — mirrors the app's golden_hour milestones + eligibility.
-_MILESTONES = [
-    ("a friend in the ward", lambda m: m.get("friends") == "Yes", lambda m: True),
-    ("a calling", lambda m: m.get("calling") == "Yes", lambda m: _turns_at_least(m, 12)),
-    ("ministers assigned to them", lambda m: m.get("ministering_brothers_sisters") == "Yes", lambda m: True),
-    ("a ministering assignment", lambda m: m.get("ministering_assignment") == "Yes", lambda m: _turns_at_least(m, 12)),
-    ("the Aaronic Priesthood", lambda m: m.get("aaronic_priesthood") == "Yes",
-     lambda m: m.get("sex") == "M" and _turns_at_least(m, 12)),
-    ("the Melchizedek Priesthood", lambda m: m.get("melchizedek_priesthood") == "Yes",
-     lambda m: m.get("sex") == "M" and _turns_at_least(m, 18) and _member_one_year(m)),
-]
-
-
-def _member_missing(m: dict) -> list[str]:
-    return [label for label, complete, elig in _MILESTONES if elig(m) and not complete(m)]
+from backend.milestones import member_missing as _member_missing, year as _year  # noqa: E402
 
 
 def _snapshot_and_diff(conn) -> dict:
