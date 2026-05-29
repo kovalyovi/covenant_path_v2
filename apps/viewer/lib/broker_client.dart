@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'config.dart';
 
@@ -35,6 +36,52 @@ class BrokerResult {
   BrokerResult({this.email, this.otp, this.loginId, this.factors = const [], this.name});
 
   bool get mfaRequired => loginId != null && otp == null;
+}
+
+/// Credential info returned from /auth/enrollment-status.
+class CredentialInfo {
+  final String state; // "none" | "active" | "revoked"
+  final bool complete;
+  final String? principalName;
+  final bool isProvider;
+  final String? enrolledAt;
+  const CredentialInfo({required this.state, this.complete = false,
+      this.principalName, this.isProvider = false, this.enrolledAt});
+  factory CredentialInfo.fromJson(Map<String, dynamic> j) => CredentialInfo(
+      state: (j['state'] as String?) ?? 'none',
+      complete: j['complete'] as bool? ?? false,
+      principalName: j['principal_name'] as String?,
+      isProvider: j['is_provider'] as bool? ?? false,
+      enrolledAt: j['enrolled_at'] as String?);
+  bool get isActive => state == 'active';
+  bool get isRevoked => state == 'revoked';
+  bool get isNone => state == 'none';
+}
+
+/// Response from /auth/enrollment-status.
+class EnrollmentStatus {
+  final String? stakeName;
+  final String? stakeId;
+  final String? lastSyncedAt;
+  final int memberCount;
+  final bool hasData;
+  final bool noRole; // true if the user has no user_roles row yet
+  final CredentialInfo credential;
+  const EnrollmentStatus({this.stakeName, this.stakeId, this.lastSyncedAt,
+      this.memberCount = 0, this.hasData = false, this.noRole = false,
+      required this.credential});
+  factory EnrollmentStatus.fromJson(Map<String, dynamic> j) {
+    final isNoRole = j['status'] == 'no_role';
+    return EnrollmentStatus(
+        stakeName: j['stake_name'] as String?,
+        stakeId: j['stake_id'] as String?,
+        lastSyncedAt: j['last_synced_at'] as String?,
+        memberCount: (j['member_count'] as num?)?.toInt() ?? 0,
+        hasData: j['has_data'] as bool? ?? false,
+        noRole: isNoRole,
+        credential: CredentialInfo.fromJson(
+            (j['credential'] as Map?)?.cast<String, dynamic>() ?? const {}));
+  }
 }
 
 class BrokerClient {
@@ -108,4 +155,44 @@ class BrokerClient {
 
   Future<BrokerResult> verifyMfa(String loginId, String code, {bool enroll = false}) =>
       _post('/auth/mfa/verify', {'login_id': loginId, 'code': code, 'enroll': enroll});
+
+  Future<EnrollmentStatus> enrollmentStatus() async {
+    if (!available) throw BrokerException('Broker not configured.');
+    final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
+    if (token.isEmpty) throw BrokerException('Not signed in.');
+    final resp = await http
+        .get(Uri.parse('$brokerUrl/auth/enrollment-status'),
+            headers: {'Authorization': 'Bearer $token'})
+        .timeout(const Duration(seconds: 20));
+    Map<String, dynamic> data;
+    try {
+      data = jsonDecode(resp.body) as Map<String, dynamic>;
+    } catch (_) {
+      throw BrokerException('Enrollment status error (${resp.statusCode}).');
+    }
+    if (resp.statusCode >= 400) {
+      throw BrokerException((data['detail'] ?? 'Enrollment status failed.').toString());
+    }
+    return EnrollmentStatus.fromJson(data);
+  }
+
+  Future<void> revoke(String stakeId) async {
+    if (!available) throw BrokerException('Broker not configured.');
+    final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
+    if (token.isEmpty) throw BrokerException('Not signed in.');
+    final resp = await http
+        .post(Uri.parse('$brokerUrl/auth/revoke'),
+            headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+            body: jsonEncode({'stake_id': stakeId}))
+        .timeout(const Duration(seconds: 20));
+    if (resp.statusCode >= 400) {
+      Map<String, dynamic> data;
+      try {
+        data = jsonDecode(resp.body) as Map<String, dynamic>;
+      } catch (_) {
+        throw BrokerException('Revoke failed (${resp.statusCode}).');
+      }
+      throw BrokerException((data['detail'] ?? 'Revoke failed.').toString());
+    }
+  }
 }

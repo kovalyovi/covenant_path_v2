@@ -146,13 +146,19 @@ def run_delegated(args, skip_unit: int | None = None) -> int:
             if not cred or cred.get("revoked"):
                 continue
             session = okta_login.session_from_cookies(cred["cookies"])
-            # Use the stored LCR session directly while it's still valid (it outlives the shorter
-            # Okta session); only re-SSO via the Okta session if the LCR session has lapsed.
+            # Three-tier session renewal:
+            # 1. LCR appSession (outlives Okta; use directly while valid)
+            # 2. Okta session re-SSO (if Okta session cookie still alive)
+            # 3. OAuth refresh_token → silent SSO (if both above have expired)
             try:
                 okta_login.verify_session(session)
             except Exception:  # noqa: BLE001
-                okta_login.establish_lcr_session(session)
-                okta_login.verify_session(session)
+                try:
+                    okta_login.establish_lcr_session(session)
+                    okta_login.verify_session(session)
+                except Exception:  # noqa: BLE001
+                    if not okta_login.try_refresh_session(session, cred.get("refresh_token")):
+                        raise  # credential truly expired — propagates to outer error handler
             okta_login.write_storage_state(session, okta_login.DEFAULT_STORAGE_STATE)
             res = _sync_one(args)
             print(f"[+] {st['name']} ({st['unit_number']}): {res['members']} members synced")

@@ -86,8 +86,9 @@ def _identity(session: requests.Session, login_id: str) -> dict:
     return ident
 
 
-def _drive_to_password(session: requests.Session, identifier: str, password: str, login_id: str) -> dict:
-    """interact -> introspect -> identify -> (select password) -> answer password."""
+def _drive_to_password(session: requests.Session, identifier: str, password: str, login_id: str) -> tuple[dict, str]:
+    """interact -> introspect -> identify -> (select password) -> answer password.
+    Returns (payload, pkce_verifier) so the caller can exchange the interaction_code for tokens."""
     verifier, challenge = _pkce()
     logger.info("[auth %s] interact", login_id)
     r = session.post(f"{ISSUER}/v1/interact", data={
@@ -105,7 +106,7 @@ def _drive_to_password(session: requests.Session, identifier: str, password: str
     identified = selected = False
     for _ in range(8):
         if "successWithInteractionCode" in payload:
-            return payload
+            return payload, verifier
         rems = _remediations(payload)
         sh = payload.get("stateHandle")
         for rr in rems.values():
@@ -127,7 +128,40 @@ def _drive_to_password(session: requests.Session, identifier: str, password: str
             selected = True
             continue
         break  # password done; whatever's next (success or MFA) is handled by the caller
-    return payload
+    return payload, verifier
+
+
+def _exchange_code(session: requests.Session, payload: dict, verifier: str, login_id: str) -> str | None:
+    """Exchange the successWithInteractionCode for OAuth tokens; returns refresh_token or None.
+    Never raises — a failure just means no refresh_token is captured (login already succeeded)."""
+    try:
+        code_obj = payload.get("successWithInteractionCode", {})
+        values = code_obj.get("value") if isinstance(code_obj.get("value"), list) else []
+        interaction_code = next(
+            (item.get("value") for item in values
+             if isinstance(item, dict) and item.get("name") == "interaction_code"),
+            None)
+        if not interaction_code:
+            logger.warning("[auth %s] no interaction_code in success payload", login_id)
+            return None
+        token_url = code_obj.get("href", f"{ISSUER}/v1/token")
+        resp = session.post(token_url, data={
+            "grant_type": "interaction_code",
+            "client_id": CLIENT_ID,
+            "interaction_code": interaction_code,
+            "code_verifier": verifier,
+        }, headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
+            timeout=30)
+        if resp.status_code != 200:
+            logger.warning("[auth %s] token exchange failed (%s)", login_id, resp.status_code)
+            return None
+        rt = resp.json().get("refresh_token")
+        if rt:
+            logger.info("[auth %s] refresh_token captured for long-lived renewal", login_id)
+        return rt
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[auth %s] token exchange error (non-fatal): %s", login_id, exc)
+        return None
 
 
 def start_login(username: str, password: str) -> dict:
@@ -137,7 +171,7 @@ def start_login(username: str, password: str) -> dict:
     login_id = _new_login_id()
     session = new_session()
     try:
-        payload = _drive_to_password(session, username, password, login_id)
+        payload, verifier = _drive_to_password(session, username, password, login_id)
     except AuthError:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -145,14 +179,18 @@ def start_login(username: str, password: str) -> dict:
         raise AuthError(f"login failed: {exc}") from exc
 
     if "successWithInteractionCode" in payload:
-        return {"status": "success", "identity": _identity(session, login_id),
-                "cookies": serialize_cookies(session)}
+        rt = _exchange_code(session, payload, verifier, login_id)
+        ident = _identity(session, login_id)
+        if rt:
+            ident["refresh_token"] = rt
+        return {"status": "success", "identity": ident, "cookies": serialize_cookies(session)}
 
     rems = _remediations(payload)
     if "select-authenticator-authenticate" in rems:
         factors = _factors(rems["select-authenticator-authenticate"])
         if factors:
-            _PENDING[login_id] = {"session": session, "payload": payload, "ts": time.time()}
+            _PENDING[login_id] = {"session": session, "payload": payload,
+                                  "verifier": verifier, "ts": time.time()}
             logger.info("[auth %s] MFA required; factors=%s", login_id, [f["label"] for f in factors])
             return {"status": "mfa_required", "login_id": login_id, "factors": factors}
     # unexpected (e.g. wrong password surfaces as messages)
@@ -184,6 +222,7 @@ def verify_mfa(login_id: str, code: str) -> dict:
     if not pend:
         raise AuthError("login session expired — start over")
     session, payload = pend["session"], pend["payload"]
+    verifier = pend.get("verifier", "")
     rems = _remediations(payload)
     ch = rems.get("challenge-authenticator")
     if not ch:
@@ -197,7 +236,10 @@ def verify_mfa(login_id: str, code: str) -> dict:
         raise AuthError(f"MFA verification failed: {exc}") from exc
     if "successWithInteractionCode" not in payload:
         raise AuthError(_idx_messages(payload) or "incorrect code")
+    rt = _exchange_code(session, payload, verifier, login_id)
     ident = _identity(session, login_id)
+    if rt:
+        ident["refresh_token"] = rt
     cookies = serialize_cookies(session)
     _PENDING.pop(login_id, None)
     return {"status": "success", "identity": ident, "cookies": cookies}
