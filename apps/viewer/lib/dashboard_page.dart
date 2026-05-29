@@ -518,15 +518,9 @@ class _StaleBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialBanner(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      content: const Text('Sync paused — credential expired. Re-enroll to resume daily updates.'),
+      content: const Text('Sync paused — credential revoked. Re-enroll to resume daily updates.'),
       leading: const Icon(Icons.sync_problem, color: Colors.orange),
-      actions: [
-        TextButton(onPressed: onReenroll, child: const Text('Re-enroll')),
-        TextButton(
-            onPressed: () =>
-                ScaffoldMessenger.of(context).clearMaterialBanners(),
-            child: const Text('Dismiss')),
-      ],
+      actions: [TextButton(onPressed: onReenroll, child: const Text('Re-enroll'))],
     );
   }
 }
