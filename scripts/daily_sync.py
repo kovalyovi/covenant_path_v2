@@ -146,8 +146,13 @@ def run_delegated(args, skip_unit: int | None = None) -> int:
             if not cred or cred.get("revoked"):
                 continue
             session = okta_login.session_from_cookies(cred["cookies"])
-            okta_login.establish_lcr_session(session)   # re-mint LCR cookies from Okta session
-            okta_login.verify_session(session)
+            # Use the stored LCR session directly while it's still valid (it outlives the shorter
+            # Okta session); only re-SSO via the Okta session if the LCR session has lapsed.
+            try:
+                okta_login.verify_session(session)
+            except Exception:  # noqa: BLE001
+                okta_login.establish_lcr_session(session)
+                okta_login.verify_session(session)
             okta_login.write_storage_state(session, okta_login.DEFAULT_STORAGE_STATE)
             res = _sync_one(args)
             print(f"[+] {st['name']} ({st['unit_number']}): {res['members']} members synced")
