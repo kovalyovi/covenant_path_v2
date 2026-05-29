@@ -49,6 +49,7 @@ class _LoginPageState extends State<LoginPage> {
   bool _emailCodeSent = false;
 
   bool _busy = false;
+  bool _enroll = false; // consent: store my session to keep my stake synced
   String? _error;
 
   void _reset() {
@@ -92,7 +93,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> _churchSignIn() => _run(() async {
-        final r = await _broker.password(_username.text.trim(), _password.text);
+        final r = await _broker.password(_username.text.trim(), _password.text, enroll: _enroll);
         if (r.mfaRequired) {
           setState(() {
             _loginId = r.loginId;
@@ -111,7 +112,7 @@ class _LoginPageState extends State<LoginPage> {
       });
 
   Future<void> _verifyMfa() => _run(() async {
-        final r = await _broker.verifyMfa(_loginId!, _mfaCode.text.trim());
+        final r = await _broker.verifyMfa(_loginId!, _mfaCode.text.trim(), enroll: _enroll);
         await _consume(r);
       });
 
@@ -246,7 +247,20 @@ class _LoginPageState extends State<LoginPage> {
         onSubmitted: (_) => _busy ? null : _churchSignIn(),
         decoration: const InputDecoration(labelText: 'Password', border: OutlineInputBorder()),
       ),
-      const SizedBox(height: 16),
+      const SizedBox(height: 8),
+      CheckboxListTile(
+        value: _enroll,
+        onChanged: _busy ? null : (v) => setState(() => _enroll = v ?? false),
+        contentPadding: EdgeInsets.zero,
+        controlAffinity: ListTileControlAffinity.leading,
+        dense: true,
+        title: const Text('Keep my stake synced', style: TextStyle(fontSize: 14)),
+        subtitle: const Text(
+            'Store my Church session (encrypted — never my password) so my stake\'s data '
+            'updates automatically. Revoke anytime.',
+            style: TextStyle(fontSize: 12)),
+      ),
+      const SizedBox(height: 8),
       FilledButton(onPressed: _busy ? null : _churchSignIn, child: _spinnerOr('Sign in')),
     ];
   }

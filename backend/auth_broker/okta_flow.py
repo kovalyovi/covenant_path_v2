@@ -63,6 +63,13 @@ def _factors(remediation: dict) -> list[dict]:
     return out
 
 
+def serialize_cookies(session: requests.Session) -> list[dict]:
+    """The LCR session cookies in storage_state shape — what the delegated sync re-mints from.
+    Returned only to the broker (server-side, for encrypted storage); never sent to the client."""
+    return [{"name": c.name, "value": c.value, "domain": c.domain, "path": c.path or "/"}
+            for c in session.cookies]
+
+
 def _identity(session: requests.Session, login_id: str) -> dict:
     """After IDX success: mint an LCR session and read /api/auth/me for identity."""
     establish_lcr_session(session)
@@ -138,7 +145,8 @@ def start_login(username: str, password: str) -> dict:
         raise AuthError(f"login failed: {exc}") from exc
 
     if "successWithInteractionCode" in payload:
-        return {"status": "success", "identity": _identity(session, login_id)}
+        return {"status": "success", "identity": _identity(session, login_id),
+                "cookies": serialize_cookies(session)}
 
     rems = _remediations(payload)
     if "select-authenticator-authenticate" in rems:
@@ -190,8 +198,9 @@ def verify_mfa(login_id: str, code: str) -> dict:
     if "successWithInteractionCode" not in payload:
         raise AuthError(_idx_messages(payload) or "incorrect code")
     ident = _identity(session, login_id)
+    cookies = serialize_cookies(session)
     _PENDING.pop(login_id, None)
-    return {"status": "success", "identity": ident}
+    return {"status": "success", "identity": ident, "cookies": cookies}
 
 
 def verify_captured_session(cookies: list[dict]) -> dict:
@@ -201,7 +210,8 @@ def verify_captured_session(cookies: list[dict]) -> dict:
     session = session_from_cookies(cookies)
     login_id = _new_login_id()
     try:
-        return {"status": "success", "identity": _identity(session, login_id)}
+        return {"status": "success", "identity": _identity(session, login_id),
+                "cookies": serialize_cookies(session)}
     except Exception as exc:  # noqa: BLE001
         dump_debug("broker_session_verify_error", login_id=login_id, error=str(exc))
         raise AuthError(f"could not verify captured session: {exc}") from exc

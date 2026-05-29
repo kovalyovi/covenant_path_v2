@@ -14,7 +14,6 @@ import base64
 import json
 import os
 
-import psycopg2.extras
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -67,6 +66,7 @@ def save_credential(conn, stake_id: str, grant: dict) -> None:
         "cookies": grant.get("cookies"),
         "refresh_token": grant.get("refresh_token"),
     }).encode("utf-8"))
+    import psycopg2.extras  # lazy: keeps the broker (encrypt-only) from needing psycopg2
     coverage = grant.get("coverage")
     with conn.cursor() as cur:
         cur.execute("""
