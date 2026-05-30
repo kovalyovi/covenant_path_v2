@@ -217,7 +217,10 @@ def fetch_ministering(session, person_uuid: str) -> dict:
     companionships = (obj.get("ministeringBrothersAssignments") or []) + \
                      (obj.get("ministeringSistersAssignments") or [])
     has_outbound = any(c.get("assignments") for c in companionships)
-    return {"has_assignment": has_outbound, "companionships": companionships, "raw": obj}
+    # Inbound: who is assigned to minister TO this member (the "has ministers" field). Same response.
+    inbound = (obj.get("ministeringBrothers") or []) + (obj.get("ministeringSisters") or [])
+    return {"has_assignment": has_outbound, "has_ministers": bool(inbound),
+            "companionships": companionships, "raw": obj}
 
 
 def _recommend_label(recommend: dict) -> str:
@@ -230,8 +233,12 @@ def _recommend_label(recommend: dict) -> str:
 
 
 def profile_fields(session, person_uuid: str) -> dict:
-    """All profile-sourced covenant-path fields via the three server actions."""
+    """All profile-sourced covenant-path fields via the server actions. Priesthood (office) +
+    received ministering ('has ministers') come from here authoritatively; calling is derived
+    separately from the unit org positions (see covenant_path.report)."""
     fields = extract_fields(fetch_member_profile(session, person_uuid))
     fields["temple_recommend"] = _recommend_label(fetch_recommend(session, person_uuid))
-    fields["ministering_assignment"] = "Yes" if fetch_ministering(session, person_uuid)["has_assignment"] else "No"
+    minw = fetch_ministering(session, person_uuid)
+    fields["ministering_assignment"] = "Yes" if minw["has_assignment"] else "No"
+    fields["ministering_brothers_sisters"] = "Yes" if minw["has_ministers"] else "No"
     return fields
