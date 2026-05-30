@@ -64,8 +64,38 @@ class _BigHeader extends StatelessWidget {
 /// Shown across the top while a scrape is running for the user's stake (coarse status from
 /// stakes.sync_state). Covers the new-stake "first sync" case too — the row exists the moment
 /// the run starts, so a freshly-onboarded stake sees this instead of an empty screen.
-class _SyncingBanner extends StatelessWidget {
-  const _SyncingBanner();
+/// Live "syncing your stake" banner with an elapsed-time counter (item 10). Auto-dismisses when
+/// the dashboard stops passing it (sync_state flips to 'done'). [startedAt] drives the timer.
+class _SyncingBanner extends StatefulWidget {
+  const _SyncingBanner({this.startedAt});
+  final DateTime? startedAt;
+  @override
+  State<_SyncingBanner> createState() => _SyncingBannerState();
+}
+
+class _SyncingBannerState extends State<_SyncingBanner> {
+  Timer? _t;
+  @override
+  void initState() {
+    super.initState();
+    if (widget.startedAt != null) {
+      _t = Timer.periodic(const Duration(seconds: 1), (_) => setState(() {}));
+    }
+  }
+
+  @override
+  void dispose() {
+    _t?.cancel();
+    super.dispose();
+  }
+
+  String get _elapsed {
+    if (widget.startedAt == null) return '';
+    final d = DateTime.now().toUtc().difference(widget.startedAt!.toUtc());
+    final m = d.inMinutes, s = d.inSeconds % 60;
+    return m > 0 ? ' · ${m}m ${s}s elapsed' : ' · ${s}s elapsed';
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = Theme.of(context).colorScheme;
@@ -80,7 +110,7 @@ class _SyncingBanner extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Text('Syncing your stake from LCR — fresh data in a few minutes.',
+            child: Text('Syncing your stake from LCR — fresh data in a few minutes$_elapsed.',
                 style: TextStyle(color: c.onSecondaryContainer)),
           ),
         ]),
