@@ -255,20 +255,64 @@ DateTime? parseMemberDate(dynamic v) {
 /// the immediately-preceding equal-length window ([prev], position-aligned; empty if none).
 typedef _Series = ({List<String> labels, List<double> current, List<double> prev});
 
-// Rolling durations, not calendar buckets (#35): Week = last 7 DAYS (daily), Month = last ~5 WEEKS
-// (weekly), Year = last 12 MONTHS (monthly). The prev overlay is the immediately preceding equal
-// span (handled in _metricData), so it's "this week vs last week by day", etc. (#36).
-const _periodWindow = {_Period.week: 7, _Period.month: 5, _Period.year: 12};
+// Fixed windows anchored to TODAY, not "the last N buckets that happen to have data" (#1):
+//   Week  = the 7 DAYS ending today        (daily buckets — empty days still show)
+//   Month = the 5 WEEKS ending this week   (weekly buckets)
+//   Year  = the 12 MONTHS ending this month(monthly buckets)
+//   All   = every MONTH from first data → now (monthly buckets)
+// Buckets with no events render as zeros (the window is honest about quiet stretches). The prev
+// overlay is the immediately-preceding equal span (this week vs last week by day, etc.).
 
-(int, String) _bucketOf(DateTime dt, _Period p) {
+DateTime _dayOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+DateTime _weekStart(DateTime d) => _dayOnly(d).subtract(Duration(days: d.weekday - 1)); // Monday
+
+/// Bucket key (stable, sortable int) for an event's date under [p] — must match _windowBuckets.
+int _bucketKey(DateTime dt, _Period p) {
   switch (p) {
-    case _Period.week: // daily buckets
-      return (dt.year * 10000 + dt.month * 100 + dt.day, DateFormat('E').format(dt)); // Mon, Tue…
-    case _Period.month: // weekly buckets (ISO week start)
-      final monday = dt.subtract(Duration(days: dt.weekday - 1));
-      return (monday.year * 10000 + monday.month * 100 + monday.day, DateFormat('M/d').format(monday));
-    case _Period.year: // monthly buckets
-      return (dt.year * 100 + dt.month, DateFormat('MMM').format(dt));
+    case _Period.week:
+      return dt.year * 10000 + dt.month * 100 + dt.day; // per day
+    case _Period.month:
+      final w = _weekStart(dt);
+      return w.year * 10000 + w.month * 100 + w.day; // per ISO week
+    case _Period.year:
+    case _Period.all:
+      return dt.year * 100 + dt.month; // per month
+  }
+}
+
+/// The ordered (key, label) buckets of the window ending [today], shifted back [shift] windows
+/// (shift=1 → the immediately-preceding equal span, for the compare overlay). _Period.all is data-
+/// driven and handled in _metricData, so it returns empty here.
+List<(int, String)> _windowBuckets(_Period p, DateTime today, int shift) {
+  switch (p) {
+    case _Period.week:
+      final end = _dayOnly(today).subtract(Duration(days: shift * 7));
+      return [
+        for (var i = 6; i >= 0; i--)
+          () {
+            final d = end.subtract(Duration(days: i));
+            return (d.year * 10000 + d.month * 100 + d.day, DateFormat('E').format(d));
+          }()
+      ];
+    case _Period.month:
+      final end = _weekStart(today).subtract(Duration(days: shift * 5 * 7));
+      return [
+        for (var i = 4; i >= 0; i--)
+          () {
+            final w = end.subtract(Duration(days: i * 7));
+            return (w.year * 10000 + w.month * 100 + w.day, DateFormat('M/d').format(w));
+          }()
+      ];
+    case _Period.year:
+      return [
+        for (var i = 11; i >= 0; i--)
+          () {
+            final m = DateTime(today.year, today.month - shift * 12 - i, 1);
+            return (m.year * 100 + m.month, DateFormat('MMM').format(m));
+          }()
+      ];
+    case _Period.all:
+      return const [];
   }
 }
 
@@ -285,36 +329,50 @@ class _Ev {
 /// underlying events so a tap can show *who* (with their unit), by unit or chronologically.
 ({_Series series, List<_Ev> events}) _metricData(Iterable<Map<String, dynamic>> rows,
     {required Iterable<DateTime> Function(Map<String, dynamic>) datesOf, required _Period period}) {
-  final sets = <int, Set<String>>{};
-  final labels = <int, String>{};
+  final today = DateTime.now();
+  final sets = <int, Set<String>>{}; // bucketKey -> unique person ids (counted once per bucket)
   final raw = <(Map<String, dynamic>, DateTime, int)>[]; // (member, date, bucketKey)
   for (final m in rows) {
     final id = (m['person_uuid'] ?? m['name'] ?? identityHashCode(m)).toString();
     for (final dt in datesOf(m)) {
-      final (key, label) = _bucketOf(dt, period);
-      labels[key] = label;
+      final key = _bucketKey(dt, period);
       (sets[key] ??= <String>{}).add(id);
       raw.add((m, dt, key));
     }
   }
-  if (sets.isEmpty) return (series: (labels: [], current: [], prev: []), events: []);
-  final keys = sets.keys.toList()..sort();
-  final n = _periodWindow[period]!;
-  final start = (keys.length - n).clamp(0, keys.length);
-  final windowKeys = keys.sublist(start);
-  final idxOf = {for (var i = 0; i < windowKeys.length; i++) windowKeys[i]: i};
-  final cur = <double>[], prv = <double>[], lab = <String>[];
-  for (var i = start; i < keys.length; i++) {
-    cur.add(sets[keys[i]]!.length.toDouble());
-    lab.add(labels[keys[i]]!);
-    final pj = i - n;
-    prv.add(pj >= 0 ? sets[keys[pj]]!.length.toDouble() : 0);
+
+  // The ordered current window (fixed for week/month/year; data-spanning for all) + prev overlay.
+  List<(int, String)> cur, prev;
+  if (period == _Period.all) {
+    if (raw.isEmpty) return (series: (labels: [], current: [], prev: []), events: []);
+    final earliest = raw.map((r) => r.$2).reduce((a, b) => a.isBefore(b) ? a : b);
+    cur = [];
+    var y = earliest.year, mo = earliest.month;
+    while (y < today.year || (y == today.year && mo <= today.month)) {
+      final lbl = DateFormat(y == today.year ? 'MMM' : "MMM ''yy").format(DateTime(y, mo));
+      cur.add((y * 100 + mo, lbl));
+      if (++mo > 12) {
+        mo = 1;
+        y++;
+      }
+    }
+    prev = const [];
+  } else {
+    cur = _windowBuckets(period, today, 0);
+    prev = _windowBuckets(period, today, 1);
   }
+
+  final idxOf = {for (var i = 0; i < cur.length; i++) cur[i].$1: i};
+  final series = (
+    labels: [for (final b in cur) b.$2],
+    current: [for (final b in cur) (sets[b.$1]?.length ?? 0).toDouble()],
+    prev: [for (final b in prev) (sets[b.$1]?.length ?? 0).toDouble()],
+  );
   final events = [
     for (final r in raw)
       if (idxOf.containsKey(r.$3)) _Ev(r.$1, r.$2, idxOf[r.$3]!),
   ];
-  return (series: (labels: lab, current: cur, prev: keys.length > n ? prv : []), events: events);
+  return (series: series, events: events);
 }
 
 /// Sundays this person was marked present at sacrament.
