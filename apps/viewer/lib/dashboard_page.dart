@@ -10,6 +10,7 @@ import 'disclaimer.dart';
 import 'golden_hour.dart';
 import 'invite_page.dart';
 import 'main.dart';
+import 'passkey_client.dart';
 import 'person_detail_page.dart';
 
 part 'views/dashboard_shell.dart';
@@ -273,6 +274,27 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
+  Future<void> _addPasskey() async {
+    final pk = PasskeyClient();
+    if (!pk.available) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Passkeys are available in the web app.')));
+      return;
+    }
+    try {
+      await pk.register();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Passkey added — next time, sign in with a passkey (no password).')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Could not add passkey: $e')));
+      }
+    }
+  }
+
   void _openAdmin() =>
       Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AdminPage()));
   void _openInvite() =>
@@ -379,6 +401,8 @@ class _DashboardPageState extends State<DashboardPage> {
                 showAboutDisclaimer(context);
               case 'theme':
                 themeController.cycle();
+              case 'passkey':
+                _addPasskey();
               case 'lock':
                 _toggleLock();
               case 'signout':
@@ -421,6 +445,10 @@ class _DashboardPageState extends State<DashboardPage> {
                 child: ListTile(
                     leading: const Icon(Icons.brightness_6_outlined),
                     title: Text('Theme: ${themeController.label}'))),
+            if (PasskeyClient().available)
+              const PopupMenuItem(
+                  value: 'passkey',
+                  child: ListTile(leading: Icon(Icons.key), title: Text('Add a passkey'))),
             if (_lockAvailable)
               PopupMenuItem(
                   value: 'lock',
@@ -459,6 +487,8 @@ class _DashboardPageState extends State<DashboardPage> {
           tooltip: 'About & privacy',
           onPressed: () => showAboutDisclaimer(context),
           icon: const Icon(Icons.info_outline)),
+      if (PasskeyClient().available)
+        IconButton(tooltip: 'Add a passkey', onPressed: _addPasskey, icon: const Icon(Icons.key)),
       if (_lockAvailable)
         IconButton(
             tooltip: 'App lock (biometrics): ${_lockOn ? 'on' : 'off'}',

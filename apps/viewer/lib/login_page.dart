@@ -6,6 +6,7 @@ import 'broker_client.dart';
 import 'config.dart';
 import 'disclaimer.dart';
 import 'main.dart';
+import 'passkey_client.dart';
 
 /// Two ways in, one resulting session:
 ///  • **Church account** (username + password, MFA-aware) — for leaders. The browser can't
@@ -24,6 +25,7 @@ enum _Mode { church, email }
 
 class _LoginPageState extends State<LoginPage> {
   final _broker = BrokerClient();
+  final _passkey = PasskeyClient();
   late _Mode _mode = _broker.available ? _Mode.church : _Mode.email;
   String? _status; // transient progress note (e.g. "waking up the sign-in service")
 
@@ -116,6 +118,11 @@ class _LoginPageState extends State<LoginPage> {
         await _consume(r);
       });
 
+  Future<void> _passkeySignIn() => _run(() async {
+        final r = await _passkey.login();
+        await _consume(r);
+      });
+
   Future<void> _sendEmailCode() => _run(() async {
         await supabase.auth.signInWithOtp(email: _email.text.trim());
         setState(() => _emailCodeSent = true);
@@ -168,6 +175,23 @@ class _LoginPageState extends State<LoginPage> {
                     const SizedBox(height: 20),
                   ],
                   if (_mode == _Mode.church) ..._churchFields() else ..._emailFields(),
+                  if (_passkey.available) ...[
+                    const SizedBox(height: 16),
+                    Row(children: [
+                      const Expanded(child: Divider()),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: Text('or', style: TextStyle(color: Colors.grey.shade600)),
+                      ),
+                      const Expanded(child: Divider()),
+                    ]),
+                    const SizedBox(height: 16),
+                    OutlinedButton.icon(
+                      onPressed: _busy ? null : _passkeySignIn,
+                      icon: const Icon(Icons.fingerprint),
+                      label: const Text('Sign in with a passkey'),
+                    ),
+                  ],
                   if (_busy && _status != null) ...[
                     const SizedBox(height: 12),
                     Text(_status!, style: TextStyle(color: Theme.of(context).colorScheme.primary)),

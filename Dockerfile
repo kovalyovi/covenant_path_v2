@@ -6,9 +6,10 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # Only the deps the broker needs at runtime (skip Playwright browsers / Google libs).
+# webauthn (py_webauthn) powers passwordless passkey login (server-side WebAuthn verify).
 RUN pip install --no-cache-dir \
     "fastapi>=0.110" "uvicorn>=0.29" "requests>=2.31" \
-    "cryptography>=42.0" "python-dotenv>=1.0"
+    "cryptography>=42.0" "python-dotenv>=1.0" "webauthn>=2.0"
 
 COPY lcr_client/ ./lcr_client/
 COPY backend/ ./backend/
