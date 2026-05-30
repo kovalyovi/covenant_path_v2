@@ -115,7 +115,7 @@ class _GoldenHourViewState extends State<_GoldenHourView> {
         const SizedBox(height: 8),
         _SectionTitle(title: 'Recently Baptized', count: rows.length, byDate: _byDate,
             onToggle: (v) => setState(() => _byDate = v)),
-        _CompletionCard(rows: rows),
+        _CompletionCard(rows: rows, onOpen: widget.onOpen),
       ]),
       child: rows.isEmpty
           ? const Padding(padding: EdgeInsets.all(32),
@@ -128,37 +128,90 @@ class _GoldenHourViewState extends State<_GoldenHourView> {
 }
 
 class _CompletionCard extends StatelessWidget {
-  const _CompletionCard({required this.rows});
+  const _CompletionCard({required this.rows, this.onOpen});
   final List<Map<String, dynamic>> rows;
+  final void Function(Map<String, dynamic>)? onOpen;
   @override
   Widget build(BuildContext context) {
-    final n = rows.length;
-    if (n == 0) return const SizedBox.shrink();
+    if (rows.isEmpty) return const SizedBox.shrink();
     return SectionCard(
       title: 'Golden Hour completion',
       child: Wrap(spacing: 18, runSpacing: 12, children: [
         for (final ms in milestones)
-          _PctStat(label: ms.label, pct: rows.where(ms.complete).length / n),
+          () {
+            // Eligible-only: % = (eligible who have it) / (eligible), so ineligible people
+            // (wrong age/sex/tenure) never drag the number down. Skip milestones nobody's eligible for.
+            final eligible = rows.where(ms.eligible).toList();
+            if (eligible.isEmpty) return const SizedBox.shrink();
+            final done = eligible.where(ms.complete).toList();
+            final missing = eligible.where((m) => !ms.complete(m)).toList();
+            return _PctStat(
+              label: ms.label,
+              pct: done.length / eligible.length,
+              caption: '${done.length}/${eligible.length}',
+              onTap: () => _showCategory(context, ms.label, missing),
+            );
+          }(),
       ]),
+    );
+  }
+
+  void _showCategory(BuildContext context, String label, List<Map<String, dynamic>> missing) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.6,
+        builder: (_, scroll) => ListView(controller: scroll, padding: const EdgeInsets.all(16), children: [
+          Text('Still need: $label', style: Theme.of(context).textTheme.titleLarge),
+          Text('${missing.length} eligible ${missing.length == 1 ? 'member' : 'members'}',
+              style: Theme.of(context).textTheme.bodySmall),
+          const Divider(),
+          if (missing.isEmpty) const Padding(padding: EdgeInsets.all(24),
+              child: Center(child: Text('Everyone eligible has this. 🎉')))
+          else for (final m in missing)
+            ListTile(
+              dense: true,
+              leading: PhotoAvatar(name: '${m['name']}', photoUrl: m['photo_url']?.toString(), size: 36),
+              title: Text('${m['name']}'),
+              subtitle: Text('${m['unit_name'] ?? ''}'),
+              onTap: onOpen == null ? null : () { Navigator.pop(context); onOpen!(m); },
+            ),
+        ]),
+      ),
     );
   }
 }
 
 class _PctStat extends StatelessWidget {
-  const _PctStat({required this.label, required this.pct});
+  const _PctStat({required this.label, required this.pct, this.caption, this.onTap});
   final String label;
   final double pct;
+  final String? caption;
+  final VoidCallback? onTap;
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 120,
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('${(pct * 100).round()}%', style: Theme.of(context).textTheme.titleLarge),
-        Text(label, style: Theme.of(context).textTheme.bodySmall, maxLines: 1, overflow: TextOverflow.ellipsis),
-        const SizedBox(height: 4),
-        ClipRRect(borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(value: pct, minHeight: 5)),
-      ]),
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: SizedBox(
+        width: 124,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.baseline, textBaseline: TextBaseline.alphabetic,
+              children: [
+            Text('${(pct * 100).round()}%', style: Theme.of(context).textTheme.titleLarge),
+            if (caption != null) ...[
+              const SizedBox(width: 4),
+              Text(caption!, style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ]),
+          Text(label, style: Theme.of(context).textTheme.bodySmall, maxLines: 1, overflow: TextOverflow.ellipsis),
+          const SizedBox(height: 4),
+          ClipRRect(borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(value: pct, minHeight: 5)),
+        ]),
+      ),
     );
   }
 }

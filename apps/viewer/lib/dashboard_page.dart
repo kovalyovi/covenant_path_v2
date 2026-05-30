@@ -6,14 +6,13 @@ import 'package:intl/intl.dart';
 
 import 'admin_client.dart';
 import 'admin_page.dart';
-import 'biometric_gate.dart';
 import 'broker_client.dart';
-import 'disclaimer.dart';
 import 'golden_hour.dart';
 import 'invite_page.dart';
 import 'main.dart';
 import 'passkey_client.dart';
 import 'person_detail_page.dart';
+import 'settings_page.dart';
 
 part 'views/dashboard_shell.dart';
 part 'views/upcoming_view.dart';
@@ -59,8 +58,6 @@ class _DashboardPageState extends State<DashboardPage> {
   String? _lastSynced;
   bool _syncing = false;
   DateTime? _syncStartedAt;
-  bool _lockAvailable = false;
-  bool _lockOn = false;
   EnrollmentStatus? _enrollStatus;
 
   @override
@@ -72,7 +69,6 @@ class _DashboardPageState extends State<DashboardPage> {
     }).catchError((_) {});
     _checkAdmin();
     _loadStakeName();
-    _checkLock();
   }
 
   Future<void> _loadEnrollStatus() async {
@@ -82,26 +78,6 @@ class _DashboardPageState extends State<DashboardPage> {
       final s = await broker.enrollmentStatus();
       if (mounted) setState(() => _enrollStatus = s);
     } catch (_) {}
-  }
-
-  Future<void> _checkLock() async {
-    final avail = await BiometricLock.available();
-    final on = await BiometricLock.enabled();
-    if (mounted) setState(() { _lockAvailable = avail; _lockOn = on; });
-  }
-
-  Future<void> _toggleLock() async {
-    final target = !_lockOn;
-    final ok = await BiometricLock.setEnabled(target);
-    if (!mounted) return;
-    if (!ok) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not set up biometric unlock — try again.')));
-      return;
-    }
-    setState(() => _lockOn = target);
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Biometric app lock ${target ? 'on' : 'off'}')));
   }
 
   Future<void> _checkAdmin() async {
@@ -310,6 +286,9 @@ class _DashboardPageState extends State<DashboardPage> {
       Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AdminPage()));
   void _openInvite() =>
       Navigator.of(context).push(MaterialPageRoute(builder: (_) => const InvitePage()));
+  void _openSettings() => Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => SettingsPage(
+          onFeedback: _sendFeedback, onContact: _contactSupport, onAddPasskey: _addPasskey)));
 
   Future<void> _openSyncSettings() async {
     final status = _enrollStatus;
@@ -348,15 +327,25 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Future<void> _syncNow() async {
-    Navigator.of(context).maybePop(); // close the sheet
+    Navigator.of(context).maybePop(); // close the sheet/dialog that triggered it
     try {
       final res = await BrokerClient().syncNow();
       if (!mounted) return;
       final partial = res['coverage_complete'] == false;
+      // Optimistically show the in-progress state right away (#freshness "see the sync in progress")
+      // so the banner + freshness chip update immediately; reconcile with the real stakes.sync_state
+      // a few seconds later once the job has marked itself running.
+      setState(() {
+        _syncing = true;
+        _syncStartedAt = DateTime.now().toUtc();
+      });
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(partial
               ? 'Sync started — note: your calling can\'t pull every field, so some data stays blank. Takes a few minutes.'
               : 'Sync started for your stake — this takes a few minutes.')));
+      Future.delayed(const Duration(seconds: 8), () {
+        if (mounted) _loadStakeName();
+      });
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -401,134 +390,58 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
+  /// Decluttered app bar (#navbar): at most 3 items on every screen size — the freshness chip, a
+  /// Refresh button, and one "⋯" menu. The menu holds ≤5 primary actions; everything else
+  /// (appearance, security, support, about, account) lives on the Settings screen.
   List<Widget> _appBarActions(ScreenTier tier) {
-    final chip = _lastSynced != null
-        ? _LastUpdated(iso: _lastSynced!, compact: tier == ScreenTier.mobile)
-        : null;
-    // Phones: stake title + a single "⋯" overflow for options (like the iOS app). Wider
-    // screens keep the inline icon row.
-    if (tier == ScreenTier.mobile) {
-      return [
-        if (chip != null) chip,
-        IconButton(tooltip: 'Refresh', onPressed: _refresh, icon: const Icon(Icons.refresh)),
-        PopupMenuButton<String>(
-          tooltip: 'Options',
-          icon: const Icon(Icons.more_horiz),
-          onSelected: (v) {
-            switch (v) {
-              case 'admin':
-                _openAdmin();
-              case 'invite':
-                _openInvite();
-              case 'report':
-                _generateReport();
-              case 'sync':
-                _openSyncSettings();
-              case 'contact':
-                _contactSupport();
-              case 'feedback':
-                _sendFeedback();
-              case 'about':
-                showAboutDisclaimer(context);
-              case 'theme':
-                themeController.cycle();
-              case 'passkey':
-                _addPasskey();
-              case 'lock':
-                _toggleLock();
-              case 'signout':
-                supabase.auth.signOut();
-            }
-          },
-          itemBuilder: (_) => [
-            if (_isAdmin)
-              const PopupMenuItem(
-                  value: 'admin',
-                  child: ListTile(
-                      leading: Icon(Icons.admin_panel_settings),
-                      title: Text('Admin · Ops console'))),
-            const PopupMenuItem(
-                value: 'report',
-                child: ListTile(
-                    leading: Icon(Icons.summarize_outlined), title: Text('Generate report'))),
-            const PopupMenuItem(
-                value: 'invite',
-                child: ListTile(
-                    leading: Icon(Icons.person_add_alt), title: Text('Invite a power user'))),
-            const PopupMenuItem(
-                value: 'sync',
-                child: ListTile(
-                    leading: Icon(Icons.sync), title: Text('Sync settings'))),
-            const PopupMenuItem(
-                value: 'contact',
-                child: ListTile(
-                    leading: Icon(Icons.support_agent), title: Text('Contact support'))),
-            const PopupMenuItem(
-                value: 'feedback',
-                child: ListTile(
-                    leading: Icon(Icons.feedback_outlined), title: Text('Send feedback'))),
-            const PopupMenuItem(
-                value: 'about',
-                child: ListTile(
-                    leading: Icon(Icons.info_outline), title: Text('About & privacy'))),
-            PopupMenuItem(
-                value: 'theme',
-                child: ListTile(
-                    leading: const Icon(Icons.brightness_6_outlined),
-                    title: Text('Theme: ${themeController.label}'))),
-            if (PasskeyClient().available)
-              const PopupMenuItem(
-                  value: 'passkey',
-                  child: ListTile(leading: Icon(Icons.key), title: Text('Add a passkey'))),
-            if (_lockAvailable)
-              PopupMenuItem(
-                  value: 'lock',
-                  child: ListTile(
-                      leading: const Icon(Icons.fingerprint),
-                      title: Text('App lock: ${_lockOn ? 'On' : 'Off'}'))),
-            const PopupMenuItem(
-                value: 'signout',
-                child: ListTile(leading: Icon(Icons.logout), title: Text('Sign out'))),
-          ],
-        ),
-      ];
-    }
     return [
-      if (chip != null) chip,
-      if (_isAdmin)
-        IconButton(
-            tooltip: 'Admin · Ops console',
-            onPressed: _openAdmin,
-            icon: const Icon(Icons.admin_panel_settings)),
-      IconButton(
-          tooltip: 'Invite a power user',
-          onPressed: _openInvite,
-          icon: const Icon(Icons.person_add_alt)),
-      IconButton(tooltip: 'Generate report', onPressed: _generateReport,
-          icon: const Icon(Icons.summarize_outlined)),
-      IconButton(tooltip: 'Sync settings', onPressed: _openSyncSettings, icon: const Icon(Icons.sync)),
+      if (_lastSynced != null)
+        _LastUpdated(
+            iso: _lastSynced!,
+            compact: tier == ScreenTier.mobile,
+            syncing: _syncing,
+            onSyncNow: BrokerClient().available ? _syncNow : null),
       IconButton(tooltip: 'Refresh', onPressed: _refresh, icon: const Icon(Icons.refresh)),
-      IconButton(tooltip: 'Contact support', onPressed: _contactSupport,
-          icon: const Icon(Icons.support_agent)),
-      IconButton(
-          tooltip: 'Send feedback',
-          onPressed: _sendFeedback,
-          icon: const Icon(Icons.feedback_outlined)),
-      IconButton(
-          tooltip: 'About & privacy',
-          onPressed: () => showAboutDisclaimer(context),
-          icon: const Icon(Icons.info_outline)),
-      if (PasskeyClient().available)
-        IconButton(tooltip: 'Add a passkey', onPressed: _addPasskey, icon: const Icon(Icons.key)),
-      if (_lockAvailable)
-        IconButton(
-            tooltip: 'App lock (biometrics): ${_lockOn ? 'on' : 'off'}',
-            onPressed: _toggleLock,
-            icon: Icon(_lockOn ? Icons.lock : Icons.lock_open)),
-      IconButton(
-          tooltip: 'Sign out (${supabase.auth.currentUser?.email ?? ''})',
-          onPressed: () => supabase.auth.signOut(),
-          icon: const Icon(Icons.logout)),
+      PopupMenuButton<String>(
+        tooltip: 'Menu',
+        icon: const Icon(Icons.more_horiz),
+        onSelected: (v) {
+          switch (v) {
+            case 'sync':
+              _openSyncSettings();
+            case 'report':
+              _generateReport();
+            case 'invite':
+              _openInvite();
+            case 'admin':
+              _openAdmin();
+            case 'settings':
+              _openSettings();
+          }
+        },
+        itemBuilder: (_) => [
+          const PopupMenuItem(
+              value: 'sync',
+              child: ListTile(leading: Icon(Icons.sync), title: Text('Sync settings'))),
+          const PopupMenuItem(
+              value: 'report',
+              child: ListTile(
+                  leading: Icon(Icons.summarize_outlined), title: Text('Generate report'))),
+          const PopupMenuItem(
+              value: 'invite',
+              child: ListTile(
+                  leading: Icon(Icons.person_add_alt), title: Text('Invite a power user'))),
+          if (_isAdmin)
+            const PopupMenuItem(
+                value: 'admin',
+                child: ListTile(
+                    leading: Icon(Icons.admin_panel_settings),
+                    title: Text('Admin · Ops console'))),
+          const PopupMenuItem(
+              value: 'settings',
+              child: ListTile(leading: Icon(Icons.settings_outlined), title: Text('Settings'))),
+        ],
+      ),
     ];
   }
 
@@ -573,8 +486,8 @@ class _DashboardPageState extends State<DashboardPage> {
           NavigationRail(
             selectedIndex: _tab,
             onDestinationSelected: (i) => setState(() => _tab = i),
-            extended: tier == ScreenTier.desktop,
-            labelType: tier == ScreenTier.desktop ? null : NavigationRailLabelType.all,
+            extended: true, // #navbar: text next to icons on tablet + desktop
+            minExtendedWidth: 168,
             destinations: [
               for (final t in _tabs)
                 NavigationRailDestination(icon: Icon(t.icon), label: Text(t.label)),
