@@ -26,6 +26,9 @@ DEFAULTS = {
     # who holds it; used to enrich the role-name catalog (lcr_client/leadership.py) and as the
     # fallback for stake-leader provisioning. Build-specific; rotates on LCR redeploys.
     "leadership": "40cd2d72827a201fcf11e15751b6e76283d1019c2c",
+    # /mlt/orgs/missionary action (args [unitNumber, "eng"]) — full-time missionaries grouped into
+    # assignedToUnit / servingFromUnit / returnedFromUnit for that ward/branch (HAR 2026-05-30).
+    "missionary": "60c73e23e06abb917261d5299c6554b5093707ac2f",
 }
 
 
