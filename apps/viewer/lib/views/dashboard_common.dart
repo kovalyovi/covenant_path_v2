@@ -255,17 +255,20 @@ DateTime? parseMemberDate(dynamic v) {
 /// the immediately-preceding equal-length window ([prev], position-aligned; empty if none).
 typedef _Series = ({List<String> labels, List<double> current, List<double> prev});
 
-const _periodWindow = {_Period.week: 12, _Period.month: 12, _Period.year: 5};
+// Rolling durations, not calendar buckets (#35): Week = last 7 DAYS (daily), Month = last ~5 WEEKS
+// (weekly), Year = last 12 MONTHS (monthly). The prev overlay is the immediately preceding equal
+// span (handled in _metricData), so it's "this week vs last week by day", etc. (#36).
+const _periodWindow = {_Period.week: 7, _Period.month: 5, _Period.year: 12};
 
 (int, String) _bucketOf(DateTime dt, _Period p) {
   switch (p) {
-    case _Period.week:
-      final monday = dt.subtract(Duration(days: dt.weekday - 1)); // ISO week start
+    case _Period.week: // daily buckets
+      return (dt.year * 10000 + dt.month * 100 + dt.day, DateFormat('E').format(dt)); // Mon, Tue…
+    case _Period.month: // weekly buckets (ISO week start)
+      final monday = dt.subtract(Duration(days: dt.weekday - 1));
       return (monday.year * 10000 + monday.month * 100 + monday.day, DateFormat('M/d').format(monday));
-    case _Period.month:
+    case _Period.year: // monthly buckets
       return (dt.year * 100 + dt.month, DateFormat('MMM').format(dt));
-    case _Period.year:
-      return (dt.year, '${dt.year}');
   }
 }
 
