@@ -5,10 +5,12 @@ part of '../dashboard_page.dart';
 /// timeline split per unit. Either way, dates already passed (still not baptized) surface in a
 /// "needs attention — overdue" block on top; genuinely upcoming dates follow.
 class _OnDateView extends StatefulWidget {
-  const _OnDateView({required this.rows, required this.tier, required this.onOpen});
+  const _OnDateView(
+      {required this.rows, required this.tier, required this.onOpen, this.missionaries = const {}});
   final List<Map<String, dynamic>> rows;
   final ScreenTier tier;
   final void Function(Map<String, dynamic>) onOpen;
+  final Map<String, List<Map<String, dynamic>>> missionaries; // unit name → assigned missionaries
   @override
   State<_OnDateView> createState() => _OnDateViewState();
 }
@@ -67,7 +69,13 @@ class _OnDateViewState extends State<_OnDateView> {
             title: u,
             leadingIcon: Icons.groups,
             trailing: _CountBadge(byUnit[u]!.length),
-            child: _Timeline(items: byUnit[u]!, today: today, onOpen: widget.onOpen, embedded: true),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if ((widget.missionaries[u] ?? const []).isNotEmpty) ...[
+                _MissionaryStrip(missionaries: widget.missionaries[u]!),
+                const Divider(height: 18),
+              ],
+              _Timeline(items: byUnit[u]!, today: today, onOpen: widget.onOpen, embedded: true),
+            ]),
           ),
       ],
     );
@@ -237,6 +245,40 @@ class _DateRow extends StatelessWidget {
                   ),
                   const Icon(Icons.chevron_right, size: 18),
                 ]),
+              ),
+            ),
+        ]),
+      ),
+    ]);
+  }
+}
+
+/// The full-time missionaries assigned to a unit (#29): name chips; tap-and-hold shows phone/email.
+class _MissionaryStrip extends StatelessWidget {
+  const _MissionaryStrip({required this.missionaries});
+  final List<Map<String, dynamic>> missionaries;
+  @override
+  Widget build(BuildContext context) {
+    final c = Theme.of(context).colorScheme;
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Icon(Icons.volunteer_activism, size: 16, color: c.primary),
+      const SizedBox(width: 6),
+      Expanded(
+        child: Wrap(spacing: 6, runSpacing: 6, children: [
+          for (final m in missionaries)
+            Tooltip(
+              triggerMode: TooltipTriggerMode.tap,
+              message: [m['phone'], m['email']]
+                  .where((x) => x != null && '$x'.isNotEmpty)
+                  .join('\n'),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                decoration: BoxDecoration(
+                  color: c.primary.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Text('${m['name'] ?? ''}',
+                    style: TextStyle(fontSize: 12, color: c.primary, fontWeight: FontWeight.w500)),
               ),
             ),
         ]),

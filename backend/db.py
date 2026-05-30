@@ -156,6 +156,14 @@ def update_stake_kpis(conn, stake_id: str, kpis: dict) -> None:
     conn.commit()
 
 
+def update_stake_missionaries(conn, stake_id: str, by_unit: dict) -> None:
+    """Store the per-ward full-time-missionary roster (#29): {unit_name: [{name,phone,email}, ...]}."""
+    with conn.cursor() as cur:
+        cur.execute("update stakes set missionaries = %s where id = %s",
+                    (psycopg2.extras.Json(by_unit), stake_id))
+    conn.commit()
+
+
 def set_sync_state(conn, stake_id: str, state: str) -> None:
     """Coarse live status for the app banner. 'running' stamps sync_started_at; any other
     state ('done'/'error') just updates the flag."""
