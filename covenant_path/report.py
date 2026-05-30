@@ -424,6 +424,25 @@ def build_stake_report(
         if include_returning:
             people += [(p, "returning") for p in (pr.raw.get("returningMemberList") or [])]
 
+        # One-time PII-safe diagnostic for the calling under-count (#GH "double-check calling %"):
+        # decides between two causes — (a) /mlt/api/orgs returns few callings (coverage), or (b) the
+        # org-position uuids don't match the progress-record personUuids (matching). Logs counts +
+        # one sample uuid from each source (uuids are opaque ids, not PII). On the next live sync,
+        # check tools/output/logs: positions≈cohort but matched≈0 ⇒ uuid mismatch; positions small
+        # ⇒ the orgs endpoint itself is sparse for this unit.
+        if calling_uuids is not None:
+            cohort_uuids = {p.get("personUuid") for p, _k in people if p.get("personUuid")}
+            matched = cohort_uuids & calling_uuids
+            stats["calling_positions"] = stats.get("calling_positions", 0) + len(calling_uuids)
+            stats["calling_matched"] = stats.get("calling_matched", 0) + len(matched)
+            if not stats.get("calling_shape_dumped"):
+                stats["calling_shape_dumped"] = True
+                dump_debug("calling_match_shape", unit=unit.unit_number,
+                           positions=len(calling_uuids), cohort=len(cohort_uuids),
+                           matched=len(matched),
+                           position_uuid_sample=next(iter(calling_uuids), None),
+                           cohort_uuid_sample=next(iter(cohort_uuids), None))
+
         for person, kind in people:
             details = _details_with_retry(client, person.get("id"), person.get("cmisId"))
             if details is None:
