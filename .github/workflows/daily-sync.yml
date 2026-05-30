@@ -1,17 +1,21 @@
 name: Daily covenant-path sync
 
-# Runs the headless pipeline daily: LCR -> report -> Google Sheets (+ Supabase).
-# No browser needed for login (pure-requests Okta). Chromium is installed only so the
-# rare action-id self-heal can run if LCR redeploys.
+# Per-stake isolation (#3): a `prepare` job lists the credentialed stakes, then a `sync` job fans
+# out ONE isolated matrix job per stake. Each stake runs in its own job — own logs, own pass/fail,
+# and it only ever touches its own data (daily_sync.py --stake <unit>). New stakes appear in the
+# matrix automatically as they onboard; nothing per-stake to manage.
+#
+# No browser needed for login (pure-requests Okta). Chromium is installed only so the rare
+# action-id self-heal can run if LCR redeploys.
 
 on:
   schedule:
-    # Times below are ET. Cron is UTC and can't do DST, so we fire the candidate UTC hours
-    # for both EST and EDT; daily_sync.py (_should_run_now) runs only at the intended ET
-    # time — 7:00 ET daily, plus 8:20 ET Thursdays (before the 8:30 meeting).
-    - cron: "0 11,12 * * *"   # 07:00 ET daily  (11:00 UTC during EDT / 12:00 UTC during EST)
-    - cron: "20 12,13 * * 4"  # 08:20 ET Thu    (12:20 UTC during EDT / 13:20 UTC during EST)
-  workflow_dispatch:          # manual run button (also how the admin console triggers flows)
+    # Times below are ET. Cron is UTC and can't do DST, so we fire the candidate UTC hours for both
+    # EST and EDT; daily_sync.py (_should_run_now) lists stakes only at the intended ET time —
+    # 7:00 ET daily, plus 8:20 ET Thursdays (before the 8:30 meeting). Off-target → empty matrix.
+    - cron: "0 11,12 * * *"   # 07:00 ET daily
+    - cron: "20 12,13 * * 4"  # 08:20 ET Thu
+  workflow_dispatch:
     inputs:
       with_profile:
         description: "Fetch profile fields (baptism/recommend/etc.)"
@@ -30,14 +34,43 @@ on:
 permissions:
   contents: read
 
+# Don't cancel an in-flight stake when a new run starts; let each finish.
 concurrency:
   group: daily-sync
   cancel-in-progress: false
 
 jobs:
+  # ---- prepare: which stakes to sync (honors the ET schedule gate) -----------
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    outputs:
+      stakes: ${{ steps.list.outputs.stakes }}
+    env:
+      CP_TOKEN_KEY: ${{ secrets.CP_TOKEN_KEY }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install psycopg2-binary cryptography python-dotenv requests
+      - id: list
+        # GITHUB_EVENT_NAME is provided by the runner; the gate emits [] off the scheduled window.
+        run: echo "stakes=$(python scripts/daily_sync.py --list-stakes)" >> "$GITHUB_OUTPUT"
+
+  # ---- sync: one isolated job per stake -------------------------------------
   sync:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.stakes != '[]' && needs.prepare.outputs.stakes != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false   # one stake failing must not cancel the others
+      max-parallel: 4
+      matrix:
+        stake: ${{ fromJson(needs.prepare.outputs.stakes) }}
     env:
       LCR_LOGIN: ${{ secrets.LCR_LOGIN }}
       LCR_PASSWORD: ${{ secrets.LCR_PASSWORD }}
@@ -50,25 +83,21 @@ jobs:
       SHEETS_SERVICE_ACCOUNT: sheets_sync/service_account.json
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
           python -m playwright install --with-deps chromium   # only for rare self-heal
 
-      # Restore the incremental profile cache across runs (best-effort; Supabase
-      # members.updated_at is the durable incremental mechanism — see ADR-002).
       - name: Restore profile cache
         uses: actions/cache@v4
         with:
           path: tools/output/profile_cache.json
-          key: profile-cache-${{ github.run_id }}
-          restore-keys: profile-cache-
+          key: profile-cache-${{ matrix.stake }}-${{ github.run_id }}
+          restore-keys: profile-cache-${{ matrix.stake }}-
 
       - name: Write Google service account (if configured)
         run: |
@@ -80,22 +109,20 @@ jobs:
             echo "no GOOGLE_SERVICE_ACCOUNT_JSON secret; Sheets push will be skipped"
           fi
 
-      - name: Run daily sync
+      - name: Sync stake ${{ matrix.stake }}
         env:
           TARGETS: ${{ github.event.inputs.targets || 'both' }}
           PHOTOS: ${{ github.event.inputs.photos || 'false' }}
         run: |
-          ARGS="--with-profile"
-          # Sheets unless the dispatch asked for supabase-only (and only if configured).
+          ARGS="--stake ${{ matrix.stake }} --with-profile"
+          # Sheets per-stake (the stake's own spreadsheet) unless dispatch asked supabase-only.
           if [ "$TARGETS" != "supabase" ] && [ -n "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
             ARGS="$ARGS --sheets"
           fi
-          # Supabase unless the dispatch asked for sheets-only (and only if configured).
           if [ "$TARGETS" != "sheets" ] && [ -n "$SUPABASE_DB_URL" ]; then
             ARGS="$ARGS --supabase"
           fi
           [ "$PHOTOS" = "true" ] && ARGS="$ARGS --photos"
-          [ -n "$SPREADSHEET_ID" ] && ARGS="$ARGS --spreadsheet-id $SPREADSHEET_ID"
           echo "running: python scripts/daily_sync.py $ARGS"
           python scripts/daily_sync.py $ARGS
 
@@ -103,7 +130,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sync-logs
+          name: sync-logs-${{ matrix.stake }}
           path: |
             tools/output/logs/
             tools/output/health_report.json

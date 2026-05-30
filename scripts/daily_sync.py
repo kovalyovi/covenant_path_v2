@@ -74,11 +74,15 @@ def _sync_one(args) -> dict:
 
     if args.sheets:
         from sheets_sync.service import SheetsSync
+        # Per-stake spreadsheet (#1/#2): each stake writes to its OWN sheet, shared read-only with
+        # its leadership. Falls back to the configured --spreadsheet-id if a per-stake sheet can't
+        # be created (e.g. Drive API not yet enabled).
+        sheet_id = _resolve_stake_sheet(client, args)
         # preserve_units keeps failed units' existing rows (Sheets is a full-replace);
         # Supabase upserts are non-destructive so stale rows simply persist there.
-        summary = SheetsSync(args.spreadsheet_id).sync(dicts, preserve_units=failed_units)
+        summary = SheetsSync(sheet_id).sync(dicts, preserve_units=failed_units)
         result["sheets"] = summary
-        logger.info("sheets: %s", summary)
+        logger.info("sheets[%s]: %s", sheet_id, summary)
     if args.supabase:
         from backend import db, sync as bsync
         conn = db.connect()
@@ -120,14 +124,130 @@ def run_self(args) -> int | None:
     return (res.get("supabase") or {}).get("stake_unit")
 
 
-def run_delegated(args, skip_unit: int | None = None) -> int:
-    """Multi-stake: pull each onboarded stake's encrypted session from Supabase,
-    re-mint its LCR session, and sync. One bad stake doesn't stop the others.
-    [skip_unit] is already handled by the self pass (avoids syncing it twice)."""
+def _resolve_stake_sheet(client, args) -> str:
+    """Per-stake spreadsheet id: reuse the stored one, else create + share it read-only with the
+    stake's leadership (user_roles emails) + the credential provider, and store it. Falls back to
+    the configured --spreadsheet-id (the shared master) when Supabase isn't configured or the Drive
+    API can't create a sheet — so the sync never fails over a sheet problem."""
+    if not os.getenv("SUPABASE_DB_URL"):
+        return args.spreadsheet_id
+    try:
+        from backend import db
+        from sheets_sync import service as sheets_service
+        ctx = client.user_context()
+        conn = db.connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("select id, spreadsheet_id, spreadsheet_shared from stakes "
+                            "where unit_number=%s", (ctx.unit_number,))
+                row = cur.fetchone()
+            stake_id = row[0] if row else db.upsert_stake(conn, ctx.unit_number, ctx.unit_name)
+            sid = row[1] if row else None
+            shared = set(row[2] or []) if row and row[2] else set()
+            with conn.cursor() as cur:
+                cur.execute("select distinct lower(email) from user_roles "
+                            "where stake_id=%s and email is not null", (stake_id,))
+                emails = {r[0] for r in cur.fetchall()}
+                cur.execute("select lower(principal_email) from stake_credentials "
+                            "where stake_id=%s and principal_email is not null", (stake_id,))
+                emails |= {r[0] for r in cur.fetchall()}
+            if not sid:
+                sid = sheets_service.create_and_share_spreadsheet(
+                    f"Covenant Path — {ctx.unit_name}", sorted(emails))
+                with conn.cursor() as cur:
+                    cur.execute("update stakes set spreadsheet_id=%s, spreadsheet_shared=%s where id=%s",
+                                (sid, sorted(emails), stake_id))
+                conn.commit()
+                logger.info("created per-stake spreadsheet for %s (%s): %s",
+                            ctx.unit_name, ctx.unit_number, sid)
+            elif emails - shared:
+                sheets_service.share_spreadsheet(sid, sorted(emails - shared))
+                with conn.cursor() as cur:
+                    cur.execute("update stakes set spreadsheet_shared=%s where id=%s",
+                                (sorted(emails), stake_id))
+                conn.commit()
+            return sid
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 — never fail the sync over the sheet target
+        logger.warning("per-stake sheet unavailable (%s); using the configured spreadsheet", exc)
+        return args.spreadsheet_id
+
+
+def _mint_and_sync(args, st: dict) -> None:
+    """Mint ONE stake's LCR session from its stored credential and sync it. Raises on failure
+    (the caller decides whether one bad stake stops the run). Isolated per stake — no other
+    stake's data is touched."""
     from backend import credentials, db
     from lcr_client import okta_login
+    conn = db.connect()
+    try:
+        cred = credentials.get_credential(conn, st["stake_id"])
+    finally:
+        conn.close()
+    if not cred or cred.get("revoked"):
+        raise RuntimeError("no active credential for this stake")
+    session = okta_login.session_from_cookies(cred["cookies"])
+    # Three-tier session renewal: (1) stored LCR appSession (outlives Okta), (2) Okta re-SSO,
+    # (3) OAuth refresh_token → silent SSO. Only fail once all three are exhausted.
+    try:
+        okta_login.verify_session(session)
+    except Exception:  # noqa: BLE001
+        try:
+            okta_login.establish_lcr_session(session)
+            okta_login.verify_session(session)
+        except Exception:  # noqa: BLE001
+            if not okta_login.try_refresh_session(session, cred.get("refresh_token")):
+                raise
+    okta_login.write_storage_state(session, okta_login.DEFAULT_STORAGE_STATE)
+    res = _sync_one(args)
+    print(f"[+] {st['name']} ({st['unit_number']}): {res['members']} members synced")
 
-    args.supabase = True  # delegated mode targets the central store
+
+def list_stake_units() -> list[int]:
+    """Credentialed stake unit numbers — the CI matrix fans out one isolated job per entry."""
+    from backend import credentials, db
+    conn = db.connect()
+    try:
+        return [s["unit_number"] for s in credentials.list_active_stakes(conn) if s.get("unit_number")]
+    finally:
+        conn.close()
+
+
+def run_one_stake(args, unit: int) -> int:
+    """Sync exactly ONE stake by unit number — the per-stake isolated job. Uses that stake's
+    delegated credential; falls back to self (LCR_LOGIN) only if this is the operator's own stake
+    and it has no stored credential."""
+    from backend import credentials, db
+    args.supabase = True
+    conn = db.connect()
+    try:
+        st = next((s for s in credentials.list_active_stakes(conn) if s.get("unit_number") == unit), None)
+    finally:
+        conn.close()
+    if st:
+        try:
+            _mint_and_sync(args, st)
+            return 0
+        except Exception as exc:  # noqa: BLE001
+            logger.error("stake %s sync failed: %s", unit, exc)
+            print(f"[!] stake {unit} failed (re-authorize may be needed): {exc}")
+            return 1
+    logger.info("no delegated credential for unit %s; falling back to self (LCR_LOGIN)", unit)
+    from lcr_client import okta_login
+    okta_login.login()
+    self_unit = (_sync_one(args).get("supabase") or {}).get("stake_unit")
+    if self_unit != unit:
+        logger.warning("self stake is %s, not the requested %s", self_unit, unit)
+    return 0
+
+
+def run_delegated(args, skip_unit: int | None = None) -> int:
+    """Multi-stake (legacy single-process path): sync every onboarded stake in one run. The CI
+    matrix now prefers one isolated --stake job per stake; this remains for local/manual use.
+    One bad stake doesn't stop the others. [skip_unit] avoids double-syncing the self pass's stake."""
+    from backend import credentials, db
+    args.supabase = True
     conn = db.connect()
     try:
         stakes = credentials.list_active_stakes(conn)
@@ -136,35 +256,13 @@ def run_delegated(args, skip_unit: int | None = None) -> int:
     if not stakes:
         logger.warning("no active stake credentials in Supabase; onboard a stake first")
         return 0
-
     failures = 0
     for st in stakes:
         if skip_unit is not None and st.get("unit_number") == skip_unit:
             logger.info("delegated: skipping %s (already synced by self baseline)", st.get("name"))
             continue
         try:
-            conn = db.connect()
-            cred = credentials.get_credential(conn, st["stake_id"])
-            conn.close()
-            if not cred or cred.get("revoked"):
-                continue
-            session = okta_login.session_from_cookies(cred["cookies"])
-            # Three-tier session renewal:
-            # 1. LCR appSession (outlives Okta; use directly while valid)
-            # 2. Okta session re-SSO (if Okta session cookie still alive)
-            # 3. OAuth refresh_token → silent SSO (if both above have expired)
-            try:
-                okta_login.verify_session(session)
-            except Exception:  # noqa: BLE001
-                try:
-                    okta_login.establish_lcr_session(session)
-                    okta_login.verify_session(session)
-                except Exception:  # noqa: BLE001
-                    if not okta_login.try_refresh_session(session, cred.get("refresh_token")):
-                        raise  # credential truly expired — propagates to outer error handler
-            okta_login.write_storage_state(session, okta_login.DEFAULT_STORAGE_STATE)
-            res = _sync_one(args)
-            print(f"[+] {st['name']} ({st['unit_number']}): {res['members']} members synced")
+            _mint_and_sync(args, st)
         except Exception as exc:  # noqa: BLE001
             failures += 1
             logger.error("stake %s (%s) sync failed: %s", st.get("name"), st.get("unit_number"), exc)
@@ -212,6 +310,11 @@ def main() -> int:
                     help="auto mode: skip the LCR_LOGIN self pass and sync EVERY stake (including "
                          "the operator's own) via its delegated credential. Use after migrating "
                          "your own stake to delegated (#79). Env DELEGATED_ONLY=1 has the same effect.")
+    ap.add_argument("--stake", type=int, metavar="UNIT",
+                    help="sync exactly ONE stake by unit number — the per-stake isolated CI job")
+    ap.add_argument("--list-stakes", action="store_true",
+                    help="print a JSON array of credentialed stake unit numbers (for the CI matrix) "
+                         "and exit; honors the schedule gate (prints [] off-target)")
     ap.add_argument("--quiet", dest="verbose", action="store_false", default=True)
     args = ap.parse_args()
     # Env switch mirrors --no-self-baseline so the GitHub workflow can flip the cutover without
@@ -221,9 +324,23 @@ def main() -> int:
 
     run_ok, why = _should_run_now()
     logger.info("schedule gate: %s", why)
+
+    # The CI matrix's prepare step: emit the stakes to sync (empty off the scheduled window so no
+    # per-stake jobs spawn). A manual workflow_dispatch always lists.
+    if args.list_stakes:
+        import json
+        print(json.dumps(list_stake_units() if run_ok else []))
+        return 0
+
     if not run_ok:
         print(f"[skip] schedule gate: {why}")
         return 0
+
+    # A single isolated per-stake job (the matrix entry). Runs unconditionally — the prepare step
+    # already applied the schedule gate when it chose to emit this stake.
+    if args.stake:
+        logger.info("daily_sync starting (single stake %s)", args.stake)
+        return run_one_stake(args, args.stake)
 
     mode = args.mode
     if mode == "auto":
