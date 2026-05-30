@@ -280,8 +280,9 @@ class _LoginPageState extends State<LoginPage> {
         dense: true,
         title: const Text('Keep my stake synced', style: TextStyle(fontSize: 14)),
         subtitle: const Text(
-            'Store my Church session (encrypted — never my password) so my stake\'s data '
-            'updates automatically. Revoke anytime.',
+            'Store my Church session (encrypted — never my password) so my stake\'s data updates '
+            'automatically each day. If my calling can\'t see every field, the app will suggest '
+            'which leaders to add. I can revoke anytime — that pauses the daily sync.',
             style: TextStyle(fontSize: 12)),
       ),
       const SizedBox(height: 8),
