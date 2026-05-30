@@ -307,7 +307,7 @@ def summary() -> dict:
 
 # --- admin invitations (owner-approved) -------------------------------------
 
-OWNER_EMAIL = "owner@example.com"  # hardcoded approver for every new admin grant
+OWNER_EMAIL = os.environ.get("OWNER_EMAIL", "owner@example.com")  # approver + support inbox
 MAIL_FROM = os.environ.get("MAIL_FROM", "Covenant Path <noreply@membercovenantpath.org>")
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 BROKER_PUBLIC_URL = os.environ.get(
