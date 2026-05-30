@@ -218,9 +218,11 @@ cd apps/viewer && D:/dev/flutter/bin/flutter test
   create the `covenant-path-app` project once in the dashboard, then `wrangler pages deploy`.
 - **LCR one-work details** use the person's `id`, **not** `personUuid` (the latter 500s). The
   endpoint returns ~198 fields; we keep the progress subtree in `members.details`.
-- **LCR transient 500s**: `progress-record` occasionally 500s for a unit. The report retries
-  3× then skips that unit, and upserts are non-destructive, so a skipped ward keeps its prior
-  rows (a later sync fills it in).
+- **LCR endpoint health** (probe-confirmed, `tools/endpoint_probe.py`): it's **not** rate-limiting.
+  `progress-record` is slow (~10.8s p50) and 500s ~38% — the report retries it **5×** with backoff
+  then skips that unit (upserts are non-destructive, so it keeps prior rows). `member-list`
+  (`/api/umlu/report/member-list`) currently **404s for every unit** (LCR moved/removed it) — it only
+  enriched sex/birth, which the profile fetch covers, so one attempt + graceful skip.
 - **Profile action ids are build-specific** — `member_profile` self-heals via
   `action_discovery` (a brief Playwright run) when LCR redeploys and an id goes stale.
 
@@ -236,5 +238,7 @@ cd apps/viewer && D:/dev/flutter/bin/flutter test
 | [docs/DECISIONS.md](docs/DECISIONS.md) | ADR log — the *why* behind the design |
 | [docs/DELEGATED_ACCESS.md](docs/DELEGATED_ACCESS.md) | Power users + delegated-access + security model |
 | [docs/CUSTOM_API_KEYS.md](docs/CUSTOM_API_KEYS.md) | Per-stake custom API keys |
+| [docs/LOGGING_SETUP.md](docs/LOGGING_SETUP.md) | Axiom + Sentry setup (free tiers, PII-safe) |
+| [docs/M7_OAUTH_DRIVE.md](docs/M7_OAUTH_DRIVE.md) | Per-stake Google OAuth Drive — design + GCP prereq |
 | [backend/auth_broker/README.md](backend/auth_broker/README.md) | Broker internals + security notes |
 | [apps/viewer/ARCHITECTURE.md](apps/viewer/ARCHITECTURE.md) | Viewer structure + shared widgets |
