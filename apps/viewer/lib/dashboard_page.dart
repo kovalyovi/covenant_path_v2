@@ -364,6 +364,8 @@ class _DashboardPageState extends State<DashboardPage> {
                 _sendFeedback();
               case 'about':
                 showAboutDisclaimer(context);
+              case 'theme':
+                themeController.cycle();
               case 'lock':
                 _toggleLock();
               case 'signout':
@@ -401,6 +403,11 @@ class _DashboardPageState extends State<DashboardPage> {
                 value: 'about',
                 child: ListTile(
                     leading: Icon(Icons.info_outline), title: Text('About & privacy'))),
+            PopupMenuItem(
+                value: 'theme',
+                child: ListTile(
+                    leading: const Icon(Icons.brightness_6_outlined),
+                    title: Text('Theme: ${themeController.label}'))),
             if (_lockAvailable)
               PopupMenuItem(
                   value: 'lock',
