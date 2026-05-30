@@ -86,6 +86,27 @@ final milestones = <Milestone>[
 List<Milestone> milestonesFor(Map<String, dynamic> m) =>
     milestones.where((x) => x.eligible(m)).toList();
 
+/// Convert responsibility (the stake's hand-off policy, #23): the first year after baptism the
+/// missionaries + ward/branch mission leader track progress; after a year it moves to the Elders
+/// Quorum (men) / Relief Society (women) president. Returns a label + icon for the chip/filter.
+({String label, IconData icon}) responsibleParty(Map<String, dynamic> m) {
+  final b = _dateOf(m['baptism_date']);
+  final months = b == null ? null : (DateTime.now().difference(b).inDays / 30.44).floor();
+  if (months == null) return (label: 'Unassigned', icon: Icons.help_outline);
+  if (months < 12) return (label: 'Missionaries / WML', icon: Icons.volunteer_activism);
+  return _male(m)
+      ? (label: 'Elders Quorum', icon: Icons.groups_2_outlined)
+      : (label: 'Relief Society', icon: Icons.diversity_1_outlined);
+}
+
+/// The two ownership buckets, for filtering. 'WML' = first-year (missionaries/ward mission leader);
+/// 'RSEQ' = after-first-year (Relief Society / Elders Quorum).
+String responsibleBucket(Map<String, dynamic> m) {
+  final b = _dateOf(m['baptism_date']);
+  final months = b == null ? null : (DateTime.now().difference(b).inDays / 30.44).floor();
+  return (months != null && months >= 12) ? 'RSEQ' : 'WML';
+}
+
 /// Row of small circle chips for one member (the iOS Golden Hour pattern). Filled = done.
 /// With [highlightNext], the first not-yet-complete milestone gets an amber ring as the
 /// suggested next step.
