@@ -5,9 +5,10 @@ class _SpreadsheetView extends StatefulWidget {
   final List<Map<String, dynamic>> rows;
   final void Function(Map<String, dynamic>) onOpen;
 
-  // (header, member key, kind) — kind drives the conditional color.
+  // (header, member key, kind). 'text' columns sort; 'yesno'/'recommend'/'gender' columns filter.
   static const _cols = <(String, String, String)>[
     ('Member', 'name', 'text'),
+    ('Sex', 'sex', 'gender'),
     ('Unit', 'unit_name', 'text'),
     ('Baptism', 'baptism_date', 'text'),
     ('Member for', 'membership_duration', 'text'),
@@ -27,10 +28,9 @@ class _SpreadsheetView extends StatefulWidget {
 }
 
 class _SpreadsheetViewState extends State<_SpreadsheetView> {
-  String? _field; // member key to filter on (null = no filter)
-  bool _has = false; // true = has it, false = missing it
-  int? _sortCol; // column index to sort by (null = stable default order)
+  int? _sortCol; // index into _cols; null = no sort (3-state: asc → desc → none)
   bool _sortAsc = true;
+  final Map<String, bool?> _filters = {}; // column key → null(all) / true(has) / false(missing)
 
   static const _yes = {'Yes', 'Active'};
 
@@ -42,18 +42,35 @@ class _SpreadsheetViewState extends State<_SpreadsheetView> {
         : v;
   }
 
+  bool _passes(Map<String, dynamic> m) {
+    for (final e in _filters.entries) {
+      if (e.value == null) continue;
+      final v = '${m[e.key] ?? ''}';
+      if (v.isEmpty || v == 'N/A') return false; // N/A = not applicable → in neither has nor missing
+      if (_yes.contains(v) != e.value) return false;
+    }
+    return true;
+  }
+
+  void _cycleFilter(String key) => setState(() {
+        final cur = _filters[key];
+        _filters[key] = cur == null ? true : (cur ? false : null); // all → has → missing → all
+      });
+
+  void _onSort(int col) => setState(() {
+        if (_sortCol == col) {
+          _sortAsc ? _sortAsc = false : _sortCol = null; // asc → desc → none
+        } else {
+          _sortCol = col;
+          _sortAsc = true;
+        }
+      });
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context);
     // baptized only (investigators live in Upcoming / Golden Hour › Being Taught)
-    var rows = widget.rows.where((m) => m['kind'] != 'investigator').toList();
-    if (_field != null) {
-      rows = rows.where((m) {
-        final v = '${m[_field] ?? ''}';
-        if (v.isEmpty || v == 'N/A') return false; // N/A = not applicable, exclude from both
-        return _has ? _yes.contains(v) : !_yes.contains(v);
-      }).toList();
-    }
+    var rows = widget.rows.where((m) => m['kind'] != 'investigator').where(_passes).toList();
     if (_sortCol != null) {
       final key = _SpreadsheetView._cols[_sortCol!].$2;
       rows.sort((a, b) {
@@ -61,34 +78,20 @@ class _SpreadsheetViewState extends State<_SpreadsheetView> {
         return _sortAsc ? c : -c;
       });
     }
-    final filterable = _SpreadsheetView._cols.where((c) => c.$3 != 'text').toList();
+    final active = _filters.values.where((v) => v != null).length;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
-        padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-        child: Wrap(spacing: 10, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-          const Text('Filter:'),
-          DropdownButton<String?>(
-            value: _field,
-            hint: const Text('field'),
-            items: [
-              const DropdownMenuItem(value: null, child: Text('All members')),
-              for (final c in filterable) DropdownMenuItem(value: c.$2, child: Text(c.$1)),
-            ],
-            onChanged: (v) => setState(() => _field = v),
-          ),
-          if (_field != null)
-            SegmentedButton<bool>(
-              showSelectedIcon: false,
-              style: const ButtonStyle(visualDensity: VisualDensity.compact),
-              segments: const [
-                ButtonSegment(value: false, label: Text('Missing')),
-                ButtonSegment(value: true, label: Text('Has')),
-              ],
-              selected: {_has},
-              onSelectionChanged: (s) => setState(() => _has = s.first),
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+        child: Row(children: [
+          Text('${rows.length} member${rows.length == 1 ? '' : 's'}'
+              '${active > 0 ? ' (filtered)' : ''}', style: scheme.textTheme.bodySmall),
+          const Spacer(),
+          if (active > 0)
+            TextButton.icon(
+              onPressed: () => setState(_filters.clear),
+              icon: const Icon(Icons.filter_alt_off, size: 16),
+              label: Text('Clear $active filter${active == 1 ? '' : 's'}'),
             ),
-          Text('${rows.length} member${rows.length == 1 ? '' : 's'}',
-              style: Theme.of(context).textTheme.bodySmall),
         ]),
       ),
       Expanded(
@@ -97,33 +100,32 @@ class _SpreadsheetViewState extends State<_SpreadsheetView> {
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
-              showCheckboxColumn: false, // #33: no bulk-select / select-all; rows open individually
-              sortColumnIndex: _sortCol,
+              showCheckboxColumn: false, // #33: no bulk-select; first column is a row number
+              sortColumnIndex: _sortCol == null ? null : _sortCol! + 1, // +1 for the leading # column
               sortAscending: _sortAsc,
               headingRowColor: WidgetStatePropertyAll(scheme.colorScheme.primary),
               headingTextStyle:
                   TextStyle(color: scheme.colorScheme.onPrimary, fontWeight: FontWeight.bold),
-              headingRowHeight: 44,
+              headingRowHeight: 46,
               dataRowMinHeight: 40,
               dataRowMaxHeight: 48,
-              columnSpacing: 18,
+              columnSpacing: 16,
               columns: [
+                const DataColumn(label: Text('#')),
                 for (var i = 0; i < _SpreadsheetView._cols.length; i++)
                   DataColumn(
-                    label: Text(_SpreadsheetView._cols[i].$1),
-                    onSort: (col, asc) => setState(() {
-                      _sortCol = col;
-                      _sortAsc = asc;
-                    }),
+                    onSort: _SpreadsheetView._cols[i].$3 == 'text' ? (_, __) => _onSort(i) : null,
+                    label: _headerLabel(i),
                   ),
               ],
               rows: [
-                for (final m in rows)
+                for (var r = 0; r < rows.length; r++)
                   DataRow(
-                    onSelectChanged: (_) => widget.onOpen(m),
+                    onSelectChanged: (_) => widget.onOpen(rows[r]),
                     cells: [
+                      DataCell(Text('${r + 1}', style: TextStyle(color: Colors.grey.shade500))),
                       for (final c in _SpreadsheetView._cols)
-                        _cell(_SpreadsheetViewState._display(m, c.$2), c.$3)
+                        _cell(_display(rows[r], c.$2), c.$3),
                     ],
                   ),
               ],
@@ -134,7 +136,39 @@ class _SpreadsheetViewState extends State<_SpreadsheetView> {
     ]);
   }
 
+  /// Header: sortable text columns show just the label (DataTable adds the arrow). Filterable
+  /// columns show the label + a tap-to-cycle filter icon (all → has → missing). (#5/#6)
+  Widget _headerLabel(int i) {
+    final (label, key, kind) = _SpreadsheetView._cols[i];
+    if (kind == 'text') return Text(label);
+    final f = _filters[key];
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Text(label),
+      const SizedBox(width: 3),
+      InkWell(
+        onTap: () => _cycleFilter(key),
+        customBorder: const CircleBorder(),
+        child: Icon(
+          f == null ? Icons.filter_alt_outlined : (f ? Icons.check_circle : Icons.cancel),
+          size: 15,
+          color: f == null
+              ? Colors.white70
+              : (f ? Colors.greenAccent.shade100 : Colors.redAccent.shade100),
+        ),
+      ),
+    ]);
+  }
+
   DataCell _cell(String value, String kind) {
+    if (kind == 'gender') {
+      if (value != 'M' && value != 'F') return const DataCell(Text(''));
+      final c = value == 'M' ? Colors.blue.shade100 : Colors.pink.shade100;
+      return DataCell(Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(color: c, borderRadius: BorderRadius.circular(6)),
+        child: Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+      ));
+    }
     final color = _cellColor(value, kind);
     if (color == null) return DataCell(Text(value));
     return DataCell(Container(
@@ -158,5 +192,3 @@ class _SpreadsheetViewState extends State<_SpreadsheetView> {
     return null;
   }
 }
-
-// ---- shared chrome ----------------------------------------------------------

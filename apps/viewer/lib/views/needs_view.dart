@@ -1,46 +1,144 @@
 part of '../dashboard_page.dart';
 
-/// What's left to do: for each integration milestone, the *eligible* members still missing it
-/// (eligibility from golden_hour, so a child isn't listed as "needs a calling"). Unit shown as
-/// metadata so leaders can see both stake-wide and per-unit gaps.
-class _NeedsView extends StatelessWidget {
+/// What's left to do: a category selector along the top (one milestone selected at a time, each
+/// with its own icon + outstanding count), then the *eligible* members still missing that step
+/// (eligibility from golden_hour, so a child isn't listed as "needs a calling"), with a per-unit
+/// summary line. Unit shown as metadata so leaders see both stake-wide and per-unit gaps.
+class _NeedsView extends StatefulWidget {
   const _NeedsView({required this.rows, required this.tier, required this.onOpen});
   final List<Map<String, dynamic>> rows;
   final ScreenTier tier;
   final void Function(Map<String, dynamic>) onOpen;
+  @override
+  State<_NeedsView> createState() => _NeedsViewState();
+}
+
+class _NeedsViewState extends State<_NeedsView> {
+  int? _selected; // milestone index; null until defaulted to the first category with outstanding members
 
   @override
   Widget build(BuildContext context) {
-    final baptized = rows.where((m) => m['kind'] != 'investigator').toList();
-    final sections = <Widget>[];
-    for (final ms in milestones) {
-      final missing = baptized
-          .where((m) => milestonesFor(m).contains(ms) && !ms.complete(m))
-          .toList()
-        ..sort((a, b) => (a['name'] ?? '').toString().compareTo((b['name'] ?? '').toString()));
-      if (missing.isEmpty) continue;
-      sections.add(SectionCard(
-        title: 'Needs ${ms.label}',
-        leadingIcon: Icons.flag_outlined,
-        trailing: _CountBadge(missing.length),
-        child: Column(children: [
-          for (var i = 0; i < missing.length; i++) ...[
-            if (i > 0) const Divider(height: 1),
-            _MemberRow(m: missing[i], onOpen: onOpen, showUnit: true),
+    final baptized = widget.rows.where((m) => m['kind'] != 'investigator').toList();
+    final missingByMs = [
+      for (final ms in milestones)
+        baptized.where((m) => ms.eligible(m) && !ms.complete(m)).toList()
+          ..sort((a, b) => '${a['name']}'.compareTo('${b['name']}')),
+    ];
+    final total = missingByMs.fold<int>(0, (a, l) => a + l.length);
+    if (total == 0) {
+      return _Page(
+        tier: widget.tier,
+        header: const _BigHeader(
+            text: 'Needs Action', subtitle: 'Eligible members still missing each integration step'),
+        child: const Padding(
+            padding: EdgeInsets.all(32),
+            child: Center(child: Text('Nothing outstanding — everyone eligible is on track. 🎉'))),
+      );
+    }
+    final firstNonEmpty = missingByMs.indexWhere((l) => l.isNotEmpty);
+    final sel = _selected ?? (firstNonEmpty < 0 ? 0 : firstNonEmpty);
+    final ms = milestones[sel];
+    final missing = missingByMs[sel];
+
+    return _Page(
+      tier: widget.tier,
+      header: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const _BigHeader(
+            text: 'Needs Action', subtitle: 'Eligible members still missing each integration step'),
+        const SizedBox(height: 12),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(children: [
+            for (var i = 0; i < milestones.length; i++) ...[
+              if (i > 0) const SizedBox(width: 8),
+              _CategoryChip(
+                ms: milestones[i],
+                count: missingByMs[i].length,
+                selected: i == sel,
+                onTap: () => setState(() => _selected = i),
+              ),
+            ],
+          ]),
+        ),
+      ]),
+      child: _Columns(cols: 1, children: [_categorySection(context, ms, missing)]),
+    );
+  }
+
+  Widget _categorySection(BuildContext context, Milestone ms, List<Map<String, dynamic>> missing) {
+    final byUnit = <String, int>{};
+    for (final m in missing) {
+      final u = (m['unit_name'] ?? '—').toString();
+      byUnit[u] = (byUnit[u] ?? 0) + 1;
+    }
+    final unitParts = (byUnit.entries.toList()..sort((a, b) => b.value.compareTo(a.value)))
+        .map((e) => '${e.key} ${e.value}')
+        .join('   ·   ');
+    return SectionCard(
+      title: 'Needs ${ms.label}',
+      leadingIcon: ms.icon,
+      trailing: _CountBadge(missing.length),
+      child: missing.isEmpty
+          ? const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Text('Everyone eligible has this. 🎉'))
+          : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(unitParts,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey.shade600)),
+              const Divider(),
+              for (var i = 0; i < missing.length; i++) ...[
+                if (i > 0) const Divider(height: 1),
+                _MemberRow(m: missing[i], onOpen: widget.onOpen, showUnit: true),
+              ],
+            ]),
+    );
+  }
+}
+
+/// A category selector chip for the Needs view: icon + label + outstanding-count badge; filled
+/// when selected. Count 0 renders dimmed (that category is fully done).
+class _CategoryChip extends StatelessWidget {
+  const _CategoryChip(
+      {required this.ms, required this.count, required this.selected, required this.onTap});
+  final Milestone ms;
+  final int count;
+  final bool selected;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) {
+    final c = Theme.of(context).colorScheme;
+    final done = count == 0;
+    final fg = selected ? c.onPrimary : (done ? c.onSurfaceVariant.withValues(alpha: 0.6) : c.onSurfaceVariant);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        decoration: BoxDecoration(
+          color: selected ? c.primary : c.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(done ? Icons.check_circle : ms.icon, size: 17, color: fg),
+          const SizedBox(width: 7),
+          Text(ms.label, style: TextStyle(color: fg, fontWeight: FontWeight.w600, fontSize: 13)),
+          if (!done) ...[
+            const SizedBox(width: 7),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+              decoration: BoxDecoration(
+                color: selected ? c.onPrimary.withValues(alpha: 0.25) : c.primary.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text('$count',
+                  style: TextStyle(
+                      color: selected ? c.onPrimary : c.primary,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12)),
+            ),
           ],
         ]),
-      ));
-    }
-    return _Page(
-      tier: tier,
-      header: const _BigHeader(
-          text: 'Needs Action',
-          subtitle: 'Eligible members still missing each integration step'),
-      child: sections.isEmpty
-          ? const Padding(
-              padding: EdgeInsets.all(32),
-              child: Center(child: Text('Nothing outstanding — everyone eligible is on track.')))
-          : _Columns(cols: _cols(tier).clamp(1, 2), children: sections),
+      ),
     );
   }
 }

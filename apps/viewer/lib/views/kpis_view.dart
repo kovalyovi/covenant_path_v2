@@ -1,6 +1,6 @@
 part of '../dashboard_page.dart';
 
-enum _Period { week, month, year }
+enum _Period { week, month, year, all }
 
 /// KPIs computed from this stake's own covenant-path data (not LCR membership stats):
 ///   • New Members at Sacrament — baptized members attending, bucketed by the selected period
@@ -26,6 +26,7 @@ class _KpiViewState extends State<_KpiView> {
         _Period.week => ('2 weeks ago', 'Last week'),
         _Period.month => ('Last month', 'This month'),
         _Period.year => ('Last year', 'This year'),
+        _Period.all => ('Prev. month', 'This month'),
       };
 
   @override
@@ -94,7 +95,8 @@ class _KpiViewState extends State<_KpiView> {
         ('New members tracked', '${baptized.length}', () => _showDrill(context,
             title: 'New members tracked', events: evs(baptized, 'baptism_date'),
             allUnits: allUnits, onOpen: onOpen)),
-        ('Golden Hour', '${(completion * 100).round()}%', null),
+        ('Golden Hour', '${(completion * 100).round()}%',
+            () => _showGoldenHourBreakdown(context, baptized, onOpen)), // #5: per-category summary
       ]),
     ];
 
@@ -123,28 +125,31 @@ class _KpiViewState extends State<_KpiView> {
               ButtonSegment(value: _Period.week, label: Text('Week')),
               ButtonSegment(value: _Period.month, label: Text('Month')),
               ButtonSegment(value: _Period.year, label: Text('Year')),
+              ButtonSegment(value: _Period.all, label: Text('All')),
             ],
             selected: {_period},
             onSelectionChanged: (s) => setState(() => _period = s.first),
           ),
         ),
-        const SizedBox(height: 8),
-        Center(
-          child: FilterChip(
-            avatar: Icon(Icons.compare_arrows,
-                size: 18, color: _compare ? Theme.of(context).colorScheme.primary : null),
-            label: const Text('Compare to previous'),
-            selected: _compare,
-            onSelected: (v) => setState(() => _compare = v),
+        if (_period != _Period.all) ...[
+          const SizedBox(height: 8),
+          Center(
+            child: FilterChip(
+              avatar: Icon(Icons.compare_arrows,
+                  size: 18, color: _compare ? Theme.of(context).colorScheme.primary : null),
+              label: const Text('Compare to previous'),
+              selected: _compare,
+              onSelected: (v) => setState(() => _compare = v),
+            ),
           ),
-        ),
+        ],
       ]),
       child: _Columns(cols: _cols(widget.tier).clamp(1, 2), children: cards),
     );
   }
 }
 
-class _MetricChartCard extends StatelessWidget {
+class _MetricChartCard extends StatefulWidget {
   const _MetricChartCard({required this.title, required this.icon, required this.color,
       required this.series, required this.compare, required this.suffix,
       required this.events, required this.allUnits, required this.onOpen, this.showCompare = false});
@@ -160,30 +165,38 @@ class _MetricChartCard extends StatelessWidget {
   final bool showCompare;
 
   @override
+  State<_MetricChartCard> createState() => _MetricChartCardState();
+}
+
+class _MetricChartCardState extends State<_MetricChartCard> {
+  int? _hovered; // bucket index the pointer is over (per-unit summary below the chart)
+
+  @override
   Widget build(BuildContext context) {
+    final series = widget.series;
     final values = series.current;
     final last = values.isNotEmpty ? values.last : null;
     final prior = values.length >= 2 ? values[values.length - 2] : null;
     final delta = (last != null && prior != null) ? (last - prior) : null;
     return SectionCard(
-      title: title,
-      leadingIcon: icon,
-      iconColor: color,
+      title: widget.title,
+      leadingIcon: widget.icon,
+      iconColor: widget.color,
       trailing: delta == null ? null : _DeltaBadge(delta: delta),
-      onTap: events.isEmpty
+      onTap: widget.events.isEmpty
           ? null
-          : () => _showDrill(context, title: title, events: events, allUnits: allUnits,
-              onOpen: onOpen, bucketLabel: null), // whole card opens the full drill (#37)
+          : () => _showDrill(context, title: widget.title, events: widget.events,
+              allUnits: widget.allUnits, onOpen: widget.onOpen, bucketLabel: null), // whole card → full drill (#37)
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (last != null && prior != null) ...[
           IntrinsicHeight(
             child: Row(children: [
-              Expanded(child: _bigStat(context, compare.$1, prior)),
+              Expanded(child: _bigStat(context, widget.compare.$1, prior)),
               Container(
                   width: 1,
                   color: Theme.of(context).colorScheme.outlineVariant,
                   margin: const EdgeInsets.symmetric(horizontal: 14)),
-              Expanded(child: _bigStat(context, compare.$2, last)),
+              Expanded(child: _bigStat(context, widget.compare.$2, last)),
             ]),
           ),
           const SizedBox(height: 16),
@@ -193,31 +206,74 @@ class _MetricChartCard extends StatelessWidget {
           child: _Line(
             values: values,
             labels: series.labels,
-            color: color,
-            prev: showCompare ? series.prev : const [],
+            color: widget.color,
+            prev: widget.showCompare ? series.prev : const [],
+            onHover: (i) {
+              if (i != _hovered) setState(() => _hovered = i);
+            },
             onBucketTap: (i) => _showDrill(context,
-                title: title,
-                events: events.where((e) => e.bucket == i).toList(),
-                allUnits: allUnits,
-                onOpen: onOpen,
+                title: widget.title,
+                events: widget.events.where((e) => e.bucket == i).toList(),
+                allUnits: widget.allUnits,
+                onOpen: widget.onOpen,
                 bucketLabel: i < series.labels.length ? series.labels[i] : null),
           ),
         ),
+        _hoverSummary(context), // #3: per-unit breakdown for the hovered point
         const SizedBox(height: 4),
         Row(children: [
           Expanded(
-            child: Text(suffix,
+            child: Text(widget.suffix,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey.shade600)),
           ),
           TextButton.icon(
             onPressed: () => _showDrill(context,
-                title: title, events: events, allUnits: allUnits, onOpen: onOpen),
+                title: widget.title, events: widget.events, allUnits: widget.allUnits, onOpen: widget.onOpen),
             icon: const Icon(Icons.groups, size: 16),
             label: const Text('By unit'),
             style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
           ),
         ]),
       ]),
+    );
+  }
+
+  /// Fixed-height strip under the chart: hovering a point (#3) shows that bucket's per-unit counts;
+  /// otherwise a hint. Fixed height so the card doesn't jump as the pointer moves.
+  Widget _hoverSummary(BuildContext context) {
+    final i = _hovered;
+    final hint = Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey.shade500);
+    Widget body;
+    if (i == null || i >= widget.series.labels.length) {
+      body = Text('Hover a point for the per-unit breakdown', style: hint);
+    } else {
+      final byUnit = <String, Set<String>>{};
+      for (final e in widget.events.where((e) => e.bucket == i)) {
+        (byUnit[(e.m['unit_name'] ?? '—').toString()] ??= {})
+            .add((e.m['person_uuid'] ?? e.m['name'] ?? '').toString());
+      }
+      final total = byUnit.values.fold<int>(0, (a, s) => a + s.length);
+      final parts = (byUnit.entries.toList()..sort((a, b) => b.value.length.compareTo(a.value.length)))
+          .map((e) => '${e.key} ${e.value.length}')
+          .join('  ·  ');
+      body = Text(
+        total == 0 ? '${widget.series.labels[i]} · none' : '${widget.series.labels[i]} · $total  —  $parts',
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w500),
+      );
+    }
+    return Container(
+      width: double.infinity,
+      height: 38,
+      alignment: Alignment.centerLeft,
+      margin: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: i == null ? Colors.transparent : widget.color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: body,
     );
   }
 
@@ -238,12 +294,13 @@ class _MetricChartCard extends StatelessWidget {
 class _Line extends StatelessWidget {
   const _Line(
       {required this.values, required this.labels, required this.color,
-      this.prev = const [], this.onBucketTap});
+      this.prev = const [], this.onBucketTap, this.onHover});
   final List<double> values;
   final List<String> labels;
   final Color color;
   final List<double> prev; // previous-period overlay (drawn faded/dashed when non-empty)
   final void Function(int bucketIndex)? onBucketTap;
+  final void Function(int? bucketIndex)? onHover; // null = pointer left the chart
 
   @override
   Widget build(BuildContext context) {
@@ -293,13 +350,22 @@ class _Line extends StatelessWidget {
       gridData: const FlGridData(show: false),
       borderData: FlBorderData(show: false),
       lineTouchData: LineTouchData(
-        enabled: onBucketTap != null,
+        enabled: onBucketTap != null || onHover != null,
         handleBuiltInTouches: false, // don't draw a built-in tooltip (keeps the always-on labels)
+        // #4: show the click cursor when the pointer is over a data point.
+        mouseCursorResolver: (event, resp) => (resp?.lineBarSpots?.isNotEmpty ?? false)
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.basic,
         touchCallback: (event, resp) {
-          if (onBucketTap != null &&
-              event is FlTapUpEvent &&
-              (resp?.lineBarSpots?.isNotEmpty ?? false)) {
-            onBucketTap!(resp!.lineBarSpots!.first.x.toInt());
+          final spot = resp?.lineBarSpots?.isNotEmpty ?? false ? resp!.lineBarSpots!.first : null;
+          // #3: report the hovered bucket (and clear it when the pointer leaves).
+          if (event is FlPointerExitEvent || spot == null) {
+            onHover?.call(null);
+          } else {
+            onHover?.call(spot.x.toInt());
+          }
+          if (onBucketTap != null && event is FlTapUpEvent && spot != null) {
+            onBucketTap!(spot.x.toInt());
           }
         },
         touchTooltipData: LineTouchTooltipData(
@@ -362,6 +428,83 @@ void _showDrill(BuildContext context,
     constraints: const BoxConstraints(maxWidth: 640),
     builder: (_) => _DrillSheet(
         title: title, events: events, allUnits: allUnits, onOpen: onOpen, bucketLabel: bucketLabel),
+  );
+}
+
+/// #5: Golden Hour completion broken out per category, eligible-only (matches the GH tab). Each row
+/// expands to the eligible members still missing that milestone, tappable to open them.
+void _showGoldenHourBreakdown(BuildContext context, List<Map<String, dynamic>> rows,
+    void Function(Map<String, dynamic>) onOpen) {
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    constraints: const BoxConstraints(maxWidth: 640),
+    builder: (_) => DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.7,
+      minChildSize: 0.4,
+      maxChildSize: 0.95,
+      builder: (context, scroll) => ListView(
+        controller: scroll,
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+        children: [
+          Text('Golden Hour by category',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          Text('Eligible-only — members who don\'t qualify (age, sex, tenure) are excluded so the % '
+              'reflects who actually still needs it.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey.shade600)),
+          const SizedBox(height: 8),
+          for (final ms in milestones)
+            () {
+              final eligible = rows.where(ms.eligible).toList();
+              if (eligible.isEmpty) return const SizedBox.shrink();
+              final missing = eligible.where((m) => !ms.complete(m)).toList()
+                ..sort((a, b) => '${a['name']}'.compareTo('${b['name']}'));
+              final done = eligible.length - missing.length;
+              final pct = done / eligible.length;
+              return Card(
+                elevation: 0,
+                margin: const EdgeInsets.symmetric(vertical: 4),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant)),
+                child: ExpansionTile(
+                  title: Text(ms.label),
+                  subtitle: Padding(
+                    padding: const EdgeInsets.only(top: 6, right: 40),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(value: pct, minHeight: 5),
+                    ),
+                  ),
+                  trailing: Text('${(pct * 100).round()}%  ·  $done/${eligible.length}',
+                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                  children: missing.isEmpty
+                      ? [const Padding(padding: EdgeInsets.all(16), child: Text('Everyone eligible has this. 🎉'))]
+                      : [
+                          for (final m in missing)
+                            ListTile(
+                              dense: true,
+                              leading: PhotoAvatar(
+                                  name: m['name']?.toString() ?? '?',
+                                  photoUrl: m['photo_url']?.toString(),
+                                  size: 32),
+                              title: Text(m['name']?.toString() ?? '—'),
+                              subtitle: Text('${m['unit_name'] ?? ''}'),
+                              onTap: () {
+                                Navigator.pop(context);
+                                onOpen(m);
+                              },
+                            ),
+                        ],
+                ),
+              );
+            }(),
+        ],
+      ),
+    ),
   );
 }
 
@@ -443,6 +586,7 @@ class _DrillSheetState extends State<_DrillSheet> {
                 : ExpansionTile(
                     title: Text(u),
                     trailing: _CountBadge(members.length),
+                    initiallyExpanded: true, // #2: units expanded on open, not collapsed
                     children: [
                       for (final m in members)
                         ListTile(

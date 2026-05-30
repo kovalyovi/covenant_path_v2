@@ -5,9 +5,11 @@ import 'package:flutter/material.dart';
 class Milestone {
   final String label; // full name (detail + accessibility)
   final String abbr;  // chip label (1-2 chars)
+  final IconData icon; // category icon (Needs tabs, summaries)
   final bool Function(Map<String, dynamic>) complete;
   final bool Function(Map<String, dynamic>) eligible; // who this milestone can apply to
-  const Milestone(this.label, this.abbr, this.complete, {this.eligible = _everyone});
+  const Milestone(this.label, this.abbr, this.complete,
+      {this.eligible = _everyone, this.icon = Icons.flag_outlined});
 }
 
 bool _everyone(Map<String, dynamic> m) => true;
@@ -71,16 +73,18 @@ bool _male(Map<String, dynamic> m) => m['sex'] == 'M';
 // actually apply to (age / sex / tenure) so completion stats don't penalize the ineligible.
 // Baptism is intentionally NOT a milestone; the longer-horizon ordinances live on the detail page.
 final milestones = <Milestone>[
-  Milestone('Friends', 'F', (m) => m['friends'] == 'Yes'), // everyone
+  Milestone('Friends', 'F', (m) => m['friends'] == 'Yes', icon: Icons.handshake_outlined), // everyone
   Milestone('Calling', 'C', (m) => m['calling'] == 'Yes',
-      eligible: (m) => _turnsAtLeast(m, 12)),
-  Milestone('Has ministers', 'M', (m) => m['ministering_brothers_sisters'] == 'Yes'), // everyone
+      eligible: (m) => _turnsAtLeast(m, 12), icon: Icons.badge_outlined),
+  Milestone('Has ministers', 'M', (m) => m['ministering_brothers_sisters'] == 'Yes',
+      icon: Icons.support_agent), // everyone
   Milestone('Ministering assignment', 'MA', (m) => m['ministering_assignment'] == 'Yes',
-      eligible: (m) => _turnsAtLeast(m, 14)), // gives ministering: 14+ (both sexes)
+      eligible: (m) => _turnsAtLeast(m, 14), icon: Icons.volunteer_activism), // gives ministering: 14+
   Milestone('Aaronic Priesthood', 'AP', (m) => m['aaronic_priesthood'] == 'Yes',
-      eligible: (m) => _male(m) && _turnsAtLeast(m, 12)),
+      eligible: (m) => _male(m) && _turnsAtLeast(m, 12), icon: Icons.military_tech_outlined),
   Milestone('Melchizedek Priesthood', 'MP', (m) => m['melchizedek_priesthood'] == 'Yes',
-      eligible: (m) => _male(m) && _ageNowAtLeast(m, 18) && _memberOneYearPlus(m)),
+      eligible: (m) => _male(m) && _ageNowAtLeast(m, 18) && _memberOneYearPlus(m),
+      icon: Icons.workspace_premium_outlined),
 ];
 
 List<Milestone> milestonesFor(Map<String, dynamic> m) =>
