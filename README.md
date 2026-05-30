@@ -88,28 +88,70 @@ it the admin console still loads — the Actions/Changelog panels and Rescrape b
 
 ## Features
 
-- **RLS-scoped dashboard** — four tabs (On Date / Golden Hour / KPIs / Table); every query is
-  auto-scoped by the signed-in user's calling. No app-side access checks. **Responsive**: bottom
-  nav + single column on phones; a side rail + multi-column cards on tablet/desktop (the browser
-  feels like a real app). KPIs are `fl_chart` line-chart cards; the Table is color-coded like the
-  master spreadsheet.
-- **LCR-style member detail** (`person_detail_page.dart`) — sacrament-attendance dots, friends
-  (names + ward), priesthood / calling / ministering names, temple ordinances & experiences,
-  principles-taught progress, self-reliance. Driven by the `members.details` JSONB subtree the
-  sync keeps (contact PII deliberately excluded).
-- **Admin / ops console** (`admin_page.dart`, gear icon, admins only) — system health, data
-  freshness + row counts, GitHub Actions runs + changelog, **targeted maintenance flows**
-  (Full sync / Supabase only / Sheets only / Refresh photos — `daily-sync.yml` dispatch inputs),
-  re-run, a **Diagnostics** panel (request success %, failing units, field parity, endpoint
-  latency), and invite/revoke admins (escalation-safe). Server side = broker `/admin/*`; gated by
-  the `app_admins` table.
-- **Observability** — `lcr_client/metrics.py` times every LCR JSON call; each sync writes a
-  `sync_diagnostics` row, and `backend/probe.py` (`probe-lcr.yml`, every 4h) profiles the flaky
-  endpoints between syncs so the console can trend where 500s/timeouts happen.
-- **Dual login** — Church account (broker → Okta IDX, MFA-aware) or email OTP (invitees).
+**RLS-scoped dashboard — five tabs**, every query auto-scoped by the signed-in user's calling (no
+app-side access checks). Responsive: bottom nav + single column on phones; a side rail with
+text-labelled items + multi-column cards on tablet/desktop.
+
+| Tab | What it shows |
+|---|---|
+| **Upcoming** | Prospective baptisms as a date-rail timeline; dates already passed surface in a "needs attention" block on top. Per-unit toggle shows each ward/branch's **assigned full-time missionaries** (name chips → phone/email). |
+| **Golden Hour** | **Being Taught** (investigators) + **New Members** (first-year integration milestone chips, next step highlighted). Eligible-only completion % (ineligible members never drag the number down), tappable per category. Baptism date shows tenure — "Feb 6, 2026 (2 months 3 days)". Unit/Date grouping + asc/desc sort. |
+| **Needs** | One selectable category tab per integration milestone (each with its own icon + outstanding count); the *eligible* members still missing it, with a per-unit summary, sorted by baptism date → unit. |
+| **KPIs** | `fl_chart` line cards over rolling windows anchored to today (week = last 7 days by day, month = 5 weeks, year = 12 months, **All** = every month). Hover a point → that bucket's per-unit breakdown; tap → who. A "Golden Hour by unit" ranked card shows which unit integrates converts best. |
+| **Table** | Every covenant-path field, color-coded like the master sheet: gender pill, row numbers, **per-column filters** (all/has/missing), sortable text columns. |
+
+- **LCR-style member detail** (`person_detail_page.dart`) — sacrament dots, friends (names + ward),
+  priesthood / calling / ministering names, temple ordinances, principles-taught, self-reliance,
+  a deep-link back to the person's LCR profile. Driven by the `members.details` JSONB subtree
+  (contact PII deliberately excluded).
+- **Eligibility is one source of truth** — `golden_hour.dart` `milestones` (mirrored in
+  `backend/milestones.py`): Aaronic = male & turns-12-this-year; Melchizedek = male & 18-now &
+  member ≥ 1yr; ministering-assignment = turns-14; calling = turns-12. Stats divide by *eligible*,
+  not everyone.
+- **Settings screen** — appearance (theme), security (passkey, biometric app lock), support
+  (contact / feedback), about & privacy, account (sign out). The app bar stays to ≤3 items + a
+  hamburger menu of ≤5 primary actions.
+- **Admin / ops console** (`admin_page.dart`, admins only) — health, freshness + counts, GitHub
+  Actions runs + changelog, maintenance flows (`daily-sync.yml` dispatch), a **Diagnostics** panel
+  (request success %, failing units, field parity, endpoint latency) with **"Copy for Claude"**,
+  and the **Enrolled-stakes** cross-stake view with **per-stake Sync now / revoke**. Gated by
+  `app_admins`; server side = broker `/admin/*`.
+- **Logins** — Church account (broker → Okta IDX, MFA-aware), email OTP (invitees), **passkeys**
+  (WebAuthn, passwordless), and a **broker email-OTP relay** ("Can't connect? Use backup sign-in")
+  for networks that can't reach Supabase directly (e.g. some regions). Optional **biometric app
+  lock** on native.
 - **Power users** — `invite_power_user(email)` clones the caller's exact scope to any email
   (recursive, audited, revocable). See [docs/DELEGATED_ACCESS.md](docs/DELEGATED_ACCESS.md).
+- **Observability** — `lcr_client/metrics.py` times every LCR call; each sync writes a
+  `sync_diagnostics` row; structured PII-safe events ship to **Axiom**; uncaught client errors go
+  to **Sentry** (no PII) and the broker `/log`. `tools/endpoint_probe.py` characterises LCR's
+  per-endpoint health/rate limits.
 - **Email digests + invitations** via Resend.
+
+---
+
+## Multi-stake support
+
+The platform serves **many stakes at once**, each isolated end-to-end:
+
+- **Access** — RLS scopes every read by the signed-in user's LCR calling (or a bound identity).
+  Stake leaders see their stake; ward leaders see their unit; clerks/exec-secs are on the
+  always-allowed calling list. Roles are auto-provisioned from LCR each sync (`backend/roles.py`).
+- **Delegated credentials** — a leader signs in with "Keep my stake synced" and their LCR session
+  is stored **envelope-encrypted** (`backend/credentials.py`, `CP_TOKEN_KEY`); the daily job mints
+  from it (three-tier renewal: stored appSession → Okta re-SSO → OAuth refresh). Revoke pauses it.
+  See [docs/DELEGATED_ACCESS.md](docs/DELEGATED_ACCESS.md).
+- **Per-stake sync jobs** — `daily-sync.yml` is a dynamic matrix: a `prepare` job lists the
+  enrolled stakes and fans out **one isolated job per stake** (own logs, independent pass/fail).
+  `daily_sync.py --stake <unit>` runs exactly one; `--only <unit>` (via the workflow `stake` input)
+  powers the OPS per-stake "Sync now".
+- **Per-stake spreadsheets** — each stake gets its **own** Google Sheet, shared read-only with that
+  stake's leadership (from the synced roster). The shared master sheet is reserved for the
+  operator's own stake — other stakes never mingle into it (they skip Sheets if Drive can't create
+  their own). Needs the Drive API enabled on the service account.
+- **Cross-stake ops** — the admin console's Enrolled-stakes panel shows every stake's enrollment,
+  coverage, freshness, member count + per-stake Sync/revoke.
+- **Roadmap** — per-stake Google **OAuth** so each stake fully owns its sheet in *its* Drive (M7).
 
 ---
 

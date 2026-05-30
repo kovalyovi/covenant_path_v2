@@ -16,6 +16,7 @@ only carries the requests, it does not bypass verification. Uses the public anon
 from __future__ import annotations
 
 import os
+import time
 
 import requests
 
@@ -23,6 +24,11 @@ from lcr_client.logging_setup import get_logger
 
 logger = get_logger()
 _TIMEOUT = 30
+
+# Defense-in-depth against using the relay to email-bomb a victim: a per-email cooldown on top of
+# Supabase's own OTP rate limit. In-memory is fine — the broker runs single-instance.
+_COOLDOWN_SECONDS = 30
+_last_start: dict[str, float] = {}
 
 
 class RelayError(RuntimeError):
@@ -45,13 +51,19 @@ def _headers(key: str) -> dict:
 def start_email_login(email: str) -> dict:
     """Ask Supabase to email a one-time code to [email]. create_user so first-time leaders work."""
     email = (email or "").strip().lower()
-    if "@" not in email:
+    if "@" not in email or len(email) > 254:
         raise RelayError("a valid email is required")
+    now = time.time()
+    last = _last_start.get(email, 0)
+    if now - last < _COOLDOWN_SECONDS:
+        raise RelayError("a code was just sent — please wait a moment before requesting another")
+    _last_start[email] = now
     url, key = _cfg()
     r = requests.post(f"{url}/auth/v1/otp", headers=_headers(key),
                       json={"email": email, "create_user": True}, timeout=_TIMEOUT)
     if r.status_code not in (200, 201):
-        logger.warning("relay otp start %s -> %s %s", email, r.status_code, r.text[:160])
+        # PII-safe: log the status only, never the email or Supabase's (possibly email-bearing) body.
+        logger.warning("relay otp start -> %s", r.status_code)
         raise RelayError(f"could not send the code ({r.status_code})")
     logger.info("relay: sent email code to a user")
     return {"ok": True}
