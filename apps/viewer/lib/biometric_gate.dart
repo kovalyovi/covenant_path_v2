@@ -3,16 +3,19 @@ import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Device-biometric app lock — Face ID / Touch ID / fingerprint / Windows Hello via local_auth.
-/// Native only; on web it's a no-op (passkeys/WebAuthn would be the web path). Gates a restored
-/// session so a returning leader unlocks with biometrics instead of re-authenticating.
+import 'biometric_web_stub.dart' if (dart.library.js_interop) 'biometric_web.dart' as webbio;
+
+/// Device-biometric app lock — Face ID / Touch ID / fingerprint / Windows Hello. Native uses
+/// local_auth; **web uses WebAuthn platform authenticators** (biometric_web.dart) so the browser
+/// also gets a biometric gate. Either way it guards a restored session so a returning leader
+/// unlocks with biometrics instead of re-authenticating — it never stores or replays a password.
 class BiometricLock {
   static const _prefKey = 'biometric_lock_enabled';
   static final _auth = LocalAuthentication();
 
-  /// Whether this device can do biometrics at all (false on web / unsupported hardware).
+  /// Whether this device/browser can do biometrics (native hardware, or a web platform authenticator).
   static Future<bool> available() async {
-    if (kIsWeb) return false;
+    if (kIsWeb) return webbio.webBiometricAvailable();
     try {
       return (await _auth.isDeviceSupported()) && (await _auth.canCheckBiometrics);
     } catch (_) {
@@ -20,18 +23,25 @@ class BiometricLock {
     }
   }
 
+  /// On by default on native; opt-in on web (registering a platform credential prompts the user,
+  /// so we only do it when they explicitly turn the lock on).
   static Future<bool> enabled() async {
-    if (kIsWeb) return false;
     final p = await SharedPreferences.getInstance();
-    return p.getBool(_prefKey) ?? true; // on by default wherever supported
+    return p.getBool(_prefKey) ?? !kIsWeb;
   }
 
-  static Future<void> setEnabled(bool v) async {
+  /// Enable/disable the lock. On web, enabling registers the platform credential now (returns false
+  /// if the user cancels); disabling drops it. Returns whether the new state took effect.
+  static Future<bool> setEnabled(bool v) async {
+    if (kIsWeb && v && !await webbio.webBiometricUnlock()) return false; // registration cancelled
     final p = await SharedPreferences.getInstance();
     await p.setBool(_prefKey, v);
+    if (kIsWeb && !v) await webbio.webBiometricClear();
+    return true;
   }
 
   static Future<bool> authenticate() async {
+    if (kIsWeb) return webbio.webBiometricUnlock();
     try {
       return await _auth.authenticate(
         localizedReason: 'Unlock Covenant Path',

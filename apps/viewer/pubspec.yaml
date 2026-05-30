@@ -14,7 +14,8 @@ dependencies:
   http: ^1.2.0          # calls the Church-login auth broker (backend/auth_broker)
   fl_chart: ^0.69.0     # KPI line charts (iOS-app-style graphs)
   url_launcher: ^6.3.2
-  local_auth: ^3.0.1
+  local_auth: ^3.0.1          # native biometric app-lock (Face ID / fingerprint / Hello)
+  web: ^1.1.0                 # WebAuthn platform-authenticator lock on web (biometric_web.dart)
   shared_preferences: ^2.5.5
 
 # app_links 7.1.0 (transitive via supabase_flutter) ships an android/build.gradle.kts that throws

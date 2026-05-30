@@ -87,12 +87,17 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Future<void> _toggleLock() async {
-    await BiometricLock.setEnabled(!_lockOn);
-    if (mounted) {
-      setState(() => _lockOn = !_lockOn);
+    final target = !_lockOn;
+    final ok = await BiometricLock.setEnabled(target);
+    if (!mounted) return;
+    if (!ok) {
       ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Biometric app lock ${_lockOn ? 'on' : 'off'}')));
+          const SnackBar(content: Text('Could not set up biometric unlock — try again.')));
+      return;
     }
+    setState(() => _lockOn = target);
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Biometric app lock ${target ? 'on' : 'off'}')));
   }
 
   Future<void> _checkAdmin() async {
