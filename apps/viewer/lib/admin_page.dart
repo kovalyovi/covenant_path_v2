@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'admin_client.dart';
@@ -468,6 +469,22 @@ class _DiagnosticsCard extends StatelessWidget {
               offText: '${failed.length} failed'),
           StatusPill(label: '${req['total_errors'] ?? 0} request errors', ok: (req['total_errors'] ?? 0) == 0),
         ]),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            // #54: one tap → the whole run's diagnostics as text, ready to paste to Claude. PII-safe
+            // (counts/endpoints/coverage only — no names/dates/addresses).
+            onPressed: () {
+              Clipboard.setData(ClipboardData(
+                  text: _claudeDump(run, req, stats, coverage, endpoints, failed)));
+              ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Diagnostics copied — paste into Claude.')));
+            },
+            icon: const Icon(Icons.copy_all, size: 16),
+            label: const Text('Copy for Claude'),
+            style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+          ),
+        ),
         if (failed.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 8),
@@ -760,6 +777,33 @@ Widget _kv(BuildContext context, String k, String v) => Padding(
         Text(v, style: const TextStyle(fontWeight: FontWeight.w500)),
       ]),
     );
+
+/// PII-safe text dump of a sync run's diagnostics for the "Copy for Claude" button (#54):
+/// success rate, failed units, per-field parity, and per-endpoint latency/error counts.
+String _claudeDump(Map<String, dynamic> run, Map req, Map stats, Map coverage, List endpoints,
+    List failed) {
+  final b = StringBuffer()
+    ..writeln('Covenant Path — sync diagnostics (PII-safe)')
+    ..writeln('run_at: ${run['run_at']}   kind: ${run['kind']}')
+    ..writeln('requests: ${req['success_pct'] ?? '?'}% success, ${req['total_errors'] ?? 0} errors')
+    ..writeln('units ok: ${stats['units'] ?? '?'}'
+        '${failed.isEmpty ? '' : '   failed: ${failed.join(', ')}'}');
+  if (coverage.isNotEmpty) {
+    b.writeln('field_coverage (filled/blocked/pending):');
+    coverage.forEach((k, v) {
+      final c = (v as Map);
+      b.writeln('  $k: ${c['filled'] ?? 0}/${c['blocked'] ?? 0}/${c['pending'] ?? 0}');
+    });
+  }
+  if (endpoints.isNotEmpty) {
+    b.writeln('endpoints:');
+    for (final ep in endpoints) {
+      b.writeln('  ${ep['endpoint']}: ${ep['calls']} calls, ${ep['avg_ms']}ms avg, '
+          '${ep['errors'] ?? 0} err');
+    }
+  }
+  return b.toString();
+}
 
 String _ago(dynamic iso) {
   if (iso == null) return 'never';
