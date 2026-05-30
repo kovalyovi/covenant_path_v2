@@ -26,6 +26,9 @@ from lcr_client.access import covenant_path_access
 from lcr_client.auth import AuthExpiredError
 from lcr_client.logging_setup import dump_debug, get_logger
 from lcr_client.member_profile import profile_fields
+# Shared, pure eligibility helpers (same rules the app + mailer use) — to gate priesthood display
+# to eligible people (N/A for ineligible), matching the reference sheet.
+from backend.milestones import is_at_least_now, member_one_year, turns_at_least
 from covenant_path.profile_cache import ProfileCache
 
 logger = get_logger()
@@ -224,17 +227,23 @@ def _retry(fn, attempts: int = 3, delay: float = 2.0, label: str = ""):
     return None
 
 
-def _build_birth_map(client: LcrClient, unit_number: int) -> dict[str, str]:
-    birth_map: dict[str, str] = {}
+def _build_member_maps(client: LcrClient, unit_number: int) -> dict[str, dict]:
+    """uuid -> {'birth': display, 'sex': 'M'/'F'} from the member list — the AUTHORITATIVE source
+    for sex (the one-work progress record has no sex, which broke all gender/priesthood eligibility)."""
+    out: dict[str, dict] = {}
     for m in client.member_list(unit_number):
         birth = (m.raw.get("birth") or {}).get("date") or {}
         display = birth.get("display")
-        if not display:
-            continue
+        sex = m.raw.get("sex")
         for key in (m.raw.get("personUuid"), m.raw.get("uuid")):
-            if key:
-                birth_map[key] = display
-    return birth_map
+            if not key:
+                continue
+            info = out.setdefault(key, {})
+            if display:
+                info["birth"] = display
+            if sex:
+                info["sex"] = sex
+    return out
 
 
 def _assemble(person_raw: dict, details: dict | None, unit_name: str, birth: str | None,
@@ -294,11 +303,16 @@ def _apply_profile(member: CovenantPathMember, prof: dict) -> None:
         member.ministering_assignment = prof["ministering_assignment"]
     if not member.birth_date and prof.get("birth_date"):
         member.birth_date = prof["birth_date"]
-    # Priesthood from the profile's office (authoritative). "priesthood_office" is always present in
-    # the profile record (possibly None); apply whenever the record was fetched.
+    # Priesthood from the profile's office (authoritative). Gate the DISPLAYED value to ELIGIBLE
+    # people — N/A for females / under-age / (for Melch) <1yr members — matching the reference
+    # sheet, where ineligible rows show N/A rather than a misleading "No".
     if "priesthood_office" in prof:
-        member.aaronic_priesthood, member.melchizedek_priesthood = \
-            priesthood_from_office(prof.get("priesthood_office"))
+        a, mel = priesthood_from_office(prof.get("priesthood_office"))
+        em = {"sex": member.sex, "birth_date": member.birth_date, "baptism_date": member.baptism_date}
+        male = member.sex == "M"
+        member.aaronic_priesthood = a if (male and turns_at_least(em, 12)) else NA
+        member.melchizedek_priesthood = (
+            mel if (male and is_at_least_now(em, 18) and member_one_year(em)) else NA)
     # calling / has-ministers when the profile supplies them (member_profile.extract_fields fills
     # these when the member record exposes them; absent -> keep the value _assemble derived).
     if prof.get("calling") in ("Yes", "No"):
@@ -386,8 +400,8 @@ def build_stake_report(
             if verbose:
                 print(f"    [!] skipped {unit.name}: progress-record unavailable after retries")
             continue
-        birth_map = _retry(lambda u=unit: _build_birth_map(client, u.unit_number),
-                           label=f"member_list {unit.unit_number}") or {}
+        member_maps = _retry(lambda u=unit: _build_member_maps(client, u.unit_number),
+                             label=f"member_list {unit.unit_number}") or {}
 
         # newMemberList = baptized; investigatorList = people being taught (planned baptism
         # date in baptismGoalDateString). Tag each so the app can split the two populations.
@@ -400,8 +414,10 @@ def build_stake_report(
             details = _details_with_retry(client, person.get("id"), person.get("cmisId"))
             if details is None:
                 stats["details_missing"] += 1
-            birth = birth_map.get(person.get("personUuid")) or birth_map.get(person.get("id"))
+            info = member_maps.get(person.get("personUuid")) or member_maps.get(person.get("id")) or {}
+            birth = info.get("birth")
             member = _assemble(person, details, unit.name, birth, kind=kind)
+            member.sex = info.get("sex") or member.sex  # member list is authoritative for sex
             member.unit_number = unit.unit_number
             uuid = person.get("personUuid")
             if uuid:
