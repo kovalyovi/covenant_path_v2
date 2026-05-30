@@ -224,7 +224,18 @@ def _build_birth_map(client: LcrClient, unit_number: int) -> dict[str, str]:
 def _assemble(person_raw: dict, details: dict | None, unit_name: str, birth: str | None,
               kind: str = "new_member") -> CovenantPathMember:
     d = details or person_raw
-    aaronic, melch = parse_priesthood(d.get("priesthoodOrdinations"))
+    # Priesthood, calling, and endowment live in the member PROFILE. Without it the bare progress
+    # record lacks those keys — emit NEEDS_PROFILE (not a false "N/A"/"No"/empty) so a no-profile or
+    # partial run is PRESERVED by the merge-upsert (backend/db.upsert_members) instead of clobbering
+    # good data. (Root cause of the "priesthood/calling blank in app, right in sheet" bug.)
+    def _has(k: str) -> bool:
+        return details is not None or k in d
+    if _has("priesthoodOrdinations"):
+        aaronic, melch = parse_priesthood(d.get("priesthoodOrdinations"))
+    else:
+        aaronic = melch = NEEDS_PROFILE
+    calling = yes_no(bool(d.get("callings"))) if _has("callings") else NEEDS_PROFILE
+    living = parse_endowment(d.get("templeOrdinances")) if _has("templeOrdinances") else NEEDS_PROFILE
     ministering = d.get("ministering") or {}
     has_ministers = bool(ministering.get("ministeringBrothers") or ministering.get("ministeringSisters"))
     return CovenantPathMember(
@@ -235,12 +246,12 @@ def _assemble(person_raw: dict, details: dict | None, unit_name: str, birth: str
         friends=yes_no(bool(d.get("friends"))),
         aaronic_priesthood=aaronic,
         melchizedek_priesthood=melch,
-        calling=yes_no(bool(d.get("callings"))),
+        calling=calling,
         ministering_brothers_sisters=yes_no(has_ministers),
         ministering_assignment=NEEDS_PROFILE,
         temple_recommend=NEEDS_PROFILE,
         patriarchal_blessing=NEEDS_PROFILE,
-        living_ordinance=parse_endowment(d.get("templeOrdinances")),
+        living_ordinance=living,
         membership_duration=d.get("memberSinceDisplayString") or person_raw.get("memberSinceDisplayString"),
         weeks_since_last_attendance=d.get("weeksSinceLastAttendance"),
         baptism_goal_date=d.get("baptismGoalDateString") or person_raw.get("baptismGoalDateString"),
@@ -266,9 +277,16 @@ def _apply_profile(member: CovenantPathMember, prof: dict) -> None:
         member.birth_date = prof["birth_date"]
 
 
+# Fields that come from the member profile and must be marked access-blocked (not blanked) when
+# the profile can't be fetched — the merge-upsert preserves last-good for all of these sentinels.
+_BLOCK_WHEN_UNFILLED = _PROFILE_GATED_FIELDS + (
+    "aaronic_priesthood", "melchizedek_priesthood", "calling", "living_ordinance",
+)
+
+
 def _mark_profile_blocked(member: CovenantPathMember) -> None:
     """Annotate still-unfilled profile-gated fields as access-blocked (not silently blank)."""
-    for fld in _PROFILE_GATED_FIELDS:
+    for fld in _BLOCK_WHEN_UNFILLED:
         if getattr(member, fld) == NEEDS_PROFILE:
             setattr(member, fld, BLOCKED)
 

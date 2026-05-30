@@ -46,6 +46,25 @@ bool _memberOneYearPlus(Map<String, dynamic> m) {
   return ym != null && int.parse(ym.group(1)!) >= 1;
 }
 
+/// Actual current age (uses full birth date when present, else by-year). For "already N now"
+/// rules (Melchizedek / endowment), distinct from the by-year `_turnsAtLeast`.
+int? _ageNow(Map<String, dynamic> m) {
+  final d = _dateOf(m['birth_date']);
+  if (d != null) {
+    final now = DateTime.now();
+    var age = now.year - d.year;
+    if (now.month < d.month || (now.month == d.month && now.day < d.day)) age--;
+    return age;
+  }
+  final by = _yearOf(m['birth_date']);
+  return by == null ? null : DateTime.now().year - by;
+}
+
+bool _ageNowAtLeast(Map<String, dynamic> m, int age) {
+  final a = _ageNow(m);
+  return a != null && a >= age;
+}
+
 bool _male(Map<String, dynamic> m) => m['sex'] == 'M';
 
 // Golden Hour = a new member's first-year *integration* milestones, each gated to who it can
@@ -56,12 +75,12 @@ final milestones = <Milestone>[
   Milestone('Calling', 'C', (m) => m['calling'] == 'Yes',
       eligible: (m) => _turnsAtLeast(m, 12)),
   Milestone('Has ministers', 'M', (m) => m['ministering_brothers_sisters'] == 'Yes'), // everyone
-  Milestone('Ministers to others', 'MA', (m) => m['ministering_assignment'] == 'Yes',
-      eligible: (m) => _turnsAtLeast(m, 12)),
+  Milestone('Ministering assignment', 'MA', (m) => m['ministering_assignment'] == 'Yes',
+      eligible: (m) => _turnsAtLeast(m, 14)), // gives ministering: 14+ (both sexes)
   Milestone('Aaronic Priesthood', 'AP', (m) => m['aaronic_priesthood'] == 'Yes',
       eligible: (m) => _male(m) && _turnsAtLeast(m, 12)),
   Milestone('Melchizedek Priesthood', 'MP', (m) => m['melchizedek_priesthood'] == 'Yes',
-      eligible: (m) => _male(m) && _turnsAtLeast(m, 18) && _memberOneYearPlus(m)),
+      eligible: (m) => _male(m) && _ageNowAtLeast(m, 18) && _memberOneYearPlus(m)),
 ];
 
 List<Milestone> milestonesFor(Map<String, dynamic> m) =>

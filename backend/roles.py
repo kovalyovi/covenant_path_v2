@@ -23,8 +23,29 @@ logger = get_logger()
 
 # a calling is stake-scoped if its name starts with one of these (else ward/branch).
 _STAKE_PREFIXES = ("Stake", "District", "Mission", "Area")
-# the feature whose role list defines "can see covenant-path member data".
-_ACCESS_FEATURE = "menu.view.member.profiles"
+
+# "Can see covenant-path member data" = the calling is granted ANY of the CORE data features
+# (not just the narrow member-profiles view). Gating on member-profiles alone wrongly locked out
+# Stake Clerks / High Councilors, who hold progress-record + member-list access. Union these.
+_ACCESS_FEATURES = (
+    "menu.progress.record",        # the new-member / covenant-path list per unit (the core data)
+    "menu.member.list",            # the roster + birth dates
+    "menu.view.member.profiles",   # the detailed member profile
+)
+
+# Explicit safety net (reviewable): stake-level stewardship callings ALWAYS get data access even
+# if the LCR menu matrix is incomplete — clerks, executive secretaries, the stake presidency, and
+# high councilors have responsibility over every member in the stake.
+_ALWAYS_ALLOWED_CALLINGS = (
+    "Stake President", "Stake Presidency", "Counselor in the Stake Presidency",
+    "Stake Clerk", "Stake Assistant Clerk", "Stake Executive Secretary",
+    "Stake Assistant Executive Secretary", "High Council",
+)
+
+
+def _calling_always_allowed(calling: str | None) -> bool:
+    c = calling or ""
+    return any(k in c for k in _ALWAYS_ALLOWED_CALLINGS)
 
 
 def _positions(objs) -> list[dict]:
@@ -101,8 +122,16 @@ def _email_by_uuid(client) -> dict[str, str]:
 def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]) -> dict:
     """Rebuild user_roles for one stake from its leadership directory. Returns counts."""
     matrix = fetch_access_matrix(client.session)
-    allowed = set(matrix.feature_roles(_ACCESS_FEATURE))  # role ids with member-data access
+    allowed = set()  # role ids granted ANY core covenant-path data feature
+    for _feature in _ACCESS_FEATURES:
+        allowed |= set(matrix.feature_roles(_feature))
     email_by_uuid = _email_by_uuid(client)
+
+    def _can_see(p: dict) -> bool:
+        """A calling can view member data if its role is in the matrix union OR it's a stake-level
+        stewardship calling on the always-allowed list (and it has a real person)."""
+        return bool(p.get("person_uuid")) and (
+            p["role_id"] in allowed or _calling_always_allowed(p.get("calling")))
 
     fresh = {}  # provision-key -> row, dedup
     ctx = client.user_context()
@@ -128,7 +157,7 @@ def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]
     stake_ok = len(stake_positions) > 0
     logger.info("stake positions found: %d", len(stake_positions))
     for p in stake_positions:
-        if p["role_id"] not in allowed or not p["person_uuid"]:
+        if not _can_see(p):
             continue
         key = ("stake_leader", None, p["person_uuid"])
         fresh[key] = (stake_id, None, "stake_leader", p["person_uuid"], p["name"], p["calling"],
@@ -150,7 +179,7 @@ def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]
             logger.warning("ward callings unavailable for %s (%s): %s", u.name, u.unit_number, exc)
             continue
         for p in positions:
-            if p["role_id"] not in allowed or not p["person_uuid"]:
+            if not _can_see(p):
                 continue
             key = ("ward_leader", unit_id, p["person_uuid"])
             fresh[key] = (stake_id, unit_id, "ward_leader", p["person_uuid"], p["name"],

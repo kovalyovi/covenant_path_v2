@@ -180,6 +180,9 @@ class BrokerClient {
     await _authed('POST', '/auth/revoke', body: {'stake_id': stakeId});
   }
 
+  /// Provider triggers a sync for their own stake. Returns {coverage_complete, last_synced_at}.
+  Future<Map<String, dynamic>> syncNow() => _authed('POST', '/auth/sync-now');
+
   /// Support form (#74): email the owner a message from the signed-in user.
   Future<void> contact(String subject, String message) async {
     await _authed('POST', '/contact', body: {'subject': subject, 'message': message});
