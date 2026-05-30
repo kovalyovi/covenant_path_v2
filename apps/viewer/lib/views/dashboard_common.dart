@@ -13,7 +13,8 @@ class _Page extends StatelessWidget {
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxW),
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(14, 16, 14, 32),
+          // extra bottom clearance on mobile so the last card isn't hidden behind the glass nav (#41)
+          padding: EdgeInsets.fromLTRB(14, 16, 14, tier == ScreenTier.mobile ? 96 : 32),
           children: [header, const SizedBox(height: 8), child],
         ),
       ),

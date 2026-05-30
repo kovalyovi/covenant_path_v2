@@ -97,6 +97,8 @@ class _SpreadsheetViewState extends State<_SpreadsheetView> {
       Expanded(
         child: SingleChildScrollView(
           scrollDirection: Axis.vertical,
+          // clear the glass bottom nav on mobile so the last rows aren't hidden (#41)
+          padding: EdgeInsets.only(bottom: MediaQuery.of(context).size.width < 600 ? 92 : 12),
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
