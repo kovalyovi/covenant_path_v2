@@ -165,6 +165,34 @@ def auth_revoke(req: RevokeReq, authorization: str = Header(default="")) -> dict
         raise HTTPException(status_code=503, detail=str(e))
 
 
+@app.post("/auth/sync-now")
+def auth_sync_now(authorization: str = Header(default="")) -> dict:
+    """Provider triggers a sync for their own stake (the 'Sync now' control). Returns whether the
+    credential's coverage is full so the app can warn it won't be a complete pull (item 11)."""
+    try:
+        email = admin.verify_user(authorization)
+    except admin.NotAdmin as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    auth_id = admin._jwt_sub((authorization or "").removeprefix("Bearer ").strip())
+    try:
+        status = admin.enrollment_status(email, auth_id)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    cred = status.get("credential", {})
+    if not cred.get("is_provider"):
+        raise HTTPException(status_code=403, detail="only the stake's sync provider can start a sync")
+    if not admin.github_configured():
+        raise HTTPException(status_code=503, detail="sync dispatch not configured (GITHUB_TOKEN)")
+    try:
+        admin.dispatch("daily-sync.yml", inputs={"targets": "supabase"})
+    except admin.AdminError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "dispatched", "coverage_complete": bool(cred.get("complete")),
+            "last_synced_at": status.get("last_synced_at")}
+
+
 @app.post("/auth/password")
 def auth_password(req: PasswordReq) -> dict:
     rid = _rid()

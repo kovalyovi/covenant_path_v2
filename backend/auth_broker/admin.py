@@ -164,6 +164,24 @@ def enrollment_status(email: str, auth_id: str) -> dict:
                                    "limit": "10"}, timeout=_TIMEOUT)
     roles = roles_r.json() if roles_r.status_code == 200 else []
     if not roles:
+        # No calling-derived role yet — but a brand-new stake's FIRST enroller has no role until
+        # the first sync provisions one. Fall back to the credential they just created (matched by
+        # principal_email) so the app shows "setting up your stake", not the sign-in prompt (item 7).
+        cred = _one("stake_credentials",
+                    {"select": "stake_id,principal_name,revoked,coverage,updated_at",
+                     "principal_email": f"eq.{email.lower()}", "limit": "1"})
+        if cred:
+            stake = _one("stakes", {"select": "name,last_synced_at",
+                                    "id": f"eq.{cred['stake_id']}", "limit": "1"}) or {}
+            cov = cred.get("coverage") or {}
+            return {"status": "no_role", "stake_name": stake.get("name"),
+                    "stake_id": cred["stake_id"], "last_synced_at": stake.get("last_synced_at"),
+                    "member_count": 0, "has_data": False,
+                    "credential": {
+                        "state": "revoked" if cred.get("revoked") else "active",
+                        "complete": bool(cov.get("complete")), "missing": cov.get("missing") or [],
+                        "principal_name": cred.get("principal_name"), "is_provider": True,
+                        "enrolled_at": cred.get("updated_at")}}
         return {"status": "no_role", "has_data": False, "credential": {"state": "none"}}
     stake_id = roles[0].get("stake_id")
 
@@ -187,7 +205,7 @@ def enrollment_status(email: str, auth_id: str) -> dict:
 
     # 4. Get credential state
     cred_r = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=headers,
-                          params={"select": "principal_name,revoked,coverage,access_rank,updated_at",
+                          params={"select": "principal_name,principal_email,revoked,coverage,access_rank,updated_at",
                                   "stake_id": f"eq.{stake_id}", "limit": "1"}, timeout=_TIMEOUT)
     creds = cred_r.json() if cred_r.status_code == 200 else []
     cred = creds[0] if creds else None
@@ -201,7 +219,8 @@ def enrollment_status(email: str, auth_id: str) -> dict:
             "state": "revoked" if cred.get("revoked") else "active",
             "complete": bool(coverage.get("complete")),
             "principal_name": cred.get("principal_name"),
-            "is_provider": (cred.get("principal_name") or "").lower() == email.lower(),
+            # Match on the stored email (principal_name is just a display name).
+            "is_provider": (cred.get("principal_email") or "").lower() == email.lower(),
             "enrolled_at": cred.get("updated_at"),
         }
     return {
@@ -220,7 +239,7 @@ def revoke_credential(stake_id: str, email: str) -> dict:
     headers = _sb_headers()
     # Verify the caller is actually the provider for this stake
     cred_r = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=headers,
-                          params={"select": "principal_name,revoked", "stake_id": f"eq.{stake_id}",
+                          params={"select": "principal_email,revoked", "stake_id": f"eq.{stake_id}",
                                   "limit": "1"}, timeout=_TIMEOUT)
     creds = cred_r.json() if cred_r.status_code == 200 else []
     cred = creds[0] if creds else None
@@ -228,7 +247,7 @@ def revoke_credential(stake_id: str, email: str) -> dict:
         raise AdminError("no credential on file for this stake")
     if cred.get("revoked"):
         return {"status": "already_revoked"}
-    if (cred.get("principal_name") or "").lower() != email.lower():
+    if (cred.get("principal_email") or "").lower() != email.lower():
         raise NotAdmin("only the credential provider can revoke")
     return _patch_revoke(stake_id, headers)
 
