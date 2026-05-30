@@ -403,6 +403,18 @@ def build_stake_report(
         member_maps = _retry(lambda u=unit: _build_member_maps(client, u.unit_number),
                              label=f"member_list {unit.unit_number}") or {}
 
+        # has-calling per member: whoever holds a position in the unit's org tree (the same
+        # org-callings endpoint roles.py uses). The member profile has no callings and the one-work
+        # record is sparse, so this is the authoritative source. None => couldn't fetch (don't override).
+        try:
+            from backend.roles import _ward_positions
+            calling_uuids: set | None = {
+                p["person_uuid"] for p in _ward_positions(client.org_callings(unit.unit_number))
+                if p.get("person_uuid")}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("org callings unavailable for %s (%s): %s", unit.name, unit.unit_number, exc)
+            calling_uuids = None
+
         # newMemberList = baptized; investigatorList = people being taught (planned baptism
         # date in baptismGoalDateString). Tag each so the app can split the two populations.
         people = [(p, "new_member") for p in (pr.raw.get("newMemberList") or [])]
@@ -418,6 +430,9 @@ def build_stake_report(
             birth = info.get("birth")
             member = _assemble(person, details, unit.name, birth, kind=kind)
             member.sex = info.get("sex") or member.sex  # member list is authoritative for sex
+            if calling_uuids is not None:  # org positions are authoritative for has-calling
+                pu = person.get("personUuid")
+                member.calling = "Yes" if (pu and pu in calling_uuids) else "No"
             member.unit_number = unit.unit_number
             uuid = person.get("personUuid")
             if uuid:
