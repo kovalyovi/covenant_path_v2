@@ -303,6 +303,8 @@ def _apply_profile(member: CovenantPathMember, prof: dict) -> None:
         member.ministering_assignment = prof["ministering_assignment"]
     if not member.birth_date and prof.get("birth_date"):
         member.birth_date = prof["birth_date"]
+    if prof.get("sex"):  # profile record is authoritative for sex (member list was unreliable)
+        member.sex = prof["sex"]
     # Priesthood from the profile's office (authoritative). Gate the DISPLAYED value to ELIGIBLE
     # people — N/A for females / under-age / (for Melch) <1yr members — matching the reference
     # sheet, where ineligible rows show N/A rather than a misleading "No".

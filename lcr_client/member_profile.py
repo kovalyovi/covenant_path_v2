@@ -129,6 +129,7 @@ def extract_fields(record: dict) -> dict:
         "sealed_to_parents_date": _ordinance_date(record, "SEALING_TO_PARENTS"),
         "patriarchal_blessing": "Yes" if record.get("hasPatriarchalBlessing") else "No",
         "priesthood_office": record.get("currentPriesthoodOfficeType"),
+        "sex": record.get("sex"),  # authoritative ("M"/"F") — the member-list field is unreliable
     }
     # Callings: a non-empty current-callings/positions list -> "Yes" (best-effort across the known
     # record shapes; if none match, the shape dump above reveals the real key and we map it).
