@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -56,6 +58,7 @@ class _DashboardPageState extends State<DashboardPage> {
   String? _stakeName;
   String? _lastSynced;
   bool _syncing = false;
+  DateTime? _syncStartedAt;
   bool _lockAvailable = false;
   bool _lockOn = false;
   EnrollmentStatus? _enrollStatus;
@@ -121,11 +124,19 @@ class _DashboardPageState extends State<DashboardPage> {
         _lastSynced = list.first['last_synced_at']?.toString();
         // only treat as syncing if it started recently — guards against a crashed run that
         // never got to mark itself 'done' leaving a permanently stuck banner.
-        _syncing = list.any((s) {
-          if (s['sync_state'] != 'running') return false;
+        DateTime? running;
+        for (final s in list) {
+          if (s['sync_state'] != 'running') continue;
           final started = DateTime.tryParse('${s['sync_started_at'] ?? ''}');
-          return started != null && DateTime.now().toUtc().difference(started.toUtc()).inMinutes < 30;
-        });
+          // only treat as syncing if it started recently — guards against a crashed run that
+          // never got to mark itself 'done' leaving a permanently stuck banner.
+          if (started != null && DateTime.now().toUtc().difference(started.toUtc()).inMinutes < 30) {
+            running = started;
+            break;
+          }
+        }
+        _syncing = running != null;
+        _syncStartedAt = running;
       });
     } catch (_) {}
   }
@@ -528,7 +539,7 @@ class _DashboardPageState extends State<DashboardPage> {
       final appBar = AppBar(title: Text(_stakeName ?? 'Covenant Path'), actions: _appBarActions(tier));
       final staleCred = _enrollStatus?.credential.isRevoked == true;
       final body = Column(children: [
-        if (_syncing) const _SyncingBanner(),
+        if (_syncing) _SyncingBanner(startedAt: _syncStartedAt),
         if (staleCred) _StaleBanner(onReenroll: () => supabase.auth.signOut()),
         Expanded(
           child: _Body(tab: _tab, tier: tier, future: _future, onRefresh: _refresh,
