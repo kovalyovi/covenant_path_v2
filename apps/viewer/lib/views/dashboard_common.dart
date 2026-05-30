@@ -183,10 +183,13 @@ class _LastUpdated extends StatelessWidget {
               if (syncing)
                 const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2))
               else
-                const Icon(Icons.history, size: 18),
+                // #18 staleness: amber >2d, red >2w, default when fresh.
+                Icon(_staleColor(iso) == null ? Icons.history : Icons.history_toggle_off,
+                    size: 18, color: _staleColor(iso)),
               if (!compact) ...[
                 const SizedBox(width: 5),
-                Text(syncing ? 'Syncing…' : 'Updated ${_ago(iso)}', style: const TextStyle(fontSize: 12)),
+                Text(syncing ? 'Syncing…' : 'Updated ${_ago(iso)}',
+                    style: TextStyle(fontSize: 12, color: _staleColor(iso))),
               ],
             ]),
           ),
@@ -460,4 +463,15 @@ String _ago(dynamic iso) {
   if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
   if (diff.inHours < 24) return '${diff.inHours}h ago';
   return '${diff.inDays}d ago';
+}
+
+/// Staleness color for a last-synced timestamp (#18): amber after 2 days, red after 2 weeks,
+/// null (default/fresh) otherwise. Drives the freshness chip + the OPS per-stake rows.
+Color? _staleColor(dynamic iso) {
+  final t = DateTime.tryParse('${iso ?? ''}');
+  if (t == null) return Colors.red.shade600; // never synced reads as stale
+  final days = DateTime.now().toUtc().difference(t.toUtc()).inDays;
+  if (days >= 14) return Colors.red.shade600;
+  if (days >= 2) return Colors.amber.shade700;
+  return null;
 }

@@ -133,6 +133,7 @@ jobs:
           name: sync-logs-${{ matrix.stake }}
           path: |
             tools/output/logs/
+            tools/output/debug/
             tools/output/health_report.json
             output/covenant_path_access.json
           if-no-files-found: ignore

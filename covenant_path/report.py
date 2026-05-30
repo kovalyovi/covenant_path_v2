@@ -437,11 +437,15 @@ def build_stake_report(
             stats["calling_matched"] = stats.get("calling_matched", 0) + len(matched)
             if not stats.get("calling_shape_dumped"):
                 stats["calling_shape_dumped"] = True
+                pos_s, coh_s = next(iter(calling_uuids), None), next(iter(cohort_uuids), None)
+                # logger.info → lands in the uploaded session log (dump_debug only writes to the
+                # un-uploaded debug/ dir). uuids are opaque ids, not PII.
+                logger.info("calling_match_shape unit=%s positions=%d cohort=%d matched=%d "
+                            "pos_uuid=%s cohort_uuid=%s", unit.unit_number, len(calling_uuids),
+                            len(cohort_uuids), len(matched), pos_s, coh_s)
                 dump_debug("calling_match_shape", unit=unit.unit_number,
                            positions=len(calling_uuids), cohort=len(cohort_uuids),
-                           matched=len(matched),
-                           position_uuid_sample=next(iter(calling_uuids), None),
-                           cohort_uuid_sample=next(iter(cohort_uuids), None))
+                           matched=len(matched), position_uuid_sample=pos_s, cohort_uuid_sample=coh_s)
 
         for person, kind in people:
             details = _details_with_retry(client, person.get("id"), person.get("cmisId"))

@@ -472,6 +472,7 @@ void _showGoldenHourBreakdown(BuildContext context, List<Map<String, dynamic>> r
                     side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant)),
                 child: ExpansionTile(
                   title: Text(ms.label),
+                  initiallyExpanded: missing.isNotEmpty, // #40: open the actionable categories
                   subtitle: Padding(
                     padding: const EdgeInsets.only(top: 6, right: 40),
                     child: ClipRRect(
