@@ -118,7 +118,7 @@ class _RichBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final left = <Widget>[
       _SacramentSection(d: d),
-      _FriendsSection(d: d),
+      _FriendsSection(d: d, recordedYes: member['friends'] == 'Yes'),
       _ListTextSection(
         title: 'Priesthood Ordination',
         icon: Icons.workspace_premium,
@@ -131,18 +131,21 @@ class _RichBody extends StatelessWidget {
         lines: _strings(d['callings']),
         emptyText: 'Not yet been given a calling.',
         emptyIsAlert: true,
+        recordedYes: member['calling'] == 'Yes',
       ),
       _ListTextSection(
         title: 'Ministering Assignment',
         icon: Icons.volunteer_activism,
         lines: _strings(d['ministeringAssignments']),
         emptyText: 'Not yet received a ministering assignment.',
+        recordedYes: member['ministering_assignment'] == 'Yes',
       ),
       _NamesSection(
         title: 'Ministering Brothers & Sisters',
         icon: Icons.diversity_3,
         names: [..._strings(d['ministeringBrothers']), ..._strings(d['ministeringSisters'])],
         emptyText: 'No ministers assigned.',
+        recordedYes: member['ministering_brothers_sisters'] == 'Yes',
       ),
     ];
     final right = <Widget>[
@@ -252,8 +255,9 @@ class _SacramentSectionState extends State<_SacramentSection> {
 }
 
 class _FriendsSection extends StatelessWidget {
-  const _FriendsSection({required this.d});
+  const _FriendsSection({required this.d, this.recordedYes = false});
   final Map<String, dynamic> d;
+  final bool recordedYes;
   @override
   Widget build(BuildContext context) {
     final friends = (d['friends'] as List?)?.cast<Map>() ?? const [];
@@ -261,7 +265,7 @@ class _FriendsSection extends StatelessWidget {
       title: 'Friends in the Church',
       leadingIcon: Icons.people_outline,
       child: friends.isEmpty
-          ? _muted(context, 'No friends recorded yet.')
+          ? (recordedYes ? _recordedYesNote(context) : _muted(context, 'No friends recorded yet.'))
           : Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -295,18 +299,32 @@ class _FriendsSection extends StatelessWidget {
   }
 }
 
+/// When a member's status field says "Yes" but the (flaky) detail endpoint returned no names,
+/// say so instead of "Not yet" — otherwise the chip and the section contradict each other.
+Widget _recordedYesNote(BuildContext context) => Row(crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Icon(Icons.info_outline, size: 15, color: Colors.amber.shade800),
+      const SizedBox(width: 6),
+      Expanded(
+        child: Text("Recorded as yes, but LCR's detail view returned no names for this person.",
+            style: TextStyle(color: Colors.amber.shade800, fontSize: 13)),
+      ),
+    ]);
+
 class _ListTextSection extends StatelessWidget {
   const _ListTextSection({
     required this.title,
     required this.lines,
     required this.emptyText,
     this.emptyIsAlert = false,
+    this.recordedYes = false,
     this.icon,
   });
   final String title;
   final List<String> lines;
   final String emptyText;
   final bool emptyIsAlert;
+  final bool recordedYes; // status field says Yes even though no names came back
   final IconData? icon;
   @override
   Widget build(BuildContext context) {
@@ -314,9 +332,11 @@ class _ListTextSection extends StatelessWidget {
       title: title,
       leadingIcon: icon,
       child: lines.isEmpty
-          ? Text(emptyText,
-              style: TextStyle(
-                  color: emptyIsAlert ? Colors.red.shade700 : Colors.grey.shade600))
+          ? (recordedYes
+              ? _recordedYesNote(context)
+              : Text(emptyText,
+                  style: TextStyle(
+                      color: emptyIsAlert ? Colors.red.shade700 : Colors.grey.shade600)))
           : Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -333,10 +353,12 @@ class _ListTextSection extends StatelessWidget {
 
 class _NamesSection extends StatelessWidget {
   const _NamesSection(
-      {required this.title, required this.names, required this.emptyText, this.icon});
+      {required this.title, required this.names, required this.emptyText, this.recordedYes = false,
+      this.icon});
   final String title;
   final List<String> names;
   final String emptyText;
+  final bool recordedYes;
   final IconData? icon;
   @override
   Widget build(BuildContext context) {
@@ -344,7 +366,7 @@ class _NamesSection extends StatelessWidget {
       title: title,
       leadingIcon: icon,
       child: names.isEmpty
-          ? _muted(context, emptyText)
+          ? (recordedYes ? _recordedYesNote(context) : _muted(context, emptyText))
           : Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
