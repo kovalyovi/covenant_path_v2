@@ -32,6 +32,29 @@ _MEMBER_COLUMNS = [
     "details",  # jsonb — the rich progress subtree (dict; wrapped as Json on write)
 ]
 
+# Profile-/access-gated columns: a partial, no-profile, or access-blocked scrape emits a sentinel
+# ('needs-profile-api' / 'blocked: insufficient calling access') for these. On upsert we MERGE
+# rather than overwrite — keep the last-good value instead of clobbering it with a sentinel (so a
+# degraded run never blanks priesthood/calling/etc). The sentinel strings mirror covenant_path.report.
+_GATED_COLUMNS = frozenset({
+    "baptism_date", "aaronic_priesthood", "melchizedek_priesthood", "calling",
+    "ministering_assignment", "temple_recommend", "patriarchal_blessing", "living_ordinance",
+})
+_SENTINELS = ("needs-profile-api", "blocked: insufficient calling access")
+
+
+def _merge_expr(c: str) -> str:
+    """ON CONFLICT update expr: gated columns preserve last-good when the incoming value is a
+    sentinel; all other columns take the fresh value. Sentinel literals are constants (safe to inline)."""
+    if c == "unit_id":
+        return "unit_id = excluded.unit_id"
+    if c in _GATED_COLUMNS:
+        e = f"excluded.{c}"
+        for s in _SENTINELS:
+            e = f"nullif({e}, '{s}')"
+        return f"{c} = coalesce({e}, members.{c})"
+    return f"{c} = excluded.{c}"
+
 
 def db_url() -> str:
     url = os.environ.get("SUPABASE_DB_URL")
@@ -111,7 +134,7 @@ def upsert_members(conn, stake_id: str, members: list[dict],
     # on conflict, refresh everything except the conflict key (person_uuid); unit_id
     # isn't in _MEMBER_COLUMNS so add it once.
     update_cols = ["unit_id"] + [c for c in _MEMBER_COLUMNS if c != "person_uuid"]
-    updates = ", ".join(f"{c} = excluded.{c}" for c in update_cols)
+    updates = ", ".join(_merge_expr(c) for c in update_cols)
     sql = (f"insert into members ({cols}) values %s "
            f"on conflict (stake_id, person_uuid) do update set {updates}")
     with conn.cursor() as cur:

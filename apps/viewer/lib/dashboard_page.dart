@@ -326,12 +326,32 @@ class _DashboardPageState extends State<DashboardPage> {
 
   void _showSyncSettingsSheet() {
     final status = _enrollStatus;
+    final isProvider = status?.credential.isProvider == true;
     showModalBottomSheet(
       context: context,
       builder: (ctx) => _SyncSettingsSheet(
           status: status,
-          onRevoke: status?.credential.isProvider == true ? _revokeCredential : null),
+          onRevoke: isProvider ? _revokeCredential : null,
+          onSyncNow: isProvider ? _syncNow : null),
     );
+  }
+
+  Future<void> _syncNow() async {
+    Navigator.of(context).maybePop(); // close the sheet
+    try {
+      final res = await BrokerClient().syncNow();
+      if (!mounted) return;
+      final partial = res['coverage_complete'] == false;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(partial
+              ? 'Sync started — note: your calling can\'t pull every field, so some data stays blank. Takes a few minutes.'
+              : 'Sync started for your stake — this takes a few minutes.')));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Couldn\'t start sync: $e')));
+      }
+    }
   }
 
   Future<void> _revokeCredential() async {

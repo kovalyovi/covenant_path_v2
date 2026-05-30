@@ -66,6 +66,7 @@ def persist(cookies: list[dict], identity: dict) -> dict:
             "p_unit_number": ctx.unit_number,
             "p_stake_name": ctx.unit_name,
             "p_principal_name": identity.get("name") or identity.get("email"),
+            "p_principal_email": (identity.get("email") or "").lower(),
             "p_granting_role_ids": role_ids,
             "p_credential_enc": blob,
             "p_coverage": coverage,

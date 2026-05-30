@@ -85,8 +85,9 @@ class _EmptyState extends StatelessWidget {
         );
       }
     } else if (cred?.isActive == true) {
-      title = 'Data syncing…';
-      body = 'Your stake has a sync credential on file. Data will appear after the next daily run (7 am ET).';
+      title = 'Setting up your stake…';
+      body = 'Your credential is saved and the first sync is running — your stake\'s data will '
+          'appear here in a few minutes. Pull down to refresh. (It also refreshes daily at 7 am ET.)';
     } else {
       title = 'No members visible';
       body = 'Access is derived from your LCR calling. Sign in with the email your stake has on file.';
@@ -209,9 +210,10 @@ class _ReportSheet extends StatelessWidget {
 }
 
 class _SyncSettingsSheet extends StatelessWidget {
-  const _SyncSettingsSheet({this.status, this.onRevoke});
+  const _SyncSettingsSheet({this.status, this.onRevoke, this.onSyncNow});
   final EnrollmentStatus? status;
   final VoidCallback? onRevoke;
+  final VoidCallback? onSyncNow;
 
   @override
   Widget build(BuildContext context) {
@@ -260,8 +262,15 @@ class _SyncSettingsSheet extends StatelessWidget {
                 'Credentials are encrypted and stored server-side. '
                 'Your password is never stored.',
                 style: TextStyle(fontSize: 12)),
-            if (onRevoke != null) ...[
+            if (onSyncNow != null) ...[
               const SizedBox(height: 16),
+              FilledButton.icon(
+                  onPressed: onSyncNow,
+                  icon: const Icon(Icons.sync),
+                  label: const Text('Sync my stake now')),
+            ],
+            if (onRevoke != null) ...[
+              const SizedBox(height: 8),
               OutlinedButton.icon(
                   onPressed: () {
                     Navigator.pop(context);

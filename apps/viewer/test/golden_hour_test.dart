@@ -51,16 +51,26 @@ void main() {
       expect(milestonesFor(child).map((m) => m.abbr).toSet(), {'F', 'M'});
     });
 
-    test('an 11-year-old who turns 12 this year is eligible for calling + Aaronic', () {
+    test('a 12-year-old is eligible for calling + Aaronic, but NOT ministering (needs 14)', () {
       final turning12 = member(sex: 'M', birth: '1 Jan ${DateTime.now().year - 12}');
       final abbrs = milestonesFor(turning12).map((m) => m.abbr).toSet();
-      expect(abbrs.containsAll({'C', 'MA', 'AP'}), isTrue);
+      expect(abbrs.containsAll({'C', 'AP'}), isTrue);
+      expect(abbrs.contains('MA'), isFalse); // ministering assignment needs turning-14+
       expect(abbrs.contains('MP'), isFalse); // not 18 yet
     });
 
-    test('Melchizedek needs 18+ AND 1+ year of membership', () {
+    test('a 14-year-old is eligible to give ministering', () {
+      final turning14 = member(sex: 'F', birth: '1 Jan ${DateTime.now().year - 14}');
+      expect(milestonesFor(turning14).map((m) => m.abbr).contains('MA'), isTrue);
+    });
+
+    test('Melchizedek needs age 18 NOW AND 1+ year of membership', () {
       final newAdult = member(sex: 'M', baptism: '1 Jan ${DateTime.now().year}'); // <1yr member
       expect(milestonesFor(newAdult).map((m) => m.abbr).contains('MP'), isFalse);
+      // turns 18 this year but not 18 yet (born late this-year-minus-18) -> not eligible
+      final turning18 = member(sex: 'M', baptism: '1 Jan 2000',
+          birth: '31 Dec ${DateTime.now().year - 18}');
+      expect(milestonesFor(turning18).map((m) => m.abbr).contains('MP'), isFalse);
     });
   });
 
