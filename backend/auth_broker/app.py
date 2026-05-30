@@ -23,7 +23,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from lcr_client.logging_setup import get_logger
-from backend.auth_broker import admin, okta_flow, session_mint
+from backend.auth_broker import admin, email_relay, okta_flow, session_mint
 
 logger = get_logger()
 app = FastAPI(title="Covenant Path — Church login broker")
@@ -266,6 +266,39 @@ def auth_session(req: SessionReq) -> dict:
     enrolled = _try_enroll(res, req.enroll, rid)
     return {"status": "ok", "session": _mint(res["identity"], rid),
             "identity_name": res["identity"].get("name"), "enroll": enrolled}
+
+
+# --- email-OTP relay (sign in when the browser can't reach Supabase directly) ---
+
+class EmailStartReq(BaseModel):
+    email: str
+
+
+class EmailVerifyReq(BaseModel):
+    email: str
+    code: str
+
+
+@app.post("/auth/email/start")
+def auth_email_start(req: EmailStartReq) -> dict:
+    """Relay an email one-time-code request to Supabase (server-side, no browser CORS)."""
+    rid = _rid()
+    logger.info("[req %s] /auth/email/start", rid)
+    try:
+        return email_relay.start_email_login(req.email)
+    except email_relay.RelayError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/auth/email/verify")
+def auth_email_verify(req: EmailVerifyReq) -> dict:
+    """Verify the emailed code server-side and return session tokens for setSession."""
+    rid = _rid()
+    logger.info("[req %s] /auth/email/verify", rid)
+    try:
+        return email_relay.verify_email_login(req.email, req.code)
+    except email_relay.RelayError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # --- passwordless passkey login (WebAuthn) ----------------------------------

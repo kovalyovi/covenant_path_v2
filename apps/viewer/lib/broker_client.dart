@@ -97,7 +97,8 @@ class BrokerClient {
   static const _retryDelays = [Duration(seconds: 3), Duration(seconds: 6),
       Duration(seconds: 9), Duration(seconds: 12), Duration(seconds: 15), Duration(seconds: 18)];
 
-  Future<BrokerResult> _post(String path, Map<String, dynamic> body) async {
+  /// POST with cold-start retry; returns the decoded JSON (throws BrokerException on error).
+  Future<Map<String, dynamic>> _postJson(String path, Map<String, dynamic> body) async {
     if (!available) throw BrokerException('Church login is not configured (BROKER_URL).');
     http.Response? resp;
     Object? lastErr;
@@ -131,6 +132,11 @@ class BrokerClient {
     if (resp.statusCode >= 400) {
       throw BrokerException((data['detail'] ?? 'Sign-in failed (${resp.statusCode}).').toString());
     }
+    return data;
+  }
+
+  Future<BrokerResult> _post(String path, Map<String, dynamic> body) async {
+    final data = await _postJson(path, body);
     if (data['status'] == 'mfa_required') {
       return BrokerResult(
         loginId: data['login_id'] as String,
@@ -155,6 +161,16 @@ class BrokerClient {
 
   Future<BrokerResult> verifyMfa(String loginId, String code, {bool enroll = false}) =>
       _post('/auth/mfa/verify', {'login_id': loginId, 'code': code, 'enroll': enroll});
+
+  /// Email-OTP relay (for networks that can't reach Supabase directly): the broker asks Supabase
+  /// to email a one-time code. The user enters it; emailVerify returns session tokens to adopt.
+  Future<void> emailStart(String email) async {
+    await _postJson('/auth/email/start', {'email': email});
+  }
+
+  /// Verify the emailed code via the broker → {access_token, refresh_token} for setSession.
+  Future<Map<String, dynamic>> emailVerify(String email, String code) =>
+      _postJson('/auth/email/verify', {'email': email, 'code': code});
 
   Future<EnrollmentStatus> enrollmentStatus() async {
     if (!available) throw BrokerException('Broker not configured.');

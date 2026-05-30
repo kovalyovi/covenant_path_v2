@@ -49,6 +49,7 @@ class _LoginPageState extends State<LoginPage> {
   final _email = TextEditingController();
   final _emailCode = TextEditingController();
   bool _emailCodeSent = false;
+  bool _useRelay = false; // route the email-code flow through the broker (for blocked networks)
 
   bool _busy = false;
   bool _enroll = false; // consent: store my session to keep my stake synced
@@ -124,16 +125,26 @@ class _LoginPageState extends State<LoginPage> {
       });
 
   Future<void> _sendEmailCode() => _run(() async {
-        await supabase.auth.signInWithOtp(email: _email.text.trim());
+        if (_useRelay) {
+          await _broker.emailStart(_email.text.trim()); // server-side, bypasses browser→Supabase
+        } else {
+          await supabase.auth.signInWithOtp(email: _email.text.trim());
+        }
         setState(() => _emailCodeSent = true);
       });
 
   Future<void> _verifyEmailCode() => _run(() async {
-        await supabase.auth.verifyOTP(
-          email: _email.text.trim(),
-          token: _emailCode.text.trim(),
-          type: OtpType.email,
-        );
+        if (_useRelay) {
+          // Broker verifies the code and returns tokens; adopt them as the local session.
+          final t = await _broker.emailVerify(_email.text.trim(), _emailCode.text.trim());
+          await supabase.auth.setSession(t['refresh_token'] as String);
+        } else {
+          await supabase.auth.verifyOTP(
+            email: _email.text.trim(),
+            token: _emailCode.text.trim(),
+            type: OtpType.email,
+          );
+        }
       });
 
   @override
@@ -293,6 +304,17 @@ class _LoginPageState extends State<LoginPage> {
   List<Widget> _emailFields() {
     return [
       const Text('Sign in with the email your stake has on file.'),
+      if (_useRelay) ...[
+        const SizedBox(height: 8),
+        Row(children: [
+          Icon(Icons.shield_outlined, size: 15, color: Theme.of(context).colorScheme.primary),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text('Backup mode: signing in through our server (for networks that block Supabase).',
+                style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.primary)),
+          ),
+        ]),
+      ],
       const SizedBox(height: 16),
       TextField(
         controller: _email,
@@ -318,6 +340,31 @@ class _LoginPageState extends State<LoginPage> {
         TextButton(
           onPressed: _busy ? null : () => setState(() => _emailCodeSent = false),
           child: const Text('Use a different email'),
+        ),
+      // Backup sign-in for blocked networks (e.g. some regions can't reach Supabase directly).
+      if (_broker.available && !_useRelay)
+        TextButton(
+          onPressed: _busy
+              ? null
+              : () => setState(() {
+                    _useRelay = true;
+                    _emailCodeSent = false;
+                    _emailCode.clear();
+                    _error = null;
+                  }),
+          child: const Text("Can't connect? Use backup sign-in"),
+        ),
+      if (_useRelay)
+        TextButton(
+          onPressed: _busy
+              ? null
+              : () => setState(() {
+                    _useRelay = false;
+                    _emailCodeSent = false;
+                    _emailCode.clear();
+                    _error = null;
+                  }),
+          child: const Text('Use normal sign-in'),
         ),
     ];
   }
