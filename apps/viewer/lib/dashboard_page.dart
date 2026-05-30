@@ -536,7 +536,13 @@ class _DashboardPageState extends State<DashboardPage> {
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, c) {
       final tier = tierFor(c.maxWidth);
-      final appBar = AppBar(title: Text(_stakeName ?? 'Covenant Path'), actions: _appBarActions(tier));
+      // FittedBox scales the title down to fit instead of truncating — full stake name visible (#48).
+      final appBar = AppBar(
+          title: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(_stakeName ?? 'Covenant Path')),
+          actions: _appBarActions(tier));
       final staleCred = _enrollStatus?.credential.isRevoked == true;
       final body = Column(children: [
         if (_syncing) _SyncingBanner(startedAt: _syncStartedAt),

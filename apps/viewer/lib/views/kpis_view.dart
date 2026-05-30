@@ -170,6 +170,10 @@ class _MetricChartCard extends StatelessWidget {
       leadingIcon: icon,
       iconColor: color,
       trailing: delta == null ? null : _DeltaBadge(delta: delta),
+      onTap: events.isEmpty
+          ? null
+          : () => _showDrill(context, title: title, events: events, allUnits: allUnits,
+              onOpen: onOpen, bucketLabel: null), // whole card opens the full drill (#37)
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (last != null && prior != null) ...[
           IntrinsicHeight(
