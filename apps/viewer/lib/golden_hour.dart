@@ -109,6 +109,28 @@ String? ageOf(Map<String, dynamic> m) {
   return (a == null || a < 0) ? null : '$a yrs';
 }
 
+/// Compact elapsed time since a past date, e.g. "2 months 3 days" (or "3 days"). Empty for a
+/// future/unknown date. Used next to the baptism date so leaders see tenure at a glance.
+String monthsDaysAgo(DateTime? d) {
+  if (d == null) return '';
+  final now = DateTime.now();
+  if (d.isAfter(now)) return '';
+  var months = (now.year - d.year) * 12 + now.month - d.month;
+  int days;
+  if (now.day >= d.day) {
+    days = now.day - d.day;
+  } else {
+    months -= 1;
+    final daysInPrevMonth = DateTime(now.year, now.month, 0).day; // day 0 = last day of prev month
+    days = daysInPrevMonth - d.day + now.day;
+  }
+  if (months < 0) return '';
+  final parts = <String>[];
+  if (months > 0) parts.add('$months month${months == 1 ? '' : 's'}');
+  if (days > 0 || months == 0) parts.add('$days day${days == 1 ? '' : 's'}');
+  return parts.join(' ');
+}
+
 /// The two ownership buckets, for filtering. 'WML' = first-year (missionaries/ward mission leader);
 /// 'RSEQ' = after-first-year (Relief Society / Elders Quorum).
 String responsibleBucket(Map<String, dynamic> m) {

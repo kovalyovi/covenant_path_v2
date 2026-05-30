@@ -22,18 +22,32 @@ class _Page extends StatelessWidget {
 }
 
 class _SectionTitle extends StatelessWidget {
-  const _SectionTitle({required this.title, required this.count, required this.byDate, required this.onToggle});
+  const _SectionTitle({required this.title, required this.count, required this.byDate,
+      required this.onToggle, this.ascending, this.onAscToggle});
   final String title;
   final int count;
   final bool byDate;
   final ValueChanged<bool> onToggle;
+  final bool? ascending; // when set with onAscToggle, shows an asc/desc sort toggle
+  final VoidCallback? onAscToggle;
   @override
   Widget build(BuildContext context) {
     return Row(children: [
-      Text(title, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+      Flexible(
+        child: Text(title,
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+            overflow: TextOverflow.ellipsis),
+      ),
       const SizedBox(width: 8),
       _CountBadge(count),
       const Spacer(),
+      if (onAscToggle != null)
+        IconButton(
+          tooltip: ascending == true ? 'Oldest first (tap for newest)' : 'Newest first (tap for oldest)',
+          visualDensity: VisualDensity.compact,
+          icon: Icon(ascending == true ? Icons.arrow_upward : Icons.arrow_downward, size: 18),
+          onPressed: onAscToggle,
+        ),
       SegmentedButton<bool>(
         showSelectedIcon: false,
         style: const ButtonStyle(visualDensity: VisualDensity.compact),

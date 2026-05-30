@@ -15,14 +15,31 @@ class _NeedsView extends StatefulWidget {
 
 class _NeedsViewState extends State<_NeedsView> {
   int? _selected; // milestone index; null until defaulted to the first category with outstanding members
+  bool _ascending = true; // baptism date order: oldest-baptized (most overdue) first by default
+
+  /// Sort the "still need" list by baptism date, then unit (#feedback), honoring asc/desc.
+  int _cmp(Map<String, dynamic> a, Map<String, dynamic> b) {
+    final da = parseMemberDate(a['baptism_date']), db = parseMemberDate(b['baptism_date']);
+    int c;
+    if (da == null && db == null) {
+      c = 0;
+    } else if (da == null) {
+      c = 1;
+    } else if (db == null) {
+      c = -1;
+    } else {
+      c = da.compareTo(db);
+    }
+    if (c == 0) c = '${a['unit_name'] ?? ''}'.compareTo('${b['unit_name'] ?? ''}');
+    return _ascending ? c : -c;
+  }
 
   @override
   Widget build(BuildContext context) {
     final baptized = widget.rows.where((m) => m['kind'] != 'investigator').toList();
     final missingByMs = [
       for (final ms in milestones)
-        baptized.where((m) => ms.eligible(m) && !ms.complete(m)).toList()
-          ..sort((a, b) => '${a['name']}'.compareTo('${b['name']}')),
+        baptized.where((m) => ms.eligible(m) && !ms.complete(m)).toList()..sort(_cmp),
     ];
     final total = missingByMs.fold<int>(0, (a, l) => a + l.length);
     if (total == 0) {
@@ -60,6 +77,18 @@ class _NeedsViewState extends State<_NeedsView> {
             ],
           ]),
         ),
+        Row(children: [
+          Icon(Icons.sort, size: 15, color: Colors.grey.shade600),
+          const SizedBox(width: 6),
+          Text('Baptism date, then unit',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey.shade600)),
+          IconButton(
+            tooltip: _ascending ? 'Oldest first (tap for newest)' : 'Newest first (tap for oldest)',
+            visualDensity: VisualDensity.compact,
+            icon: Icon(_ascending ? Icons.arrow_upward : Icons.arrow_downward, size: 18),
+            onPressed: () => setState(() => _ascending = !_ascending),
+          ),
+        ]),
       ]),
       child: _Columns(cols: 1, children: [_categorySection(context, ms, missing)]),
     );
@@ -246,7 +275,14 @@ class _MemberRow extends StatelessWidget {
             Icon(isBaptism ? Icons.water_drop : Icons.event,
                 size: 13, color: isBaptism ? Colors.lightBlue.shade600 : Colors.grey.shade600),
             const SizedBox(width: 4),
-            Flexible(child: Text(fmtLong(date), style: sub)),
+            // Baptism: "February 6, 2026 (2 months 3 days)" so tenure is visible at a glance.
+            Flexible(
+                child: Text(
+                    isBaptism
+                        ? '${DateFormat('MMMM d, y').format(date)}'
+                            '${monthsDaysAgo(date).isNotEmpty ? ' (${monthsDaysAgo(date)})' : ''}'
+                        : fmtLong(date),
+                    style: sub)),
           ]),
         if (resp != null) ...[
           const SizedBox(height: 4),

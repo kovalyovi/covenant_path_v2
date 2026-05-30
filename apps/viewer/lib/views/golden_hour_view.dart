@@ -18,7 +18,10 @@ class _GoldenHourViewState extends State<_GoldenHourView> {
   _GhSection _section = _GhSection.newMembers;
   _Window _window = _Window.all;
   bool _byDate = false;
+  bool? _asc; // null = section default; Being Taught → soonest first, New Members → newest first
   String? _respFilter; // null=all, 'WML'=first year, 'RSEQ'=after first year
+
+  bool get _ascending => _asc ?? (_section == _GhSection.beingTaught);
 
   bool _within(Map<String, dynamic> m) {
     if (_window == _Window.all) return true;
@@ -61,16 +64,17 @@ class _GoldenHourViewState extends State<_GoldenHourView> {
           sectionToggle,
           const SizedBox(height: 8),
           _SectionTitle(title: 'Being Taught', count: beingTaught.length, byDate: _byDate,
-              onToggle: (v) => setState(() => _byDate = v)),
+              onToggle: (v) => setState(() => _byDate = v),
+              ascending: _ascending, onAscToggle: () => setState(() => _asc = !_ascending)),
         ]),
         child: beingTaught.isEmpty
             ? const Padding(padding: EdgeInsets.all(32),
                 child: Center(child: Text('No one currently being taught.')))
             : (_byDate
                 ? _DateList(rows: beingTaught, tier: widget.tier, onOpen: widget.onOpen, chips: false,
-                    dateField: 'baptism_goal_date', ascending: true)
+                    dateField: 'baptism_goal_date', ascending: _ascending)
                 : _UnitGrid(rows: beingTaught, tier: widget.tier, onOpen: widget.onOpen, chips: false,
-                    dateField: 'baptism_goal_date', ascending: true)),
+                    dateField: 'baptism_goal_date', ascending: _ascending)),
       );
     }
 
@@ -114,15 +118,18 @@ class _GoldenHourViewState extends State<_GoldenHourView> {
         ),
         const SizedBox(height: 8),
         _SectionTitle(title: 'Recently Baptized', count: rows.length, byDate: _byDate,
-            onToggle: (v) => setState(() => _byDate = v)),
+            onToggle: (v) => setState(() => _byDate = v),
+            ascending: _ascending, onAscToggle: () => setState(() => _asc = !_ascending)),
         _CompletionCard(rows: rows, onOpen: widget.onOpen),
       ]),
       child: rows.isEmpty
           ? const Padding(padding: EdgeInsets.all(32),
               child: Center(child: Text('No new members in this window.')))
           : (_byDate
-              ? _DateList(rows: rows, tier: widget.tier, onOpen: widget.onOpen, chips: true)
-              : _UnitGrid(rows: rows, tier: widget.tier, onOpen: widget.onOpen, chips: true)),
+              ? _DateList(rows: rows, tier: widget.tier, onOpen: widget.onOpen, chips: true,
+                  ascending: _ascending)
+              : _UnitGrid(rows: rows, tier: widget.tier, onOpen: widget.onOpen, chips: true,
+                  ascending: _ascending)),
     );
   }
 }
