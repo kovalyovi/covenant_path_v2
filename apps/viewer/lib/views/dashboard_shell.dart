@@ -2,13 +2,15 @@ part of '../dashboard_page.dart';
 
 class _Body extends StatelessWidget {
   const _Body({required this.tab, required this.tier, required this.future,
-      required this.onRefresh, required this.onOpen, this.enrollStatus});
+      required this.onRefresh, required this.onOpen, this.enrollStatus,
+      this.missionaries = const {}});
   final int tab;
   final ScreenTier tier;
   final Future<List<Map<String, dynamic>>> future;
   final Future<void> Function() onRefresh;
   final void Function(Map<String, dynamic>) onOpen;
   final EnrollmentStatus? enrollStatus;
+  final Map<String, List<Map<String, dynamic>>> missionaries; // unit name → assigned missionaries
 
   @override
   Widget build(BuildContext context) {
@@ -27,7 +29,7 @@ class _Body extends StatelessWidget {
           return _EmptyState(enrollStatus: enrollStatus);
         }
         final view = switch (tab) {
-          0 => _OnDateView(rows: rows, tier: tier, onOpen: onOpen),
+          0 => _OnDateView(rows: rows, tier: tier, onOpen: onOpen, missionaries: missionaries),
           1 => _GoldenHourView(rows: rows, tier: tier, onOpen: onOpen),
           2 => _NeedsView(rows: rows, tier: tier, onOpen: onOpen),
           3 => _KpiView(rows: rows, tier: tier, onOpen: onOpen),

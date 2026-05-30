@@ -59,6 +59,7 @@ class _DashboardPageState extends State<DashboardPage> {
   bool _syncing = false;
   DateTime? _syncStartedAt;
   EnrollmentStatus? _enrollStatus;
+  Map<String, List<Map<String, dynamic>>> _missionaries = const {}; // unit name → assigned missionaries
 
   @override
   void initState() {
@@ -88,7 +89,8 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Future<void> _loadStakeName() async {
     try {
-      final rows = await supabase.from('stakes').select('name, last_synced_at, sync_state, sync_started_at');
+      final rows = await supabase.from('stakes')
+          .select('name, last_synced_at, sync_state, sync_started_at, missionaries');
       final list = (rows as List).cast<Map<String, dynamic>>();
       if (list.isEmpty || !mounted) return;
       // freshest stake first, so the chip reflects the most recent scrape the user can see
@@ -98,6 +100,19 @@ class _DashboardPageState extends State<DashboardPage> {
       setState(() {
         _stakeName = list.first['name'];
         _lastSynced = list.first['last_synced_at']?.toString();
+        // unit name → assigned full-time missionaries (#29), merged across visible stakes
+        final miss = <String, List<Map<String, dynamic>>>{};
+        for (final s in list) {
+          final m = s['missionaries'];
+          if (m is Map) {
+            m.forEach((k, v) {
+              if (v is List) {
+                miss['$k'] = v.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+              }
+            });
+          }
+        }
+        _missionaries = miss;
         // only treat as syncing if it started recently — guards against a crashed run that
         // never got to mark itself 'done' leaving a permanently stuck banner.
         DateTime? running;
@@ -462,7 +477,7 @@ class _DashboardPageState extends State<DashboardPage> {
         if (staleCred) _StaleBanner(onReenroll: () => supabase.auth.signOut()),
         Expanded(
           child: _Body(tab: _tab, tier: tier, future: _future, onRefresh: _refresh,
-              onOpen: _open, enrollStatus: _enrollStatus),
+              onOpen: _open, enrollStatus: _enrollStatus, missionaries: _missionaries),
         ),
       ]);
 
