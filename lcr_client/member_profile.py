@@ -96,10 +96,32 @@ def _ordinance_date(record: dict, type_: str) -> str | None:
     return None
 
 
+_dumped_record_shape = False
+
+
+def _as_list(*vals):
+    for v in vals:
+        if isinstance(v, list):
+            return v
+    return None
+
+
 def extract_fields(record: dict) -> dict:
-    """Pull the covenant-path-relevant fields out of the raw member record."""
+    """Pull the covenant-path-relevant fields out of the raw member record. Priesthood, callings,
+    and received ministering come from HERE (the authoritative per-member profile) — the one-work
+    progress record is sparse for these. A one-time PII-safe shape dump (keys only) lands in
+    tools/output/logs so the exact calling/ministering keys can be confirmed from a real sync."""
+    global _dumped_record_shape
+    if not _dumped_record_shape:
+        _dumped_record_shape = True
+        try:
+            dump_debug("profile_record_shape", keys=sorted(record.keys()),
+                       priesthood_office=record.get("currentPriesthoodOfficeType"))
+        except Exception:  # noqa: BLE001
+            pass
+
     birth = record.get("birth") or {}
-    return {
+    out = {
         "birth_date": birth.get("dateDisplay"),
         "baptism_date": _ordinance_date(record, "BAPTISM"),
         "confirmation_date": _ordinance_date(record, "CONFIRMATION"),
@@ -108,6 +130,20 @@ def extract_fields(record: dict) -> dict:
         "patriarchal_blessing": "Yes" if record.get("hasPatriarchalBlessing") else "No",
         "priesthood_office": record.get("currentPriesthoodOfficeType"),
     }
+    # Callings: a non-empty current-callings/positions list -> "Yes" (best-effort across the known
+    # record shapes; if none match, the shape dump above reveals the real key and we map it).
+    callings = _as_list(record.get("callings"), record.get("positions"),
+                        record.get("currentCallings"), record.get("memberCallings"))
+    if callings is not None:
+        out["calling"] = "Yes" if callings else "No"
+    # Received ministering (who ministers TO this member).
+    minw = record.get("ministering") or {}
+    recv = _as_list(minw.get("ministeringBrothers"), minw.get("ministeringSisters"),
+                    record.get("ministeringBrothers"), record.get("ministeringSisters"),
+                    record.get("assignedMinisteringBrothers"))
+    if recv is not None:
+        out["ministering_brothers_sisters"] = "Yes" if recv else "No"
+    return out
 
 
 def call_action(session, person_uuid: str, action_id: str, args: list) -> list:

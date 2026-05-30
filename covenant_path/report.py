@@ -58,6 +58,22 @@ def parse_priesthood(ordinations: list[str] | None) -> tuple[str, str]:
     return (NA, NA)
 
 
+# LCR currentPriesthoodOfficeType -> (aaronic, melchizedek). Melchizedek offices imply the holder
+# also received the Aaronic Priesthood. This is the AUTHORITATIVE priesthood source (the per-member
+# profile record); the sparse one-work progress record's priesthoodOrdinations is empty for most.
+_MELCH_OFFICES = {"ELDER", "HIGH_PRIEST", "BISHOP", "SEVENTY", "PATRIARCH", "APOSTLE"}
+_AARONIC_OFFICES = {"DEACON", "TEACHER", "PRIEST"}
+
+
+def priesthood_from_office(office: str | None) -> tuple[str, str]:
+    o = (office or "").upper().replace(" ", "_").replace("-", "_")
+    if o in _MELCH_OFFICES:
+        return ("Yes", "Yes")
+    if o in _AARONIC_OFFICES:
+        return ("Yes", "No")
+    return ("No", "No")  # profile fetched, no office -> genuinely no priesthood (eligibility gates display)
+
+
 def parse_endowment(temple_ordinances: list[str] | None) -> str:
     """living_ordinance = received temple endowment."""
     text = " | ".join(temple_ordinances or [])
@@ -264,7 +280,10 @@ def _assemble(person_raw: dict, details: dict | None, unit_name: str, birth: str
 
 
 def _apply_profile(member: CovenantPathMember, prof: dict) -> None:
-    """Fill the profile-sourced fields (baptism, temple recommend, patriarchal, ministering)."""
+    """Fill the profile-sourced fields from the AUTHORITATIVE per-member profile record. Priesthood
+    comes from priesthood_office here (the one-work record's priesthoodOrdinations is empty for most
+    members — the root cause of the priesthood discrepancy). calling / has-ministers are likewise
+    overridden from the profile when it supplies them."""
     if prof.get("baptism_date"):
         member.baptism_date = prof["baptism_date"]
     if prof.get("temple_recommend"):
@@ -275,6 +294,17 @@ def _apply_profile(member: CovenantPathMember, prof: dict) -> None:
         member.ministering_assignment = prof["ministering_assignment"]
     if not member.birth_date and prof.get("birth_date"):
         member.birth_date = prof["birth_date"]
+    # Priesthood from the profile's office (authoritative). "priesthood_office" is always present in
+    # the profile record (possibly None); apply whenever the record was fetched.
+    if "priesthood_office" in prof:
+        member.aaronic_priesthood, member.melchizedek_priesthood = \
+            priesthood_from_office(prof.get("priesthood_office"))
+    # calling / has-ministers when the profile supplies them (member_profile.extract_fields fills
+    # these when the member record exposes them; absent -> keep the value _assemble derived).
+    if prof.get("calling") in ("Yes", "No"):
+        member.calling = prof["calling"]
+    if prof.get("ministering_brothers_sisters") in ("Yes", "No"):
+        member.ministering_brothers_sisters = prof["ministering_brothers_sisters"]
 
 
 # Fields that come from the member profile and must be marked access-blocked (not blanked) when
