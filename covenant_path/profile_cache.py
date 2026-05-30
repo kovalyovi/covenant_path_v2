@@ -25,6 +25,12 @@ from pathlib import Path
 
 DEFAULT_PATH = Path(__file__).resolve().parent.parent / "tools" / "output" / "profile_cache.json"
 
+# Bump when the set of profile fields changes, so stale-shaped cache entries (e.g. missing a
+# newly-added field like sex / priesthood_office / ministering_brothers_sisters) are treated as
+# misses and refetched instead of served with gaps. v2 = added sex + priesthood-office + received
+# ministering (2026-05-30).
+SCHEMA_VERSION = 2
+
 
 class ProfileCache:
     def __init__(self, path: str | Path = DEFAULT_PATH, max_age_days: float = 7.0,
@@ -49,6 +55,10 @@ class ProfileCache:
         if not entry:
             self.misses += 1
             return None
+        # Different field schema (old cache) -> refetch so new fields aren't served as gaps.
+        if entry.get("_v") != SCHEMA_VERSION:
+            self.misses += 1
+            return None
         # max_age <= 0 means "always refresh" -> treat every entry as stale on read
         # (we still keep/refresh the stored value via put()).
         age = time.time() - entry.get("_ts", 0)
@@ -56,12 +66,12 @@ class ProfileCache:
             self.misses += 1
             return None
         self.hits += 1
-        return {k: v for k, v in entry.items() if k != "_ts"}
+        return {k: v for k, v in entry.items() if k not in ("_ts", "_v")}
 
     def put(self, uuid: str, fields: dict) -> None:
         if not self.enabled or not uuid:
             return
-        self._data[uuid] = {**fields, "_ts": time.time()}
+        self._data[uuid] = {**fields, "_ts": time.time(), "_v": SCHEMA_VERSION}
 
     def prune(self, live_uuids: set[str]) -> int:
         """Drop entries for members no longer in the report (left the stake)."""
