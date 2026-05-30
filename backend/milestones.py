@@ -12,9 +12,12 @@ import re
 from datetime import datetime
 
 
-_MONTHS = {n.lower(): i for i, n in enumerate(
-    ["january", "february", "march", "april", "may", "june", "july", "august",
-     "september", "october", "november", "december"], 1)}
+_MONTHS: dict[str, int] = {}
+for _i, _full in enumerate(
+        ["january", "february", "march", "april", "may", "june", "july", "august",
+         "september", "october", "november", "december"], 1):
+    _MONTHS[_full] = _i
+    _MONTHS[_full[:3]] = _i  # abbreviation too ("Sep", "Jul") — LCR uses "20 Sep 2016"
 
 
 def year(v) -> int | None:
