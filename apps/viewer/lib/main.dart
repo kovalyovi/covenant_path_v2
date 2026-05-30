@@ -5,6 +5,7 @@ import 'biometric_gate.dart';
 import 'config.dart';
 import 'dashboard_page.dart';
 import 'login_page.dart';
+import 'theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,19 +20,27 @@ Future<void> main() async {
 /// Shorthand used across the app.
 SupabaseClient get supabase => Supabase.instance.client;
 
+/// App-wide light/dark preference (persisted). The dashboard menu toggles it.
+final themeController = ThemeController();
+
 class ViewerApp extends StatelessWidget {
   const ViewerApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Covenant Path',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
-      // Make all text selectable app-wide (text fields manage their own selection and are
-      // excluded automatically); taps/buttons still work inside a SelectionArea.
-      builder: (context, child) => SelectionArea(child: child ?? const SizedBox.shrink()),
-      home: const AuthGate(),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: themeController,
+      builder: (context, mode, _) => MaterialApp(
+        title: 'Covenant Path',
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.light,
+        darkTheme: AppTheme.dark,
+        themeMode: mode,
+        // Make all text selectable app-wide (text fields manage their own selection and are
+        // excluded automatically); taps/buttons still work inside a SelectionArea.
+        builder: (context, child) => SelectionArea(child: child ?? const SizedBox.shrink()),
+        home: const AuthGate(),
+      ),
     );
   }
 }

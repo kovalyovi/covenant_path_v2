@@ -4,6 +4,9 @@ import 'package:url_launcher/url_launcher.dart';
 import 'admin_client.dart';
 import 'golden_hour.dart';
 import 'main.dart';
+import 'theme/tokens.dart';
+import 'widgets/app_card.dart';
+import 'widgets/status.dart';
 
 Future<void> _open(String? url) async {
   if (url == null || url.isEmpty) return;
@@ -236,14 +239,14 @@ class _AdminPageState extends State<AdminPage> {
       future: future,
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
-          return _Card(
+          return AppCard(
               title: '$title…',
               child: const Padding(
                   padding: EdgeInsets.symmetric(vertical: 8),
                   child: Center(child: CircularProgressIndicator())));
         }
         if (snap.hasError) {
-          return _Card(
+          return AppCard(
             title: title,
             child: Text(
               "Couldn't load: ${snap.error}${errorHint != null ? '\n\n$errorHint' : ''}",
@@ -293,7 +296,7 @@ class _LinksCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final links = d.links;
     if (links.isEmpty) return const SizedBox.shrink();
-    return _Card(
+    return AppCard(
       title: 'Tools & dashboards',
       child: Wrap(spacing: 8, runSpacing: 8, children: [
         for (final e in links.entries)
@@ -309,35 +312,6 @@ class _LinksCard extends StatelessWidget {
 
 // ---- cards -----------------------------------------------------------------
 
-class _Card extends StatelessWidget {
-  const _Card({required this.title, required this.child, this.trailing});
-  final String title;
-  final Widget child;
-  final Widget? trailing;
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 6),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Expanded(
-                child: Text(title,
-                    style: Theme.of(context)
-                        .textTheme
-                        .titleMedium
-                        ?.copyWith(fontWeight: FontWeight.bold))),
-            if (trailing != null) trailing!,
-          ]),
-          const SizedBox(height: 10),
-          child,
-        ]),
-      ),
-    );
-  }
-}
-
 class _HealthCard extends StatelessWidget {
   const _HealthCard({required this.d});
   final _AdminData d;
@@ -345,36 +319,13 @@ class _HealthCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final brokerOk = (d.summary['broker'] as Map?)?['ok'] == true;
     final sbOk = d.sb['ok'] == true;
-    return _Card(
+    return AppCard(
       title: 'System health',
       child: Wrap(spacing: 10, runSpacing: 10, children: [
-        _Pill(label: 'Broker', ok: brokerOk),
-        _Pill(label: 'Supabase', ok: sbOk),
-        _Pill(label: 'GitHub Actions', ok: d.githubConfigured,
+        StatusPill(label: 'Broker', ok: brokerOk),
+        StatusPill(label: 'Supabase', ok: sbOk),
+        StatusPill(label: 'GitHub Actions', ok: d.githubConfigured,
             offText: 'not linked'),
-      ]),
-    );
-  }
-}
-
-class _Pill extends StatelessWidget {
-  const _Pill({required this.label, required this.ok, this.offText = 'down'});
-  final String label;
-  final bool ok;
-  final String offText;
-  @override
-  Widget build(BuildContext context) {
-    final c = ok ? Colors.green.shade600 : Colors.orange.shade700;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-      decoration: BoxDecoration(
-          color: c.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: c)),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(ok ? Icons.check_circle : Icons.error_outline, size: 16, color: c),
-        const SizedBox(width: 6),
-        Text('$label · ${ok ? 'ok' : offText}', style: TextStyle(color: c)),
       ]),
     );
   }
@@ -386,7 +337,7 @@ class _FreshnessCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final sb = d.sb;
-    return _Card(
+    return AppCard(
       title: 'Data freshness',
       child: Column(children: [
         _kv(context, 'Last member update', _ago(sb['last_member_update'])),
@@ -417,7 +368,7 @@ class _MaintenanceCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final on = d.githubConfigured ? onRun : null;
-    return _Card(
+    return AppCard(
       title: 'Maintenance',
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Text('Each flow re-scrapes LCR (required for fresh data); the choice controls '
@@ -471,7 +422,7 @@ class _DiagnosticsCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final run = d.latestSync;
     if (run == null) {
-      return const _Card(title: 'Diagnostics', child: Text('No sync diagnostics yet.'));
+      return const AppCard(title: 'Diagnostics', child: Text('No sync diagnostics yet.'));
     }
     final p = (run['payload'] as Map?)?.cast<String, dynamic>() ?? const {};
     final req = (p['requests'] as Map?)?.cast<String, dynamic>() ?? const {};
@@ -481,15 +432,15 @@ class _DiagnosticsCard extends StatelessWidget {
     final failed = ((stats['failed_units'] as List?) ?? const []).cast<dynamic>();
     final successPct = (req['success_pct'] as num?)?.toDouble() ?? 100.0;
 
-    return _Card(
+    return AppCard(
       title: 'Diagnostics',
       trailing: Text(_ago(run['run_at']), style: Theme.of(context).textTheme.bodySmall),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Wrap(spacing: 10, runSpacing: 10, children: [
-          _Pill(label: 'Requests ${successPct.toStringAsFixed(0)}%', ok: successPct >= 99),
-          _Pill(label: 'Units ${(stats['units'] ?? '—')} ok', ok: failed.isEmpty,
+          StatusPill(label: 'Requests ${successPct.toStringAsFixed(0)}%', ok: successPct >= 99),
+          StatusPill(label: 'Units ${(stats['units'] ?? '—')} ok', ok: failed.isEmpty,
               offText: '${failed.length} failed'),
-          _Pill(label: '${req['total_errors'] ?? 0} request errors', ok: (req['total_errors'] ?? 0) == 0),
+          StatusPill(label: '${req['total_errors'] ?? 0} request errors', ok: (req['total_errors'] ?? 0) == 0),
         ]),
         if (failed.isNotEmpty)
           Padding(
@@ -540,9 +491,9 @@ class _EnrolledStakesCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (stakes.isEmpty) {
-      return const _Card(title: 'Enrolled stakes', child: Text('No stakes yet.'));
+      return const AppCard(title: 'Enrolled stakes', child: Text('No stakes yet.'));
     }
-    return _Card(
+    return AppCard(
       title: 'Enrolled stakes (${stakes.length})',
       child: Column(children: [
         for (final s in stakes) _stakeTile(context, s),
@@ -561,16 +512,16 @@ class _EnrolledStakesCard extends StatelessWidget {
     final Color credColor;
     if (cred == null) {
       credLabel = 'No credential';
-      credColor = Colors.grey.shade600;
+      credColor = AppColors.neutral;
     } else if (cred['state'] == 'revoked') {
       credLabel = 'Revoked';
-      credColor = Colors.orange.shade700;
+      credColor = AppColors.warning;
     } else if (cred['complete'] == true) {
       credLabel = 'Active · full coverage';
-      credColor = Colors.green.shade600;
+      credColor = AppColors.success;
     } else {
       credLabel = 'Active · partial';
-      credColor = Colors.blue.shade600;
+      credColor = AppColors.info;
     }
 
     return Padding(
@@ -609,14 +560,7 @@ class _EnrolledStakesCard extends StatelessWidget {
     );
   }
 
-  Widget _tag(String text, Color c) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-        decoration: BoxDecoration(
-            color: c.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: c)),
-        child: Text(text, style: TextStyle(color: c, fontSize: 12)),
-      );
+  Widget _tag(String text, Color c) => StatusTag(text, color: c);
 }
 
 class _ParityRow extends StatelessWidget {
@@ -658,7 +602,7 @@ class _RunsCard extends StatelessWidget {
   Widget build(BuildContext context) {
     if (!d.githubConfigured) return const SizedBox.shrink();
     final runs = d.runs;
-    return _Card(
+    return AppCard(
       title: 'Recent Actions runs',
       child: runs.isEmpty
           ? const Text('No runs found.')
@@ -712,7 +656,7 @@ class _ChangelogCard extends StatelessWidget {
     if (!d.githubConfigured) return const SizedBox.shrink();
     final commits = d.commits;
     if (commits.isEmpty) return const SizedBox.shrink();
-    return _Card(
+    return AppCard(
       title: 'Changelog',
       child: Column(
         children: [
@@ -740,7 +684,7 @@ class _AdminsCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final me = supabase.auth.currentUser?.email?.toLowerCase();
-    return _Card(
+    return AppCard(
       title: 'Admins',
       trailing: TextButton.icon(
         onPressed: onInvite,
