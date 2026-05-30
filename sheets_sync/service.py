@@ -29,6 +29,10 @@ from googleapiclient.discovery import build
 from sheets_sync.row_mapper import DATA_WIDTH, GATED_COLUMNS, to_row
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+# drive.file lets the service account CREATE per-stake spreadsheets and SHARE the ones it created
+# (narrower than full Drive — it can only touch files it made). Requires the Drive API enabled on
+# the GCP project (one-time toggle). Used only by create_and_share_spreadsheet.
+CREATE_SCOPES = SCOPES + ["https://www.googleapis.com/auth/drive.file"]
 DEFAULT_SHEET = "New member progress"
 CHANGELOG = "Changelog"
 _SA_CANDIDATES = [
@@ -46,6 +50,45 @@ def _service_account_file() -> str:
         "No service account file. Set SHEETS_SERVICE_ACCOUNT or drop "
         "sheets_sync/service_account.json (Editor-shared on the target sheet)."
     )
+
+
+def create_and_share_spreadsheet(title: str, viewer_emails: list[str],
+                                 service_account_file: str | None = None) -> str:
+    """Create a NEW spreadsheet for one stake and share it READ-ONLY with the given emails (the
+    stake's leadership + onboarder). Returns the new spreadsheet id. Best-effort sharing — a bad
+    email is skipped. Requires the Drive API enabled on the GCP project (else raises; the caller
+    degrades gracefully)."""
+    creds = Credentials.from_service_account_file(
+        service_account_file or _service_account_file(), scopes=CREATE_SCOPES)
+    sheets = build("sheets", "v4", credentials=creds)
+    drive = build("drive", "v3", credentials=creds)
+    ss = sheets.spreadsheets().create(
+        body={"properties": {"title": title},
+              "sheets": [{"properties": {"title": DEFAULT_SHEET}}]}).execute()
+    sid = ss["spreadsheetId"]
+    for em in {e.strip().lower() for e in viewer_emails if e and "@" in e}:
+        try:
+            drive.permissions().create(
+                fileId=sid, sendNotificationEmail=False,
+                body={"type": "user", "role": "reader", "emailAddress": em}).execute()
+        except Exception:  # noqa: BLE001 — one bad address shouldn't block the rest
+            pass
+    return sid
+
+
+def share_spreadsheet(spreadsheet_id: str, viewer_emails: list[str],
+                      service_account_file: str | None = None) -> None:
+    """Add read-only viewers to an existing (app-created) spreadsheet. Idempotent per email."""
+    creds = Credentials.from_service_account_file(
+        service_account_file or _service_account_file(), scopes=CREATE_SCOPES)
+    drive = build("drive", "v3", credentials=creds)
+    for em in {e.strip().lower() for e in viewer_emails if e and "@" in e}:
+        try:
+            drive.permissions().create(
+                fileId=spreadsheet_id, sendNotificationEmail=False,
+                body={"type": "user", "role": "reader", "emailAddress": em}).execute()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 class SheetsSync:
