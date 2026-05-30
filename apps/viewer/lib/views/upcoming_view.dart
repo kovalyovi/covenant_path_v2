@@ -1,7 +1,9 @@
 part of '../dashboard_page.dart';
 
 /// People being taught who have a *planned* (future) baptism date — the missionary
-/// "baptismGoalDate". Sorted soonest-first; the date shown is the goal, not an actual baptism.
+/// "baptismGoalDate". Two presentations (the header toggle): a combined date timeline, or the same
+/// timeline split per unit. Either way, dates already passed (still not baptized) surface in a
+/// "needs attention — overdue" block on top; genuinely upcoming dates follow.
 class _OnDateView extends StatefulWidget {
   const _OnDateView({required this.rows, required this.tier, required this.onOpen});
   final List<Map<String, dynamic>> rows;
@@ -11,161 +13,235 @@ class _OnDateView extends StatefulWidget {
   State<_OnDateView> createState() => _OnDateViewState();
 }
 
+typedef _Dated = ({Map<String, dynamic> m, DateTime date});
+
 class _OnDateViewState extends State<_OnDateView> {
-  bool _byDate = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final dated = widget.rows
-        .where((m) => m['kind'] == 'investigator' && parseMemberDate(m['baptism_goal_date']) != null)
-        .toList();
-    return _Page(
-      tier: widget.tier,
-      header: _SectionTitle(title: 'Prospective Baptisms', count: dated.length, byDate: _byDate,
-          onToggle: (v) => setState(() => _byDate = v)),
-      child: dated.isEmpty
-          ? const Padding(padding: EdgeInsets.all(32),
-              child: Center(child: Text('No prospective baptisms with a planned date.')))
-          : (_byDate
-              ? _UpcomingCalendar(rows: dated, onOpen: widget.onOpen)
-              : _UnitGrid(rows: dated, tier: widget.tier, onOpen: widget.onOpen, chips: false,
-                  dateField: 'baptism_goal_date', ascending: true)),
-    );
-  }
-}
-
-/// Prospective baptisms as a calendar (this month + next, if any) with today highlighted and
-/// baptism days marked, then a compact list. Dates beyond the two months go in a "Later" list.
-/// Kept narrow on purpose.
-class _UpcomingCalendar extends StatelessWidget {
-  const _UpcomingCalendar({required this.rows, required this.onOpen});
-  final List<Map<String, dynamic>> rows;
-  final void Function(Map<String, dynamic>) onOpen;
+  bool _byUnit = false; // header toggle: combined timeline (false) vs per-unit timelines (true)
 
   @override
   Widget build(BuildContext context) {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final items = <({Map<String, dynamic> m, DateTime date})>[];
-    for (final m in rows) {
+    final items = <_Dated>[];
+    for (final m in widget.rows) {
+      if (m['kind'] != 'investigator') continue;
       final d = parseMemberDate(m['baptism_goal_date']);
       if (d != null) items.add((m: m, date: DateTime(d.year, d.month, d.day)));
     }
     items.sort((a, b) => a.date.compareTo(b.date));
-    final thisM = DateTime(now.year, now.month);
-    final nextM = DateTime(now.year, now.month + 1);
-    bool inMonth(DateTime d, DateTime mo) => d.year == mo.year && d.month == mo.month;
-    final inCal = items.where((i) => inMonth(i.date, thisM) || inMonth(i.date, nextM)).toList();
-    final later = items.where((i) => !inCal.contains(i)).toList();
-    final byDay = <DateTime, int>{};
-    for (final i in inCal) {
-      byDay[i.date] = (byDay[i.date] ?? 0) + 1;
+
+    return _Page(
+      tier: widget.tier,
+      // _SectionTitle's toggle is Unit(false)/Date(true); map it to _byUnit.
+      header: _SectionTitle(
+          title: 'Prospective Baptisms',
+          count: items.length,
+          byDate: !_byUnit,
+          onToggle: (v) => setState(() => _byUnit = !v)),
+      child: items.isEmpty
+          ? const Padding(
+              padding: EdgeInsets.all(32),
+              child: Center(child: Text('No prospective baptisms with a planned date.')))
+          : (_byUnit ? _perUnit(today, items) : _combined(today, items)),
+    );
+  }
+
+  Widget _combined(DateTime today, List<_Dated> items) => Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640),
+          child: _Timeline(items: items, today: today, onOpen: widget.onOpen),
+        ),
+      );
+
+  Widget _perUnit(DateTime today, List<_Dated> items) {
+    final byUnit = <String, List<_Dated>>{};
+    for (final i in items) {
+      (byUnit[(i.m['unit_name'] ?? '—').toString()] ??= []).add(i);
     }
-    final showNext = inCal.any((i) => inMonth(i.date, nextM));
-
-    Widget row(({Map<String, dynamic> m, DateTime date}) i) => ListTile(
-          dense: true,
-          contentPadding: EdgeInsets.zero,
-          leading: PhotoAvatar(
-              name: i.m['name']?.toString() ?? '?', photoUrl: i.m['photo_url']?.toString(), size: 38),
-          title: Text(i.m['name']?.toString() ?? '—',
-              style: const TextStyle(fontWeight: FontWeight.w600)),
-          subtitle: Text('${i.m['unit_name'] ?? ''} · ${fmtLong(i.date)}',
-              style: Theme.of(context).textTheme.bodySmall),
-          onTap: () => onOpen(i.m),
-        );
-
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 560),
-        child: Column(children: [
-          _MonthGrid(month: thisM, today: today, byDay: byDay),
-          if (showNext) _MonthGrid(month: nextM, today: today, byDay: byDay),
-          if (inCal.isNotEmpty)
-            SectionCard(
-                title: 'This & next month',
-                leadingIcon: Icons.event_available,
-                child: Column(children: [for (final i in inCal) row(i)])),
-          if (later.isNotEmpty)
-            SectionCard(
-                title: 'Later',
-                leadingIcon: Icons.update,
-                child: Column(children: [for (final i in later) row(i)])),
-        ]),
-      ),
+    final units = byUnit.keys.toList()..sort();
+    return _Columns(
+      cols: _cols(widget.tier).clamp(1, 2),
+      children: [
+        for (final u in units)
+          SectionCard(
+            title: u,
+            leadingIcon: Icons.groups,
+            trailing: _CountBadge(byUnit[u]!.length),
+            child: _Timeline(items: byUnit[u]!, today: today, onOpen: widget.onOpen, embedded: true),
+          ),
+      ],
     );
   }
 }
 
-/// A compact month grid; days with a baptism are tinted (with a count dot), today gets a ring.
-class _MonthGrid extends StatelessWidget {
-  const _MonthGrid({required this.month, required this.today, required this.byDay});
-  final DateTime month; // year/month (day ignored)
+/// The baptism timeline: an overdue block ("needs attention") then an upcoming block, each a
+/// date-rail list (month/day on the left, the people on that date on the right). [embedded] drops
+/// the outer cards so it can live inside a per-unit card.
+class _Timeline extends StatelessWidget {
+  const _Timeline(
+      {required this.items, required this.today, required this.onOpen, this.embedded = false});
+  final List<_Dated> items;
   final DateTime today;
-  final Map<DateTime, int> byDay;
+  final void Function(Map<String, dynamic>) onOpen;
+  final bool embedded;
 
   @override
   Widget build(BuildContext context) {
-    final c = Theme.of(context).colorScheme;
-    final daysInMonth = DateTime(month.year, month.month + 1, 0).day;
-    final lead = DateTime(month.year, month.month, 1).weekday % 7; // Sun=0 .. Sat=6
-    final cells = <Widget?>[for (var i = 0; i < lead; i++) null];
-    for (var d = 1; d <= daysInMonth; d++) {
-      cells.add(_dayCell(context, DateTime(month.year, month.month, d)));
-    }
-    while (cells.length % 7 != 0) {
-      cells.add(null);
-    }
-    return SectionCard(
-      title: DateFormat('MMMM y').format(month),
-      leadingIcon: Icons.calendar_month,
-      child: Column(children: [
-        Row(children: [
-          for (final w in const ['S', 'M', 'T', 'W', 'T', 'F', 'S'])
-            Expanded(
-                child: Center(
-                    child: Text(w,
-                        style: TextStyle(fontSize: 11, color: c.onSurfaceVariant)))),
-        ]),
-        const SizedBox(height: 4),
-        for (var r = 0; r < cells.length / 7; r++)
-          Row(children: [
-            for (var k = 0; k < 7; k++)
-              Expanded(child: cells[r * 7 + k] ?? const SizedBox(height: 40)),
-          ]),
-      ]),
-    );
+    final overdue = items.where((i) => i.date.isBefore(today)).toList();
+    final upcoming = items.where((i) => !i.date.isBefore(today)).toList();
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      if (overdue.isNotEmpty)
+        _DateSection(
+          title: 'Needs attention — date passed',
+          icon: Icons.warning_amber_rounded,
+          color: Colors.orange.shade800,
+          items: overdue,
+          today: today,
+          overdue: true,
+          onOpen: onOpen,
+          embedded: embedded,
+        ),
+      if (upcoming.isNotEmpty)
+        _DateSection(
+          title: 'Upcoming',
+          icon: Icons.event_available,
+          color: Theme.of(context).colorScheme.primary,
+          items: upcoming,
+          today: today,
+          overdue: false,
+          onOpen: onOpen,
+          embedded: embedded,
+        ),
+      if (upcoming.isEmpty && overdue.isEmpty)
+        const Padding(padding: EdgeInsets.all(16), child: Text('No planned dates.')),
+    ]);
   }
+}
 
-  Widget _dayCell(BuildContext context, DateTime day) {
-    final c = Theme.of(context).colorScheme;
-    final count = byDay[day] ?? 0;
-    final isToday = day == today;
-    return Container(
-      height: 40,
-      margin: const EdgeInsets.all(2),
-      decoration: BoxDecoration(
-        color: count > 0 ? c.primary.withValues(alpha: 0.14) : null,
-        borderRadius: BorderRadius.circular(8),
-        border: isToday ? Border.all(color: c.primary, width: 1.6) : null,
+class _DateSection extends StatelessWidget {
+  const _DateSection(
+      {required this.title,
+      required this.icon,
+      required this.color,
+      required this.items,
+      required this.today,
+      required this.overdue,
+      required this.onOpen,
+      required this.embedded});
+  final String title;
+  final IconData icon;
+  final Color color;
+  final List<_Dated> items;
+  final DateTime today;
+  final bool overdue;
+  final void Function(Map<String, dynamic>) onOpen;
+  final bool embedded;
+
+  @override
+  Widget build(BuildContext context) {
+    final byDate = <DateTime, List<_Dated>>{};
+    for (final i in items) {
+      (byDate[i.date] ??= []).add(i);
+    }
+    final dates = byDate.keys.toList()..sort(); // soonest first (overdue: oldest-passed first)
+    final rail = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      for (var di = 0; di < dates.length; di++) ...[
+        if (di > 0) Divider(height: 18, color: Theme.of(context).colorScheme.outlineVariant),
+        _DateRow(
+            date: dates[di], people: byDate[dates[di]]!, today: today, overdue: overdue, onOpen: onOpen),
+      ],
+    ]);
+    if (embedded) {
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const SizedBox(height: 4),
+        Row(children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 6),
+          Text(title, style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 13)),
+        ]),
+        const SizedBox(height: 8),
+        rail,
+        const SizedBox(height: 6),
+      ]);
+    }
+    return SectionCard(title: title, leadingIcon: icon, iconColor: color, child: rail);
+  }
+}
+
+/// One date in the rail: a month/day block on the left, the people planned for that day on the right.
+class _DateRow extends StatelessWidget {
+  const _DateRow(
+      {required this.date,
+      required this.people,
+      required this.today,
+      required this.overdue,
+      required this.onOpen});
+  final DateTime date;
+  final List<_Dated> people;
+  final DateTime today;
+  final bool overdue;
+  final void Function(Map<String, dynamic>) onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = overdue ? Colors.orange.shade800 : Theme.of(context).colorScheme.primary;
+    final days = date.difference(today).inDays;
+    final rel = overdue
+        ? '${-days} day${days == -1 ? '' : 's'} ago'
+        : (days == 0 ? 'Today' : (days == 1 ? 'Tomorrow' : 'in $days days'));
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Container(
+        width: 54,
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        decoration: BoxDecoration(
+            color: accent.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(10)),
+        child: Column(children: [
+          Text(DateFormat('MMM').format(date).toUpperCase(),
+              style: TextStyle(fontSize: 11, color: accent, fontWeight: FontWeight.w700)),
+          Text('${date.day}',
+              style: TextStyle(fontSize: 22, height: 1.0, color: accent, fontWeight: FontWeight.bold)),
+          Text(DateFormat('EEE').format(date),
+              style: TextStyle(fontSize: 10, color: Colors.grey.shade600)),
+        ]),
       ),
-      child: Stack(alignment: Alignment.center, children: [
-        Text('${day.day}',
-            style: TextStyle(
-                fontWeight: count > 0 || isToday ? FontWeight.bold : FontWeight.normal,
-                color: count > 0 ? c.primary : null)),
-        if (count > 0)
-          Positioned(
-            bottom: 3,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 5),
-              decoration: BoxDecoration(color: c.primary, borderRadius: BorderRadius.circular(8)),
-              child: Text('$count',
-                  style: TextStyle(color: c.onPrimary, fontSize: 9, fontWeight: FontWeight.bold)),
-            ),
+      const SizedBox(width: 12),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 3, bottom: 1),
+            child: Text(rel,
+                style: TextStyle(
+                    fontSize: 11,
+                    color: overdue ? accent : Colors.grey.shade600,
+                    fontWeight: FontWeight.w600)),
           ),
-      ]),
-    );
+          for (final p in people)
+            InkWell(
+              onTap: () => onOpen(p.m),
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 5),
+                child: Row(children: [
+                  PhotoAvatar(
+                      name: p.m['name']?.toString() ?? '?',
+                      photoUrl: p.m['photo_url']?.toString(),
+                      size: 36),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(p.m['name']?.toString() ?? '—',
+                          style: const TextStyle(fontWeight: FontWeight.w600)),
+                      Text(p.m['unit_name']?.toString() ?? '',
+                          style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                    ]),
+                  ),
+                  const Icon(Icons.chevron_right, size: 18),
+                ]),
+              ),
+            ),
+        ]),
+      ),
+    ]);
   }
 }
 
