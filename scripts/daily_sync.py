@@ -244,7 +244,25 @@ def run_one_stake(args, unit: int) -> int:
                 _mint_and_sync(args, st)
             return 0
         except Exception as exc:  # noqa: BLE001
-            logger.error("stake %s sync failed: %s", unit, exc)
+            logger.error("stake %s delegated sync failed: %s", unit, exc)
+            # Self-heal: if the operator account (LCR_LOGIN) is available and this is THEIR stake, a
+            # stale delegated credential shouldn't strand the stake — log in fresh and sync. We only
+            # claim recovery if the self pass actually synced the requested unit (so a non-operator
+            # stake's failure isn't masked by syncing the operator's own stake instead).
+            if os.getenv("LCR_LOGIN"):
+                try:
+                    from lcr_client import okta_login
+                    logger.info("attempting self-baseline (LCR_LOGIN) recovery for stake %s", unit)
+                    okta_login.login()
+                    args._allow_master = True
+                    recovered = (_sync_one(args).get("supabase") or {}).get("stake_unit")
+                    if recovered == unit:
+                        logger.info("stake %s recovered via the self baseline", unit)
+                        return 0
+                    logger.warning("self baseline synced %s, not %s — delegated credential is stale",
+                                   recovered, unit)
+                except Exception as exc2:  # noqa: BLE001
+                    logger.error("self-baseline recovery also failed: %s", exc2)
             print(f"[!] stake {unit} failed (re-authorize may be needed): {exc}")
             return 1
         finally:
