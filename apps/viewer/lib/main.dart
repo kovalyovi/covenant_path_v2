@@ -1,4 +1,6 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'biometric_gate.dart';
@@ -10,13 +12,34 @@ import 'theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  installErrorReporting(); // uncaught errors → broker /log → Axiom (best-effort, no-op offline)
   if (supabaseUrl.isEmpty || supabaseAnonKey.isEmpty) {
+    installErrorReporting();
     runApp(const _ConfigError());
     return;
   }
   await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
-  runApp(const ViewerApp());
+
+  // Sentry wraps runApp and auto-captures uncaught errors; installErrorReporting() then chains on
+  // top so the same errors also reach our broker /log → Axiom. PII is never sent (sendDefaultPii
+  // off + our reporter strips member data). No-op path when no DSN is configured.
+  Future<void> startApp() async {
+    installErrorReporting();
+    runApp(const ViewerApp());
+  }
+
+  if (sentryDsn.isEmpty) {
+    await startApp();
+  } else {
+    await SentryFlutter.init(
+      (o) {
+        o.dsn = sentryDsn;
+        o.tracesSampleRate = 0.2; // performance traces (20%)
+        o.sendDefaultPii = false; // never attach user PII
+        o.environment = kReleaseMode ? 'production' : 'debug';
+      },
+      appRunner: startApp,
+    );
+  }
 }
 
 /// Shorthand used across the app.

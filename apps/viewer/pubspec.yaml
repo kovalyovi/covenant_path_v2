@@ -17,6 +17,7 @@ dependencies:
   local_auth: ^3.0.1          # native biometric app-lock (Face ID / fingerprint / Hello)
   web: ^1.1.0                 # WebAuthn platform-authenticator lock on web (biometric_web.dart)
   shared_preferences: ^2.5.5
+  sentry_flutter: ^8.14.2
 
 # app_links 7.1.0 (transitive via supabase_flutter) ships an android/build.gradle.kts that throws
 # "DefaultAndroidSourceSet_Decorated cannot be cast to AndroidLibrarySourceSet" with our AGP — pin
