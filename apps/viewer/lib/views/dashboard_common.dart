@@ -119,12 +119,15 @@ class _SyncingBannerState extends State<_SyncingBanner> {
   }
 }
 
-/// AppBar chip showing data freshness. Shows "Updated 2h ago" (icon-only when [compact]);
-/// hover tooltip and tap both reveal the exact local date/time + timezone of the last scrape.
+/// AppBar chip showing data freshness. Shows "Updated 2h ago" (icon-only when [compact]); while a
+/// scrape is running it shows a spinner + "Syncing…". Tapping opens a dialog with the exact local
+/// time and — when [onSyncNow] is provided — a "Sync now" button (or in-progress state). (#freshness)
 class _LastUpdated extends StatelessWidget {
-  const _LastUpdated({required this.iso, this.compact = false});
+  const _LastUpdated({required this.iso, this.compact = false, this.onSyncNow, this.syncing = false});
   final String iso;
   final bool compact;
+  final VoidCallback? onSyncNow; // triggers a sync; closes the dialog itself
+  final bool syncing;
 
   String get _exact {
     final dt = DateTime.tryParse(iso)?.toLocal();
@@ -136,24 +139,54 @@ class _LastUpdated extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: Tooltip(
-        message: 'Data last updated:\n$_exact',
+        message: syncing ? 'Sync in progress…' : 'Data last updated:\n$_exact',
         child: InkWell(
           borderRadius: BorderRadius.circular(20),
           onTap: () => showDialog<void>(
             context: context,
-            builder: (_) => AlertDialog(
+            builder: (dctx) => AlertDialog(
               title: const Text('Data freshness'),
-              content: Text('Last scraped from LCR:\n\n$_exact'),
-              actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK'))],
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Last scraped from LCR:\n\n$_exact'),
+                  if (syncing) ...[
+                    const SizedBox(height: 18),
+                    Row(children: [
+                      const SizedBox(
+                          width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                      const SizedBox(width: 10),
+                      Text('Sync in progress — fresh data in a few minutes.',
+                          style: Theme.of(context).textTheme.bodySmall),
+                    ]),
+                  ] else if (onSyncNow != null) ...[
+                    const SizedBox(height: 16),
+                    Text('Run a fresh scrape now using your stake\'s saved sync credential.',
+                        style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                ],
+              ),
+              actions: [
+                if (onSyncNow != null && !syncing)
+                  FilledButton.icon(
+                      onPressed: onSyncNow, // closes the dialog + kicks off the sync
+                      icon: const Icon(Icons.sync, size: 18),
+                      label: const Text('Sync now')),
+                TextButton(onPressed: () => Navigator.pop(dctx), child: const Text('Close')),
+              ],
             ),
           ),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.history, size: 18),
+              if (syncing)
+                const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2))
+              else
+                const Icon(Icons.history, size: 18),
               if (!compact) ...[
-                const SizedBox(width: 4),
-                Text('Updated ${_ago(iso)}', style: const TextStyle(fontSize: 12)),
+                const SizedBox(width: 5),
+                Text(syncing ? 'Syncing…' : 'Updated ${_ago(iso)}', style: const TextStyle(fontSize: 12)),
               ],
             ]),
           ),
