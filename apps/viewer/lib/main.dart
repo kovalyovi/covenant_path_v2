@@ -4,11 +4,13 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'biometric_gate.dart';
 import 'config.dart';
 import 'dashboard_page.dart';
+import 'error_reporter.dart';
 import 'login_page.dart';
 import 'theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  installErrorReporting(); // uncaught errors → broker /log → Axiom (best-effort, no-op offline)
   if (supabaseUrl.isEmpty || supabaseAnonKey.isEmpty) {
     runApp(const _ConfigError());
     return;

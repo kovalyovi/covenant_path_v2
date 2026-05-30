@@ -126,6 +126,28 @@ def health() -> dict:
     return {"ok": True, "service": "church-login-broker"}
 
 
+class LogReq(BaseModel):
+    level: str = "error"
+    event: str = "client.error"
+    message: str | None = None
+    surface: str | None = None      # "web" | "android" | …
+    context: dict | None = None     # small, non-PII extras (ids/counts/route)
+
+
+@app.post("/log")
+def client_log(req: LogReq) -> dict:
+    """Client-side error/observability ingest (#53): the app ships uncaught errors / failed calls
+    here and the broker forwards them to Axiom (PII-scrubbed, no-op without AXIOM_TOKEN). Anonymous
+    + size-capped — it's just telemetry."""
+    from backend import observability as obs
+    safe = {k: v for k, v in (req.context or {}).items()
+            if isinstance(v, (str, int, float, bool))}
+    obs.event(req.event, level=req.level, message=(req.message or "")[:500],
+              surface=req.surface, **safe)
+    obs.flush()
+    return {"ok": True}
+
+
 class RevokeReq(BaseModel):
     stake_id: str
 

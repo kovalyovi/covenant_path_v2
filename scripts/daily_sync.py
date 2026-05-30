@@ -218,8 +218,9 @@ def run_one_stake(args, unit: int) -> int:
     """Sync exactly ONE stake by unit number — the per-stake isolated job. Uses that stake's
     delegated credential; falls back to self (LCR_LOGIN) only if this is the operator's own stake
     and it has no stored credential."""
-    from backend import credentials, db
+    from backend import credentials, db, observability as obs
     args.supabase = True
+    args._correlation_id = obs.new_correlation_id()  # ties this stake's events end-to-end
     conn = db.connect()
     try:
         st = next((s for s in credentials.list_active_stakes(conn) if s.get("unit_number") == unit), None)
@@ -227,12 +228,15 @@ def run_one_stake(args, unit: int) -> int:
         conn.close()
     if st:
         try:
-            _mint_and_sync(args, st)
+            with obs.span("sync.stake", correlation_id=args._correlation_id, stake=unit):
+                _mint_and_sync(args, st)
             return 0
         except Exception as exc:  # noqa: BLE001
             logger.error("stake %s sync failed: %s", unit, exc)
             print(f"[!] stake {unit} failed (re-authorize may be needed): {exc}")
             return 1
+        finally:
+            obs.flush()
     logger.info("no delegated credential for unit %s; falling back to self (LCR_LOGIN)", unit)
     from lcr_client import okta_login
     okta_login.login()
