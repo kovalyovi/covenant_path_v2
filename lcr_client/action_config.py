@@ -16,9 +16,12 @@ from pathlib import Path
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "tools" / "output" / "action_ids.json"
 
 DEFAULTS = {
-    "record": "7f2ccb08ceed847752296703e86519aa152df6ea90",
-    "recommend": "7f17b3fc0f8bfa0f970314557b20af32fb0e0346b5",
-    "ministering": "7fbf523f92fbc2ee6ce8e2384cd3413a82c1bdbf8b",
+    # Refreshed 2026-05-30 from a live HAR — LCR had rotated all three (the stale ministering id
+    # returned nothing → ministering fields were empty). The `record` action self-heals; recommend
+    # and ministering don't, so keep these current (or capture a fresh HAR when LCR redeploys).
+    "record": "60d9cea64347f48c3278846ad33af661aa96c7c675",
+    "recommend": "6048eedaf1d276c5281af3bc5f2ea364440869390a",
+    "ministering": "601fc08b32296e765da7c82db3b0a04d680e34af8b",
     # /mlt/orgs leadership-directory action (args ["eng"]) — names every calling +
     # who holds it; used to enrich the role-name catalog (lcr_client/leadership.py) and as the
     # fallback for stake-leader provisioning. Build-specific; rotates on LCR redeploys.
