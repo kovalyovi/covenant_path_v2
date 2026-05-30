@@ -456,6 +456,41 @@ double _avgCompletion(List<Map<String, dynamic>> rows) {
   return sum / rows.length;
 }
 
+/// Average Golden Hour completion per unit (#26 "which org integrates converts best"), ranked
+/// high→low. n = how many baptized members in that unit.
+List<({String unit, double pct, int n})> _unitCompletion(List<Map<String, dynamic>> baptized) {
+  final byUnit = <String, List<Map<String, dynamic>>>{};
+  for (final m in baptized) {
+    (byUnit[(m['unit_name'] ?? '—').toString()] ??= []).add(m);
+  }
+  final out = [
+    for (final e in byUnit.entries) (unit: e.key, pct: _avgCompletion(e.value), n: e.value.length)
+  ];
+  out.sort((a, b) => b.pct.compareTo(a.pct));
+  return out;
+}
+
+/// Members who had ≥1 lesson with a member present, with that count — the drill behind the
+/// Lessons-with-member stat (#38). Sorted by most member-present lessons.
+List<({Map<String, dynamic> m, int count})> _membersWithMemberLessons(
+    List<Map<String, dynamic>> rows) {
+  final out = <({Map<String, dynamic> m, int count})>[];
+  for (final m in rows) {
+    final d = m['details'];
+    final lessons = (d is Map ? d['lessons'] : null) as List?;
+    if (lessons == null) continue;
+    var c = 0;
+    for (final l in lessons) {
+      if (l is! Map) continue;
+      final ps = (l['principles'] as List?) ?? const [];
+      if (ps.any((p) => p is Map && p['memberPresent'] == true)) c++;
+    }
+    if (c > 0) out.add((m: m, count: c));
+  }
+  out.sort((a, b) => b.count.compareTo(a.count));
+  return out;
+}
+
 String _ago(dynamic iso) {
   final t = DateTime.tryParse('${iso ?? ''}');
   if (t == null) return '$iso';

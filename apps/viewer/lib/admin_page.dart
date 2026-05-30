@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'admin_client.dart';
@@ -83,6 +84,31 @@ class _AdminPageState extends State<AdminPage> {
     await _guard(() async {
       await _client.revokeStake(stakeId);
       _snack('Revoked sync for $name.');
+      await _refresh();
+    });
+  }
+
+  Future<void> _syncStake(String unit, String name) async {
+    if (unit.isEmpty || unit == 'null') {
+      _snack('No unit number on file for $name — can\'t scope a sync.');
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('Sync $name now?'),
+        content: const Text('Re-scrapes LCR for this one stake and writes to Supabase. Runs in the '
+            'cloud (GitHub Actions) and takes a few minutes.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Sync')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await _guard(() async {
+      await _client.run('daily-sync.yml', inputs: {'stake': unit, 'targets': 'supabase'});
+      _snack('Sync dispatched for $name. Refresh in a minute to see the run.');
       await _refresh();
     });
   }
@@ -202,7 +228,8 @@ class _AdminPageState extends State<AdminPage> {
                 _section<Map<String, dynamic>>(_stakesF, 'Enrolled stakes', (s) =>
                     _EnrolledStakesCard(
                         stakes: ((s['stakes'] as List?) ?? const []).cast<Map<String, dynamic>>(),
-                        onRevoke: _busy ? null : _revokeStake)),
+                        onRevoke: _busy ? null : _revokeStake,
+                        onSync: _busy ? null : _syncStake)),
                 // GitHub Actions: its own card so a token/repo error only affects this section.
                 _section<Map<String, dynamic>>(_actionsF, 'GitHub Actions', (a) {
                   final d = _AdminData({'github_configured': a['configured'] == true}, a, const {}, const []);
@@ -442,6 +469,22 @@ class _DiagnosticsCard extends StatelessWidget {
               offText: '${failed.length} failed'),
           StatusPill(label: '${req['total_errors'] ?? 0} request errors', ok: (req['total_errors'] ?? 0) == 0),
         ]),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            // #54: one tap → the whole run's diagnostics as text, ready to paste to Claude. PII-safe
+            // (counts/endpoints/coverage only — no names/dates/addresses).
+            onPressed: () {
+              Clipboard.setData(ClipboardData(
+                  text: _claudeDump(run, req, stats, coverage, endpoints, failed)));
+              ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Diagnostics copied — paste into Claude.')));
+            },
+            icon: const Icon(Icons.copy_all, size: 16),
+            label: const Text('Copy for Claude'),
+            style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+          ),
+        ),
         if (failed.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 8),
@@ -484,9 +527,10 @@ class _DiagnosticsCard extends StatelessWidget {
 /// Cross-stake ops view: every stake's enrollment, coverage, freshness + member count, with an
 /// admin revoke for support. "Sync now" reuses the shared daily-sync dispatch (runs all stakes).
 class _EnrolledStakesCard extends StatelessWidget {
-  const _EnrolledStakesCard({required this.stakes, required this.onRevoke});
+  const _EnrolledStakesCard({required this.stakes, required this.onRevoke, this.onSync});
   final List<Map<String, dynamic>> stakes;
   final void Function(String stakeId, String name)? onRevoke;
+  final void Function(String unitNumber, String name)? onSync;
 
   @override
   Widget build(BuildContext context) {
@@ -533,6 +577,14 @@ class _EnrolledStakesCard extends StatelessWidget {
             const Padding(
               padding: EdgeInsets.only(right: 8),
               child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+            ),
+          // Per-stake sync (#42): scope a fresh scrape to this one stake (active credential only).
+          if (!running && cred != null && cred['state'] == 'active' && onSync != null)
+            IconButton(
+              tooltip: 'Sync this stake now',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.sync, size: 18),
+              onPressed: () => onSync!('${s['unit_number'] ?? ''}', name),
             ),
           if (cred != null && cred['state'] == 'active' && onRevoke != null)
             IconButton(
@@ -725,6 +777,33 @@ Widget _kv(BuildContext context, String k, String v) => Padding(
         Text(v, style: const TextStyle(fontWeight: FontWeight.w500)),
       ]),
     );
+
+/// PII-safe text dump of a sync run's diagnostics for the "Copy for Claude" button (#54):
+/// success rate, failed units, per-field parity, and per-endpoint latency/error counts.
+String _claudeDump(Map<String, dynamic> run, Map req, Map stats, Map coverage, List endpoints,
+    List failed) {
+  final b = StringBuffer()
+    ..writeln('Covenant Path — sync diagnostics (PII-safe)')
+    ..writeln('run_at: ${run['run_at']}   kind: ${run['kind']}')
+    ..writeln('requests: ${req['success_pct'] ?? '?'}% success, ${req['total_errors'] ?? 0} errors')
+    ..writeln('units ok: ${stats['units'] ?? '?'}'
+        '${failed.isEmpty ? '' : '   failed: ${failed.join(', ')}'}');
+  if (coverage.isNotEmpty) {
+    b.writeln('field_coverage (filled/blocked/pending):');
+    coverage.forEach((k, v) {
+      final c = (v as Map);
+      b.writeln('  $k: ${c['filled'] ?? 0}/${c['blocked'] ?? 0}/${c['pending'] ?? 0}');
+    });
+  }
+  if (endpoints.isNotEmpty) {
+    b.writeln('endpoints:');
+    for (final ep in endpoints) {
+      b.writeln('  ${ep['endpoint']}: ${ep['calls']} calls, ${ep['avg_ms']}ms avg, '
+          '${ep['errors'] ?? 0} err');
+    }
+  }
+  return b.toString();
+}
 
 String _ago(dynamic iso) {
   if (iso == null) return 'never';
