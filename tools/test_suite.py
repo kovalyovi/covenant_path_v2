@@ -208,6 +208,53 @@ def test_clean_missing_filters_unnamed():
     return "named-only + dedupe + unnamed count ok"
 
 
+def test_missionary_roster_parse():
+    """The /mlt/orgs/missionary flight → assignedToUnit records, with the optional mission filter."""
+    from lcr_client.missionaries import fetch_unit_missionaries
+    flight = (
+        '0:["$","div",null,{}]\n'
+        '1:{"assignedToUnit":[{"uuid":"u1","name":"Elder Test","phoneNumber":"+1 555",'
+        '"email":"e@missionary.org","missionName":"NC Raleigh Mission","missionId":2011727},'
+        '{"uuid":"u2","name":"Sister Other","missionId":9999}],'
+        '"servingFromUnit":[],"returnedFromUnit":[]}\n'
+    )
+
+    class _R:
+        def __init__(self, t):
+            self.text = t
+
+    class _Sess:
+        def post(self, *a, **k):
+            return _R(flight)
+
+    class _Client:
+        session = _Sess()
+
+    allm = fetch_unit_missionaries(_Client(), 44911)
+    assert len(allm) == 2 and allm[0]["name"] == "Elder Test", allm
+    assert allm[0]["mission_id"] == 2011727 and allm[0]["email"] == "e@missionary.org"
+    filtered = fetch_unit_missionaries(_Client(), 44911, mission_id=2011727)
+    assert len(filtered) == 1 and filtered[0]["uuid"] == "u1", filtered
+    return "missionary flight parse + mission filter ok"
+
+
+def test_email_relay_validation():
+    """The auth relay rejects bad input before any network call (no open-relay / enumeration)."""
+    from backend.auth_broker import email_relay
+    for bad in ("", "nope", "x" * 300 + "@a.com"):
+        try:
+            email_relay.start_email_login(bad)
+            raise AssertionError(f"accepted bad email: {bad[:16]}")
+        except email_relay.RelayError:
+            pass
+    try:
+        email_relay.verify_email_login("a@b.com", "")
+        raise AssertionError("accepted empty code")
+    except email_relay.RelayError:
+        pass
+    return "email relay rejects bad email + empty code pre-network"
+
+
 # --- LIVE --------------------------------------------------------------------
 
 def test_live_access_matrix():
@@ -287,7 +334,8 @@ def main() -> int:
     offline = [test_token_store_roundtrip, test_token_store_key_mismatch,
                test_report_degradation_helpers, test_okta_building_blocks, test_access_humanize,
                test_name_cache_roundtrip, test_clean_missing_filters_unnamed,
-               test_leadership_harvest, test_profile_cache, test_sheets_preserve_failed_units]
+               test_leadership_harvest, test_profile_cache, test_sheets_preserve_failed_units,
+               test_missionary_roster_parse, test_email_relay_validation]
     for t in offline:
         check(t.__name__, t)
 

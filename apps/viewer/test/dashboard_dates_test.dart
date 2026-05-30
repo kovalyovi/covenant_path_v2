@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:covenant_path_viewer/dashboard_page.dart';
+import 'package:covenant_path_viewer/golden_hour.dart';
 
 // The On Date / Golden Hour tabs group + filter by baptism date, so date parsing across
 // LCR's several string formats is the part most likely to silently misbehave.
@@ -24,5 +25,23 @@ void main() {
   test('fmtLong is a full human-readable date', () {
     expect(fmtLong(DateTime(2026, 2, 6)), 'Friday, February 6, 2026');
     expect(fmtLong(null), '');
+  });
+
+  // Baptism tenure label shown next to the date ("February 6, 2026 (2 months 3 days)").
+  group('monthsDaysAgo', () {
+    test('null and future dates return empty', () {
+      expect(monthsDaysAgo(null), '');
+      expect(monthsDaysAgo(DateTime.now().add(const Duration(days: 10))), '');
+    });
+    test('recent dates read in days', () {
+      final r = monthsDaysAgo(DateTime.now().subtract(const Duration(days: 3)));
+      expect(r, contains('day'));
+      expect(r, isNot(contains('month')));
+    });
+    test('older dates include months, with correct pluralization', () {
+      expect(monthsDaysAgo(DateTime.now().subtract(const Duration(days: 75))), contains('month'));
+      // exactly today reads "0 days" (never empty/negative)
+      expect(monthsDaysAgo(DateTime.now()), contains('day'));
+    });
   });
 }
