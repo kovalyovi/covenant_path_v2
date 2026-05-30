@@ -205,12 +205,13 @@ class MaxWidthBody extends StatelessWidget {
 class SectionCard extends StatelessWidget {
   const SectionCard(
       {super.key, required this.title, required this.child, this.trailing, this.leadingIcon,
-      this.iconColor});
+      this.iconColor, this.onTap});
   final String title;
   final Widget child;
   final Widget? trailing;
   final IconData? leadingIcon;
   final Color? iconColor;
+  final VoidCallback? onTap; // when set, the whole card is tappable (#37)
   @override
   Widget build(BuildContext context) {
     final accent = iconColor ?? Theme.of(context).colorScheme.primary;
@@ -221,7 +222,10 @@ class SectionCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
       ),
-      child: Padding(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
@@ -248,6 +252,7 @@ class SectionCard extends StatelessWidget {
           const SizedBox(height: 12),
           child,
         ]),
+      ),
       ),
     );
   }
