@@ -78,11 +78,14 @@ def _sync_one(args) -> dict:
         # its leadership. Falls back to the configured --spreadsheet-id if a per-stake sheet can't
         # be created (e.g. Drive API not yet enabled).
         sheet_id = _resolve_stake_sheet(client, args)
-        # preserve_units keeps failed units' existing rows (Sheets is a full-replace);
-        # Supabase upserts are non-destructive so stale rows simply persist there.
-        summary = SheetsSync(sheet_id).sync(dicts, preserve_units=failed_units)
-        result["sheets"] = summary
-        logger.info("sheets[%s]: %s", sheet_id, summary)
+        if not sheet_id:
+            logger.info("no per-stake sheet for this stake; skipping Sheets (Supabase still synced)")
+        else:
+            # preserve_units keeps failed units' existing rows (Sheets is a full-replace);
+            # Supabase upserts are non-destructive so stale rows simply persist there.
+            summary = SheetsSync(sheet_id).sync(dicts, preserve_units=failed_units)
+            result["sheets"] = summary
+            logger.info("sheets[%s]: %s", sheet_id, summary)
     if args.supabase:
         from backend import db, sync as bsync
         conn = db.connect()
@@ -118,6 +121,7 @@ def run_self(args) -> int | None:
     from lcr_client import okta_login
     logger.info("daily_sync mode=self: minting session via okta_login")
     okta_login.login()
+    args._allow_master = True  # only the operator's own stake may fall back to the master sheet (#3)
     res = _sync_one(args)
     print(f"[+] self sync: {res['members']} members "
           f"(sheets={'ok' if res['sheets'] else 'off'}, supabase={'ok' if res['supabase'] else 'off'})")
@@ -170,14 +174,22 @@ def _resolve_stake_sheet(client, args) -> str:
         finally:
             conn.close()
     except Exception as exc:  # noqa: BLE001 — never fail the sync over the sheet target
-        logger.warning("per-stake sheet unavailable (%s); using the configured spreadsheet", exc)
-        return args.spreadsheet_id
+        # The master sheet is reserved for the OPERATOR's own stake (#3: don't mingle other stakes
+        # into it). Only the self path sets _allow_master; a delegated stake with no own sheet skips
+        # Sheets entirely (Supabase still gets its data) rather than writing into the master.
+        if getattr(args, "_allow_master", False):
+            logger.warning("per-stake sheet unavailable (%s); using the operator's master sheet", exc)
+            return args.spreadsheet_id
+        logger.warning("per-stake sheet unavailable (%s); skipping Sheets for this stake "
+                       "(master is reserved for the operator's stake)", exc)
+        return ""
 
 
 def _mint_and_sync(args, st: dict) -> None:
     """Mint ONE stake's LCR session from its stored credential and sync it. Raises on failure
     (the caller decides whether one bad stake stops the run). Isolated per stake — no other
     stake's data is touched."""
+    args._allow_master = False  # a delegated stake never writes into the operator's master sheet (#3)
     from backend import credentials, db
     from lcr_client import okta_login
     conn = db.connect()
@@ -240,6 +252,7 @@ def run_one_stake(args, unit: int) -> int:
     logger.info("no delegated credential for unit %s; falling back to self (LCR_LOGIN)", unit)
     from lcr_client import okta_login
     okta_login.login()
+    args._allow_master = True  # operator's own stake → may use the master sheet (#3)
     self_unit = (_sync_one(args).get("supabase") or {}).get("stake_unit")
     if self_unit != unit:
         logger.warning("self stake is %s, not the requested %s", self_unit, unit)
