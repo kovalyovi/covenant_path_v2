@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'golden_hour.dart';
 import 'main.dart';
@@ -35,8 +36,18 @@ class PersonDetailPage extends StatelessWidget {
             ? 'Baptized $baptismDate'
             : null);
 
+    final uuid = member['person_uuid']?.toString();
     return Scaffold(
-      appBar: AppBar(title: Text(name)),
+      appBar: AppBar(title: Text(name), actions: [
+        if (uuid != null && uuid.isNotEmpty)
+          IconButton(
+            tooltip: 'Open in LCR (compare data)',
+            icon: const Icon(Icons.open_in_new),
+            onPressed: () => launchUrl(
+                Uri.parse('https://lcr.churchofjesuschrist.org/records/member-profile/$uuid?lang=eng'),
+                mode: LaunchMode.externalApplication),
+          ),
+      ]),
       body: MaxWidthBody(
         maxWidth: 1000,
         child: ListView(
@@ -81,7 +92,7 @@ class PersonDetailPage extends StatelessWidget {
           _Section(
             title: 'Covenant Path',
             leadingIcon: Icons.timeline,
-            child: GoldenHourChips(member: member, size: 30, highlightNext: true),
+            child: GoldenHourChips(member: member, highlightNext: true, labeled: true),
           ),
 
           if (d != null)

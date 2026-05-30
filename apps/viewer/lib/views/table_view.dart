@@ -29,8 +29,18 @@ class _SpreadsheetView extends StatefulWidget {
 class _SpreadsheetViewState extends State<_SpreadsheetView> {
   String? _field; // member key to filter on (null = no filter)
   bool _has = false; // true = has it, false = missing it
+  int? _sortCol; // column index to sort by (null = stable default order)
+  bool _sortAsc = true;
 
   static const _yes = {'Yes', 'Active'};
+
+  /// Display value — strips the redundant "Member for " prefix (header already says it). (#31)
+  static String _display(Map<String, dynamic> m, String key) {
+    final v = '${m[key] ?? ''}';
+    return key == 'membership_duration'
+        ? v.replaceFirst(RegExp(r'^Member for\s*', caseSensitive: false), '')
+        : v;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -43,6 +53,13 @@ class _SpreadsheetViewState extends State<_SpreadsheetView> {
         if (v.isEmpty || v == 'N/A') return false; // N/A = not applicable, exclude from both
         return _has ? _yes.contains(v) : !_yes.contains(v);
       }).toList();
+    }
+    if (_sortCol != null) {
+      final key = _SpreadsheetView._cols[_sortCol!].$2;
+      rows.sort((a, b) {
+        final c = _display(a, key).toLowerCase().compareTo(_display(b, key).toLowerCase());
+        return _sortAsc ? c : -c;
+      });
     }
     final filterable = _SpreadsheetView._cols.where((c) => c.$3 != 'text').toList();
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -80,6 +97,9 @@ class _SpreadsheetViewState extends State<_SpreadsheetView> {
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
+              showCheckboxColumn: false, // #33: no bulk-select / select-all; rows open individually
+              sortColumnIndex: _sortCol,
+              sortAscending: _sortAsc,
               headingRowColor: WidgetStatePropertyAll(scheme.colorScheme.primary),
               headingTextStyle:
                   TextStyle(color: scheme.colorScheme.onPrimary, fontWeight: FontWeight.bold),
@@ -87,12 +107,24 @@ class _SpreadsheetViewState extends State<_SpreadsheetView> {
               dataRowMinHeight: 40,
               dataRowMaxHeight: 48,
               columnSpacing: 18,
-              columns: [for (final c in _SpreadsheetView._cols) DataColumn(label: Text(c.$1))],
+              columns: [
+                for (var i = 0; i < _SpreadsheetView._cols.length; i++)
+                  DataColumn(
+                    label: Text(_SpreadsheetView._cols[i].$1),
+                    onSort: (col, asc) => setState(() {
+                      _sortCol = col;
+                      _sortAsc = asc;
+                    }),
+                  ),
+              ],
               rows: [
                 for (final m in rows)
                   DataRow(
                     onSelectChanged: (_) => widget.onOpen(m),
-                    cells: [for (final c in _SpreadsheetView._cols) _cell('${m[c.$2] ?? ''}', c.$3)],
+                    cells: [
+                      for (final c in _SpreadsheetView._cols)
+                        _cell(_SpreadsheetViewState._display(m, c.$2), c.$3)
+                    ],
                   ),
               ],
             ),
