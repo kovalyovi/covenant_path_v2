@@ -127,14 +127,37 @@ class _MemberRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final name = m['name']?.toString() ?? '—';
     final date = parseMemberDate(m[dateField]);
+    final age = ageOf(m);
+    final isBaptism = dateField == 'baptism_date';
+    final resp = chips ? responsibleParty(m) : null; // ownership applies to baptized converts
+    final sub = Theme.of(context).textTheme.bodySmall;
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
       onTap: () => onOpen(m),
       leading: PhotoAvatar(name: name, photoUrl: m['photo_url']?.toString(), size: 44),
-      title: Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
+      title: Row(children: [
+        Flexible(child: Text(name, style: const TextStyle(fontWeight: FontWeight.w600))),
+        if (age != null) ...[
+          const SizedBox(width: 6),
+          Text('· $age', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+        ],
+      ]),
       subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (date != null)
-          Text(fmtLong(date), style: Theme.of(context).textTheme.bodySmall),
+          Row(children: [
+            Icon(isBaptism ? Icons.water_drop : Icons.event,
+                size: 13, color: isBaptism ? Colors.lightBlue.shade600 : Colors.grey.shade600),
+            const SizedBox(width: 4),
+            Flexible(child: Text(fmtLong(date), style: sub)),
+          ]),
+        if (resp != null) ...[
+          const SizedBox(height: 4),
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(resp.icon, size: 13, color: Theme.of(context).colorScheme.primary),
+            const SizedBox(width: 4),
+            Text(resp.label, style: sub?.copyWith(color: Theme.of(context).colorScheme.primary)),
+          ]),
+        ],
         if (chips) ...[const SizedBox(height: 6), GoldenHourChips(member: m, size: 22, highlightNext: true)],
       ]),
       trailing: showUnit

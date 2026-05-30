@@ -18,6 +18,7 @@ class _GoldenHourViewState extends State<_GoldenHourView> {
   _GhSection _section = _GhSection.newMembers;
   _Window _window = _Window.all;
   bool _byDate = false;
+  String? _respFilter; // null=all, 'WML'=first year, 'RSEQ'=after first year
 
   bool _within(Map<String, dynamic> m) {
     if (_window == _Window.all) return true;
@@ -73,11 +74,30 @@ class _GoldenHourViewState extends State<_GoldenHourView> {
       );
     }
 
-    final rows = newMembers.where(_within).toList();
+    final rows = newMembers
+        .where(_within)
+        .where((m) => _respFilter == null || responsibleBucket(m) == _respFilter)
+        .toList();
     return _Page(
       tier: widget.tier,
       header: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         sectionToggle,
+        const SizedBox(height: 8),
+        Center(
+          child: Wrap(spacing: 6, children: [
+            FilterChip(
+                label: const Text('All'), selected: _respFilter == null,
+                onSelected: (_) => setState(() => _respFilter = null)),
+            FilterChip(
+                label: const Text('Missionaries / WML'), selected: _respFilter == 'WML',
+                avatar: const Icon(Icons.volunteer_activism, size: 16),
+                onSelected: (_) => setState(() => _respFilter = 'WML')),
+            FilterChip(
+                label: const Text('EQ / Relief Society'), selected: _respFilter == 'RSEQ',
+                avatar: const Icon(Icons.groups_2_outlined, size: 16),
+                onSelected: (_) => setState(() => _respFilter = 'RSEQ')),
+          ]),
+        ),
         const SizedBox(height: 8),
         Center(
           child: SegmentedButton<_Window>(

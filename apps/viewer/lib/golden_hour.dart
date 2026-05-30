@@ -99,6 +99,12 @@ List<Milestone> milestonesFor(Map<String, dynamic> m) =>
       : (label: 'Relief Society', icon: Icons.diversity_1_outlined);
 }
 
+/// Display age (e.g. "35 yrs") from birth_date, or null when unknown.
+String? ageOf(Map<String, dynamic> m) {
+  final a = _ageNow(m);
+  return (a == null || a < 0) ? null : '$a yrs';
+}
+
 /// The two ownership buckets, for filtering. 'WML' = first-year (missionaries/ward mission leader);
 /// 'RSEQ' = after-first-year (Relief Society / Elders Quorum).
 String responsibleBucket(Map<String, dynamic> m) {
