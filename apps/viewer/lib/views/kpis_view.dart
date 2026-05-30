@@ -91,13 +91,17 @@ class _KpiViewState extends State<_KpiView> {
         ('Being taught now', '${investigators.length}', () => _showDrill(context,
             title: 'Being taught now', events: evs(investigators, 'baptism_goal_date'),
             allUnits: allUnits, onOpen: onOpen)),
-        ('Lessons w/ member present', '$lessonsWithMember', null),
+        ('Lessons w/ member present', '$lessonsWithMember',
+            () => _showLessonsDrill(context, _membersWithMemberLessons(rows), onOpen)), // #38
         ('New members tracked', '${baptized.length}', () => _showDrill(context,
             title: 'New members tracked', events: evs(baptized, 'baptism_date'),
             allUnits: allUnits, onOpen: onOpen)),
         ('Golden Hour', '${(completion * 100).round()}%',
             () => _showGoldenHourBreakdown(context, baptized, onOpen)), // #5: per-category summary
       ]),
+      // #26: which unit integrates converts best — only meaningful stake-wide across ≥2 units.
+      if (_unit == null && units.length > 1)
+        _UnitCompletionCard(rows: baptized, onSelectUnit: (u) => setState(() => _unit = u)),
     ];
 
     return _Page(
@@ -507,6 +511,102 @@ void _showGoldenHourBreakdown(BuildContext context, List<Map<String, dynamic>> r
       ),
     ),
   );
+}
+
+/// #38: the members behind "Lessons with a member present" — who had member-supported lessons, and
+/// how many — ranked. (A time plot isn't possible; our stored lessons carry no per-lesson date.)
+void _showLessonsDrill(BuildContext context, List<({Map<String, dynamic> m, int count})> people,
+    void Function(Map<String, dynamic>) onOpen) {
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    constraints: const BoxConstraints(maxWidth: 640),
+    builder: (_) => DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.6,
+      minChildSize: 0.4,
+      maxChildSize: 0.95,
+      builder: (context, scroll) => ListView(
+        controller: scroll,
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+        children: [
+          Text('Lessons with a member present',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+          Text('${people.length} ${people.length == 1 ? 'person' : 'people'} · ranked by count',
+              style: Theme.of(context).textTheme.bodySmall),
+          const Divider(),
+          if (people.isEmpty)
+            const Padding(
+                padding: EdgeInsets.all(20),
+                child: Center(child: Text('No member-present lessons recorded yet.')))
+          else
+            for (final p in people)
+              ListTile(
+                dense: true,
+                leading: PhotoAvatar(
+                    name: p.m['name']?.toString() ?? '?',
+                    photoUrl: p.m['photo_url']?.toString(),
+                    size: 34),
+                title: Text(p.m['name']?.toString() ?? '—'),
+                subtitle: Text('${p.m['unit_name'] ?? ''}'),
+                trailing: _CountBadge(p.count),
+                onTap: () {
+                  Navigator.pop(context);
+                  onOpen(p.m);
+                },
+              ),
+        ],
+      ),
+    ),
+  );
+}
+
+/// #26: a ranked bar list of each unit's average Golden Hour completion — which unit integrates its
+/// converts best. Tapping a unit scopes the KPI page to it.
+class _UnitCompletionCard extends StatelessWidget {
+  const _UnitCompletionCard({required this.rows, required this.onSelectUnit});
+  final List<Map<String, dynamic>> rows; // baptized members in scope
+  final void Function(String unit) onSelectUnit;
+  @override
+  Widget build(BuildContext context) {
+    final ranked = _unitCompletion(rows);
+    if (ranked.length < 2) return const SizedBox.shrink();
+    return SectionCard(
+      title: 'Golden Hour by unit',
+      leadingIcon: Icons.leaderboard_outlined,
+      child: Column(children: [
+        for (final r in ranked)
+          InkWell(
+            onTap: () => onSelectUnit(r.unit),
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+              child: Row(children: [
+                Expanded(
+                    flex: 4,
+                    child: Text(r.unit, maxLines: 1, overflow: TextOverflow.ellipsis)),
+                const SizedBox(width: 8),
+                Expanded(
+                  flex: 5,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(value: r.pct, minHeight: 8),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 62,
+                  child: Text('${(r.pct * 100).round()}% · ${r.n}',
+                      textAlign: TextAlign.right,
+                      style: Theme.of(context).textTheme.bodySmall),
+                ),
+              ]),
+            ),
+          ),
+      ]),
+    );
+  }
 }
 
 class _DrillSheet extends StatefulWidget {
