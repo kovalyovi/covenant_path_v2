@@ -404,7 +404,7 @@ class _DashboardPageState extends State<DashboardPage> {
       IconButton(tooltip: 'Refresh', onPressed: _refresh, icon: const Icon(Icons.refresh)),
       PopupMenuButton<String>(
         tooltip: 'Menu',
-        icon: const Icon(Icons.more_horiz),
+        icon: const Icon(Icons.menu),
         onSelected: (v) {
           switch (v) {
             case 'sync':
