@@ -394,16 +394,22 @@ def build_stake_report(
     for unit in units:
         if verbose:
             print(f"[*] {unit.name} ({unit.unit_number})")
+        # progress-record is LCR's slowest, flakiest endpoint (probe: ~10.8s p50, ~38% 500s under
+        # load) and is the dominant cause of "unit failed" — NOT rate limiting. Be patient: more
+        # attempts + longer backoff so a transient 500 doesn't lose the whole unit.
         pr = _retry(lambda u=unit: client.progress_record(u.unit_number),
-                    label=f"progress_record {unit.unit_number}")
+                    attempts=5, delay=4.0, label=f"progress_record {unit.unit_number}")
         if pr is None:
             stats["units_failed"] += 1
             stats["failed_units"].append(unit.name)
             if verbose:
                 print(f"    [!] skipped {unit.name}: progress-record unavailable after retries")
             continue
+        # member-list currently 404s for every unit (LCR moved/removed /api/umlu/report/member-list,
+        # probe-confirmed) — it only enriches sex/birth, which the profile fetch also provides, so a
+        # miss degrades gracefully. One quick attempt (no point retrying a deterministic 404).
         member_maps = _retry(lambda u=unit: _build_member_maps(client, u.unit_number),
-                             label=f"member_list {unit.unit_number}") or {}
+                             attempts=1, label=f"member_list {unit.unit_number}") or {}
 
         # has-calling per member: whoever holds a position in the unit's org tree (the same
         # org-callings endpoint roles.py uses). The member profile has no callings and the one-work
