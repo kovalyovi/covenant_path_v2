@@ -319,6 +319,8 @@ def main() -> int:
     ap.add_argument("--list-stakes", action="store_true",
                     help="print a JSON array of credentialed stake unit numbers (for the CI matrix) "
                          "and exit; honors the schedule gate (prints [] off-target)")
+    ap.add_argument("--only", type=int, metavar="UNIT", default=None,
+                    help="with --list-stakes, emit only this stake's unit (the OPS per-stake dispatch)")
     ap.add_argument("--quiet", dest="verbose", action="store_false", default=True)
     args = ap.parse_args()
     # Env switch mirrors --no-self-baseline so the GitHub workflow can flip the cutover without
@@ -333,7 +335,10 @@ def main() -> int:
     # per-stake jobs spawn). A manual workflow_dispatch always lists.
     if args.list_stakes:
         import json
-        print(json.dumps(list_stake_units() if run_ok else []))
+        stakes = list_stake_units() if run_ok else []
+        if args.only is not None:  # OPS per-stake dispatch: emit just this one (if credentialed)
+            stakes = [u for u in stakes if u == args.only]
+        print(json.dumps(stakes))
         return 0
 
     if not run_ok:

@@ -30,6 +30,10 @@ on:
         description: "Also refresh member avatars (needs Supabase)"
         type: boolean
         default: false
+      stake:
+        description: "Sync only this stake (unit number); blank = all enrolled"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -58,7 +62,19 @@ jobs:
       - run: pip install psycopg2-binary cryptography python-dotenv requests
       - id: list
         # GITHUB_EVENT_NAME is provided by the runner; the gate emits [] off the scheduled window.
-        run: echo "stakes=$(python scripts/daily_sync.py --list-stakes)" >> "$GITHUB_OUTPUT"
+        # OPS can pass a single stake (unit number) to scope the run; validated numeric to keep it
+        # out of the shell, then forwarded as --only.
+        env:
+          ONLY_STAKE: ${{ inputs.stake }}
+        run: |
+          ARGS="--list-stakes"
+          if [ -n "$ONLY_STAKE" ]; then
+            if ! printf '%s' "$ONLY_STAKE" | grep -qE '^[0-9]+$'; then
+              echo "stake input must be a numeric unit number"; exit 1
+            fi
+            ARGS="$ARGS --only $ONLY_STAKE"
+          fi
+          echo "stakes=$(python scripts/daily_sync.py $ARGS)" >> "$GITHUB_OUTPUT"
 
   # ---- sync: one isolated job per stake -------------------------------------
   sync:

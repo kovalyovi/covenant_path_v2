@@ -87,6 +87,31 @@ class _AdminPageState extends State<AdminPage> {
     });
   }
 
+  Future<void> _syncStake(String unit, String name) async {
+    if (unit.isEmpty || unit == 'null') {
+      _snack('No unit number on file for $name — can\'t scope a sync.');
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('Sync $name now?'),
+        content: const Text('Re-scrapes LCR for this one stake and writes to Supabase. Runs in the '
+            'cloud (GitHub Actions) and takes a few minutes.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Sync')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await _guard(() async {
+      await _client.run('daily-sync.yml', inputs: {'stake': unit, 'targets': 'supabase'});
+      _snack('Sync dispatched for $name. Refresh in a minute to see the run.');
+      await _refresh();
+    });
+  }
+
   void _snack(String msg) {
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
@@ -202,7 +227,8 @@ class _AdminPageState extends State<AdminPage> {
                 _section<Map<String, dynamic>>(_stakesF, 'Enrolled stakes', (s) =>
                     _EnrolledStakesCard(
                         stakes: ((s['stakes'] as List?) ?? const []).cast<Map<String, dynamic>>(),
-                        onRevoke: _busy ? null : _revokeStake)),
+                        onRevoke: _busy ? null : _revokeStake,
+                        onSync: _busy ? null : _syncStake)),
                 // GitHub Actions: its own card so a token/repo error only affects this section.
                 _section<Map<String, dynamic>>(_actionsF, 'GitHub Actions', (a) {
                   final d = _AdminData({'github_configured': a['configured'] == true}, a, const {}, const []);
@@ -484,9 +510,10 @@ class _DiagnosticsCard extends StatelessWidget {
 /// Cross-stake ops view: every stake's enrollment, coverage, freshness + member count, with an
 /// admin revoke for support. "Sync now" reuses the shared daily-sync dispatch (runs all stakes).
 class _EnrolledStakesCard extends StatelessWidget {
-  const _EnrolledStakesCard({required this.stakes, required this.onRevoke});
+  const _EnrolledStakesCard({required this.stakes, required this.onRevoke, this.onSync});
   final List<Map<String, dynamic>> stakes;
   final void Function(String stakeId, String name)? onRevoke;
+  final void Function(String unitNumber, String name)? onSync;
 
   @override
   Widget build(BuildContext context) {
@@ -533,6 +560,14 @@ class _EnrolledStakesCard extends StatelessWidget {
             const Padding(
               padding: EdgeInsets.only(right: 8),
               child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+            ),
+          // Per-stake sync (#42): scope a fresh scrape to this one stake (active credential only).
+          if (!running && cred != null && cred['state'] == 'active' && onSync != null)
+            IconButton(
+              tooltip: 'Sync this stake now',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.sync, size: 18),
+              onPressed: () => onSync!('${s['unit_number'] ?? ''}', name),
             ),
           if (cred != null && cred['state'] == 'active' && onRevoke != null)
             IconButton(
