@@ -218,6 +218,58 @@ def auth_session(req: SessionReq) -> dict:
             "identity_name": res["identity"].get("name"), "enroll": enrolled}
 
 
+# --- passwordless passkey login (WebAuthn) ----------------------------------
+
+class PasskeyCompleteReq(BaseModel):
+    handle: str
+    credential: dict
+
+
+@app.post("/webauthn/register/begin")
+def webauthn_register_begin(email: str = Depends(require_user)) -> dict:
+    """A signed-in user begins binding a passkey to their email (returns ceremony options)."""
+    from backend.auth_broker import webauthn_flow
+    try:
+        return webauthn_flow.register_begin(email)
+    except webauthn_flow.PasskeyError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/webauthn/register/complete")
+def webauthn_register_complete(req: PasskeyCompleteReq, email: str = Depends(require_user)) -> dict:
+    """Verify the attestation and store the passkey for the signed-in user."""
+    from backend.auth_broker import webauthn_flow
+    try:
+        return webauthn_flow.register_complete(req.handle, req.credential)
+    except webauthn_flow.PasskeyError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/webauthn/login/begin")
+def webauthn_login_begin() -> dict:
+    """Begin a passwordless passkey login (discoverable credential challenge). No auth required."""
+    from backend.auth_broker import webauthn_flow
+    try:
+        return webauthn_flow.login_begin()
+    except webauthn_flow.PasskeyError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/webauthn/login/complete")
+def webauthn_login_complete(req: PasskeyCompleteReq) -> dict:
+    """Verify the assertion and mint a Supabase session OTP for the passkey's owner."""
+    rid = _rid()
+    from backend.auth_broker import webauthn_flow
+    try:
+        session = webauthn_flow.login_complete(req.handle, req.credential)
+    except webauthn_flow.PasskeyError as e:
+        logger.warning("[req %s] passkey login failed: %s", rid, e)
+        raise HTTPException(status_code=401, detail=str(e))
+    except session_mint.MintError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return {"status": "ok", "session": session}
+
+
 # --- admin / ops console (all gated by require_admin) -----------------------
 
 @app.get("/admin/summary")
