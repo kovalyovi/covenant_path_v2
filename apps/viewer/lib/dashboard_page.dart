@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show ImageFilter;
 
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
@@ -482,15 +483,26 @@ class _DashboardPageState extends State<DashboardPage> {
       ]);
 
       if (tier == ScreenTier.mobile) {
+        // Frosted "glass" bottom nav (#41): the body extends behind it and a BackdropFilter blurs
+        // the content scrolling underneath. _Page / the table add bottom clearance so nothing hides.
+        final c = Theme.of(context).colorScheme;
         return Scaffold(
           appBar: appBar,
+          extendBody: true,
           body: body,
-          bottomNavigationBar: NavigationBar(
-            selectedIndex: _tab,
-            onDestinationSelected: (i) => setState(() => _tab = i),
-            destinations: [
-              for (final t in _tabs) NavigationDestination(icon: Icon(t.icon), label: t.label),
-            ],
+          bottomNavigationBar: ClipRect(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+              child: NavigationBar(
+                backgroundColor: c.surface.withValues(alpha: 0.72),
+                elevation: 0,
+                selectedIndex: _tab,
+                onDestinationSelected: (i) => setState(() => _tab = i),
+                destinations: [
+                  for (final t in _tabs) NavigationDestination(icon: Icon(t.icon), label: t.label),
+                ],
+              ),
+            ),
           ),
         );
       }
