@@ -17,6 +17,13 @@ dependencies:
   local_auth: ^3.0.1
   shared_preferences: ^2.5.5
 
+# app_links 7.1.0 (transitive via supabase_flutter) ships an android/build.gradle.kts that throws
+# "DefaultAndroidSourceSet_Decorated cannot be cast to AndroidLibrarySourceSet" with our AGP — pin
+# the 6.x line (plain Groovy build.gradle, no typed-sourceSets cast). Within supabase_flutter's
+# allowed range (>=6.2.0 <8.0.0). Revisit when app_links fixes its build script for our AGP.
+dependency_overrides:
+  app_links: 6.4.1
+
 dev_dependencies:
   flutter_lints: ^4.0.0
   flutter_test:
