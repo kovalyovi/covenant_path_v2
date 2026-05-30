@@ -6,6 +6,44 @@ level — ideally via **pure API calls** (no Selenium/Playwright DOM scraping).
 
 Stake under test: Raleigh North Carolina Stake (unit 503991), 9 wards/branches,
 ~112 new covenant-path members. Account is password-only (no 2FA).
+Second live stake: Санкт-Петербургский (unit 615145), delegated credential.
+
+---
+
+## Session handoff — 2026-05-30 (PRs #15–25 merged, `main` green)
+
+**Shipped + verified:** missionary roster client + per-ward storage (#29, migration 0026 — populated
+14 missionaries/7 units for 615145; Raleigh re-sync triggered); endpoint probe → **it's NOT rate
+limiting** (member-list endpoint dead/404, progress-record slow+500s) → patient 5× retries (verified
+**0 failed units** after); Russia email-OTP relay (broker `/auth/email/*` + "backup sign-in", rate-
+limited); Sentry; Axiom env docs; master-sheet reserved for operator's stake (#3); baptism tenure +
+asc/desc sort; security hardening + tests (12 Python / 22 Dart); glass bottom nav; person-detail
+"recorded yes but LCR returned no names" note. README rewritten (5 tabs + multi-stake).
+
+**Remaining queue (start next session):**
+- **M7 per-stake OAuth Drive** — design in `docs/M7_OAUTH_DRIVE.md`. **Blocked on the owner creating
+  a Google Cloud OAuth client** (client id/secret + redirect). Build the no-op-until-configured
+  scaffolding, then live-test. Owner is creating the GCP client later today.
+- **#39 go_router** — deep-linkable tabs + back/forward (no router dep yet; needs a migration).
+- **#19 per-unit refetch** — OPS button to re-pull one ward (`build_stake_report` unit filter +
+  workflow `unit` input). Lower priority now that patient retries fixed the failures.
+- **Axiom log views (#43–47)** — owner added `AXIOM_TOKEN` to Actions + Render (✅); build the broker
+  query route + in-app log browser. Owner action remaining: **enable the Drive API** for per-stake
+  sheets.
+- **Node 20 → 24** — GitHub forces the actions to Node 24 on **2026-06-16**; bump checkout/setup-
+  python/cache/upload-artifact majors (or confirm they run clean) before then.
+
+**Follow-up enhancements (deeper fixes):**
+- **Show minister/calling NAMES in person detail.** The names exist in the reliable sources
+  (`fetch_ministering` inbound = minister names; org positions = calling name) but aren't stored —
+  LCR's covenant-path *details* endpoint returns empty arrays for them. Merge those names into
+  `members.details` during sync so the detail view shows real names (today it shows the recorded-yes
+  note). Needs a re-sync to populate.
+- **Notes sync (rickybloomfield iOS app).** That app is a private repo (don't use the owner's creds
+  to read someone else's private source). It almost certainly round-trips **LCR's native member
+  notes** (Member Tools → member → Notes). Plan: reverse-engineer the LCR notes read/write endpoint
+  from a **HAR of viewing + adding a note**, then sync it with our existing `member_comments` table
+  (migration 0017) so both apps share via LCR. Need the HAR from the owner.
 
 ---
 
