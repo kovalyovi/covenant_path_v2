@@ -117,19 +117,43 @@ String responsibleBucket(Map<String, dynamic> m) {
 /// With [highlightNext], the first not-yet-complete milestone gets an amber ring as the
 /// suggested next step.
 class GoldenHourChips extends StatelessWidget {
-  const GoldenHourChips({super.key, required this.member, this.size = 24, this.highlightNext = false});
+  const GoldenHourChips(
+      {super.key, required this.member, this.size = 24, this.highlightNext = false,
+      this.labeled = false});
   final Map<String, dynamic> member;
   final double size;
   final bool highlightNext;
+  final bool labeled; // full-text pills (person detail) vs compact circles (lists)
 
   @override
   Widget build(BuildContext context) {
     final list = milestonesFor(member);
     final nextIdx = highlightNext ? list.indexWhere((ms) => !ms.complete(member)) : -1;
-    return Wrap(spacing: 5, runSpacing: 5, children: [
+    return Wrap(spacing: labeled ? 8 : 5, runSpacing: labeled ? 8 : 5, children: [
       for (var i = 0; i < list.length; i++)
-        _chip(context, list[i], list[i].complete(member), isNext: i == nextIdx),
+        labeled
+            ? _labeledChip(context, list[i], list[i].complete(member), isNext: i == nextIdx)
+            : _chip(context, list[i], list[i].complete(member), isNext: i == nextIdx),
     ]);
+  }
+
+  Widget _labeledChip(BuildContext context, Milestone ms, bool done, {bool isNext = false}) {
+    final green = Colors.green.shade600, amber = Colors.amber.shade700;
+    final c = done ? green : (isNext ? amber : Colors.grey.shade500);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: done ? green.withValues(alpha: 0.12) : (isNext ? amber.withValues(alpha: 0.12) : null),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: c, width: isNext ? 1.6 : 1),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(done ? Icons.check_circle : (isNext ? Icons.arrow_forward : Icons.circle_outlined),
+            size: 15, color: c),
+        const SizedBox(width: 5),
+        Text(ms.label, style: TextStyle(fontSize: 13, color: c, fontWeight: FontWeight.w500)),
+      ]),
+    );
   }
 
   Widget _chip(BuildContext context, Milestone ms, bool done, {bool isNext = false}) {
