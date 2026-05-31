@@ -220,8 +220,33 @@ def fetch_ministering(session, person_uuid: str) -> dict:
     has_outbound = any(c.get("assignments") for c in companionships)
     # Inbound: who is assigned to minister TO this member (the "has ministers" field). Same response.
     inbound = (obj.get("ministeringBrothers") or []) + (obj.get("ministeringSisters") or [])
+    global _dumped_min_shape
+    if inbound and not _dumped_min_shape:
+        _dumped_min_shape = True
+        s = inbound[0]
+        dump_debug("ministering_inbound_shape",
+                   shape=sorted(s.keys()) if isinstance(s, dict) else type(s).__name__)
+    names = [n for n in (_minister_name(m) for m in inbound) if n]
     return {"has_assignment": has_outbound, "has_ministers": bool(inbound),
-            "companionships": companionships, "raw": obj}
+            "minister_names": names, "companionships": companionships, "raw": obj}
+
+
+_dumped_min_shape = False
+
+
+def _minister_name(m) -> str | None:
+    """Best-effort 'Last, First' from an inbound minister record (the exact key set lands in the
+    one-time ministering_inbound_shape dump so we can tighten this)."""
+    if isinstance(m, str):
+        return m or None
+    if not isinstance(m, dict):
+        return None
+    for k in ("name", "displayName", "preferredName", "fullName", "spokenName"):
+        if m.get(k):
+            return str(m[k])
+    sur = m.get("surname") or m.get("lastName")
+    giv = m.get("givenName") or m.get("firstName")
+    return f"{sur}, {giv}".strip(", ") if (sur or giv) else None
 
 
 def _recommend_label(recommend: dict) -> str:
@@ -242,4 +267,5 @@ def profile_fields(session, person_uuid: str) -> dict:
     minw = fetch_ministering(session, person_uuid)
     fields["ministering_assignment"] = "Yes" if minw["has_assignment"] else "No"
     fields["ministering_brothers_sisters"] = "Yes" if minw["has_ministers"] else "No"
+    fields["_minister_names"] = minw.get("minister_names") or []  # transient: report injects into details
     return fields
