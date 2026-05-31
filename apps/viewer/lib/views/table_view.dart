@@ -5,7 +5,7 @@ class _SpreadsheetView extends StatefulWidget {
   final List<Map<String, dynamic>> rows;
   final void Function(Map<String, dynamic>) onOpen;
 
-  // (header, member key, kind). 'text' columns sort; 'yesno'/'recommend'/'gender' columns filter.
+  // (header, member key, kind). 'text' columns also sort; every column filters by value.
   static const _cols = <(String, String, String)>[
     ('Member', 'name', 'text'),
     ('Sex', 'sex', 'gender'),
@@ -30,9 +30,9 @@ class _SpreadsheetView extends StatefulWidget {
 class _SpreadsheetViewState extends State<_SpreadsheetView> {
   int? _sortCol; // index into _cols; null = no sort (3-state: asc → desc → none)
   bool _sortAsc = true;
-  final Map<String, bool?> _filters = {}; // column key → null(all) / true(has) / false(missing)
-
-  static const _yes = {'Yes', 'Active'};
+  // Google-Sheets-style filter: per column, the set of values the user UNCHECKED (hidden).
+  // Empty/absent = that column shows everything. A row passes if none of its values are excluded.
+  final Map<String, Set<String>> _excluded = {};
 
   /// Display value — strips the redundant "Member for " prefix (header already says it). (#31)
   static String _display(Map<String, dynamic> m, String key) {
@@ -43,19 +43,11 @@ class _SpreadsheetViewState extends State<_SpreadsheetView> {
   }
 
   bool _passes(Map<String, dynamic> m) {
-    for (final e in _filters.entries) {
-      if (e.value == null) continue;
-      final v = '${m[e.key] ?? ''}';
-      if (v.isEmpty || v == 'N/A') return false; // N/A = not applicable → in neither has nor missing
-      if (_yes.contains(v) != e.value) return false;
+    for (final e in _excluded.entries) {
+      if (e.value.contains(_display(m, e.key))) return false;
     }
     return true;
   }
-
-  void _cycleFilter(String key) => setState(() {
-        final cur = _filters[key];
-        _filters[key] = cur == null ? true : (cur ? false : null); // all → has → missing → all
-      });
 
   void _onSort(int col) => setState(() {
         if (_sortCol == col) {
@@ -66,10 +58,74 @@ class _SpreadsheetViewState extends State<_SpreadsheetView> {
         }
       });
 
+  /// Google-Sheets-style value picker: the distinct values in this column, each with a checkbox.
+  /// Unchecking hides rows with that value; works for any column (gender, unit, Yes/No/N/A, …).
+  void _openFilter(BuildContext context, String key, String label) {
+    final rows = widget.rows.where((m) => m['kind'] != 'investigator');
+    final counts = <String, int>{};
+    for (final m in rows) {
+      final v = _display(m, key);
+      counts[v] = (counts[v] ?? 0) + 1;
+    }
+    final values = counts.keys.toList()..sort();
+    final excluded = Set<String>.from(_excluded[key] ?? const <String>{});
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: Text('Filter · $label'),
+          content: SizedBox(
+            width: 320,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Row(children: [
+                TextButton(
+                    onPressed: () => setLocal(excluded.clear), child: const Text('Select all')),
+                TextButton(
+                    onPressed: () => setLocal(() => excluded.addAll(values)),
+                    child: const Text('Clear all')),
+              ]),
+              const Divider(height: 1),
+              Flexible(
+                child: ListView(shrinkWrap: true, children: [
+                  for (final v in values)
+                    CheckboxListTile(
+                      dense: true,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      value: !excluded.contains(v),
+                      title: Text(v.isEmpty ? '(blank)' : v, overflow: TextOverflow.ellipsis),
+                      secondary: Text('${counts[v]}',
+                          style: Theme.of(context).textTheme.bodySmall),
+                      onChanged: (on) =>
+                          setLocal(() => on == true ? excluded.remove(v) : excluded.add(v)),
+                    ),
+                ]),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () {
+                setState(() {
+                  if (excluded.isEmpty) {
+                    _excluded.remove(key);
+                  } else {
+                    _excluded[key] = excluded;
+                  }
+                });
+                Navigator.pop(ctx);
+              },
+              child: const Text('Apply'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context);
-    // baptized only (investigators live in Upcoming / Golden Hour › Being Taught)
     var rows = widget.rows.where((m) => m['kind'] != 'investigator').where(_passes).toList();
     if (_sortCol != null) {
       final key = _SpreadsheetView._cols[_sortCol!].$2;
@@ -78,7 +134,7 @@ class _SpreadsheetViewState extends State<_SpreadsheetView> {
         return _sortAsc ? c : -c;
       });
     }
-    final active = _filters.values.where((v) => v != null).length;
+    final active = _excluded.length;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
@@ -88,7 +144,7 @@ class _SpreadsheetViewState extends State<_SpreadsheetView> {
           const Spacer(),
           if (active > 0)
             TextButton.icon(
-              onPressed: () => setState(_filters.clear),
+              onPressed: () => setState(_excluded.clear),
               icon: const Icon(Icons.filter_alt_off, size: 16),
               label: Text('Clear $active filter${active == 1 ? '' : 's'}'),
             ),
@@ -103,22 +159,17 @@ class _SpreadsheetViewState extends State<_SpreadsheetView> {
             scrollDirection: Axis.horizontal,
             child: DataTable(
               showCheckboxColumn: false, // #33: no bulk-select; first column is a row number
-              sortColumnIndex: _sortCol == null ? null : _sortCol! + 1, // +1 for the leading # column
-              sortAscending: _sortAsc,
               headingRowColor: WidgetStatePropertyAll(scheme.colorScheme.primary),
               headingTextStyle:
                   TextStyle(color: scheme.colorScheme.onPrimary, fontWeight: FontWeight.bold),
-              headingRowHeight: 46,
+              headingRowHeight: 48,
               dataRowMinHeight: 40,
               dataRowMaxHeight: 48,
-              columnSpacing: 16,
+              columnSpacing: 14,
               columns: [
                 const DataColumn(label: Text('#')),
                 for (var i = 0; i < _SpreadsheetView._cols.length; i++)
-                  DataColumn(
-                    onSort: _SpreadsheetView._cols[i].$3 == 'text' ? (_, __) => _onSort(i) : null,
-                    label: _headerLabel(i),
-                  ),
+                  DataColumn(label: _header(i)),
               ],
               rows: [
                 for (var r = 0; r < rows.length; r++)
@@ -138,25 +189,35 @@ class _SpreadsheetViewState extends State<_SpreadsheetView> {
     ]);
   }
 
-  /// Header: sortable text columns show just the label (DataTable adds the arrow). Filterable
-  /// columns show the label + a tap-to-cycle filter icon (all → has → missing). (#5/#6)
-  Widget _headerLabel(int i) {
+  /// Header: label + (text columns) a 3-state sort toggle + (all columns) a value-filter icon.
+  /// Both are explicit icons so sorting and the filter popup never fight over the same tap.
+  Widget _header(int i) {
     final (label, key, kind) = _SpreadsheetView._cols[i];
-    if (kind == 'text') return Text(label);
-    final f = _filters[key];
+    final sortable = kind == 'text';
+    final filtered = (_excluded[key] ?? const {}).isNotEmpty;
+    final fg = Theme.of(context).colorScheme.onPrimary;
     return Row(mainAxisSize: MainAxisSize.min, children: [
-      Text(label),
-      const SizedBox(width: 3),
-      InkWell(
-        onTap: () => _cycleFilter(key),
-        customBorder: const CircleBorder(),
-        child: Icon(
-          f == null ? Icons.filter_alt_outlined : (f ? Icons.check_circle : Icons.cancel),
-          size: 15,
-          color: f == null
-              ? Colors.white70
-              : (f ? Colors.greenAccent.shade100 : Colors.redAccent.shade100),
+      Flexible(child: Text(label, overflow: TextOverflow.ellipsis)),
+      if (sortable) ...[
+        const SizedBox(width: 2),
+        InkWell(
+          onTap: () => _onSort(i),
+          customBorder: const CircleBorder(),
+          child: Icon(
+            _sortCol == i
+                ? (_sortAsc ? Icons.arrow_upward : Icons.arrow_downward)
+                : Icons.unfold_more,
+            size: 14,
+            color: _sortCol == i ? fg : fg.withValues(alpha: 0.55),
+          ),
         ),
+      ],
+      const SizedBox(width: 2),
+      InkWell(
+        onTap: () => _openFilter(context, key, label),
+        customBorder: const CircleBorder(),
+        child: Icon(filtered ? Icons.filter_alt : Icons.filter_alt_outlined,
+            size: 15, color: filtered ? Colors.amberAccent.shade100 : fg.withValues(alpha: 0.7)),
       ),
     ]);
   }
