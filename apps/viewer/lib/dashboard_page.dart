@@ -108,6 +108,28 @@ class _DashboardPageState extends State<DashboardPage> {
     super.initState();
     _future = _bootstrap();
     _checkAdmin();
+    // Industry-standard passkey upsell: once, after the user reaches the app, suggest enrolling a
+    // passkey for password-free sign-in next time — but only where passkeys actually work.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeSuggestPasskey());
+  }
+
+  /// One-time, dismissible nudge to add a passkey (only when the platform supports it). We remember
+  /// that we've asked so we never nag; "Add" reuses the same enrollment flow as Settings.
+  Future<void> _maybeSuggestPasskey() async {
+    if (!PasskeyClient().available) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool('passkey_suggested') == true) return;
+      await prefs.setBool('passkey_suggested', true);
+    } catch (_) {
+      return; // if we can't remember the prompt, don't risk nagging — skip it
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      duration: const Duration(seconds: 8),
+      content: const Text('Tip: add a passkey to sign in without a password next time.'),
+      action: SnackBarAction(label: 'Add passkey', onPressed: _addPasskey),
+    ));
   }
 
   /// Resolve which single stake to show BEFORE the first member query, so the dashboard is scoped
