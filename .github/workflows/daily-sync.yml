@@ -97,6 +97,10 @@ jobs:
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
       SHEETS_SERVICE_ACCOUNT: sheets_sync/service_account.json
+      # M7: the sync refreshes a stake's Google Drive OAuth token to (re)create + write its sheet.
+      GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+      GOOGLE_OAUTH_REDIRECT: ${{ secrets.GOOGLE_OAUTH_REDIRECT }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
