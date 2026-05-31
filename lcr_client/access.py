@@ -205,13 +205,22 @@ def covenant_path_access(client) -> dict:
 
     rows = evaluate(matrix, role_ids, list(COVENANT_PATH_FEATURES))
     missing = [r for r in rows if not r["allowed"]]
+    # The two leadership features are perspective-based — a STAKE runner gets the "stake's view" of
+    # ward leadership; a WARD runner gets the "ward's view" of stake leadership — so a runner only
+    # ever holds ONE, never both, and they carry just "who to ask", not member DATA. They must not
+    # make coverage "partial": completeness reflects the data features (so a full-data stake calling
+    # reads Complete, not Partial). Still report them in `missing` for transparency.
+    data_missing = [r for r in missing if r["feature"] not in _PERSPECTIVE_FEATURES]
     return {
         "runner_positions": positions,
         "role_ids": sorted(i for i in role_ids if isinstance(i, int)),
         "features": rows,
-        "can_pull_all": not missing,
+        "can_pull_all": not data_missing,
         "missing": [_clean_missing(r) for r in missing],
     }
+
+
+_PERSPECTIVE_FEATURES = {"menu.ward.leadership", "menu.stake.leadership"}
 
 
 def _maybe_enrich_names(client) -> None:
