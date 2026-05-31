@@ -461,7 +461,7 @@ def report(email: str = Depends(require_user), authorization: str = Header(defau
     from backend.auth_broker import reports
     auth_id = admin._jwt_sub((authorization or "").removeprefix("Bearer ").strip())
     try:
-        return reports.build_report(auth_id)
+        return reports.build_report(auth_id, email)
     except admin.AdminError as e:
         raise HTTPException(status_code=503, detail=str(e))
 

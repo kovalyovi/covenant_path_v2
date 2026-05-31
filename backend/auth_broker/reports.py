@@ -21,12 +21,20 @@ _MEMBER_COLS = ("person_uuid,name,unit_name,unit_id,sex,birth_date,baptism_date,
                 "aaronic_priesthood,melchizedek_priesthood")
 
 
-def _scope(auth_id: str) -> dict | None:
-    """Resolve the signed-in user's RLS scope from user_roles (stake-wide or specific units)."""
-    r = requests.get(f"{admin.SUPABASE_URL}/rest/v1/user_roles", headers=admin._sb_headers(),
-                     params={"select": "stake_id,unit_id", "auth_id": f"eq.{auth_id}", "limit": "200"},
-                     timeout=_TIMEOUT)
-    rows = r.json() if r.status_code == 200 else []
+def _scope(auth_id: str, email: str | None = None) -> dict | None:
+    """Resolve the signed-in user's RLS scope from user_roles (stake-wide or specific units).
+
+    Match by bound auth_id OR verified email — mirrors RLS (0004). Matching auth_id alone missed
+    every email/Google login (auth_id holds the LCR person uuid, never the Supabase uid), which
+    made "Generate report" come back empty + errored."""
+    def _q(params: dict) -> list:
+        r = requests.get(f"{admin.SUPABASE_URL}/rest/v1/user_roles", headers=admin._sb_headers(),
+                         params={"select": "stake_id,unit_id", "limit": "200", **params},
+                         timeout=_TIMEOUT)
+        return r.json() if r.status_code == 200 else []
+    rows = _q({"auth_id": f"eq.{auth_id}"}) if auth_id else []
+    if not rows and email:
+        rows = _q({"email": f"eq.{email.lower()}"})
     if not rows:
         return None
     stake_id = rows[0]["stake_id"]
@@ -35,10 +43,10 @@ def _scope(auth_id: str) -> dict | None:
     return {"stake_id": stake_id, "units": units, "stake_wide": stake_wide}
 
 
-def build_report(auth_id: str) -> dict:
+def build_report(auth_id: str, email: str | None = None) -> dict:
     """Build the convert-integration report for the user's scope. Returns structured data the app
     renders in-app and the email path formats. Raises admin.AdminError on misconfig/failure."""
-    scope = _scope(auth_id)
+    scope = _scope(auth_id, email)
     if not scope:
         return {"scope": "none", "total": 0, "outstanding": [], "by_milestone": [],
                 "generated_at": datetime.now(timezone.utc).isoformat()}
@@ -93,7 +101,7 @@ def _report_html(rep: dict) -> str:
 
 def email_report(auth_id: str, reporter_email: str, to_email: str | None) -> dict:
     """Build the report for the user's scope and email it (default: to the requester)."""
-    rep = build_report(auth_id)
+    rep = build_report(auth_id, reporter_email)
     to = (to_email or reporter_email or "").strip()
     if "@" not in to:
         raise admin.AdminError("a valid recipient email is required")
