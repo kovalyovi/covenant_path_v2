@@ -123,7 +123,9 @@ def _mint(identity: dict, rid: str) -> dict:
 
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True, "service": "church-login-broker"}
+    # google_oauth_configured: a non-secret boolean so we can confirm the M7 env loaded (#M7).
+    return {"ok": True, "service": "church-login-broker",
+            "google_oauth_configured": google_oauth.is_configured()}
 
 
 class LogReq(BaseModel):
