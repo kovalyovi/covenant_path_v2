@@ -23,7 +23,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from lcr_client.logging_setup import get_logger
-from backend.auth_broker import admin, email_relay, okta_flow, session_mint
+from backend.auth_broker import admin, email_relay, google_oauth, okta_flow, session_mint
 
 logger = get_logger()
 app = FastAPI(title="Covenant Path — Church login broker")
@@ -299,6 +299,64 @@ def auth_email_verify(req: EmailVerifyReq) -> dict:
         return email_relay.verify_email_login(req.email, req.code)
     except email_relay.RelayError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# --- per-stake Google Drive OAuth (M7) --------------------------------------
+
+@app.get("/auth/google/status")
+def google_status(authorization: str = Header(default="")) -> dict:
+    """Whether the signed-in user can connect Drive + the current connection."""
+    email = admin.verify_user(authorization)
+    return {"configured": google_oauth.is_configured(), **admin.gdrive_status_for(email)}
+
+
+@app.post("/auth/google/start")
+def google_start(authorization: str = Header(default="")) -> dict:
+    """Authed: returns the Google consent URL for the user's OWN stake (the app opens it)."""
+    rid = _rid()
+    email = admin.verify_user(authorization)
+    if not google_oauth.is_configured():
+        raise HTTPException(status_code=503, detail="Google Drive isn't configured on the server yet.")
+    stake_id = admin.provider_stake_id(email)
+    if not stake_id:
+        raise HTTPException(status_code=403,
+                            detail="Only your stake's sync provider can connect Google Drive.")
+    logger.info("[req %s] /auth/google/start stake=%s", rid, stake_id)
+    return {"url": google_oauth.start_url(stake_id)}
+
+
+@app.get("/auth/google/callback", response_class=HTMLResponse)
+def google_callback(code: str = "", state: str = "", error: str = "") -> HTMLResponse:
+    """Google redirects here. The signed state binds the stake; we exchange + store the refresh token."""
+    rid = _rid()
+    if error or not code or not state:
+        return HTMLResponse(_popup_html(f"Connection cancelled. ({error or 'missing code'})"))
+    try:
+        stake_id = google_oauth.verify_state(state)
+        tokens = google_oauth.exchange_code(code)
+        admin.store_gdrive_token(stake_id, google_oauth.encrypt_refresh(tokens["refresh_token"]),
+                                 tokens.get("email"))
+        logger.info("[req %s] google drive connected for stake=%s", rid, stake_id)
+        return HTMLResponse(_popup_html(f"Google Drive connected ({tokens.get('email') or ''}). "
+                                        "You can close this window."))
+    except google_oauth.OAuthError as e:
+        logger.warning("[req %s] google callback failed: %s", rid, e)
+        return HTMLResponse(_popup_html(f"Could not connect: {e}"))
+
+
+@app.post("/auth/google/disconnect")
+def google_disconnect(authorization: str = Header(default="")) -> dict:
+    email = admin.verify_user(authorization)
+    stake_id = admin.provider_stake_id(email)
+    if not stake_id:
+        raise HTTPException(status_code=403, detail="Not a stake provider.")
+    return admin.disconnect_gdrive(stake_id)
+
+
+def _popup_html(message: str) -> str:
+    return ("<!doctype html><meta charset=utf-8><title>Covenant Path</title>"
+            "<body style='font-family:system-ui;padding:40px;text-align:center'>"
+            f"<p>{message}</p><script>setTimeout(()=>window.close(),2500)</script></body>")
 
 
 # --- passwordless passkey login (WebAuthn) ----------------------------------

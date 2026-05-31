@@ -199,6 +199,11 @@ class BrokerClient {
   /// Provider triggers a sync for their own stake. Returns {coverage_complete, last_synced_at}.
   Future<Map<String, dynamic>> syncNow() => _authed('POST', '/auth/sync-now');
 
+  /// M7 per-stake Google Drive: status, start the OAuth (returns {url} to open), disconnect.
+  Future<Map<String, dynamic>> googleDriveStatus() => _authed('GET', '/auth/google/status');
+  Future<Map<String, dynamic>> googleDriveStart() => _authed('POST', '/auth/google/start');
+  Future<Map<String, dynamic>> googleDriveDisconnect() => _authed('POST', '/auth/google/disconnect');
+
   /// Support form (#74): email the owner a message from the signed-in user.
   Future<void> contact(String subject, String message) async {
     await _authed('POST', '/contact', body: {'subject': subject, 'message': message});
