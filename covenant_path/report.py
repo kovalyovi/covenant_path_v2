@@ -192,16 +192,26 @@ class CovenantPathMember:
 
 # --- build -------------------------------------------------------------------
 
-def _details_with_retry(client: LcrClient, person_id: str, cmis_id: Any, attempts: int = 2) -> dict | None:
+def _details_with_retry(client: LcrClient, person_id: str, cmis_id: Any, attempts: int = 3) -> dict | None:
+    """Fetch one-work/details (the rich subtree: friends NAMES, sacrament, lessons, ministering).
+    This endpoint is in the same slow/flaky 500 family as progress-record, and friend NAMES come
+    ONLY from here (the progress-record `friends` array carries no name key). It's called once per
+    person (128+/run), so it gets a measured retry — a few attempts with exponential backoff +
+    jitter — rather than progress-record's heavier budget, to stay inside the per-stake job timeout.
+    With only 2 attempts + a flat 1s sleep nearly every per-person fetch failed (details_missing ≈
+    members) → friend names empty for almost everyone. NOTE: when LCR's details endpoint is fully
+    down (observed 500 for ALL people 2026-05-31) no retry can conjure data — this only recovers the
+    transient/overloaded 500s. Returns None after all attempts (caller counts details_missing)."""
+    import random
     for i in range(attempts):
         try:
             return client.progress_details(person_id, cmis_id)
         except AuthExpiredError:
             raise
-        except Exception:  # noqa: BLE001  (LCR occasionally 500s; retry once)
+        except Exception:  # noqa: BLE001  (LCR occasionally 500s; back off and retry)
             if i == attempts - 1:
                 return None
-            time.sleep(1.0)
+            time.sleep(1.0 * (2 ** i) + random.uniform(0, 0.75))
     return None
 
 
