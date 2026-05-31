@@ -301,13 +301,17 @@ class _FriendsSection extends StatelessWidget {
 }
 
 /// When a member's status field says "Yes" but the (flaky) detail endpoint returned no names,
-/// say so instead of "Not yet" — otherwise the chip and the section contradict each other.
+/// say so instead of "Not yet" — otherwise the chip and the section contradict each other. The
+/// wording reflects that this is a temporary LCR-side data gap (the detail endpoint is currently
+/// failing system-wide), not something specific to this person.
 Widget _recordedYesNote(BuildContext context) => Row(crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       Icon(Icons.info_outline, size: 15, color: Colors.amber.shade800),
       const SizedBox(width: 6),
       Expanded(
-        child: Text("Recorded as yes, but LCR's detail view returned no names for this person.",
+        child: Text(
+            'Recorded as yes — names are temporarily unavailable from LCR and will appear once its '
+            'detail data loads on a future sync.',
             style: TextStyle(color: Colors.amber.shade800, fontSize: 13)),
       ),
     ]);
