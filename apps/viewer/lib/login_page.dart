@@ -52,7 +52,10 @@ class _LoginPageState extends State<LoginPage> {
   bool _useRelay = false; // route the email-code flow through the broker (for blocked networks)
 
   bool _busy = false;
-  bool _enroll = false; // consent: store my session to keep my stake synced
+  // Church sign-in always enrolls the stake for daily sync — that's its whole purpose. The old
+  // "Keep my stake synced" checkbox is gone from this screen (#4); the consent note below explains
+  // it, and the leader can pause it anytime from Settings → Sync settings → Revoke.
+  static const bool _enroll = true;
   String? _error;
 
   void _reset() {
@@ -282,21 +285,19 @@ class _LoginPageState extends State<LoginPage> {
         onSubmitted: (_) => _busy ? null : _churchSignIn(),
         decoration: const InputDecoration(labelText: 'Password', border: OutlineInputBorder()),
       ),
-      const SizedBox(height: 8),
-      CheckboxListTile(
-        value: _enroll,
-        onChanged: _busy ? null : (v) => setState(() => _enroll = v ?? false),
-        contentPadding: EdgeInsets.zero,
-        controlAffinity: ListTileControlAffinity.leading,
-        dense: true,
-        title: const Text('Keep my stake synced', style: TextStyle(fontSize: 14)),
-        subtitle: const Text(
-            'Store my Church session (encrypted — never my password) so my stake\'s data updates '
-            'automatically each day. If my calling can\'t see every field, the app will suggest '
-            'which leaders to add. I can revoke anytime — that pauses the daily sync.',
-            style: TextStyle(fontSize: 12)),
-      ),
-      const SizedBox(height: 8),
+      const SizedBox(height: 10),
+      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(Icons.sync, size: 15, color: Theme.of(context).colorScheme.primary),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+              'Signing in keeps your stake synced: your Church session is stored encrypted '
+              '(never your password) so the data refreshes daily. You can pause this anytime in '
+              'Settings → Sync settings.',
+              style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+        ),
+      ]),
+      const SizedBox(height: 10),
       FilledButton(onPressed: _busy ? null : _churchSignIn, child: _spinnerOr('Sign in')),
     ];
   }
