@@ -414,11 +414,14 @@ def build_stake_report(
         # has-calling per member: whoever holds a position in the unit's org tree (the same
         # org-callings endpoint roles.py uses). The member profile has no callings and the one-work
         # record is sparse, so this is the authoritative source. None => couldn't fetch (don't override).
+        calling_names: dict[str, list] = {}  # person_uuid -> [calling name, ...] for the detail view
         try:
             from backend.roles import _ward_positions
-            calling_uuids: set | None = {
-                p["person_uuid"] for p in _ward_positions(client.org_callings(unit.unit_number))
-                if p.get("person_uuid")}
+            _positions = _ward_positions(client.org_callings(unit.unit_number))
+            calling_uuids: set | None = {p["person_uuid"] for p in _positions if p.get("person_uuid")}
+            for p in _positions:
+                if p.get("person_uuid") and p.get("calling"):
+                    calling_names.setdefault(p["person_uuid"], []).append(p["calling"])
         except Exception as exc:  # noqa: BLE001
             logger.warning("org callings unavailable for %s (%s): %s", unit.name, unit.unit_number, exc)
             calling_uuids = None
@@ -464,6 +467,10 @@ def build_stake_report(
             if calling_uuids is not None:  # org positions are authoritative for has-calling
                 pu = person.get("personUuid")
                 member.calling = "Yes" if (pu and pu in calling_uuids) else "No"
+                # Surface the calling NAME in the detail view when LCR's details endpoint came back
+                # empty (it often does) — the org positions have it.
+                if pu and calling_names.get(pu) and not (member.details or {}).get("callings"):
+                    member.details = {**(member.details or {}), "callings": calling_names[pu]}
             member.unit_number = unit.unit_number
             uuid = person.get("personUuid")
             if uuid:
