@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'main.dart';
+import 'widgets/shimmer.dart';
 
 /// Power users: give someone your exact access. They sign in with the invited email
 /// (a one-time code — no Church account needed) and see what you see, and can invite
@@ -120,7 +121,10 @@ class _InvitePageState extends State<InvitePage> {
         Expanded(child: FutureBuilder<List<Map<String, dynamic>>>(
           future: _invites,
           builder: (context, snap) {
-            if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+            if (!snap.hasData) {
+              return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16), child: CardSkeleton(lines: 3));
+            }
             final rows = snap.data!;
             if (rows.isEmpty) {
               return const Center(child: Text('No power users invited yet.'));

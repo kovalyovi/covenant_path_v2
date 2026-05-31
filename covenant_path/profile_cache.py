@@ -28,8 +28,10 @@ DEFAULT_PATH = Path(__file__).resolve().parent.parent / "tools" / "output" / "pr
 # Bump when the set of profile fields changes, so stale-shaped cache entries (e.g. missing a
 # newly-added field like sex / priesthood_office / ministering_brothers_sisters) are treated as
 # misses and refetched instead of served with gaps. v2 = added sex + priesthood-office + received
-# ministering (2026-05-30).
-SCHEMA_VERSION = 2
+# ministering (2026-05-30). v3 = added _minister_names (the inbound-minister NAMES for the detail
+# view); v2 entries were served as fresh without names, so minister names never populated — bump
+# forces a one-time refetch that captures them (2026-05-31).
+SCHEMA_VERSION = 3
 
 
 class ProfileCache:

@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'golden_hour.dart';
 import 'main.dart';
+import 'widgets/shimmer.dart';
 
 /// Full covenant-path detail for one member, laid out like LCR's "new member" record:
 /// sacrament-attendance dots, friends in the church, priesthood / calling / ministering,
@@ -657,8 +658,7 @@ class _CommentsSectionState extends State<_CommentsSection> {
           future: _future,
           builder: (context, snap) {
             if (snap.connectionState == ConnectionState.waiting) {
-              return const Padding(
-                  padding: EdgeInsets.all(8), child: Center(child: CircularProgressIndicator()));
+              return const Padding(padding: EdgeInsets.all(8), child: CardSkeleton(lines: 2));
             }
             final list = snap.data ?? [];
             if (list.isEmpty) {
