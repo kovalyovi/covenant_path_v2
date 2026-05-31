@@ -34,6 +34,10 @@ on:
         description: "Sync only this stake (unit number); blank = all enrolled"
         type: string
         default: ""
+      unit:
+        description: "With 'stake': re-pull only this ONE ward/branch (OPS per-unit refetch)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -133,8 +137,15 @@ jobs:
         env:
           TARGETS: ${{ github.event.inputs.targets || 'both' }}
           PHOTOS: ${{ github.event.inputs.photos || 'false' }}
+          ONLY_UNIT: ${{ inputs.unit }}
         run: |
           ARGS="--stake ${{ matrix.stake }} --with-profile"
+          if [ -n "$ONLY_UNIT" ]; then
+            if ! printf '%s' "$ONLY_UNIT" | grep -qE '^[0-9]+$'; then
+              echo "unit input must be a numeric unit number"; exit 1
+            fi
+            ARGS="$ARGS --unit $ONLY_UNIT"
+          fi
           # Sheets per-stake (the stake's own spreadsheet) unless dispatch asked supabase-only.
           if [ "$TARGETS" != "supabase" ] && [ -n "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
             ARGS="$ARGS --sheets"
