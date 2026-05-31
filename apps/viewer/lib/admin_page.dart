@@ -7,6 +7,7 @@ import 'golden_hour.dart';
 import 'main.dart';
 import 'theme/tokens.dart';
 import 'widgets/app_card.dart';
+import 'widgets/shimmer.dart';
 import 'widgets/status.dart';
 
 Future<void> _open(String? url) async {
@@ -270,7 +271,7 @@ class _AdminPageState extends State<AdminPage> {
               title: '$title…',
               child: const Padding(
                   padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Center(child: CircularProgressIndicator())));
+                  child: CardSkeleton(lines: 3)));
         }
         if (snap.hasError) {
           return AppCard(
