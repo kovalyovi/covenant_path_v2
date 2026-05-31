@@ -28,6 +28,22 @@ class _KpiViewState extends State<_KpiView> {
         _Period.all => ('Prev. month', 'This month'),
       };
 
+  /// The date range the chart's x-axis currently spans, so a selected Month/Year isn't ambiguous
+  /// (#range). Null for "All" (data-driven span, already labeled on the axis).
+  String? _periodRangeLabel() {
+    final now = DateTime.now();
+    switch (_period) {
+      case _Period.month:
+        final from = now.subtract(const Duration(days: 35)); // 5 weeks of buckets
+        return '${DateFormat('MMM d').format(from)} – ${DateFormat('MMM d, y').format(now)}';
+      case _Period.year:
+        final from = DateTime(now.year, now.month - 11, 1); // 12 months of buckets
+        return '${DateFormat('MMM y').format(from)} – ${DateFormat('MMM y').format(now)}';
+      case _Period.all:
+        return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final units = (widget.rows.map((m) => '${m['unit_name'] ?? ''}').where((u) => u.isNotEmpty).toSet().toList()
@@ -133,6 +149,10 @@ class _KpiViewState extends State<_KpiView> {
             onSelectionChanged: (s) => setState(() => _period = s.first),
           ),
         ),
+        if (_periodRangeLabel() != null) ...[
+          const SizedBox(height: 6),
+          Center(child: _RangePill(_periodRangeLabel()!)),
+        ],
         if (_period != _Period.all) ...[
           const SizedBox(height: 8),
           Center(

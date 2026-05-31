@@ -290,7 +290,20 @@ class SheetsSync:
             spreadsheetId=self.spreadsheet_id, range=f"{self.sheet}!A1",
             valueInputOption="RAW", body={"values": [[f"Last updated: {stamp}"]]}).execute()
 
+    def _ensure_tab(self, title: str) -> None:
+        """Create a tab if it doesn't exist yet (idempotent). Guards reads/writes to optional tabs
+        like Changelog on freshly-created per-stake (OAuth-Drive) sheets, which otherwise 400 with
+        'Unable to parse range: Changelog!A1:F1'."""
+        meta = self._svc.get(spreadsheetId=self.spreadsheet_id,
+                             fields="sheets.properties.title").execute()
+        titles = {s["properties"]["title"] for s in meta.get("sheets", [])}
+        if title not in titles:
+            self._svc.batchUpdate(
+                spreadsheetId=self.spreadsheet_id,
+                body={"requests": [{"addSheet": {"properties": {"title": title}}}]}).execute()
+
     def _append_changelog(self, changes: list[dict]) -> None:
+        self._ensure_tab(CHANGELOG)  # new per-stake sheets have no Changelog tab yet
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         rows = [[ts, c["name"], c["ward"], c["field"], c["old"], c["new"]] for c in changes]
         head = self._svc.values().get(spreadsheetId=self.spreadsheet_id,

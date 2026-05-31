@@ -287,9 +287,9 @@ class _MemberRow extends StatelessWidget {
         if (resp != null) ...[
           const SizedBox(height: 4),
           Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(resp.icon, size: 13, color: Theme.of(context).colorScheme.primary),
+            Icon(resp.icon, size: 13, color: resp.color),
             const SizedBox(width: 4),
-            Text(resp.label, style: sub?.copyWith(color: Theme.of(context).colorScheme.primary)),
+            Text(resp.label, style: sub?.copyWith(color: resp.color)),
           ]),
         ],
         if (chips) ...[const SizedBox(height: 6), GoldenHourChips(member: m, size: 22, highlightNext: true)],
