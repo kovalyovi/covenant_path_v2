@@ -63,7 +63,8 @@ def _sync_one(args) -> dict:
     access = covenant_path_access(client)
     cache = ProfileCache(max_age_days=args.cache_max_age_days, enabled=not args.no_cache)
     rows = build_stake_report(client, with_profile=args.with_profile, access=access,
-                              cache=cache, verbose=args.verbose)
+                              cache=cache, verbose=args.verbose,
+                              only_unit=getattr(args, "unit", None))
     dicts = [asdict(r) for r in rows]
     export(rows, access=access, with_profile=args.with_profile)
     failed_units = set(access.get("_run_stats", {}).get("failed_units", []))
@@ -376,6 +377,8 @@ def main() -> int:
                          "your own stake to delegated (#79). Env DELEGATED_ONLY=1 has the same effect.")
     ap.add_argument("--stake", type=int, metavar="UNIT",
                     help="sync exactly ONE stake by unit number — the per-stake isolated CI job")
+    ap.add_argument("--unit", type=int, metavar="UNIT", default=None,
+                    help="with --stake, re-pull only this ONE ward/branch (OPS per-unit refetch, #19)")
     ap.add_argument("--list-stakes", action="store_true",
                     help="print a JSON array of credentialed stake unit numbers (for the CI matrix) "
                          "and exit; honors the schedule gate (prints [] off-target)")

@@ -376,6 +376,7 @@ def build_stake_report(
     verbose: bool = True,
     access: dict | None = None,
     cache: ProfileCache | None = None,
+    only_unit: int | None = None,
 ) -> list[CovenantPathMember]:
     if access is None:
         access = covenant_path_access(client)
@@ -385,6 +386,8 @@ def build_stake_report(
 
     ctx = client.user_context()
     units = [u for u in ctx.child_units if u.unit_number and u.type in ("WARD", "BRANCH")]
+    if only_unit:  # OPS per-unit refetch (#19): re-pull just one ward/branch
+        units = [u for u in units if u.unit_number == only_unit]
     results: list[CovenantPathMember] = []
     seen_uuids: set[str] = set()
 
@@ -393,8 +396,9 @@ def build_stake_report(
     # blocked endpoint and mark the rest as access-blocked.
     profile_blocked = False
     profile_fail_streak = 0
-    stats = {"units": 0, "units_failed": 0, "failed_units": [], "members": 0, "profile_ok": 0,
-             "profile_cached": 0, "profile_blocked": 0, "profile_error": 0, "details_missing": 0}
+    stats = {"units": 0, "units_failed": 0, "failed_units": [], "failed_unit_numbers": [],
+             "members": 0, "profile_ok": 0, "profile_cached": 0, "profile_blocked": 0,
+             "profile_error": 0, "details_missing": 0}
 
     for unit in units:
         if verbose:
@@ -407,6 +411,7 @@ def build_stake_report(
         if pr is None:
             stats["units_failed"] += 1
             stats["failed_units"].append(unit.name)
+            stats["failed_unit_numbers"].append(unit.unit_number)
             if verbose:
                 print(f"    [!] skipped {unit.name}: progress-record unavailable after retries")
             continue
