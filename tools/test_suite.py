@@ -255,6 +255,26 @@ def test_email_relay_validation():
     return "email relay rejects bad email + empty code pre-network"
 
 
+def test_google_oauth_state():
+    """M7 OAuth: signed state binds the stake + resists tampering; refresh token vault round-trips."""
+    import os as _os
+    from cryptography.fernet import Fernet
+    _os.environ["CP_TOKEN_KEY"] = Fernet.generate_key().decode()  # self-contained key for the vault
+    from backend.auth_broker import google_oauth as g
+    st = g.sign_state("stake-xyz-1")
+    assert g.verify_state(st) == "stake-xyz-1", "state round-trip"
+    for bad in (st[:-2] + "zz", "garbage", st.replace(".", "_")):
+        try:
+            g.verify_state(bad)
+            raise AssertionError(f"tamper not caught: {bad[:12]}")
+        except g.OAuthError:
+            pass
+    enc = g.encrypt_refresh("1//refresh-abc")
+    assert g.decrypt_refresh(enc) == "1//refresh-abc", "token vault round-trip"
+    assert enc != "1//refresh-abc", "refresh token must be encrypted at rest"
+    return "oauth state sign/verify/tamper + encrypted refresh-token vault ok"
+
+
 # --- LIVE --------------------------------------------------------------------
 
 def test_live_access_matrix():
@@ -335,7 +355,7 @@ def main() -> int:
                test_report_degradation_helpers, test_okta_building_blocks, test_access_humanize,
                test_name_cache_roundtrip, test_clean_missing_filters_unnamed,
                test_leadership_harvest, test_profile_cache, test_sheets_preserve_failed_units,
-               test_missionary_roster_parse, test_email_relay_validation]
+               test_missionary_roster_parse, test_email_relay_validation, test_google_oauth_state]
     for t in offline:
         check(t.__name__, t)
 

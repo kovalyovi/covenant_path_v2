@@ -128,6 +128,16 @@ def run_self(args) -> int | None:
     return (res.get("supabase") or {}).get("stake_unit")
 
 
+def _service_account_email() -> str | None:
+    """The Sheets service account's email — to share an OAuth-Drive sheet with it so it can write."""
+    try:
+        import json
+        from sheets_sync.service import _service_account_file
+        return json.load(open(_service_account_file(), encoding="utf-8")).get("client_email")
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _resolve_stake_sheet(client, args) -> str:
     """Per-stake spreadsheet id: reuse the stored one, else create + share it read-only with the
     stake's leadership (user_roles emails) + the credential provider, and store it. Falls back to
@@ -142,12 +152,14 @@ def _resolve_stake_sheet(client, args) -> str:
         conn = db.connect()
         try:
             with conn.cursor() as cur:
-                cur.execute("select id, spreadsheet_id, spreadsheet_shared from stakes "
-                            "where unit_number=%s", (ctx.unit_number,))
+                cur.execute("select id, spreadsheet_id, spreadsheet_shared, gdrive_token, "
+                            "gdrive_file_id from stakes where unit_number=%s", (ctx.unit_number,))
                 row = cur.fetchone()
             stake_id = row[0] if row else db.upsert_stake(conn, ctx.unit_number, ctx.unit_name)
             sid = row[1] if row else None
             shared = set(row[2] or []) if row and row[2] else set()
+            gdrive_token = row[3] if row else None
+            gdrive_file_id = row[4] if row else None
             with conn.cursor() as cur:
                 cur.execute("select distinct lower(email) from user_roles "
                             "where stake_id=%s and email is not null", (stake_id,))
@@ -155,6 +167,23 @@ def _resolve_stake_sheet(client, args) -> str:
                 cur.execute("select lower(principal_email) from stake_credentials "
                             "where stake_id=%s and principal_email is not null", (stake_id,))
                 emails |= {r[0] for r in cur.fetchall()}
+            # M7: a stake that connected Google Drive OWNS its sheet in the leader's Drive — the
+            # service account can't create files (0 storage), so OAuth provides the create + the SA
+            # (shared in) writes the data. Takes precedence over the service-account/master paths.
+            if gdrive_token:
+                from backend.auth_broker import google_oauth
+                from sheets_sync import oauth_drive
+                access = google_oauth.access_token_for(gdrive_token)
+                fid = oauth_drive.ensure_sheet(
+                    access, f"Covenant Path — {ctx.unit_name}", _service_account_email(),
+                    sorted(emails), gdrive_file_id)
+                if fid != gdrive_file_id:
+                    with conn.cursor() as cur:
+                        cur.execute("update stakes set gdrive_file_id=%s where id=%s", (fid, stake_id))
+                    conn.commit()
+                logger.info("using OAuth-Drive sheet for %s (%s): %s", ctx.unit_name,
+                            ctx.unit_number, fid)
+                return fid
             if not sid:
                 sid = sheets_service.create_and_share_spreadsheet(
                     f"Covenant Path — {ctx.unit_name}", sorted(emails))
