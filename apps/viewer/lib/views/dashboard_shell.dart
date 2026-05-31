@@ -18,7 +18,8 @@ class _Body extends StatelessWidget {
       future: future,
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
+          // content-shaped skeleton instead of a spinner, so the layout doesn't pop in (#shimmer)
+          return const MemberListSkeleton();
         }
         if (snap.hasError) {
           return Center(child: Padding(padding: const EdgeInsets.all(24),
@@ -212,78 +213,88 @@ class _ReportSheet extends StatelessWidget {
 }
 
 class _SyncSettingsSheet extends StatelessWidget {
-  const _SyncSettingsSheet({this.status, this.onRevoke, this.onSyncNow});
-  final EnrollmentStatus? status;
+  const _SyncSettingsSheet({required this.statusFuture, this.onRevoke, this.onSyncNow});
+  final Future<EnrollmentStatus?> statusFuture;
   final VoidCallback? onRevoke;
   final VoidCallback? onSyncNow;
 
   @override
   Widget build(BuildContext context) {
-    final cred = status?.credential;
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Sync settings', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 16),
-          if (status == null)
-            const Text('Loading…')
-          else ...[
-            _Row(label: 'Stake', value: status!.stakeName ?? '—'),
-            _Row(
-                label: 'Last synced',
-                value: status!.lastSyncedAt != null
-                    ? _fmt(status!.lastSyncedAt!)
-                    : 'Never'),
-            _Row(label: 'Members', value: '${status!.memberCount}'),
-            const Divider(height: 24),
-            if (cred == null || cred.isNone) ...[
-              const ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.warning_amber_outlined, color: Colors.orange),
-                  title: Text('No sync credential'),
-                  subtitle: Text('Sign in with your Church account and check '
-                      '"Keep my stake synced" to enable daily updates.')),
-            ] else ...[
-              _Row(
-                  label: 'Status',
-                  value: cred.isRevoked ? 'Revoked' : 'Active',
-                  color: cred.isRevoked ? Colors.orange : Colors.green),
-              if (cred.principalName != null)
-                _Row(label: 'Provided by', value: cred.principalName!),
-              if (cred.enrolledAt != null)
-                _Row(label: 'Enrolled', value: _fmt(cred.enrolledAt!)),
-              _Row(
-                  label: 'Coverage',
-                  value: cred.complete ? 'Complete' : 'Partial'),
-            ],
-            const SizedBox(height: 8),
-            const Text(
-                'Credentials are encrypted and stored server-side. '
-                'Your password is never stored.',
-                style: TextStyle(fontSize: 12)),
-            if (onSyncNow != null) ...[
+      child: FutureBuilder<EnrollmentStatus?>(
+        future: statusFuture,
+        builder: (context, snap) {
+          // Skeleton the instant the sheet opens, then swap to data — no blank→content jump.
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const SyncSettingsSkeleton();
+          }
+          final status = snap.data;
+          final cred = status?.credential;
+          final isProvider = cred?.isProvider == true;
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Sync settings', style: Theme.of(context).textTheme.titleLarge),
               const SizedBox(height: 16),
-              FilledButton.icon(
-                  onPressed: onSyncNow,
-                  icon: const Icon(Icons.sync),
-                  label: const Text('Sync my stake now')),
+              if (status == null)
+                const Text('Could not load sync settings — close and try again.')
+              else ...[
+                _Row(label: 'Stake', value: status.stakeName ?? '—'),
+                _Row(
+                    label: 'Last synced',
+                    value: status.lastSyncedAt != null
+                        ? _fmt(status.lastSyncedAt!)
+                        : 'Never'),
+                _Row(label: 'Members', value: '${status.memberCount}'),
+                const Divider(height: 24),
+                if (cred == null || cred.isNone) ...[
+                  const ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.warning_amber_outlined, color: Colors.orange),
+                      title: Text('No sync credential'),
+                      subtitle: Text('Sign in with your Church account to enable daily updates.')),
+                ] else ...[
+                  _Row(
+                      label: 'Status',
+                      value: cred.isRevoked ? 'Revoked' : 'Active',
+                      color: cred.isRevoked ? Colors.orange : Colors.green),
+                  if (cred.principalName != null)
+                    _Row(label: 'Provided by', value: cred.principalName!),
+                  if (cred.enrolledAt != null)
+                    _Row(label: 'Enrolled', value: _fmt(cred.enrolledAt!)),
+                  _Row(
+                      label: 'Coverage',
+                      value: cred.complete ? 'Complete' : 'Partial'),
+                ],
+                const SizedBox(height: 8),
+                const Text(
+                    'Credentials are encrypted and stored server-side. '
+                    'Your password is never stored.',
+                    style: TextStyle(fontSize: 12)),
+                if (isProvider && onSyncNow != null) ...[
+                  const SizedBox(height: 16),
+                  FilledButton.icon(
+                      onPressed: onSyncNow,
+                      icon: const Icon(Icons.sync),
+                      label: const Text('Sync my stake now')),
+                ],
+                if (isProvider && onRevoke != null) ...[
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        onRevoke!();
+                      },
+                      icon: const Icon(Icons.link_off),
+                      label: const Text('Revoke my sync access')),
+                ],
+                const _GoogleDriveSection(), // M7: connect Drive so the stake owns its own sheet
+              ],
             ],
-            if (onRevoke != null) ...[
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    onRevoke!();
-                  },
-                  icon: const Icon(Icons.link_off),
-                  label: const Text('Revoke my sync access')),
-            ],
-            const _GoogleDriveSection(), // M7: connect Drive so the stake owns its own sheet
-          ],
-        ],
+          );
+        },
       ),
     );
   }
