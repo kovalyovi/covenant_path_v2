@@ -15,7 +15,7 @@ jobs:
       contents: read
       deployments: write # required for Cloudflare Pages deployment status
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: subosito/flutter-action@v2
         with:
