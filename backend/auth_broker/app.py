@@ -341,9 +341,9 @@ def google_callback(code: str = "", state: str = "", error: str = "") -> HTMLRes
         logger.info("[req %s] google drive connected for stake=%s", rid, stake_id)
         return HTMLResponse(_popup_html(f"Google Drive connected ({tokens.get('email') or ''}). "
                                         "You can close this window."))
-    except google_oauth.OAuthError as e:
-        logger.warning("[req %s] google callback failed: %s", rid, e)
-        return HTMLResponse(_popup_html(f"Could not connect: {e}"))
+    except Exception as e:  # noqa: BLE001 — never 500 the OAuth popup; show the cause instead
+        logger.exception("[req %s] google callback failed", rid)
+        return HTMLResponse(_popup_html(f"Could not connect: {type(e).__name__}: {str(e)[:200]}"))
 
 
 @app.post("/auth/google/disconnect")
