@@ -14,6 +14,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 from lcr_client.logging_setup import get_logger
+from sheets_sync.service import DEFAULT_SHEET
 
 logger = get_logger()
 
@@ -40,8 +41,12 @@ def ensure_sheet(access_token: str, title: str, service_account_email: str,
     drive = _svc(access_token, "drive", "v3")
     if not file_id:
         sheets = _svc(access_token, "sheets", "v4")
+        # Create with the "New member progress" tab (not the default "Sheet1") so SheetsSync can
+        # write to it — exactly like the service-account create path.
         created = sheets.spreadsheets().create(
-            body={"properties": {"title": title}}, fields="spreadsheetId").execute()
+            body={"properties": {"title": title},
+                  "sheets": [{"properties": {"title": DEFAULT_SHEET}}]},
+            fields="spreadsheetId").execute()
         file_id = created["spreadsheetId"]
         logger.info("created OAuth-Drive spreadsheet %s in the leader's Drive", file_id)
     _share(drive, file_id, service_account_email, "writer")  # so the SA-based sync can write data
