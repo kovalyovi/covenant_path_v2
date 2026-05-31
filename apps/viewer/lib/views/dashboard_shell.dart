@@ -281,6 +281,7 @@ class _SyncSettingsSheet extends StatelessWidget {
                   icon: const Icon(Icons.link_off),
                   label: const Text('Revoke my sync access')),
             ],
+            const _GoogleDriveSection(), // M7: connect Drive so the stake owns its own sheet
           ],
         ],
       ),
@@ -291,6 +292,105 @@ class _SyncSettingsSheet extends StatelessWidget {
     final dt = DateTime.tryParse(iso);
     if (dt == null) return iso;
     return DateFormat('MMM d, y · h:mm a').format(dt.toLocal());
+  }
+}
+
+/// M7: per-stake Google Drive. Self-gating — renders only when the broker has OAuth configured and
+/// the signed-in user is their stake's sync provider. Connect → the stake's sheet lives in THEIR
+/// Drive (which the platform can't do with a 0-storage service account).
+class _GoogleDriveSection extends StatefulWidget {
+  const _GoogleDriveSection();
+  @override
+  State<_GoogleDriveSection> createState() => _GoogleDriveSectionState();
+}
+
+class _GoogleDriveSectionState extends State<_GoogleDriveSection> {
+  Map<String, dynamic>? _status;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final s = await BrokerClient().googleDriveStatus();
+      if (mounted) setState(() => _status = s);
+    } catch (_) {/* leave hidden on error */}
+  }
+
+  void _snack(String m) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  }
+
+  Future<void> _connect() async {
+    setState(() => _busy = true);
+    try {
+      final r = await BrokerClient().googleDriveStart();
+      final url = r['url'] as String?;
+      if (url != null && url.isNotEmpty) {
+        await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+        _snack('Finish in the Google window, then tap "Refresh".');
+      }
+    } catch (e) {
+      _snack('Could not start: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _disconnect() async {
+    setState(() => _busy = true);
+    try {
+      await BrokerClient().googleDriveDisconnect();
+      await _load();
+    } catch (e) {
+      _snack('Could not disconnect: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = _status;
+    if (s == null || s['configured'] != true || s['eligible'] != true) {
+      return const SizedBox.shrink();
+    }
+    final connected = s['connected'] == true;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Divider(height: 24),
+      Row(children: [
+        Icon(Icons.add_to_drive, size: 18, color: Theme.of(context).colorScheme.primary),
+        const SizedBox(width: 8),
+        Text('Google Drive', style: Theme.of(context).textTheme.titleSmall),
+      ]),
+      const SizedBox(height: 4),
+      Text(
+        connected
+            ? 'Connected as ${s['email'] ?? ''}. Your stake\'s spreadsheet lives in your Drive.'
+            : 'Connect your Google account so your stake gets its own spreadsheet that you own '
+                '(the app can only touch the file it creates).',
+        style: const TextStyle(fontSize: 13),
+      ),
+      const SizedBox(height: 8),
+      Row(children: [
+        if (!connected)
+          FilledButton.icon(
+              onPressed: _busy ? null : _connect,
+              icon: const Icon(Icons.add_to_drive, size: 18),
+              label: const Text('Connect Google Drive'))
+        else
+          OutlinedButton.icon(
+              onPressed: _busy ? null : _disconnect,
+              icon: const Icon(Icons.link_off, size: 18),
+              label: const Text('Disconnect')),
+        const SizedBox(width: 8),
+        TextButton(onPressed: _busy ? null : _load, child: const Text('Refresh')),
+      ]),
+    ]);
   }
 }
 

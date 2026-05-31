@@ -265,6 +265,52 @@ def _patch_revoke(stake_id: str, headers: dict) -> dict:
     return {"status": "revoked"}
 
 
+def provider_stake_id(email: str) -> str | None:
+    """The stake this user is the sync provider for — i.e. whose Drive they may connect (M7)."""
+    cred = _one("stake_credentials",
+                {"select": "stake_id", "principal_email": f"eq.{email.lower()}", "limit": "1"})
+    return cred.get("stake_id") if cred else None
+
+
+def gdrive_status_for(email: str) -> dict:
+    """Whether this user can connect Google Drive, and the current connection (M7)."""
+    sid = provider_stake_id(email)
+    if not sid:
+        return {"eligible": False}
+    s = _one("stakes", {"select": "gdrive_email,gdrive_connected_at",
+                        "id": f"eq.{sid}", "limit": "1"}) or {}
+    return {"eligible": True, "stake_id": sid,
+            "connected": bool(s.get("gdrive_connected_at")), "email": s.get("gdrive_email")}
+
+
+def store_gdrive_token(stake_id: str, encrypted_refresh: str, gdrive_email: str | None) -> dict:
+    """Persist the envelope-encrypted Drive refresh token on the stake (M7 callback)."""
+    from datetime import datetime, timezone
+    r = requests.patch(
+        f"{SUPABASE_URL}/rest/v1/stakes",
+        headers={**_sb_headers(), "Prefer": "return=minimal"},
+        params={"id": f"eq.{stake_id}"},
+        json={"gdrive_token": encrypted_refresh, "gdrive_email": gdrive_email,
+              "gdrive_connected_at": datetime.now(timezone.utc).isoformat()},
+        timeout=_TIMEOUT)
+    if r.status_code >= 300:
+        raise AdminError(f"store gdrive token failed ({r.status_code}): {r.text[:120]}")
+    return {"connected": True, "email": gdrive_email}
+
+
+def disconnect_gdrive(stake_id: str) -> dict:
+    r = requests.patch(
+        f"{SUPABASE_URL}/rest/v1/stakes",
+        headers={**_sb_headers(), "Prefer": "return=minimal"},
+        params={"id": f"eq.{stake_id}"},
+        json={"gdrive_token": None, "gdrive_email": None, "gdrive_connected_at": None,
+              "gdrive_file_id": None},
+        timeout=_TIMEOUT)
+    if r.status_code >= 300:
+        raise AdminError(f"disconnect failed ({r.status_code})")
+    return {"connected": False}
+
+
 def enrolled_stakes() -> list[dict]:
     """Every stake + its credential state + member count + freshness — the admin cross-stake
     ops view. Includes stakes with no credential (so admins see who still needs to enroll)."""

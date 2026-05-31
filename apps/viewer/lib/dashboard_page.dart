@@ -4,6 +4,7 @@ import 'dart:ui' show ImageFilter;
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'admin_client.dart';
 import 'admin_page.dart';
