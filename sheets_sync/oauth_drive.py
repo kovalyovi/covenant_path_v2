@@ -14,6 +14,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 from lcr_client.logging_setup import get_logger
+from sheets_sync.row_mapper import HEADER_LABELS
 from sheets_sync.service import DEFAULT_SHEET
 
 logger = get_logger()
@@ -48,6 +49,11 @@ def ensure_sheet(access_token: str, title: str, service_account_email: str,
                   "sheets": [{"properties": {"title": DEFAULT_SHEET}}]},
             fields="spreadsheetId").execute()
         file_id = created["spreadsheetId"]
+        # Write the column headers (row 2, where SheetsSync looks for them) so the new sheet is
+        # self-describing — the sync writes data at row 3+.
+        sheets.spreadsheets().values().update(
+            spreadsheetId=file_id, range=f"{DEFAULT_SHEET}!A2",
+            valueInputOption="RAW", body={"values": [HEADER_LABELS]}).execute()
         logger.info("created OAuth-Drive spreadsheet %s in the leader's Drive", file_id)
     _share(drive, file_id, service_account_email, "writer")  # so the SA-based sync can write data
     for em in share_emails:

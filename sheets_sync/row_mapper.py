@@ -23,6 +23,14 @@ import datetime as _dt
 
 DATA_WIDTH = 15  # columns A..O written by the sync; P+ are manual and preserved
 
+# Column headers (row 2) — written when we CREATE a fresh per-stake sheet (the master sheet already
+# has them). Must stay aligned with to_row()'s column order above.
+HEADER_LABELS = [
+    "Member", "Unit", "Baptism date", "Member for", "Birth date", "Age", "Friends", "Aaronic",
+    "Melchizedek", "Calling", "Ministering Bros/Sisters", "Ministering Assignment",
+    "Temple recommend", "Patriarchal blessing", "Living ordinance",
+]
+
 # values that mean "not fetched" — blanked, and preserved-on-merge for gated cols.
 # NOTE: "N/A" is a REAL value (e.g. priesthood not applicable) and must pass through.
 _UNKNOWN = {"", None, "needs-profile-api", "blocked: insufficient calling access"}
