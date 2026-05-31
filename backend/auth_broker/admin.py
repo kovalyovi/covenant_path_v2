@@ -18,6 +18,7 @@ GITHUB_TOKEN (fine-grained PAT: Actions read+write, Contents read), GITHUB_REPO.
 from __future__ import annotations
 
 import os
+import re
 
 import requests
 
@@ -276,14 +277,21 @@ def provider_stake_id(email: str) -> str | None:
 
 
 def gdrive_status_for(email: str) -> dict:
-    """Whether this user can connect Google Drive, and the current connection (M7)."""
+    """Whether this user can connect Google Drive, and the current connection (M7). Includes the
+    stake's spreadsheet link + last-sync time so the app can show actual usage, not just 'Connected'
+    (item: 'I don't see the Drive syncing/usage')."""
     sid = provider_stake_id(email)
     if not sid:
         return {"eligible": False}
-    s = _one("stakes", {"select": "gdrive_email,gdrive_connected_at",
+    s = _one("stakes", {"select": "gdrive_email,gdrive_connected_at,gdrive_file_id,last_synced_at",
                         "id": f"eq.{sid}", "limit": "1"}) or {}
+    file_id = s.get("gdrive_file_id")
     return {"eligible": True, "stake_id": sid,
-            "connected": bool(s.get("gdrive_connected_at")), "email": s.get("gdrive_email")}
+            "connected": bool(s.get("gdrive_connected_at")), "email": s.get("gdrive_email"),
+            "connected_at": s.get("gdrive_connected_at"),
+            "file_id": file_id,
+            "sheet_url": f"https://docs.google.com/spreadsheets/d/{file_id}" if file_id else None,
+            "last_synced_at": s.get("last_synced_at")}
 
 
 def store_gdrive_token(stake_id: str, encrypted_refresh: str, gdrive_email: str | None) -> dict:
@@ -537,14 +545,32 @@ def rerun(run_id: int) -> None:
         raise AdminError(f"rerun failed ({r.status_code}): {r.text[:200]}")
 
 
+def _sanitize_issue_text(s: str, limit: int) -> str:
+    """Neutralize user-submitted feedback before it becomes a GitHub issue. Issues don't execute
+    anything, but unsanitized text can mass-ping people (@mentions), cross-link/auto-close issues
+    (#123, "fixes #..."), or smuggle control chars. We cap length, drop control chars (keep \\n/\\t),
+    and defang @ / # by inserting a zero-width space so they render literally but don't trigger
+    GitHub. We never auto-merge or run anything from feedback — it only ever opens an issue."""
+    s = (s or "").strip()[:limit]
+    s = "".join(ch for ch in s if ch in "\n\t" or ord(ch) >= 0x20)
+    s = re.sub(r"([@#])(?=\w)", "\\1​", s)          # @mention / #ref -> inert
+    s = re.sub(r"(?i)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)(?=\s+#?​?\d)",
+               r"\1​", s)                            # defang "fixes #123" auto-close keywords
+    return s
+
+
 def create_feedback_issue(title: str, body: str, reporter: str) -> dict:
     """File a GitHub issue from in-app feedback and best-effort hand it to Copilot's coding
     agent. Requires the broker PAT to have Issues: write. Copilot assignment is optional —
-    the issue is filed regardless (auto-assign needs Copilot enabled on the repo)."""
+    the issue is filed regardless (auto-assign needs Copilot enabled on the repo).
+
+    Input is sanitized (see _sanitize_issue_text). This NEVER merges anything: at most it opens an
+    issue and assigns Copilot, which can only PROPOSE a PR — a human still reviews and merges."""
     if not GITHUB_TOKEN:
         raise AdminError("github not configured (GITHUB_TOKEN)")
-    title = (title or "").strip()[:120] or "App feedback"
-    full = f"{(body or '').strip()}\n\n— filed via Covenant Path by {reporter}"
+    title = _sanitize_issue_text(title, 120).replace("\n", " ") or "App feedback"
+    safe_body = _sanitize_issue_text(body, 8000)
+    full = f"{safe_body}\n\n— filed via Covenant Path by `{reporter}`"
     r = requests.post(f"https://api.github.com/repos/{GITHUB_REPO}/issues", headers=_gh_headers(),
                       json={"title": title, "body": full, "labels": ["feedback"]}, timeout=_TIMEOUT)
     if r.status_code >= 300:

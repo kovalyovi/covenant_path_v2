@@ -356,17 +356,34 @@ class _GoogleDriveSectionState extends State<_GoogleDriveSection> {
   @override
   Widget build(BuildContext context) {
     final s = _status;
-    if (s == null || s['configured'] != true || s['eligible'] != true) {
-      return const SizedBox.shrink();
+    // Only the stake's sync provider can own a Drive sheet — others never see this section.
+    if (s == null || s['eligible'] != true) return const SizedBox.shrink();
+
+    final header = Row(children: [
+      Icon(Icons.add_to_drive, size: 18, color: Theme.of(context).colorScheme.primary),
+      const SizedBox(width: 8),
+      Text('Google Drive', style: Theme.of(context).textTheme.titleSmall),
+    ]);
+
+    // Eligible provider, but the broker has no Google OAuth configured — say so instead of hiding,
+    // so it's clear why "Connect" isn't available (it's a server setting, not their account).
+    if (s['configured'] != true) {
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Divider(height: 24),
+        header,
+        const SizedBox(height: 4),
+        Text('Drive integration isn\'t enabled on the server yet — your stake\'s sheet is kept on '
+            'the shared service account for now.',
+            style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+      ]);
     }
+
     final connected = s['connected'] == true;
+    final sheetUrl = s['sheet_url']?.toString();
+    final lastSynced = s['last_synced_at']?.toString();
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const Divider(height: 24),
-      Row(children: [
-        Icon(Icons.add_to_drive, size: 18, color: Theme.of(context).colorScheme.primary),
-        const SizedBox(width: 8),
-        Text('Google Drive', style: Theme.of(context).textTheme.titleSmall),
-      ]),
+      header,
       const SizedBox(height: 4),
       Text(
         connected
@@ -375,6 +392,25 @@ class _GoogleDriveSectionState extends State<_GoogleDriveSection> {
                 '(the app can only touch the file it creates).',
         style: const TextStyle(fontSize: 13),
       ),
+      // Connected → show the actual usage: a link to the sheet and when it last synced (#item Drive).
+      if (connected && sheetUrl != null) ...[
+        const SizedBox(height: 6),
+        InkWell(
+          onTap: () => launchUrl(Uri.parse(sheetUrl), mode: LaunchMode.externalApplication),
+          child: Row(children: [
+            const Icon(Icons.table_view, size: 16),
+            const SizedBox(width: 6),
+            Flexible(child: Text('Open your stake spreadsheet',
+                style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.primary,
+                    decoration: TextDecoration.underline))),
+          ]),
+        ),
+      ],
+      if (connected && lastSynced != null) ...[
+        const SizedBox(height: 4),
+        Text('Sheet last refreshed ${_fmtShort(lastSynced)}.',
+            style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+      ],
       const SizedBox(height: 8),
       Row(children: [
         if (!connected)
@@ -391,6 +427,12 @@ class _GoogleDriveSectionState extends State<_GoogleDriveSection> {
         TextButton(onPressed: _busy ? null : _load, child: const Text('Refresh')),
       ]),
     ]);
+  }
+
+  String _fmtShort(String iso) {
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return iso;
+    return DateFormat('MMM d, y · h:mm a').format(dt.toLocal());
   }
 }
 
