@@ -79,7 +79,9 @@ class _SettingsPageState extends State<SettingsPage> {
             ListTile(
               leading: const Icon(Icons.key),
               title: const Text('Add a passkey'),
-              subtitle: const Text('Sign in without a password next time'),
+              subtitle: const Text('Recommended — sign in with your face, fingerprint, or PIN '
+                  'instead of a password'),
+              isThreeLine: true,
               onTap: widget.onAddPasskey,
             ),
           if (_lockAvailable)
