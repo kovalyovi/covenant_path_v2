@@ -19,7 +19,7 @@ class _GoldenHourViewState extends State<_GoldenHourView> {
   _Window _window = _Window.all;
   bool _byDate = false;
   bool? _asc; // null = section default; Being Taught → soonest first, New Members → newest first
-  String? _respFilter; // null=all, 'WML'=first year, 'RSEQ'=after first year
+  OrgBucket? _orgFilter; // null = all orgs; else only converts that org currently owns
 
   bool get _ascending => _asc ?? (_section == _GhSection.beingTaught);
 
@@ -34,6 +34,21 @@ class _GoldenHourViewState extends State<_GoldenHourView> {
       _Window.year => days <= 366,
       _Window.all => true,
     };
+  }
+
+  /// Human-readable window the data covers, so a selected Week/Month/Year isn't ambiguous (#range).
+  /// Null for "All" (no bounded window).
+  String? _windowRangeLabel() {
+    if (_window == _Window.all) return null;
+    final now = DateTime.now();
+    final days = switch (_window) {
+      _Window.week => 7,
+      _Window.month => 31,
+      _Window.year => 366,
+      _Window.all => 0,
+    };
+    final from = now.subtract(Duration(days: days));
+    return 'Baptized ${DateFormat('MMM d').format(from)} – ${DateFormat('MMM d, y').format(now)}';
   }
 
   @override
@@ -80,29 +95,19 @@ class _GoldenHourViewState extends State<_GoldenHourView> {
 
     final rows = newMembers
         .where(_within)
-        .where((m) => _respFilter == null || responsibleBucket(m) == _respFilter)
+        .where((m) => _orgFilter == null || responsibleOrg(m) == _orgFilter)
         .toList();
     return _Page(
       tier: widget.tier,
       header: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         sectionToggle,
         const SizedBox(height: 8),
-        Center(
-          child: Wrap(spacing: 6, children: [
-            FilterChip(
-                label: const Text('All'), selected: _respFilter == null,
-                onSelected: (_) => setState(() => _respFilter = null)),
-            FilterChip(
-                label: const Text('Missionaries / WML'), selected: _respFilter == 'WML',
-                avatar: const Icon(Icons.volunteer_activism, size: 16),
-                onSelected: (_) => setState(() => _respFilter = 'WML')),
-            FilterChip(
-                label: const Text('EQ / Relief Society'), selected: _respFilter == 'RSEQ',
-                avatar: const Icon(Icons.groups_2_outlined, size: 16),
-                onSelected: (_) => setState(() => _respFilter = 'RSEQ')),
-          ]),
-        ),
-        const SizedBox(height: 8),
+        _OrgFilterBar(selected: _orgFilter, onSelect: (b) => setState(() => _orgFilter = b)),
+        if (_orgFilter != null) ...[
+          const SizedBox(height: 6),
+          _SubtleNote(orgResponsibilityNote(_orgFilter!)),
+        ],
+        const SizedBox(height: 10),
         Center(
           child: SegmentedButton<_Window>(
             showSelectedIcon: false,
@@ -116,7 +121,11 @@ class _GoldenHourViewState extends State<_GoldenHourView> {
             onSelectionChanged: (s) => setState(() => _window = s.first),
           ),
         ),
-        const SizedBox(height: 8),
+        if (_windowRangeLabel() != null) ...[
+          const SizedBox(height: 6),
+          Center(child: _RangePill(_windowRangeLabel()!)),
+        ],
+        const SizedBox(height: 10),
         _SectionTitle(title: 'Recently Baptized', count: rows.length, byDate: _byDate,
             onToggle: (v) => setState(() => _byDate = v),
             ascending: _ascending, onAscToggle: () => setState(() => _asc = !_ascending)),
@@ -219,6 +228,82 @@ class _PctStat extends StatelessWidget {
               child: LinearProgressIndicator(value: pct, minHeight: 5)),
         ]),
       ),
+    );
+  }
+}
+
+/// The org-ownership filter bar: All + one colored chip per org (WML / EQ / RS). Selected → filled
+/// with that org's color; unselected → colored icon + faint colored border. Colors come from
+/// orgInfo so they stay consistent with the per-member responsibility chips. (#15)
+class _OrgFilterBar extends StatelessWidget {
+  const _OrgFilterBar({required this.selected, required this.onSelect});
+  final OrgBucket? selected;
+  final void Function(OrgBucket?) onSelect;
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Wrap(spacing: 6, runSpacing: 6, alignment: WrapAlignment.center, children: [
+        FilterChip(
+          label: const Text('All'),
+          selected: selected == null,
+          showCheckmark: false,
+          onSelected: (_) => onSelect(null),
+        ),
+        for (final b in OrgBucket.values)
+          () {
+            final i = orgInfo(b);
+            final sel = selected == b;
+            return FilterChip(
+              label: Text(i.label),
+              avatar: Icon(i.icon, size: 16, color: sel ? Colors.white : i.color),
+              selected: sel,
+              showCheckmark: false,
+              selectedColor: i.color,
+              labelStyle: TextStyle(
+                  color: sel ? Colors.white : null, fontWeight: FontWeight.w500),
+              side: BorderSide(color: i.color.withValues(alpha: sel ? 1 : 0.45)),
+              onSelected: (_) => onSelect(b),
+            );
+          }(),
+      ]),
+    );
+  }
+}
+
+/// A centered, muted one-liner (used for the org-responsibility explanation under the filter).
+class _SubtleNote extends StatelessWidget {
+  const _SubtleNote(this.text);
+  final String text;
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Text(text,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant)),
+        ),
+      );
+}
+
+/// A small pill showing the date range the current period covers, so the data window is explicit.
+class _RangePill extends StatelessWidget {
+  const _RangePill(this.text);
+  final String text;
+  @override
+  Widget build(BuildContext context) {
+    final c = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+      decoration: BoxDecoration(
+          color: c.surfaceContainerHighest, borderRadius: BorderRadius.circular(20)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.date_range, size: 14, color: c.onSurfaceVariant),
+        const SizedBox(width: 6),
+        Text(text,
+            style: TextStyle(
+                fontSize: 12, color: c.onSurfaceVariant, fontWeight: FontWeight.w500)),
+      ]),
     );
   }
 }

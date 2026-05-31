@@ -92,15 +92,59 @@ List<Milestone> milestonesFor(Map<String, dynamic> m) =>
 
 /// Convert responsibility (the stake's hand-off policy, #23): the first year after baptism the
 /// missionaries + ward/branch mission leader track progress; after a year it moves to the Elders
-/// Quorum (men) / Relief Society (women) president. Returns a label + icon for the chip/filter.
-({String label, IconData icon}) responsibleParty(Map<String, dynamic> m) {
+/// Quorum (men) / Relief Society (women) president. ONE source of org ownership for filters + chips.
+enum OrgBucket { wml, eq, rs }
+
+/// Label + short tag + icon + a palette-friendly color for each org bucket. Colors deliberately
+/// avoid the status palette (green=done, amber=next, red=no, indigo=primary): teal (WML), blue (EQ),
+/// rose (RS) — distinct, calm, and consistent everywhere the org appears.
+({String label, String short, IconData icon, Color color}) orgInfo(OrgBucket b) => switch (b) {
+      OrgBucket.wml => (
+          label: 'Missionaries / WML',
+          short: 'WML',
+          icon: Icons.volunteer_activism,
+          color: const Color(0xFF00897B)), // teal
+      OrgBucket.eq => (
+          label: 'Elders Quorum',
+          short: 'EQ',
+          icon: Icons.groups_2_outlined,
+          color: const Color(0xFF1565C0)), // blue
+      OrgBucket.rs => (
+          label: 'Relief Society',
+          short: 'RS',
+          icon: Icons.diversity_1_outlined,
+          color: const Color(0xFFAD1457)), // rose
+    };
+
+/// Which org currently owns this convert's integration, or null when there's no baptism date to
+/// reckon from. <1 year → missionaries/WML; ≥1 year → Elders Quorum (men) / Relief Society (women).
+OrgBucket? responsibleOrg(Map<String, dynamic> m) {
   final b = _dateOf(m['baptism_date']);
-  final months = b == null ? null : (DateTime.now().difference(b).inDays / 30.44).floor();
-  if (months == null) return (label: 'Unassigned', icon: Icons.help_outline);
-  if (months < 12) return (label: 'Missionaries / WML', icon: Icons.volunteer_activism);
-  return _male(m)
-      ? (label: 'Elders Quorum', icon: Icons.groups_2_outlined)
-      : (label: 'Relief Society', icon: Icons.diversity_1_outlined);
+  if (b == null) return null;
+  final months = (DateTime.now().difference(b).inDays / 30.44).floor();
+  if (months < 12) return OrgBucket.wml;
+  return _male(m) ? OrgBucket.eq : OrgBucket.rs;
+}
+
+/// One-line explanation of when converts are this org's responsibility (shown under the filter).
+String orgResponsibilityNote(OrgBucket b) => switch (b) {
+      OrgBucket.wml =>
+        'First year after baptism: the full-time missionaries and the ward mission leader watch '
+            'over each new member\'s progress.',
+      OrgBucket.eq =>
+        'After the first year: the elders quorum presidency watches over each brother\'s '
+            'continued integration.',
+      OrgBucket.rs =>
+        'After the first year: the Relief Society presidency watches over each sister\'s '
+            'continued integration.',
+    };
+
+/// Responsibility chip data for a member row: label + icon + color (Unassigned when no baptism date).
+({String label, IconData icon, Color color}) responsibleParty(Map<String, dynamic> m) {
+  final org = responsibleOrg(m);
+  if (org == null) return (label: 'Unassigned', icon: Icons.help_outline, color: Colors.grey);
+  final i = orgInfo(org);
+  return (label: i.label, icon: i.icon, color: i.color);
 }
 
 /// Display age (e.g. "35 yrs") from birth_date, or null when unknown.
@@ -131,13 +175,7 @@ String monthsDaysAgo(DateTime? d) {
   return parts.join(' ');
 }
 
-/// The two ownership buckets, for filtering. 'WML' = first-year (missionaries/ward mission leader);
-/// 'RSEQ' = after-first-year (Relief Society / Elders Quorum).
-String responsibleBucket(Map<String, dynamic> m) {
-  final b = _dateOf(m['baptism_date']);
-  final months = b == null ? null : (DateTime.now().difference(b).inDays / 30.44).floor();
-  return (months != null && months >= 12) ? 'RSEQ' : 'WML';
-}
+// (responsibleBucket removed — filters use responsibleOrg, the single source of org ownership.)
 
 /// Row of small circle chips for one member (the iOS Golden Hour pattern). Filled = done.
 /// With [highlightNext], the first not-yet-complete milestone gets an amber ring as the

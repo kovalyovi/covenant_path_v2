@@ -33,22 +33,10 @@ class _SectionTitle extends StatelessWidget {
   final VoidCallback? onAscToggle;
   @override
   Widget build(BuildContext context) {
-    return Row(children: [
-      Flexible(
-        child: Text(title,
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
-            overflow: TextOverflow.ellipsis),
-      ),
-      const SizedBox(width: 8),
-      _CountBadge(count),
-      const Spacer(),
+    final c = Theme.of(context).colorScheme;
+    final controls = <Widget>[
       if (onAscToggle != null)
-        IconButton(
-          tooltip: ascending == true ? 'Oldest first (tap for newest)' : 'Newest first (tap for oldest)',
-          visualDensity: VisualDensity.compact,
-          icon: Icon(ascending == true ? Icons.arrow_upward : Icons.arrow_downward, size: 18),
-          onPressed: onAscToggle,
-        ),
+        _SortToggle(ascending: ascending == true, onTap: onAscToggle!),
       SegmentedButton<bool>(
         showSelectedIcon: false,
         style: const ButtonStyle(visualDensity: VisualDensity.compact),
@@ -59,7 +47,75 @@ class _SectionTitle extends StatelessWidget {
         selected: {byDate},
         onSelectionChanged: (s) => onToggle(s.first),
       ),
-    ]);
+    ];
+    // Title + count on the left; controls on the right. Wrap so a long stake/section name + the
+    // toggles never overflow on a phone (the controls drop to the next line instead of clipping).
+    return Wrap(
+      alignment: WrapAlignment.spaceBetween,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      runSpacing: 8,
+      spacing: 8,
+      children: [
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          // a slim accent bar gives the section a clear visual anchor (#header styling)
+          Container(
+            width: 4,
+            height: 22,
+            margin: const EdgeInsets.only(right: 10),
+            decoration: BoxDecoration(
+                color: c.primary, borderRadius: BorderRadius.circular(2)),
+          ),
+          Flexible(
+            child: Text(title,
+                style: Theme.of(context)
+                    .textTheme
+                    .titleLarge
+                    ?.copyWith(fontWeight: FontWeight.bold, letterSpacing: -0.2),
+                overflow: TextOverflow.ellipsis),
+          ),
+          const SizedBox(width: 8),
+          _CountBadge(count),
+        ]),
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          for (var i = 0; i < controls.length; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            controls[i],
+          ],
+        ]),
+      ],
+    );
+  }
+}
+
+/// A compact, labeled sort control (replaces the orphaned bare arrow in the header). Shows the
+/// current order in words so it's obvious what the arrow does. (#header styling)
+class _SortToggle extends StatelessWidget {
+  const _SortToggle({required this.ascending, required this.onTap});
+  final bool ascending;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) {
+    final c = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: ascending ? 'Oldest first (tap for newest)' : 'Newest first (tap for oldest)',
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+              color: c.surfaceContainerHighest, borderRadius: BorderRadius.circular(20)),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(ascending ? Icons.arrow_upward : Icons.arrow_downward,
+                size: 15, color: c.onSurfaceVariant),
+            const SizedBox(width: 4),
+            Text(ascending ? 'Oldest' : 'Newest',
+                style: TextStyle(
+                    fontSize: 12, color: c.onSurfaceVariant, fontWeight: FontWeight.w500)),
+          ]),
+        ),
+      ),
+    );
   }
 }
 
@@ -69,9 +125,28 @@ class _BigHeader extends StatelessWidget {
   final String subtitle;
   @override
   Widget build(BuildContext context) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(text, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
-      Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+    final c = Theme.of(context).colorScheme;
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Container(
+        width: 4,
+        height: 34,
+        margin: const EdgeInsets.only(right: 10, top: 2),
+        decoration: BoxDecoration(color: c.primary, borderRadius: BorderRadius.circular(2)),
+      ),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(text,
+              style: Theme.of(context)
+                  .textTheme
+                  .titleLarge
+                  ?.copyWith(fontWeight: FontWeight.bold, letterSpacing: -0.2)),
+          Text(subtitle,
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: c.onSurfaceVariant)),
+        ]),
+      ),
     ]);
   }
 }
