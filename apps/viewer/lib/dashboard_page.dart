@@ -16,6 +16,7 @@ import 'main.dart';
 import 'passkey_client.dart';
 import 'person_detail_page.dart';
 import 'settings_page.dart';
+import 'widgets/shimmer.dart';
 
 part 'views/dashboard_shell.dart';
 part 'views/upcoming_view.dart';
@@ -405,39 +406,26 @@ class _DashboardPageState extends State<DashboardPage> {
       builder: (_) => SettingsPage(
           onFeedback: _sendFeedback, onContact: _contactSupport, onAddPasskey: _addPasskey)));
 
-  Future<void> _openSyncSettings() async {
-    final status = _enrollStatus;
-    if (status == null) {
-      // Load on demand if not yet fetched
-      final broker = BrokerClient();
-      if (!broker.available) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Sync settings require Church account login.')));
-        return;
-      }
-      try {
-        final s = await broker.enrollmentStatus();
-        if (mounted) setState(() => _enrollStatus = s);
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Could not load sync settings: $e')));
-        }
-        return;
-      }
+  void _openSyncSettings() {
+    final broker = BrokerClient();
+    if (!broker.available) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Sync settings require Church account login.')));
+      return;
     }
-    if (mounted) { _showSyncSettingsSheet(); }
-  }
-
-  void _showSyncSettingsSheet() {
-    final status = _enrollStatus;
-    final isProvider = status?.credential.isProvider == true;
+    // Open the sheet INSTANTLY with a content-shaped skeleton; resolve status in the background so
+    // it never jumps from blank to content (#shimmer). Cache the result so a re-open is immediate.
+    final future = _enrollStatus != null
+        ? Future<EnrollmentStatus?>.value(_enrollStatus)
+        : broker.enrollmentStatus().then((s) {
+            if (mounted) setState(() => _enrollStatus = s);
+            return s;
+          });
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       builder: (ctx) => _SyncSettingsSheet(
-          status: status,
-          onRevoke: isProvider ? _revokeCredential : null,
-          onSyncNow: isProvider ? _syncNow : null),
+          statusFuture: future, onRevoke: _revokeCredential, onSyncNow: _syncNow),
     );
   }
 
