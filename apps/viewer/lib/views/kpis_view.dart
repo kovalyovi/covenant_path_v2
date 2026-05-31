@@ -1,6 +1,6 @@
 part of '../dashboard_page.dart';
 
-enum _Period { week, month, year, all }
+enum _Period { month, year, all }
 
 /// KPIs computed from this stake's own covenant-path data (not LCR membership stats):
 ///   • New Members at Sacrament — baptized members attending, bucketed by the selected period
@@ -18,12 +18,11 @@ class _KpiView extends StatefulWidget {
 }
 
 class _KpiViewState extends State<_KpiView> {
-  _Period _period = _Period.week;
+  _Period _period = _Period.month;
   String? _unit; // null = whole stake; else drill into one unit
   bool _compare = false; // overlay the previous equal period
 
   (String, String) get _compareLabels => switch (_period) {
-        _Period.week => ('2 weeks ago', 'Last week'),
         _Period.month => ('Last month', 'This month'),
         _Period.year => ('Last year', 'This year'),
         _Period.all => ('Prev. month', 'This month'),
@@ -126,7 +125,6 @@ class _KpiViewState extends State<_KpiView> {
           child: SegmentedButton<_Period>(
             showSelectedIcon: false,
             segments: const [
-              ButtonSegment(value: _Period.week, label: Text('Week')),
               ButtonSegment(value: _Period.month, label: Text('Month')),
               ButtonSegment(value: _Period.year, label: Text('Year')),
               ButtonSegment(value: _Period.all, label: Text('All')),

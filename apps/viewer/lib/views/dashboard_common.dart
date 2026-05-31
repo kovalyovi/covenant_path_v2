@@ -307,27 +307,25 @@ DateTime? parseMemberDate(dynamic v) {
 typedef _Series = ({List<String> labels, List<double> current, List<double> prev});
 
 // Fixed windows anchored to TODAY, not "the last N buckets that happen to have data" (#1):
-//   Week  = the 7 DAYS ending today        (daily buckets — empty days still show)
 //   Month = the 5 WEEKS ending this week   (weekly buckets)
 //   Year  = the 12 MONTHS ending this month(monthly buckets)
-//   All   = every MONTH from first data → now (monthly buckets)
+//   All   = first data → now, grouped by MONTH (≤3 yrs) or by YEAR (longer, so it stays readable)
 // Buckets with no events render as zeros (the window is honest about quiet stretches). The prev
-// overlay is the immediately-preceding equal span (this week vs last week by day, etc.).
+// overlay is the immediately-preceding equal span (this week vs last week, etc.).
 
 DateTime _dayOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 DateTime _weekStart(DateTime d) => _dayOnly(d).subtract(Duration(days: d.weekday - 1)); // Monday
 
 /// Bucket key (stable, sortable int) for an event's date under [p] — must match _windowBuckets.
-int _bucketKey(DateTime dt, _Period p) {
+int _bucketKey(DateTime dt, _Period p, {bool allByYear = false}) {
   switch (p) {
-    case _Period.week:
-      return dt.year * 10000 + dt.month * 100 + dt.day; // per day
     case _Period.month:
       final w = _weekStart(dt);
       return w.year * 10000 + w.month * 100 + w.day; // per ISO week
     case _Period.year:
-    case _Period.all:
       return dt.year * 100 + dt.month; // per month
+    case _Period.all:
+      return allByYear ? dt.year : dt.year * 100 + dt.month; // per year (long spans) or per month
   }
 }
 
@@ -336,15 +334,6 @@ int _bucketKey(DateTime dt, _Period p) {
 /// driven and handled in _metricData, so it returns empty here.
 List<(int, String)> _windowBuckets(_Period p, DateTime today, int shift) {
   switch (p) {
-    case _Period.week:
-      final end = _dayOnly(today).subtract(Duration(days: shift * 7));
-      return [
-        for (var i = 6; i >= 0; i--)
-          () {
-            final d = end.subtract(Duration(days: i));
-            return (d.year * 10000 + d.month * 100 + d.day, DateFormat('E').format(d));
-          }()
-      ];
     case _Period.month:
       final end = _weekStart(today).subtract(Duration(days: shift * 5 * 7));
       return [
@@ -381,30 +370,51 @@ class _Ev {
 ({_Series series, List<_Ev> events}) _metricData(Iterable<Map<String, dynamic>> rows,
     {required Iterable<DateTime> Function(Map<String, dynamic>) datesOf, required _Period period}) {
   final today = DateTime.now();
-  final sets = <int, Set<String>>{}; // bucketKey -> unique person ids (counted once per bucket)
-  final raw = <(Map<String, dynamic>, DateTime, int)>[]; // (member, date, bucketKey)
+  // Collect (member, date) pairs up front so 'All' can choose its bucket granularity from the span.
+  final pairs = <(Map<String, dynamic>, DateTime)>[];
   for (final m in rows) {
-    final id = (m['person_uuid'] ?? m['name'] ?? identityHashCode(m)).toString();
     for (final dt in datesOf(m)) {
-      final key = _bucketKey(dt, period);
-      (sets[key] ??= <String>{}).add(id);
-      raw.add((m, dt, key));
+      pairs.add((m, dt));
     }
   }
 
-  // The ordered current window (fixed for week/month/year; data-spanning for all) + prev overlay.
+  // 'All' groups by month for short histories, switching to YEAR buckets once the data spans more
+  // than ~3 years — so a long history reads as a few year columns, not dozens of cramped months.
+  var allByYear = false;
+  if (period == _Period.all && pairs.isNotEmpty) {
+    final earliest = pairs.map((p) => p.$2).reduce((a, b) => a.isBefore(b) ? a : b);
+    final months = (today.year - earliest.year) * 12 + (today.month - earliest.month);
+    allByYear = months > 36;
+  }
+
+  final sets = <int, Set<String>>{}; // bucketKey -> unique person ids (counted once per bucket)
+  final raw = <(Map<String, dynamic>, DateTime, int)>[]; // (member, date, bucketKey)
+  for (final (m, dt) in pairs) {
+    final id = (m['person_uuid'] ?? m['name'] ?? identityHashCode(m)).toString();
+    final key = _bucketKey(dt, period, allByYear: allByYear);
+    (sets[key] ??= <String>{}).add(id);
+    raw.add((m, dt, key));
+  }
+
+  // The ordered current window (fixed for month/year; data-spanning for all) + prev overlay.
   List<(int, String)> cur, prev;
   if (period == _Period.all) {
     if (raw.isEmpty) return (series: (labels: [], current: [], prev: []), events: []);
     final earliest = raw.map((r) => r.$2).reduce((a, b) => a.isBefore(b) ? a : b);
     cur = [];
-    var y = earliest.year, mo = earliest.month;
-    while (y < today.year || (y == today.year && mo <= today.month)) {
-      final lbl = DateFormat(y == today.year ? 'MMM' : "MMM ''yy").format(DateTime(y, mo));
-      cur.add((y * 100 + mo, lbl));
-      if (++mo > 12) {
-        mo = 1;
-        y++;
+    if (allByYear) {
+      for (var y = earliest.year; y <= today.year; y++) {
+        cur.add((y, '$y'));
+      }
+    } else {
+      var y = earliest.year, mo = earliest.month;
+      while (y < today.year || (y == today.year && mo <= today.month)) {
+        final lbl = DateFormat(y == today.year ? 'MMM' : "MMM ''yy").format(DateTime(y, mo));
+        cur.add((y * 100 + mo, lbl));
+        if (++mo > 12) {
+          mo = 1;
+          y++;
+        }
       }
     }
     prev = const [];
