@@ -4,6 +4,7 @@ import 'dart:ui' show ImageFilter;
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'admin_client.dart';
@@ -52,10 +53,49 @@ const _tabs = [
   (icon: Icons.grid_on, label: 'Table'),
 ];
 
+/// App-bar title that doubles as a stake switcher when the viewer can see more than one stake
+/// (power users / operators). With a single stake it's just the stake name — one stake at a time;
+/// cross-stake browsing for ops/stats lives in the Admin console.
+class _StakeTitle extends StatelessWidget {
+  const _StakeTitle({required this.stakes, required this.currentId,
+      required this.fallback, required this.onSelect});
+  final List<Map<String, dynamic>> stakes;
+  final String? currentId;
+  final String fallback;
+  final void Function(String id) onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerLeft,
+        child: Text(fallback));
+    if (stakes.length < 2) return title;
+    return PopupMenuButton<String>(
+      tooltip: 'Switch stake',
+      onSelected: onSelect,
+      itemBuilder: (_) => [
+        for (final s in stakes)
+          CheckedPopupMenuItem<String>(
+            value: s['id'] as String,
+            checked: s['id'] == currentId,
+            child: Text('${s['name'] ?? '—'}'),
+          ),
+      ],
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Flexible(child: title),
+        const Icon(Icons.arrow_drop_down),
+      ]),
+    );
+  }
+}
+
 class _DashboardPageState extends State<DashboardPage> {
   late Future<List<Map<String, dynamic>>> _future;
   int _tab = 0;
   bool _isAdmin = false;
+  List<Map<String, dynamic>> _stakes = const [];
+  String? _currentStakeId; // the single stake the dashboard is scoped to (switcher-selectable)
   String? _stakeName;
   String? _lastSynced;
   bool _syncing = false;
@@ -66,12 +106,18 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void initState() {
     super.initState();
-    _future = _load();
-    _future.then((rows) {
-      if (rows.isEmpty && mounted) _loadEnrollStatus();
-    }).catchError((_) {});
+    _future = _bootstrap();
     _checkAdmin();
-    _loadStakeName();
+  }
+
+  /// Resolve which single stake to show BEFORE the first member query, so the dashboard is scoped
+  /// to one stake from the start. A leader sees only their own stake; multi-stake power users get a
+  /// switcher in the app bar; cross-stake browsing for ops/stats lives in the Admin console.
+  Future<List<Map<String, dynamic>>> _bootstrap() async {
+    await _loadStakes();
+    final rows = await _load();
+    if (rows.isEmpty && mounted) _loadEnrollStatus();
+    return rows;
   }
 
   Future<void> _loadEnrollStatus() async {
@@ -89,53 +135,83 @@ class _DashboardPageState extends State<DashboardPage> {
     } catch (_) {}
   }
 
-  Future<void> _loadStakeName() async {
+  Future<void> _loadStakes() async {
     try {
       final rows = await supabase.from('stakes')
-          .select('name, last_synced_at, sync_state, sync_started_at, missionaries');
+          .select('id, name, last_synced_at, sync_state, sync_started_at, missionaries');
       final list = (rows as List).cast<Map<String, dynamic>>();
-      if (list.isEmpty || !mounted) return;
-      // freshest stake first, so the chip reflects the most recent scrape the user can see
+      if (list.isEmpty) return;
+      // freshest stake first, so an unset default lands on the most recent scrape
       list.sort((a, b) => (b['last_synced_at'] ?? '')
           .toString()
           .compareTo((a['last_synced_at'] ?? '').toString()));
+      String? current = _currentStakeId;
+      if (current == null) {
+        try {
+          current = (await SharedPreferences.getInstance()).getString('current_stake_id');
+        } catch (_) {}
+      }
+      // keep the remembered choice only if still visible; otherwise default to the freshest stake
+      if (current == null || !list.any((s) => s['id'] == current)) {
+        current = list.first['id'] as String?;
+      }
+      if (!mounted) return;
       setState(() {
-        _stakeName = list.first['name'];
-        _lastSynced = list.first['last_synced_at']?.toString();
-        // unit name → assigned full-time missionaries (#29), merged across visible stakes
-        final miss = <String, List<Map<String, dynamic>>>{};
-        for (final s in list) {
-          final m = s['missionaries'];
-          if (m is Map) {
-            m.forEach((k, v) {
-              if (v is List) {
-                miss['$k'] = v.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
-              }
-            });
-          }
-        }
-        _missionaries = miss;
-        // only treat as syncing if it started recently — guards against a crashed run that
-        // never got to mark itself 'done' leaving a permanently stuck banner.
-        DateTime? running;
-        for (final s in list) {
-          if (s['sync_state'] != 'running') continue;
-          final started = DateTime.tryParse('${s['sync_started_at'] ?? ''}');
-          // only treat as syncing if it started recently — guards against a crashed run that
-          // never got to mark itself 'done' leaving a permanently stuck banner.
-          if (started != null && DateTime.now().toUtc().difference(started.toUtc()).inMinutes < 30) {
-            running = started;
-            break;
-          }
-        }
-        _syncing = running != null;
-        _syncStartedAt = running;
+        _stakes = list;
+        _currentStakeId = current;
       });
+      _applyCurrentStake();
     } catch (_) {}
   }
 
+  /// Recompute the single-stake view state (title, freshness chip, missionaries, syncing banner)
+  /// from the selected stake only — never merge across stakes.
+  void _applyCurrentStake() {
+    if (_stakes.isEmpty) return;
+    final s = _stakes.firstWhere((e) => e['id'] == _currentStakeId, orElse: () => _stakes.first);
+    final miss = <String, List<Map<String, dynamic>>>{};
+    final m = s['missionaries'];
+    if (m is Map) {
+      m.forEach((k, v) {
+        if (v is List) {
+          miss['$k'] = v.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+        }
+      });
+    }
+    DateTime? running;
+    if (s['sync_state'] == 'running') {
+      final started = DateTime.tryParse('${s['sync_started_at'] ?? ''}');
+      // only treat as syncing if it started recently — guards a crashed run that never marked 'done'
+      if (started != null && DateTime.now().toUtc().difference(started.toUtc()).inMinutes < 30) {
+        running = started;
+      }
+    }
+    setState(() {
+      _stakeName = s['name'] as String?;
+      _lastSynced = s['last_synced_at']?.toString();
+      _missionaries = miss;
+      _syncing = running != null;
+      _syncStartedAt = running;
+    });
+  }
+
+  Future<void> _switchStake(String id) async {
+    if (id == _currentStakeId) return;
+    setState(() => _currentStakeId = id);
+    _applyCurrentStake();
+    try {
+      await (await SharedPreferences.getInstance()).setString('current_stake_id', id);
+    } catch (_) {}
+    setState(() => _future = _load());
+    await _future;
+  }
+
   Future<List<Map<String, dynamic>>> _load() async {
-    final rows = await supabase.from('members').select(_columns).order('unit_name').order('name');
+    // Scope to the selected stake — never return the RLS union of every stake the viewer has a role
+    // in (that merged two stakes into one "141 members" list). RLS is still the gate underneath.
+    final base = supabase.from('members').select(_columns);
+    final filtered = _currentStakeId != null ? base.eq('stake_id', _currentStakeId!) : base;
+    final rows = await filtered.order('unit_name').order('name');
     return (rows as List).cast<Map<String, dynamic>>();
   }
 
@@ -361,7 +437,7 @@ class _DashboardPageState extends State<DashboardPage> {
               ? 'Sync started — note: your calling can\'t pull every field, so some data stays blank. Takes a few minutes.'
               : 'Sync started for your stake — this takes a few minutes.')));
       Future.delayed(const Duration(seconds: 8), () {
-        if (mounted) _loadStakeName();
+        if (mounted) _loadStakes();
       });
     } catch (e) {
       if (mounted) {
@@ -468,10 +544,11 @@ class _DashboardPageState extends State<DashboardPage> {
       final tier = tierFor(c.maxWidth);
       // FittedBox scales the title down to fit instead of truncating — full stake name visible (#48).
       final appBar = AppBar(
-          title: FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerLeft,
-              child: Text(_stakeName ?? 'Covenant Path')),
+          title: _StakeTitle(
+              stakes: _stakes,
+              currentId: _currentStakeId,
+              fallback: _stakeName ?? 'Covenant Path',
+              onSelect: _switchStake),
           actions: _appBarActions(tier));
       final staleCred = _enrollStatus?.credential.isRevoked == true;
       final body = Column(children: [
