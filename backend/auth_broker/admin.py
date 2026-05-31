@@ -174,9 +174,12 @@ def enrollment_status(email: str, auth_id: str) -> dict:
             stake = _one("stakes", {"select": "name,last_synced_at",
                                     "id": f"eq.{cred['stake_id']}", "limit": "1"}) or {}
             cov = cred.get("coverage") or {}
+            # Real member count for the provider's stake (was hardcoded 0 → "Members 0" in settings
+            # even when the stake is fully synced; the auth_id just didn't match a user_roles row).
+            mc = _count_where("members", {"stake_id": f"eq.{cred['stake_id']}"}) or 0
             return {"status": "no_role", "stake_name": stake.get("name"),
                     "stake_id": cred["stake_id"], "last_synced_at": stake.get("last_synced_at"),
-                    "member_count": 0, "has_data": False,
+                    "member_count": mc, "has_data": mc > 0,
                     "credential": {
                         "state": "revoked" if cred.get("revoked") else "active",
                         "complete": bool(cov.get("complete")), "missing": cov.get("missing") or [],
