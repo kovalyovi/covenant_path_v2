@@ -26,7 +26,10 @@ from typing import Any
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
+from lcr_client.logging_setup import get_logger
 from sheets_sync.row_mapper import DATA_WIDTH, GATED_COLUMNS, to_row
+
+logger = get_logger()
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 # drive.file lets the service account CREATE per-stake spreadsheets and SHARE the ones it created
@@ -35,6 +38,14 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 CREATE_SCOPES = SCOPES + ["https://www.googleapis.com/auth/drive.file"]
 DEFAULT_SHEET = "New member progress"
 CHANGELOG = "Changelog"
+
+# Sheet styling (#6) — colors mirror the master sheet leaders are used to.
+_HEADER_BG = {"red": 0.17, "green": 0.24, "blue": 0.31}   # dark slate
+_HEADER_FG = {"red": 1.0, "green": 1.0, "blue": 1.0}      # white
+_YES_BG = {"red": 0.85, "green": 0.94, "blue": 0.83}      # light green
+_NO_BG = {"red": 0.99, "green": 0.85, "blue": 0.85}       # light red
+_EXP_BG = {"red": 1.0, "green": 0.95, "blue": 0.80}       # light amber (Expired recommend)
+_STATUS_START_COL = 6  # Friends(6) … Living ordinance(14) get Yes/No/Expired coloring
 _SA_CANDIDATES = [
     os.environ.get("SHEETS_SERVICE_ACCOUNT"),
     str(Path(__file__).resolve().parent / "service_account.json"),
@@ -142,8 +153,77 @@ class SheetsSync:
             self._write_units(members, headers)
         if copy_formats:
             self._copy_formats()
+        # Always (best-effort) re-apply the covenant-path styling so generated/updated sheets keep
+        # their colored frozen header, frozen Member column, filter, widths, and Yes/No colors (#6).
+        try:
+            self._style_all_tabs(members)
+        except Exception as e:  # noqa: BLE001 — styling must never fail the data write
+            logger.warning("sheet styling skipped: %s", e)
         summary["wrote"] = True
         return summary
+
+    def _style_all_tabs(self, members: list[dict]) -> None:
+        """Re-apply covenant-path styling to the main sheet + every unit tab (#6): a bold colored
+        frozen header, a frozen Member column, a basic filter, auto-sized columns, and value-based
+        Yes/No/Expired cell colors. Idempotent — existing conditional-format rules are cleared first
+        so a daily re-run doesn't stack duplicates."""
+        # rows of data per styled tab, so filters/colors cover the right range
+        counts: dict[str, int] = {self.sheet: len(members)}
+        for m in members:
+            u = m.get("unit")
+            if u:
+                counts[u] = counts.get(u, 0) + 1
+        meta = self._svc.get(
+            spreadsheetId=self.spreadsheet_id,
+            fields="sheets(properties(sheetId,title),conditionalFormats)").execute()
+        sid_by_title: dict[str, int] = {}
+        cf_by_id: dict[int, int] = {}
+        for s in meta.get("sheets", []):
+            p = s["properties"]
+            sid_by_title[p["title"]] = p["sheetId"]
+            cf_by_id[p["sheetId"]] = len(s.get("conditionalFormats") or [])
+
+        reqs: list[dict] = []
+        for title, n_data in counts.items():
+            sid = sid_by_title.get(title)
+            if sid is None or title == CHANGELOG:
+                continue
+            # main sheet: row1 = timestamp, row2 = header, data from row3. unit tabs: row1 = header.
+            header_idx = 1 if title == self.sheet else 0
+            end_row = header_idx + 1 + max(n_data, 1)
+
+            reqs.append({"updateSheetProperties": {
+                "properties": {"sheetId": sid, "gridProperties": {
+                    "frozenRowCount": header_idx + 1, "frozenColumnCount": 1}},
+                "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount"}})
+            reqs.append({"repeatCell": {
+                "range": {"sheetId": sid, "startRowIndex": header_idx, "endRowIndex": header_idx + 1,
+                          "startColumnIndex": 0, "endColumnIndex": DATA_WIDTH},
+                "cell": {"userEnteredFormat": {
+                    "backgroundColor": _HEADER_BG, "horizontalAlignment": "CENTER",
+                    "textFormat": {"foregroundColor": _HEADER_FG, "bold": True}}},
+                "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)"}})
+            # clear prior conditional-format rules (highest index first) so re-runs stay idempotent
+            for i in range(cf_by_id.get(sid, 0) - 1, -1, -1):
+                reqs.append({"deleteConditionalFormatRule": {"sheetId": sid, "index": i}})
+            status_range = {"sheetId": sid, "startRowIndex": header_idx + 1, "endRowIndex": end_row,
+                            "startColumnIndex": _STATUS_START_COL, "endColumnIndex": DATA_WIDTH}
+            for value, bg in (("Yes", _YES_BG), ("No", _NO_BG), ("Expired", _EXP_BG)):
+                reqs.append({"addConditionalFormatRule": {"index": 0, "rule": {
+                    "ranges": [status_range],
+                    "booleanRule": {
+                        "condition": {"type": "TEXT_EQ", "values": [{"userEnteredValue": value}]},
+                        "format": {"backgroundColor": bg}}}}})
+            reqs.append({"setBasicFilter": {"filter": {"range": {
+                "sheetId": sid, "startRowIndex": header_idx, "endRowIndex": end_row,
+                "startColumnIndex": 0, "endColumnIndex": DATA_WIDTH}}}})
+            reqs.append({"autoResizeDimensions": {"dimensions": {
+                "sheetId": sid, "dimension": "COLUMNS", "startIndex": 0, "endIndex": DATA_WIDTH}}})
+
+        if reqs:
+            self._svc.batchUpdate(spreadsheetId=self.spreadsheet_id,
+                                  body={"requests": reqs}).execute()
+            logger.info("styled %d sheet tab(s)", len(counts))
 
     # --- internals ------------------------------------------------------------
 
