@@ -1,11 +1,11 @@
 {
-    "name": "covenant_path_viewer",
-    "short_name": "covenant_path_viewer",
+    "name": "Covenant Path",
+    "short_name": "Covenant Path",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#FFFFFF",
+    "theme_color": "#0277BD",
+    "description": "Track new and prospective members' covenant-path progress. An independent tool for stake and ward leaders — not an official product of The Church of Jesus Christ of Latter-day Saints.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
