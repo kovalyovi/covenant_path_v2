@@ -11,10 +11,11 @@ the **auth broker** (browsers can't call Okta directly).
 |---|---|
 | `lib/main.dart` | Supabase init (`--dart-define` config) + `AuthGate` (login ↔ dashboard) |
 | `lib/config.dart` | `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `BROKER_URL` from `--dart-define` |
-| `lib/login_page.dart` | Dual login: **Church account** (broker, MFA-aware) + **email code**; browser autofill (AutofillGroup) |
+| `lib/login_page.dart` | Dual login: **Church account** (broker, MFA-aware — **always enrolls** the stake, consent inline) + **email code** (with a broker relay fallback) + passkey; browser autofill (AutofillGroup) |
 | `lib/broker_client.dart` | Calls the auth broker (`/auth/*`); cold-start retry/"waking up" UX |
-| `lib/dashboard_page.dart` | Reads `members`; **responsive** 4-tab shell (On Date / Golden Hour / KPIs / Table) |
-| `lib/golden_hour.dart` | **Shared**: `milestones`, `GoldenHourChips`, `InitialsAvatar`, `PhotoAvatar`, `SectionCard`, `MaxWidthBody`, `ScreenTier`/`tierFor` |
+| `lib/dashboard_page.dart` | Reads `members` **scoped to one selected stake**; **responsive** 5-tab shell (Upcoming / Golden Hour / Needs / KPIs / Table) + an app-bar **stake switcher** for multi-stake users + a one-time passkey upsell |
+| `lib/golden_hour.dart` | **Shared**: `milestones`, the Golden-Hour org buckets (`OrgBucket`/`orgInfo`/`responsibleOrg`), `GoldenHourChips`, `InitialsAvatar`, `PhotoAvatar`, `SectionCard`, `MaxWidthBody`, `ScreenTier`/`tierFor` |
+| `lib/widgets/shimmer.dart` | **Shared**: content-shaped loading skeletons (`Shimmer`, `SkeletonBox`/`SkeletonLine`, `MemberListSkeleton`, `SyncSettingsSkeleton`, `CardSkeleton`) — use instead of bare spinners for content loads |
 | `lib/person_detail_page.dart` | LCR-style member detail (cards: sacrament, friends, lessons, ministering, …) from `members.details` JSON |
 | `lib/invite_page.dart` | Power-user invite/revoke (`invite_power_user` RPC) |
 | `lib/admin_page.dart` | Admin/ops console (gated by `is_admin` RPC) — health, freshness, Actions, diagnostics, maintenance flows, admins |
@@ -33,26 +34,35 @@ no-cache on the service worker so deploys aren't served stale. Tracked: `lib/`, 
   (`_Columns`, 1/2/3 cols) inside a width-capped, centered `_Page`. The browser feels like a
   real app, not a stretched phone. No full-width bottom bar on wide screens.
 
-## The four tabs
+## The five tabs
 
-- **On Date** — members with a baptismal date. *By unit*: a card per unit (unit = title,
-  members = rows). *By date*: a flat list sorted by date with the unit shown as right-side
-  metadata. Long dates via `intl`.
-- **Golden Hour** — Week/Month/Year/All recency filter + completion summary; same by-unit /
-  by-date layouts, each member row carries `GoldenHourChips`. Milestones = *integration only*
-  (Friends, Calling, Ministering ×2, Aaronic, Melchizedek) — **baptism is intentionally not a
-  milestone**.
-- **KPIs** — iOS-style line-chart cards (`fl_chart`): "New Members at Sacrament" weekly trend
-  computed from `members.details.sacrament`, plus stake metrics from `stakes.kpis`
-  (sacrament/recommends/ministering) and an overview stat card.
+All tabs render **one selected stake's** rows (the dashboard scopes the `members` query with
+`.eq('stake_id', …)`; a switcher in the app bar changes the selection for multi-stake users).
+
+- **Upcoming** — people being taught, by planned baptism date, as a date-rail timeline; passed
+  dates surface in a "needs attention" block. Per-unit toggle shows assigned full-time missionaries.
+- **Golden Hour** — **Being Taught** + **New Members**; a Week/Month/Year/All recency filter **plus
+  an org-ownership filter** (three colored chips — Missionaries/WML · Elders Quorum · Relief
+  Society — from `golden_hour.dart` `orgInfo`/`responsibleOrg`, with a responsibility subtitle when
+  selected); by-unit / by-date layouts, each member row carries `GoldenHourChips`. Milestones =
+  *integration only* (Friends, Calling, Ministering ×2, Aaronic, Melchizedek) — **baptism is
+  intentionally not a milestone**.
+- **Needs** — one category tab per integration milestone with the *eligible* members still missing
+  it, per-unit summary, sorted by baptism date → unit.
+- **KPIs** — iOS-style line-chart cards (`fl_chart`) over a **Month / Year / All** period selector
+  (no "Week"; "All" buckets by month then by year past ~3 years; Month/Year show a date-range pill),
+  computed from `members.details`, plus an overview stat card and a "Golden Hour by unit" ranking.
 - **Table** — every covenant-path field, color-coded like the master spreadsheet
   (Yes=green / No=red / N/A=grey; recommend Active=green·Expired=amber) with a styled header.
 
 ## Rules (keep all platforms consistent)
 
-1. **Reuse shared widgets** from `golden_hour.dart`. Milestones are defined *once* there
-   (`milestones`) — dashboard, detail, completion all read it. To change a milestone edit only
-   that list (and `backend/mailer._DIGEST_MILESTONES` if digests should match).
+1. **Reuse shared widgets.** Milestones and the Golden-Hour org buckets are defined *once* in
+   `golden_hour.dart` (`milestones`, `orgInfo`/`responsibleOrg`/`OrgBucket`) — dashboard, detail,
+   completion, and the org filter all read them. To change a milestone edit only that list (and
+   `backend/mailer._DIGEST_MILESTONES` if digests should match). For content loads, use the
+   `widgets/shimmer.dart` skeletons (`MemberListSkeleton`, `SyncSettingsSkeleton`, `CardSkeleton`)
+   instead of a bare `CircularProgressIndicator`.
 2. **No LCR / no secrets in the client.** Only the Supabase URL + publishable anon key (RLS
    gates everything) + the broker URL. Data comes from `supabase.from(...)`; the broker holds
    the service-role/GitHub secrets server-side.

@@ -476,7 +476,6 @@ def github_configured() -> bool:
 def tool_links() -> dict:
     """External dashboards for the platform's services — admin-only (returned in /admin/summary,
     which is gated by require_admin). Only includes a link when its config is present."""
-    import re
     links: dict[str, str] = {}
     if SUPABASE_URL:
         m = re.match(r"https://([a-z0-9-]+)\.supabase\.co", SUPABASE_URL)

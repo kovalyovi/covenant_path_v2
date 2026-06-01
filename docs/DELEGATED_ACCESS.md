@@ -116,6 +116,14 @@ LCR also has a **native proxy** model (`user.loggedInUser.canProxy/proxyRights`)
 leader can proxy to your account in LCR, that keeps delegation inside the system that
 owns the data and is preferable where available.
 
+> **Enrollment also grants view access.** When a leader enrolls a stake (stores the encrypted
+> session), a trigger on `stake_credentials` (`trg_bind_provider_stake_role`, migration
+> `0029_provider_role_binding.sql`) binds their verified `principal_email` to a stake-wide
+> `stake_leader` `user_roles` row. This is what lets the enroller actually *see* their stake in the
+> app even when they later sign in with email OTP or Google — `provision_roles` keys
+> calling-derived roles on the LCR person UUID, and the UUID→email member-list endpoint is dead, so
+> without this binding the enroller would match no role and see nothing.
+
 ---
 
 ## 5. Testing & troubleshooting

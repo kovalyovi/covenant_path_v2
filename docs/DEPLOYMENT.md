@@ -161,8 +161,9 @@ variables → Actions → Variables) and update the UptimeRobot monitor + the vi
 
 | Where | Needs |
 |---|---|
-| Render (broker) | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ALLOWED_ORIGINS`, `GITHUB_TOKEN` *(optional, admin console)* |
-| GitHub Actions (daily sync) | `LCR_LOGIN`, `LCR_PASSWORD`, `CP_TOKEN_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_DB_URL` (IPv4 pooler), `GOOGLE_SERVICE_ACCOUNT_JSON`, `SPREADSHEET_ID` |
+| Render (broker) | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `CP_TOKEN_KEY` (enrollment encryption), `ALLOWED_ORIGINS`; *optional:* `GITHUB_TOKEN` + `GITHUB_REPO` (admin console), `WEBAUTHN_RP_ID` (passkeys), `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REDIRECT` (per-stake Drive), `RESEND_API_KEY` (reports/contact) |
+| GitHub Actions (daily sync) | `LCR_LOGIN`, `LCR_PASSWORD`, `CP_TOKEN_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_DB_URL` (IPv4 pooler), `GOOGLE_SERVICE_ACCOUNT_JSON`, `SPREADSHEET_ID`; *optional (per-stake OAuth Drive):* `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REDIRECT` |
+| GitHub Actions (deploy-web) | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `BROKER_URL` |
 | Viewer build | `--dart-define`: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `BROKER_URL` |
 
 Never commit any of these — `.env` mirrors them locally and is gitignored.

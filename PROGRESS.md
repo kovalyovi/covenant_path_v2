@@ -407,7 +407,9 @@ Reworked the viewer to match the reference iOS app and feel like a real app on t
   title + member rows; or a flat list **sorted by date** with the unit as right-side metadata).
   Full long dates (`intl`), full names, count badges.
 - **Golden Hour** drops Baptized — completion is integration milestones only (Friends, Calling,
-  Ministering ×2, Aaronic, Melchizedek). Week/Month/Year/All recency filter.
+  Ministering ×2, Aaronic, Melchizedek). Week/Month/Year/All recency filter, plus an org-ownership
+  filter (Missionaries/WML · Elders Quorum · Relief Society) from `golden_hour.dart` `orgInfo` /
+  `responsibleOrg` / `OrgBucket`.
 - **KPIs** = iOS-style **line-chart cards** (`fl_chart`): "New Members at Sacrament" weekly trend
   computed from `members.details.sacrament`, plus stake sacrament/recommend/ministering and an
   overview stat card, each with delta badges.

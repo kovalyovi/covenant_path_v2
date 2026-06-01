@@ -53,6 +53,7 @@ LCR (church data)
 | Supabase schema / RLS | `backend/migrations/*.sql` | everything |
 | Role scope rule (stake vs ward) | `backend/roles.py` + RLS policies | access everywhere |
 | Golden-Hour milestones (app) | `apps/viewer/lib/golden_hour.dart` (`milestones`) | dashboard + detail |
+| Golden-Hour org buckets (app) | `apps/viewer/lib/golden_hour.dart` (`orgInfo` / `responsibleOrg` / `OrgBucket`) | Golden Hour view filter chips |
 | Digest milestones (email) | `backend/mailer.py` (`_DIGEST_MILESTONES`) | digest emails |
 | Sheet columns | `sheets_sync/row_mapper.py` | Google Sheet |
 
@@ -65,8 +66,12 @@ LCR (church data)
 
 The viewer is **one Flutter codebase** → editing `lib/` changes web + iOS + macOS +
 Android at once. To keep that true:
-- Put reusable UI in **shared widgets** (`golden_hour.dart`: `GoldenHourChips`,
-  `InitialsAvatar`, `milestones`). New views compose these — don't re-implement chips/rows.
+- Put reusable UI in **shared widgets**: `golden_hour.dart` (`GoldenHourChips`,
+  `InitialsAvatar`, `milestones`, and the Golden-Hour org buckets `OrgBucket` / `orgInfo` /
+  `responsibleOrg`) and `widgets/shimmer.dart` (content-shaped loading skeletons —
+  `Shimmer`, `SkeletonBox`/`SkeletonLine`, `MemberListSkeleton`, `SyncSettingsSkeleton`,
+  `CardSkeleton` — use these instead of a bare spinner for content areas). New views compose
+  these — don't re-implement chips/rows/skeletons.
 - Don't write platform-specific code in `lib/` unless guarded; the app must stay
   CORS-free (reads Supabase only) so the web build keeps working.
 - After any `lib/` change: `flutter analyze` then `flutter build web` (both must pass).
@@ -77,6 +82,13 @@ Android at once. To keep that true:
   account needed. The issued JWT carries the verified email.
 - **RLS** matches that email (or a bound `auth_id`) to a `user_roles` row →
   stake_leader sees the stake, ward_leader sees their unit.
+- **Provider-binding trigger** (`backend/migrations/0029_provider_role_binding.sql`):
+  `provision_roles` stores the LCR person UUID in `user_roles.auth_id`, but an email/Google
+  login is keyed by email, and the LCR member-list endpoint that mapped UUID→email is dead.
+  So a trigger on `stake_credentials` binds the enroller's verified `principal_email` to a
+  stake-wide `stake_leader` row — a freshly-enrolled leader immediately sees their whole
+  stake. Backend reads that need this (e.g. `auth_broker/reports.py`) match `user_roles` by
+  `auth_id` **OR** verified email.
 - **Power users**: `invite_power_user(email)` clones the caller's exact roles to any email
   (escalation-safe — you can only clone what you hold); recursive; audited; `revoke_power_user`.
 
@@ -84,5 +96,8 @@ Android at once. To keep that true:
 
 `.env` (local, gitignored) + GitHub Actions secrets mirror each other:
 `LCR_LOGIN`, `LCR_PASSWORD`, `CP_TOKEN_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
-`SUPABASE_DB_URL` (**use the IPv4 shared pooler for CI**), `RESEND_API_KEY`, `APP_URL`,
-`GOOGLE_SERVICE_ACCOUNT_JSON` (CI), `SPREADSHEET_ID`. `.env.example` documents all.
+`SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL` (**use the IPv4 shared pooler for CI**),
+`RESEND_API_KEY`, `APP_URL`, `GOOGLE_SERVICE_ACCOUNT_JSON` (the CI secret; locally the SA file
+path is `SHEETS_SERVICE_ACCOUNT`), `SPREADSHEET_ID`, plus broker/admin/Drive extras (`BROKER_URL`,
+`GITHUB_TOKEN`, `GITHUB_REPO`, `WEBAUTHN_RP_ID`, `GOOGLE_OAUTH_CLIENT_ID` /
+`GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REDIRECT`). `.env.example` documents all.

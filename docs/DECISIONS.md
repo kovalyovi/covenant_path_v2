@@ -6,6 +6,49 @@ Newest first.
 
 ---
 
+## ADR-008 — Dashboard scopes to one selected stake (2026-05-31)
+
+**Context.** Power users and operators hold roles in several stakes, so the members query
+returned the **RLS union of every stake** — merging two stakes into one "141 members" list and
+making per-stake KPIs/Golden-Hour meaningless. Leaders think and act one stake at a time.
+
+**Decision.** The viewer scopes the member query *and* the KPIs to a **single selected stake**.
+`dashboard_page.dart` loads the visible stakes, picks one (remembered in `SharedPreferences`,
+else the freshest), filters the `members` select with `.eq('stake_id', …)`, and shows a stake
+**switcher in the app bar** only when more than one stake is visible. Cross-stake browsing for
+ops/stats lives in the Admin console's Enrolled-stakes view.
+
+**Why safe.** RLS is still the only access gate — this is a UI concern *over already-allowed
+rows* (you can only select a stake you can already see), not an app-side access check.
+**Consequence.** All dashboard views receive one stake's rows; the title doubles as the switcher.
+
+---
+
+## ADR-007 — Bind the enrolling leader's email to a stake-wide role (2026-05-31)
+
+**Context.** `provision_roles` keys calling-derived `user_roles` on the LCR person UUID (stored
+in `auth_id`) and enriches `email` from `client.member_list()`. RLS (0004) matches a viewer by
+`auth_id = auth.uid()` **OR** `lower(email) = jwt email`. But an email-OTP/Google login is
+identified by **email**, never the LCR UUID, and the member-list endpoint that mapped UUID→email
+is **dead (404)** — so the role's email is NULL. Net effect: the leader who *set the stake up*
+authenticated fine but matched zero roles and saw none of their own members.
+
+**Decision.** The person who enrolls a stake is by definition a stake leader who must see it. A
+**trigger on `stake_credentials`** (`trg_bind_provider_stake_role`, migration
+`0029_provider_role_binding.sql`) binds their verified `principal_email` to a stake-wide
+`stake_leader` `user_roles` row on every (non-revoked) credential write, and a backfill covers
+already-enrolled stakes. Done as a trigger (not in the enroll RPC) so it's independent of that
+RPC's several historical overloads — endpoint-independent and self-healing. The bound row has
+`lcr_person_uuid = NULL` / `source='enrollment'`, so the daily provision_roles revoke step (which
+only deletes calling-derived rows) never drops it.
+
+**Consequence.** Backend reads that need this (e.g. `auth_broker/reports.py`) match `user_roles`
+by `auth_id` **OR** verified email. The enroller sees their whole stake immediately, before any
+calling-derived role exists. **Drawback:** anyone who can complete enrollment for a stake gets a
+stake-wide role — acceptable, since enrollment already requires that leader's own Church login.
+
+---
+
 ## ADR-006 — Power users: invitations that clone scope (2026-05-27)
 
 **Context.** Any leader (stake or ward) must be able to give someone else — possibly with

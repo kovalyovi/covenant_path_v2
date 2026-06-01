@@ -21,7 +21,6 @@ from __future__ import annotations
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build

@@ -14,15 +14,22 @@ python scripts/onboard.py --capture    # opens a browser for a stake leader to s
 This: verifies the leader's calling, registers the stake + its units in Supabase, stores
 the encrypted credential (`stake_credentials`), and **auto-provisions stake-leader roles
 from callings**. The daily multi-stake job (`scripts/daily_sync.py`, auto/delegated mode)
-then includes the stake. (A Flutter "Connect LCR" WebView wrapper is future work; the CLI
-is the functional core today.)
+then includes the stake.
+
+**In-app onboarding is the primary path now:** when a leader signs in with their **Church account**
+in the app, the auth broker enrolls the stake automatically (the consent note is inline on the
+login screen; revoke lives in Settings → Sync settings). Enrollment also binds the leader's verified
+email to a stake-wide `stake_leader` role (migration 0029) so they see their stake immediately. The
+CLI above remains for headless/self onboarding and ops.
 
 ## 2. Who can see what (access model)
 
 - Roles are **auto-derived from LCR callings** on every sync — no manual assignment.
-  Stake-level callings → see the whole stake; (ward auto-provisioning is pending, see #21).
+  Stake-level callings → see the whole stake; ward-level callings (bishop, counselors, clerks,
+  exec secs, ward mission leaders) → see only their unit (`backend/roles.py`).
 - Access is enforced by Postgres **RLS**, matched to the signed-in **email** (or bound LCR
-  identity). Sign in with the email your stake has on file.
+  identity). Sign in with the email your stake has on file. The leader who **enrolls** a stake is
+  also bound to a stake-wide role on enrollment (migration 0029) so they see their stake right away.
 
 ## 3. Power users (share access with anyone)
 

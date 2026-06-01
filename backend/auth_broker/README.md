@@ -20,7 +20,23 @@ app  ◀── { email, otp } ── broker          (verifyOtp → RLS-scoped S
 - `POST /auth/mfa/verify` `{login_id, code}` → `{status:"ok", session:{email,otp}}`
 - `POST /auth/session` `{cookies:[...]}` → native WebView path (app captured the Okta session
   itself; password only ever touched Okta) → `{status:"ok", session:{email,otp}}`
+- `POST /auth/email/start` · `POST /auth/email/verify` → email-OTP **relay** (sign in when the
+  browser can't reach Supabase directly, e.g. some regions)
+- `GET /enrollment/status` · `POST /revoke` → the signed-in leader's stake enrollment + revoke
+- `GET /report` · `POST /report/email` → ad-hoc convert-integration report for the caller's scope
+  (`user_roles` matched by bound `auth_id` **OR** verified email)
+- `POST /feedback` → file a **sanitized** GitHub issue (caps length, strips control chars, defangs
+  @mentions / #refs / auto-close keywords; never auto-merges) · `POST /contact` → email the owner
+- `GET /auth/google/status` + `/auth/google/start` + `/auth/google/callback` → per-stake Drive OAuth
+- `POST /webauthn/register/begin|complete` · `POST /webauthn/authenticate/begin|complete` → passkeys
+- `GET /admin/*` → admin/ops console (health, freshness, GitHub Actions, enrolled-stakes), gated by
+  `app_admins`
 - `GET /health`
+
+> **Enrollment binds a role.** Storing a stake credential also binds the enroller's verified email
+> to a stake-wide `stake_leader` `user_roles` row (trigger `trg_bind_provider_stake_role`, migration
+> 0029) so an email/Google login sees their stake even though `provision_roles` keys roles on the
+> LCR person UUID and the UUID→email member-list endpoint is dead.
 
 The app then calls `supabase.auth.verifyOtp(email, otp)` to get the session.
 
