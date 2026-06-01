@@ -44,6 +44,10 @@ LCR (church data)
    (`if not exists` / `drop policy ... ; create`). Apply with `python -m backend.apply`.
 6. **`cd /d <path>` is a cmd.exe idiom that SILENTLY FAILS in the bash tool** — use plain
    `cd D:/dev/...`. (It once ran `flutter create` at the repo root.)
+7. **Always commit to `main` — NEVER create a branch.** One repo, one line, one commit tree:
+   every change is committed and pushed directly to `origin/main` (still one focused, well-described
+   commit per task). This OVERRIDES the default "branch before committing on the default branch."
+   (User directive, 2026-06-01.)
 
 ## Where things are defined (change once, all views follow)
 

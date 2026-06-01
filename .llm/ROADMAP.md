@@ -23,7 +23,8 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done. Surfaces: **F**=Flutter,
   any login's Church credentials gather data. **F/iOS/A + docs**
 - [x] **#3** Surface friends **count** — captured as `friends_count` (migration 0031), synced,
   already captured in `report.py`; just needs the column in the select + display. **F/iOS/A**
-- [ ] **N2** Block **no-access** members *at login* + sign out. **Decision (user): robust
+- [x] **N2** ✓ Done (broker `enroll.authorized` + pre-session block on Church login, all 3 apps;
+  email/passkey unchanged). Block **no-access** members *at login* + sign out. **Decision (user): robust
   approach** — the broker can't tell a regular member from a not-yet-set-up leader post-login
   (both = no-role + no-credential), so surface the user's covenant-path access (calling's
   granted features) at **Church login**; block when no data-granting calling AND no role/
@@ -67,6 +68,18 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done. Surfaces: **F**=Flutter,
 - [ ] **#5-live** Present computed per-sheet recipient lists → on user OK: strip non-owner
   viewers / delete + recreate `1rCkwLZ6HV8qRFJJFfxgWDiUWWc0ZeoyRPcvQOYPl4EE`, apply correct
   access, enable share notifications. **Irreversible — never run unprompted.**
+
+## Phase 5 — React web rebuild (after everything above)
+- [ ] **R1** Rebuild the **web** UI in **React** in a new folder (`apps/web/`), **WEB-ONLY**, with
+  **100% parity** (UI + functionality + scalability) to the Flutter web app, to modern web best
+  practices (a11y / semantic HTML / responsive) and best React practices. Reads Supabase directly
+  + the broker exactly like today. Done fully autonomously in one pass.
+  _Stack (best-judgment, revisit at build time): Vite + React + TypeScript + React Router +
+  `@supabase/supabase-js` + TanStack Query; charts via Recharts; accessible component primitives._
+
+## Git / workflow rule (locked)
+- **Always `main`, never branch** — one repo, one commit tree, push every change to `origin/main`.
+  See CLAUDE.md rule 7 + memory `git-workflow-main-only`.
 
 ## Working assumptions (correct anytime)
 - **N2**: "regular member" = signed-in user with zero RLS-visible roles (no stake/ward/
