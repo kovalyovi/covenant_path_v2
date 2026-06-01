@@ -79,7 +79,7 @@ struct PersonDetailView: View {
     @ViewBuilder
     private func richBody(_ d: MemberDetails) -> some View {
         SacramentSection(details: d)
-        FriendsSection(details: d, recordedYes: member.friends == "Yes")
+        FriendsSection(details: d, recordedYes: member.friends == "Yes", count: member.friendsCount)
         ListTextSection(title: "Priesthood Ordination", symbol: "rosette",
                         lines: d.priesthoodOrdinations ?? [],
                         emptyText: "No priesthood ordination on record.")

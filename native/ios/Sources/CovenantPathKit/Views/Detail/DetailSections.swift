@@ -75,12 +75,15 @@ struct AttendanceDot: View {
 struct FriendsSection: View {
     let details: MemberDetails
     let recordedYes: Bool
+    var count: Int? = nil
     private var friends: [MemberDetails.Friend] { details.friends ?? [] }
+    private var shownCount: Int? { count ?? (friends.isEmpty ? nil : friends.count) }
 
     var body: some View {
-        SectionCard(title: "Friends in the Church", systemImage: "person.2") {
+        SectionCard(title: shownCount.map { "Friends in the Church · \($0)" } ?? "Friends in the Church", systemImage: "person.2") {
             if friends.isEmpty {
-                if recordedYes { RecordedYesNote() } else { mutedText("No friends recorded yet.") }
+                if let c = count, c > 0 { mutedText("\(c) friend\(c == 1 ? "" : "s") recorded (names not available).") }
+                else if recordedYes { RecordedYesNote() } else { mutedText("No friends recorded yet.") }
             } else {
                 VStack(alignment: .leading, spacing: 0) {
                     if friends.contains(where: { $0.inStake == true }) {

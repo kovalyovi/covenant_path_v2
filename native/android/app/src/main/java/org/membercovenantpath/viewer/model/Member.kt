@@ -31,6 +31,7 @@ data class Member(
 
     // Yes/No status fields.
     @SerialName("friends") val friends: String? = null,
+    @SerialName("friends_count") val friendsCount: Int? = null,
     @SerialName("aaronic_priesthood") val aaronicPriesthood: String? = null,
     @SerialName("melchizedek_priesthood") val melchizedekPriesthood: String? = null,
     @SerialName("calling") val calling: String? = null,

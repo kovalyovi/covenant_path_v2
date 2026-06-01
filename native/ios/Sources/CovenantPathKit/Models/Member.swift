@@ -21,6 +21,7 @@ public struct Member: Codable, Identifiable, Hashable, Sendable {
 
     // Yes/No/N-A status fields.
     public let friends: String?
+    public let friendsCount: Int?
     public let aaronicPriesthood: String?
     public let melchizedekPriesthood: String?
     public let calling: String?
@@ -53,6 +54,7 @@ public struct Member: Codable, Identifiable, Hashable, Sendable {
         case membershipDuration = "membership_duration"
         case sex
         case friends
+        case friendsCount = "friends_count"
         case aaronicPriesthood = "aaronic_priesthood"
         case melchizedekPriesthood = "melchizedek_priesthood"
         case calling
@@ -70,7 +72,7 @@ public struct Member: Codable, Identifiable, Hashable, Sendable {
         personUUID: String? = nil, stakeID: String? = nil, unitID: String? = nil,
         name: String? = nil, unitName: String? = nil, baptismDate: String? = nil,
         baptismGoalDate: String? = nil, birthDate: String? = nil, membershipDuration: String? = nil,
-        sex: String? = nil, friends: String? = nil, aaronicPriesthood: String? = nil,
+        sex: String? = nil, friends: String? = nil, friendsCount: Int? = nil, aaronicPriesthood: String? = nil,
         melchizedekPriesthood: String? = nil, calling: String? = nil,
         ministeringBrothersSisters: String? = nil, ministeringAssignment: String? = nil,
         templeRecommend: String? = nil, patriarchalBlessing: String? = nil,
@@ -81,6 +83,7 @@ public struct Member: Codable, Identifiable, Hashable, Sendable {
         self.name = name; self.unitName = unitName; self.baptismDate = baptismDate
         self.baptismGoalDate = baptismGoalDate; self.birthDate = birthDate
         self.membershipDuration = membershipDuration; self.sex = sex; self.friends = friends
+        self.friendsCount = friendsCount
         self.aaronicPriesthood = aaronicPriesthood; self.melchizedekPriesthood = melchizedekPriesthood
         self.calling = calling; self.ministeringBrothersSisters = ministeringBrothersSisters
         self.ministeringAssignment = ministeringAssignment; self.templeRecommend = templeRecommend
