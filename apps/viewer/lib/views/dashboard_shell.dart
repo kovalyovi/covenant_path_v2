@@ -491,19 +491,34 @@ class _GoogleDriveSectionState extends State<_GoogleDriveSection> {
     }
 
     final connected = s['connected'] == true;
+    final needsReconnect = s['needs_reconnect'] == true;
     final sheetUrl = s['sheet_url']?.toString();
     final lastSynced = s['last_synced_at']?.toString();
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const Divider(height: 24),
       header,
       const SizedBox(height: 4),
-      Text(
-        connected
-            ? 'Connected as ${s['email'] ?? ''}. Your stake\'s spreadsheet lives in your Drive.'
-            : 'Connect your Google account so your stake gets its own spreadsheet that you own '
-                '(the app can only touch the file it creates).',
-        style: const TextStyle(fontSize: 13),
-      ),
+      // A stale Drive token (refresh failed during a sync) → prompt a reconnect explicitly, since
+      // the data is meanwhile falling back to the shared sheet. (#drive-reconnect)
+      if (needsReconnect)
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(Icons.warning_amber_outlined, size: 15, color: Colors.orange.shade800),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+                'Google Drive needs reconnecting — the saved access expired, so syncs are using the '
+                'shared sheet for now. Reconnect to resume writing to your own Drive.',
+                style: TextStyle(fontSize: 13, color: Colors.orange.shade800)),
+          ),
+        ])
+      else
+        Text(
+          connected
+              ? 'Connected as ${s['email'] ?? ''}. Your stake\'s spreadsheet lives in your Drive.'
+              : 'Connect your Google account so your stake gets its own spreadsheet that you own '
+                  '(the app can only touch the file it creates).',
+          style: const TextStyle(fontSize: 13),
+        ),
       // Connected → show the actual usage: a link to the sheet and when it last synced (#item Drive).
       if (connected && sheetUrl != null) ...[
         const SizedBox(height: 6),

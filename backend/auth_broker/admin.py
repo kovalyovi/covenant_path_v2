@@ -314,12 +314,16 @@ def gdrive_status_for(email: str) -> dict:
     sid = provider_stake_id(email)
     if not sid:
         return {"eligible": False}
-    s = _one("stakes", {"select": "gdrive_email,gdrive_connected_at,gdrive_file_id,last_synced_at",
-                        "id": f"eq.{sid}", "limit": "1"}) or {}
+    s = _one("stakes", {"select": "gdrive_email,gdrive_connected_at,gdrive_file_id,gdrive_token,"
+                                  "last_synced_at", "id": f"eq.{sid}", "limit": "1"}) or {}
     file_id = s.get("gdrive_file_id")
+    connected = bool(s.get("gdrive_connected_at"))
+    # A stale-token nudge: the daily sync clears gdrive_connected_at on a refresh failure but keeps
+    # the token — so "not connected, yet a token is still on file" means "was connected, reconnect".
+    needs_reconnect = (not connected) and bool(s.get("gdrive_token"))
     return {"eligible": True, "stake_id": sid,
-            "connected": bool(s.get("gdrive_connected_at")), "email": s.get("gdrive_email"),
-            "connected_at": s.get("gdrive_connected_at"),
+            "connected": connected, "needs_reconnect": needs_reconnect,
+            "email": s.get("gdrive_email"), "connected_at": s.get("gdrive_connected_at"),
             "file_id": file_id,
             "sheet_url": f"https://docs.google.com/spreadsheets/d/{file_id}" if file_id else None,
             "last_synced_at": s.get("last_synced_at")}
