@@ -36,14 +36,14 @@ jobs:
         run: flutter pub get
       - name: Build release APK
         working-directory: apps/viewer
-        # Anon key is RLS-safe (not a secret); BROKER_URL enables Church login. Supplied as repo
-        # variables/secrets so the artifact is a real, working build. Empty values still build a
-        # valid APK (the app shows the config-error screen until pointed at a backend).
+        # Anon key is RLS-safe (not a real secret) but URL/key/broker are all stored as repo SECRETS
+        # (see `gh secret list`), so read them from secrets — not vars, which are empty and produced
+        # the config-error APK. Empty values still build a valid APK (config-error screen) for forks.
         run: |
           flutter build apk --release \
-            --dart-define=SUPABASE_URL="${{ vars.SUPABASE_URL }}" \
+            --dart-define=SUPABASE_URL="${{ secrets.SUPABASE_URL }}" \
             --dart-define=SUPABASE_ANON_KEY="${{ secrets.SUPABASE_ANON_KEY }}" \
-            --dart-define=BROKER_URL="${{ vars.BROKER_URL }}"
+            --dart-define=BROKER_URL="${{ secrets.BROKER_URL }}"
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
