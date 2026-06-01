@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Launch/base theme. The real UI theme is Material 3 in Compose (ui/theme).
+         A Material3 DayNight base avoids a flash of an unstyled window at startup. -->
+    <style name="Theme.CovenantPath" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:statusBarColor">?attr/colorPrimaryContainer</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+    </style>
+</resources>

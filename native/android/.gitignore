@@ -1,0 +1,18 @@
+# Android / Gradle build artifacts
+.gradle/
+build/
+app/build/
+captures/
+.cxx/
+
+# Local config & secrets (never commit a real key)
+local.properties
+*.keystore
+*.jks
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store

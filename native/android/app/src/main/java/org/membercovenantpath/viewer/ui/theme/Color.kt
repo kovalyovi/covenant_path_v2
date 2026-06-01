@@ -1,0 +1,66 @@
+package org.membercovenantpath.viewer.ui.theme
+
+import androidx.compose.ui.graphics.Color
+
+/**
+ * All the palette tokens, mirroring the Flutter app's color choices exactly so the two PoCs read
+ * identically. Material 3 seed is Indigo (matching app_theme.dart `_seed = Colors.indigo`); the
+ * rest are the deliberate, non-status accent palettes the Flutter code documents.
+ */
+
+// Seed (Colors.indigo == 0xFF3F51B5)
+val Indigo = Color(0xFF3F51B5)
+
+// ---- per-tab nav accents (dashboard_page.dart `_tabs`) -----------------------
+object TabColors {
+    val Baptisms = Color(0xFF0277BD)   // blue
+    val GoldenHour = Color(0xFFF9A825) // gold/amber
+    val Needs = Color(0xFFD84315)      // deep orange
+    val Kpis = Color(0xFF2E7D32)       // green
+    val Table = Color(0xFF5E35B1)      // deep purple
+}
+
+// ---- org-ownership identity colors (golden_hour.dart `orgInfo`) --------------
+object OrgColors {
+    val WML = Color(0xFF00897B)        // teal
+    val EQ = Color(0xFF1565C0)         // blue
+    val RS = Color(0xFFAD1457)         // rose
+    val Unassigned = Color(0xFF9E9E9E) // grey
+}
+
+// ---- milestone category colors (golden_hour.dart `milestones`) ---------------
+object MilestoneColors {
+    val Friends = Color(0xFFD81B60)               // pink
+    val Calling = Color(0xFF6A1B9A)               // purple
+    val HasMinisters = Color(0xFF00838F)          // cyan
+    val MinisteringAssignment = Color(0xFFEF6C00) // orange
+    val AaronicPriesthood = Color(0xFF1565C0)     // blue
+    val MelchizedekPriesthood = Color(0xFF2E7D32) // green
+}
+
+// ---- status palette (chips, table cells) ------------------------------------
+object StatusColors {
+    val DoneGreen = Color(0xFF43A047)   // green.shade600
+    val NextAmber = Color(0xFFFFB300)   // amber.shade700
+    val NoRed = Color(0xFFE53935)       // red-ish
+    val GreyBorder = Color(0xFFBDBDBD)  // grey.shade400
+    val GreyText = Color(0xFF757575)    // grey.shade600
+
+    // Table cell fills (Yes/No/N-A + recommend Active/Expired/No)
+    val CellGreen = Color(0xFFC8E6C9)   // green.shade100
+    val CellRed = Color(0xFFFFCDD2)     // red.shade100
+    val CellGrey = Color(0xFFEEEEEE)    // grey.shade200
+    val CellAmber = Color(0xFFFFECB3)   // amber.shade100
+    val CellMaleBlue = Color(0xFFBBDEFB)
+    val CellFemalePink = Color(0xFFF8BBD0)
+}
+
+// ---- per-unit accent palette (needs_view.dart `_unitPalette`) ----------------
+val UnitPalette = listOf(
+    Color(0xFF00695C), Color(0xFF4527A0), Color(0xFFAD1457), Color(0xFF283593),
+    Color(0xFF558B2F), Color(0xFF6D4C41), Color(0xFF00838F), Color(0xFFC62828),
+)
+
+/** Stable per-unit color (hash → fixed palette), mirroring `_unitColor`. */
+fun unitColor(unit: String): Color =
+    UnitPalette[(unit.hashCode().let { if (it == Int.MIN_VALUE) 0 else kotlin.math.abs(it) }) % UnitPalette.size]
