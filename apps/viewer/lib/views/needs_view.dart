@@ -129,11 +129,13 @@ class _NeedsViewState extends State<_NeedsView> {
           ),
         ]),
       ]),
-      child: _Columns(cols: 1, children: [_categorySection(context, ms, missing)]),
+      child: _Columns(cols: 1,
+          children: [_categorySection(context, ms, missing, _assignUnitColors(widget.rows))]),
     );
   }
 
-  Widget _categorySection(BuildContext context, Milestone ms, List<Map<String, dynamic>> missing) {
+  Widget _categorySection(BuildContext context, Milestone ms, List<Map<String, dynamic>> missing,
+      Map<String, Color> unitColors) {
     final byUnit = <String, int>{};
     for (final m in missing) {
       final u = (m['unit_name'] ?? '—').toString();
@@ -152,7 +154,9 @@ class _NeedsViewState extends State<_NeedsView> {
           : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               // per-unit breakdown as colored chips (each ward a stable color) (#ward-colors)
               Wrap(spacing: 6, runSpacing: 6, children: [
-                for (final e in units) _UnitCountChip(unit: e.key, count: e.value),
+                for (final e in units)
+                  _UnitCountChip(unit: e.key, count: e.value,
+                      color: unitColors[e.key] ?? _unitColor(e.key)),
               ]),
               const Divider(),
               for (var i = 0; i < missing.length; i++) ...[
@@ -167,12 +171,12 @@ class _NeedsViewState extends State<_NeedsView> {
 /// A small colored chip for a unit's outstanding count in the Needs breakdown. Each ward gets a
 /// stable color (hash → fixed palette) so a unit reads the same hue wherever it appears.
 class _UnitCountChip extends StatelessWidget {
-  const _UnitCountChip({required this.unit, required this.count});
+  const _UnitCountChip({required this.unit, required this.count, required this.color});
   final String unit;
   final int count;
+  final Color color;
   @override
   Widget build(BuildContext context) {
-    final color = _unitColor(unit);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
@@ -186,12 +190,24 @@ class _UnitCountChip extends StatelessWidget {
   }
 }
 
-// A fixed, calm palette for per-unit accents — distinct from the status/org/nav colors; indexed by
-// a stable hash of the unit name so a ward keeps the same color across the session.
+// A fixed, calm palette for per-unit accents — distinct from the status/org/nav colors. 16 hues so a
+// stake's wards each get their own color (assigned by sorted index via [_assignUnitColors], not by
+// hash — hashCode % N produced near-duplicate ward colors when names collided on the modulus).
 const _unitPalette = <Color>[
   Color(0xFF00695C), Color(0xFF4527A0), Color(0xFFAD1457), Color(0xFF283593),
   Color(0xFF558B2F), Color(0xFF6D4C41), Color(0xFF00838F), Color(0xFFC62828),
+  Color(0xFFEF6C00), Color(0xFF1565C0), Color(0xFF8E24AA), Color(0xFF2E7D32),
+  Color(0xFF827717), Color(0xFF006064), Color(0xFFBF360C), Color(0xFF37474F),
 ];
+
+/// Each distinct unit → its own palette color by SORTED INDEX, so every ward reads as a different
+/// hue (stable across categories/org filters). Wraps the palette only if a stake has >16 units.
+Map<String, Color> _assignUnitColors(List<Map<String, dynamic>> rows) {
+  final units = rows.map((m) => (m['unit_name'] ?? '—').toString()).toSet().toList()..sort();
+  return {for (var i = 0; i < units.length; i++) units[i]: _unitPalette[i % _unitPalette.length]};
+}
+
+/// Fallback when the full unit set isn't handy (a lone chip).
 Color _unitColor(String unit) => _unitPalette[unit.hashCode.abs() % _unitPalette.length];
 
 /// A category selector chip for the Needs view: icon + label + outstanding-count badge; filled

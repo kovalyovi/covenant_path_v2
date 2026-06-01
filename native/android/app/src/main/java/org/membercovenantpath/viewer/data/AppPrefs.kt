@@ -34,7 +34,10 @@ class AppPrefs(private val context: Context) {
         when (p[themeKey]) {
             "light" -> ThemeChoice.Light
             "dark" -> ThemeChoice.Dark
-            else -> ThemeChoice.System
+            "system" -> ThemeChoice.System
+            // First run (nothing saved) defaults to Light, matching the web build — so the login
+            // isn't dark out of the box. Choosing "System" in Settings is honored above.
+            else -> ThemeChoice.Light
         }
     }
 
