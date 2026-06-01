@@ -62,9 +62,10 @@ through tokens. Add **dark mode** for free once the theme is centralized. Defer 
 
 **Current.** One Flutter codebase already targets web + iOS + macOS + Android (CLAUDE.md's core
 premise). Deployed surface today = **web/PWA** on Cloudflare Pages. The Android `apk` build was
-intentionally paused; the generated platform folders (`android/ios/macos/windows/`) are gitignored
-(only `web/` is committed for CI). `local_auth` biometrics already in. The app is CORS-free (reads
-Supabase only), so native has no extra backend work.
+intentionally paused; the generated platform folders (`android/ios/macos/windows/web/`) are
+gitignored — CI builds the web bundle with `flutter build web` (`deploy-web.yml`), so nothing
+generated is committed (only `web/_headers` is force-tracked). `local_auth` biometrics already in.
+The app is CORS-free (reads Supabase only), so native has no extra backend work.
 
 | Path | Effort | Distribution | Notes |
 |---|---|---|---|

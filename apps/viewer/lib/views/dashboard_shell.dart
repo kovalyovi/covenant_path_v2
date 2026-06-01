@@ -65,7 +65,7 @@ class _EmptyState extends StatelessWidget {
       if (isChurchLoginAvailable) {
         title = 'Set up stake sync';
         body = 'Your stake hasn\'t set up Covenant Path yet. Sign in with your Church account '
-            'and check "Keep my stake synced" to start daily data updates.';
+            'to start daily data updates — signing in keeps your stake synced automatically.';
         action = FilledButton.icon(
           onPressed: () => supabase.auth.signOut(),
           icon: const Icon(Icons.login),

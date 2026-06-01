@@ -75,7 +75,8 @@ BROKER_URL=https://covenant-path-broker.onrender.com
 
 **Daily sync → GitHub Actions secrets:** `LCR_LOGIN`, `LCR_PASSWORD`, `CP_TOKEN_KEY`,
 `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_DB_URL` (**use the IPv4 shared pooler for CI**),
-`GOOGLE_SERVICE_ACCOUNT_JSON`, `SPREADSHEET_ID`.
+`SUPABASE_SERVICE_ROLE_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON`, `SPREADSHEET_ID`, and (for per-stake
+OAuth Drive) `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REDIRECT`.
 
 ### `GITHUB_TOKEN` (admin console Actions panel)
 
@@ -89,15 +90,17 @@ it the admin console still loads — the Actions/Changelog panels and Rescrape b
 ## Features
 
 **RLS-scoped dashboard — five tabs**, every query auto-scoped by the signed-in user's calling (no
-app-side access checks). Responsive: bottom nav + single column on phones; a side rail with
-text-labelled items + multi-column cards on tablet/desktop.
+app-side access checks). The dashboard scopes to **one selected stake** (member query + KPIs), with
+a **stake switcher in the app bar** for multi-stake users. Content loads show **shimmer skeletons**
+shaped like the real content, not bare spinners. Responsive: bottom nav + single column on phones;
+a side rail with text-labelled items + multi-column cards on tablet/desktop.
 
 | Tab | What it shows |
 |---|---|
 | **Upcoming** | Prospective baptisms as a date-rail timeline; dates already passed surface in a "needs attention" block on top. Per-unit toggle shows each ward/branch's **assigned full-time missionaries** (name chips → phone/email). |
-| **Golden Hour** | **Being Taught** (investigators) + **New Members** (first-year integration milestone chips, next step highlighted). Eligible-only completion % (ineligible members never drag the number down), tappable per category. Baptism date shows tenure — "Feb 6, 2026 (2 months 3 days)". Unit/Date grouping + asc/desc sort. |
+| **Golden Hour** | **Being Taught** (investigators) + **New Members** (first-year integration milestone chips, next step highlighted). An org-responsibility filter splits converts into three colored chips — Missionaries/WML (teal), Elders Quorum (blue), Relief Society (rose) — with a responsibility subtitle when one is selected. Eligible-only completion % (ineligible members never drag the number down), tappable per category. Baptism date shows tenure — "Feb 6, 2026 (2 months 3 days)". Unit/Date grouping + asc/desc sort. |
 | **Needs** | One selectable category tab per integration milestone (each with its own icon + outstanding count); the *eligible* members still missing it, with a per-unit summary, sorted by baptism date → unit. |
-| **KPIs** | `fl_chart` line cards over rolling windows anchored to today (week = last 7 days by day, month = 5 weeks, year = 12 months, **All** = every month). Hover a point → that bucket's per-unit breakdown; tap → who. A "Golden Hour by unit" ranked card shows which unit integrates converts best. |
+| **KPIs** | `fl_chart` line cards over rolling windows anchored to today — **Month** (5 weeks), **Year** (12 months), **All** (every month, then by year past ~3 years); Month/Year show a date-range pill. Hover a point → that bucket's per-unit breakdown; tap → who. A "Golden Hour by unit" ranked card shows which unit integrates converts best. |
 | **Table** | Every covenant-path field, color-coded like the master sheet: gender pill, row numbers, **per-column filters** (all/has/missing), sortable text columns. |
 
 - **LCR-style member detail** (`person_detail_page.dart`) — sacrament dots, friends (names + ward),
@@ -137,10 +140,13 @@ The platform serves **many stakes at once**, each isolated end-to-end:
 - **Access** — RLS scopes every read by the signed-in user's LCR calling (or a bound identity).
   Stake leaders see their stake; ward leaders see their unit; clerks/exec-secs are on the
   always-allowed calling list. Roles are auto-provisioned from LCR each sync (`backend/roles.py`).
-- **Delegated credentials** — a leader signs in with "Keep my stake synced" and their LCR session
-  is stored **envelope-encrypted** (`backend/credentials.py`, `CP_TOKEN_KEY`); the daily job mints
-  from it (three-tier renewal: stored appSession → Okta re-SSO → OAuth refresh). Revoke pauses it.
-  See [docs/DELEGATED_ACCESS.md](docs/DELEGATED_ACCESS.md).
+- **Delegated credentials** — Church sign-in always enrolls the stake (the consent note is inline
+  on the login screen; the old "Keep my stake synced" checkbox is gone): the leader's LCR session
+  is stored **envelope-encrypted** (`backend/credentials.py`, `CP_TOKEN_KEY`) and their verified
+  email is bound to a stake-wide `stake_leader` role (trigger, migration 0029) so they see their
+  stake. The daily job mints from the stored session (three-tier renewal: stored appSession → Okta
+  re-SSO → OAuth refresh). Revoke (Settings → Sync settings) pauses it. See
+  [docs/DELEGATED_ACCESS.md](docs/DELEGATED_ACCESS.md).
 - **Per-stake sync jobs** — `daily-sync.yml` is a dynamic matrix: a `prepare` job lists the
   enrolled stakes and fans out **one isolated job per stake** (own logs, independent pass/fail).
   `daily_sync.py --stake <unit>` runs exactly one; `--only <unit>` (via the workflow `stake` input)
