@@ -147,13 +147,15 @@ final class LogicTests: XCTestCase {
     // MARK: - org filter toggle guard
 
     func testOrgFilterCannotDeselectLast() {
+        // Uses the pure `Org.toggleFilter` (the SwiftUI `OrgFilterBar.toggle` delegates to it), so the
+        // guard is testable on macOS without UIKit.
         var set: Set<OrgBucket> = [.wml]
-        OrgFilterBar.toggle(.wml, in: &set)
+        Org.toggleFilter(.wml, in: &set)
         XCTAssertEqual(set, [.wml])  // unchanged — can't empty it
         set = [.wml, .eq]
-        OrgFilterBar.toggle(.wml, in: &set)
+        Org.toggleFilter(.wml, in: &set)
         XCTAssertEqual(set, [.eq])
-        OrgFilterBar.toggle(.rs, in: &set)
+        Org.toggleFilter(.rs, in: &set)
         XCTAssertEqual(set, [.eq, .rs])
     }
 

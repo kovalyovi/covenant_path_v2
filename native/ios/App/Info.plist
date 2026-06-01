@@ -41,5 +41,9 @@
 	<string>$(SUPABASE_URL)</string>
 	<key>SUPABASE_ANON_KEY</key>
 	<string>$(SUPABASE_ANON_KEY)</string>
+	<key>BROKER_URL</key>
+	<string>$(BROKER_URL)</string>
+	<key>PASSKEY_RP_ID</key>
+	<string>$(PASSKEY_RP_ID)</string>
 </dict>
 </plist>

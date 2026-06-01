@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -63,7 +64,7 @@ fun TableScreen(members: List<Member>, onOpen: (Member) -> Unit) {
     }
 
     val hScroll = rememberScrollState()
-    Column(Modifier.fillMaxWidth()) {
+    Column(Modifier.fillMaxSize()) {
         Text(
             "${rows.size} member${if (rows.size == 1) "" else "s"}",
             style = MaterialTheme.typography.bodySmall,
@@ -88,7 +89,7 @@ fun TableScreen(members: List<Member>, onOpen: (Member) -> Unit) {
                 )
             }
         }
-        LazyColumn(Modifier.fillMaxWidth()) {
+        LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
             itemsIndexed(rows, key = { _, m -> m.personUuid ?: m.name ?: m.hashCode().toString() }) { idx, m ->
                 Row(
                     Modifier

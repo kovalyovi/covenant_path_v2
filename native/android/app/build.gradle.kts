@@ -31,9 +31,12 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // BuildConfig fields read at runtime via BuildConfig.SUPABASE_URL / SUPABASE_ANON_KEY.
+        // BuildConfig fields read at runtime via BuildConfig.SUPABASE_URL / SUPABASE_ANON_KEY /
+        // BROKER_URL. All default to "" so the app builds with no secret committed — the app then
+        // shows a config screen (Supabase) or hides Church-login/admin/report features (broker).
         buildConfigField("String", "SUPABASE_URL", "\"${secret("SUPABASE_URL")}\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"${secret("SUPABASE_ANON_KEY")}\"")
+        buildConfigField("String", "BROKER_URL", "\"${secret("BROKER_URL")}\"")
     }
 
     buildTypes {
@@ -88,10 +91,21 @@ dependencies {
     // Images (member photo_url)
     implementation(libs.coil.compose)
 
+    // Biometric app-lock, native passkeys (Credential Manager), persisted prefs (DataStore)
+    implementation(libs.androidx.biometric)
+    implementation(libs.androidx.fragment) // FragmentActivity host for BiometricPrompt (coherent recent ver)
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services.auth)
+    implementation(libs.androidx.datastore.preferences)
+
+    // Material Components — only to supply the Theme.Material3.* XML launch theme parent.
+    implementation(libs.google.android.material)
+
     // Supabase (auth = gotrue, postgrest) + Ktor engine + serialization
     implementation(platform(libs.supabase.bom))
     implementation(libs.supabase.auth)
     implementation(libs.supabase.postgrest)
+    implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.okhttp)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)

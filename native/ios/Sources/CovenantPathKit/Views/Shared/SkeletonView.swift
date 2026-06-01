@@ -41,6 +41,45 @@ struct SkeletonCard: View {
     }
 }
 
+/// Skeleton for the Sync-settings sheet (port of `SyncSettingsSkeleton`): title + label/value rows
+/// + a button block, shown the instant the sheet opens so it never jumps from blank → content.
+public struct SyncSettingsSkeleton: View {
+    public init() {}
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            RoundedRectangle(cornerRadius: 6).frame(width: 160, height: 22)
+            ForEach(0..<5, id: \.self) { _ in
+                HStack {
+                    RoundedRectangle(cornerRadius: 4).frame(width: 90, height: 12)
+                    RoundedRectangle(cornerRadius: 4).frame(maxWidth: .infinity).frame(height: 12)
+                }
+            }
+            RoundedRectangle(cornerRadius: 8).frame(maxWidth: .infinity).frame(height: 44)
+        }
+        .redacted(reason: .placeholder)
+        .shimmer()
+    }
+}
+
+/// Generic skeleton of a few text lines for detail/secondary panels (comments, admin). Port of
+/// `CardSkeleton`.
+public struct CardSkeleton: View {
+    let lines: Int
+    public init(lines: Int = 3) { self.lines = lines }
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(0..<lines, id: \.self) { i in
+                RoundedRectangle(cornerRadius: 4)
+                    .frame(maxWidth: .infinity).frame(height: 12)
+                    .frame(width: i % 2 == 0 ? nil : 180, alignment: .leading)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .redacted(reason: .placeholder)
+        .shimmer()
+    }
+}
+
 // MARK: - shimmer modifier
 
 extension View {

@@ -1,18 +1,16 @@
 // swift-tools-version: 5.9
 //
-// CovenantPath — native iOS PoC (Swift + SwiftUI, iOS 17+).
+// CovenantPath — native iOS app (Swift + SwiftUI, iOS 17+).
 //
-// This package holds the entire app as a library module (`CovenantPathKit`) so the pure
-// logic (milestones, org buckets, date parsing) is unit-testable on the command line, and a
-// thin iOS app target in Xcode just imports it and renders `RootView`.
-//
-// The Supabase dependency is declared here via SwiftPM. We could not run `swift build` in the
-// authoring environment (no macOS toolchain), so the resolved version is whatever SwiftPM
-// picks in the 2.x line at first open in Xcode — see README "Dependencies".
+// This package builds the app's sources as a library module (`CovenantPathKit`) so the pure logic
+// (milestones, org buckets, date parsing, KPI bucketing, freshness) is unit-testable on the command
+// line via `swift test`. The shipping app is built by XcodeGen/xcodebuild (see `project.yml`), which
+// compiles the same `Sources/` + the `App/` shell directly and links supabase-swift — the xcodeproj
+// does NOT reference this package. supabase-swift's resolved 2.x minor is whatever SwiftPM picks.
 import PackageDescription
 
 let package = Package(
-    name: "CovenantPath",
+    name: "CovenantPathKit",
     platforms: [
         .iOS(.v17),
         .macOS(.v14) // lets the pure-logic tests run on a Mac dev box / CI without a simulator
@@ -28,7 +26,10 @@ let package = Package(
         .target(
             name: "CovenantPathKit",
             dependencies: [
-                .product(name: "Supabase", package: "supabase-swift")
+                .product(name: "Supabase", package: "supabase-swift"),
+                // `Auth` is a separate supabase-swift product; depend on it explicitly so `import Auth`
+                // (Session / AuthChangeEvent / EmailOTPType) always resolves, not just transitively.
+                .product(name: "Auth", package: "supabase-swift")
             ],
             path: "Sources/CovenantPathKit"
         ),

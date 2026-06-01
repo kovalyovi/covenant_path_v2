@@ -36,6 +36,7 @@ struct PersonDetailView: View {
                 } else {
                     flatFallback
                 }
+                CommentsSection(member: member)
             }
             .padding(16)
             .frame(maxWidth: 1000)
@@ -150,5 +151,89 @@ struct RecordedYesNote: View {
 
 func mutedText(_ text: String) -> some View {
     Text(text).foregroundStyle(.secondary)
+}
+
+// MARK: - notes / comments (port of `_CommentsSection`)
+
+/// Leader notes on a member (RLS-scoped to people you can see). Read + add. Authors can't see
+/// others' across scope boundaries — the DB enforces it.
+struct CommentsSection: View {
+    let member: Member
+    @Environment(\.appServices) private var services
+
+    @State private var comments: [MemberComment] = []
+    @State private var loaded = false
+    @State private var draft = ""
+    @State private var posting = false
+
+    private var uuid: String? { member.personUUID?.isEmpty == false ? member.personUUID : nil }
+    private var gateway: SupabaseGateway? { services?.gateway }
+
+    var body: some View {
+        if let uuid {
+            SectionCard(title: "Notes", systemImage: "bubble.left") {
+                VStack(alignment: .leading, spacing: 8) {
+                    if !loaded {
+                        CardSkeleton(lines: 2)
+                    } else if comments.isEmpty {
+                        Text("No notes yet.").foregroundStyle(.secondary)
+                    } else {
+                        ForEach(comments) { c in commentTile(c) }
+                    }
+                    HStack(alignment: .bottom) {
+                        TextField("Add a note…", text: $draft, axis: .vertical)
+                            .lineLimit(1...4)
+                            .textFieldStyle(.roundedBorder)
+                        if posting {
+                            ProgressView().controlSize(.small).frame(width: 36, height: 36)
+                        } else {
+                            Button {
+                                Task { await post(uuid: uuid) }
+                            } label: {
+                                Image(systemName: "paperplane.fill")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+                        }
+                    }
+                }
+            }
+            .task { await load(uuid: uuid) }
+        }
+    }
+
+    private func commentTile(_ c: MemberComment) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(c.body ?? "")
+            Text("\(c.who) · \(c.createdAt.map(Freshness.exact) ?? "")")
+                .font(.caption).foregroundStyle(.secondary)
+            Divider().padding(.top, 4)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func load(uuid: String) async {
+        guard let gateway else { loaded = true; return }
+        comments = (try? await gateway.comments(memberUUID: uuid)) ?? []
+        loaded = true
+    }
+
+    private func post(uuid: String) async {
+        guard let gateway else { return }
+        let body = draft.trimmingCharacters(in: .whitespaces)
+        guard !body.isEmpty else { return }
+        posting = true
+        let email = (await services?.auth.currentEmail) ?? ""
+        let new = NewComment(stake_id: member.stakeID, unit_id: member.unitID,
+                             member_person_uuid: uuid, author_email: email, body: body)
+        do {
+            try await gateway.addComment(new)
+            draft = ""
+            comments = (try? await gateway.comments(memberUUID: uuid)) ?? comments
+        } catch {
+            // surface via the body? keep it simple — leave the draft so they can retry.
+        }
+        posting = false
+    }
 }
 #endif

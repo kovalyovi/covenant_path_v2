@@ -24,12 +24,15 @@ import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.AssignmentInd
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Diversity3
 import androidx.compose.material.icons.filled.EventAvailable
 import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.VolunteerActivism
 import androidx.compose.material.icons.filled.WorkspacePremium
@@ -56,6 +59,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.membercovenantpath.viewer.model.Details
 import org.membercovenantpath.viewer.model.Member
 import org.membercovenantpath.viewer.model.Toggle
@@ -78,6 +82,8 @@ private val AmberInfo = Color(0xFFFF8F00) // amber.shade800
 fun PersonDetailScreen(member: Member, onBack: () -> Unit) {
     val name = member.name ?: "—"
     val d = member.parsedDetails()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val uuid = member.personUuid
 
     Scaffold(
         topBar = {
@@ -86,6 +92,21 @@ fun PersonDetailScreen(member: Member, onBack: () -> Unit) {
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    // Open in LCR (compare data) — same deep link the Flutter detail page uses.
+                    if (!uuid.isNullOrEmpty()) {
+                        IconButton(onClick = {
+                            val url = "https://lcr.churchofjesuschrist.org/records/member-profile/$uuid?lang=eng"
+                            runCatching {
+                                context.startActivity(
+                                    android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)),
+                                )
+                            }
+                        }) {
+                            Icon(Icons.Filled.OpenInNew, contentDescription = "Open in LCR")
+                        }
                     }
                 },
             )
@@ -106,6 +127,7 @@ fun PersonDetailScreen(member: Member, onBack: () -> Unit) {
             } else {
                 item { FlatFallback(member) }
             }
+            item { CommentsSection(member) }
         }
     }
 }
@@ -435,6 +457,64 @@ private fun RecordedYesNote() {
 @Composable
 private fun MutedLine(text: String) {
     Text(text, color = StatusColors.GreyText)
+}
+
+/**
+ * Leader notes on a member (#20), RLS-scoped via member_comments: read existing + add a note.
+ * Each note shows author + local timestamp. Mirrors person_detail_page.dart `_CommentsSection`.
+ */
+@Composable
+private fun CommentsSection(member: Member) {
+    if (member.personUuid.isNullOrEmpty()) return
+    val vm: org.membercovenantpath.viewer.viewmodel.CommentsViewModel =
+        androidx.lifecycle.viewmodel.compose.viewModel(
+            key = "comments-${member.personUuid}",
+            factory = org.membercovenantpath.viewer.viewmodel.CommentsViewModelFactory(member),
+        )
+    val s by vm.state.collectAsStateWithLifecycle()
+
+    SectionCard(title = "Notes", leadingIcon = Icons.Filled.ChatBubbleOutline) {
+        Column {
+            when {
+                s.loading -> org.membercovenantpath.viewer.ui.components.CardSkeleton(lines = 2)
+                s.comments.isEmpty() -> Text("No notes yet.", color = StatusColors.GreyText)
+                else -> s.comments.forEach { CommentTile(it) }
+            }
+            Spacer(Modifier.size(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.material3.OutlinedTextField(
+                    value = s.draft,
+                    onValueChange = vm::onDraft,
+                    placeholder = { Text("Add a note…") },
+                    minLines = 1,
+                    maxLines = 4,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                if (s.posting) {
+                    androidx.compose.material3.CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+                } else {
+                    androidx.compose.material3.FilledIconButton(onClick = vm::post) {
+                        Icon(Icons.Filled.Send, contentDescription = "Post note")
+                    }
+                }
+            }
+            s.error?.let {
+                Text(it, color = StatusColors.NoRed, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun CommentTile(c: org.membercovenantpath.viewer.model.Comment) {
+    val whenStr = org.membercovenantpath.viewer.logic.Freshness.exactLocal(c.createdAt)
+    Column(Modifier.padding(vertical = 6.dp)) {
+        Text(c.body ?: "")
+        Spacer(Modifier.size(2.dp))
+        Text("${c.who} · $whenStr", style = MaterialTheme.typography.bodySmall, color = StatusColors.GreyText)
+        androidx.compose.material3.HorizontalDivider(Modifier.padding(top = 8.dp))
+    }
 }
 
 /** Pre-`details` rows: the original flat field list (mirrors `_FlatFallback`). */

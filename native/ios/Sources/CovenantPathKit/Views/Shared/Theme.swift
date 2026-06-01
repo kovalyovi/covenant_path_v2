@@ -113,4 +113,59 @@ public struct CountBadge: View {
             .foregroundStyle(Color.accentColor)
     }
 }
+
+/// Semantic status colors (meaning-named) — mirrors `theme/tokens.dart` `AppColors`.
+public enum AppColors {
+    public static let success = Color(hex: 0x2E7D32)
+    public static let warning = Color(hex: 0xEF6C00)
+    public static let info = Color(hex: 0x1E88E5)
+    public static let danger = Color(hex: 0xE53935)
+    public static let neutral = Color(hex: 0x616161)
+}
+
+public extension Freshness.Staleness {
+    /// Color for the freshness chip (port of `_staleColor`): amber after 2 days, red after 2 weeks,
+    /// nil (default/fresh) otherwise.
+    var color: Color? {
+        switch self {
+        case .fresh: return nil
+        case .amber: return Color(hex: 0xFFB300)   // amber 700
+        case .red:   return Color(hex: 0xE53935)   // red 600
+        }
+    }
+}
+
+/// A colored status tag (admin enrolled-stakes). Mirrors `StatusTag`.
+public struct StatusTag: View {
+    let text: String
+    let color: Color
+    public init(_ text: String, color: Color) { self.text = text; self.color = color }
+    public var body: some View {
+        Text(text)
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 8).padding(.vertical, 2)
+            .background(color.opacity(0.14), in: Capsule())
+            .foregroundStyle(color)
+    }
+}
+
+/// An ok/off status pill (admin health/diagnostics). Mirrors `StatusPill`.
+public struct StatusPill: View {
+    let label: String
+    let ok: Bool
+    var offText: String?
+    public init(label: String, ok: Bool, offText: String? = nil) {
+        self.label = label; self.ok = ok; self.offText = offText
+    }
+    public var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .font(.caption)
+            Text(ok ? label : (offText.map { "\(label) — \($0)" } ?? label)).font(.caption.weight(.medium))
+        }
+        .foregroundStyle(ok ? AppColors.success : AppColors.danger)
+        .padding(.horizontal, 10).padding(.vertical, 5)
+        .background((ok ? AppColors.success : AppColors.danger).opacity(0.12), in: Capsule())
+    }
+}
 #endif

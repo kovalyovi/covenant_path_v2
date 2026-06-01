@@ -19,3 +19,13 @@ SUPABASE_URL = https:/$()/YOUR-REF.supabase.co
 
 // Your Supabase anon (publishable) key.
 SUPABASE_ANON_KEY = YOUR_SUPABASE_ANON_KEY
+
+// Church-login auth broker base URL (backend/auth_broker). Leave empty to show only Email-code
+// login and hide broker-backed features (Church/passkey login, sync settings, report, admin).
+// Same //-escaping gotcha as the URL above: BROKER_URL = https:/$()/broker.example.org
+BROKER_URL =
+
+// Relying-party id for native passkeys (must match the broker's WebAuthn RP id + an associated-
+// domains entitlement). Leave empty to disable passkeys (the login button shows a "use email code"
+// note). Example: PASSKEY_RP_ID = membercovenantpath.org
+PASSKEY_RP_ID =

@@ -1,37 +1,85 @@
 #if canImport(UIKit)
 import SwiftUI
 
-/// Email-OTP login (the only login in the PoC). Step 1: enter email → "Send code". Step 2: enter the
-/// 6-digit code Supabase emailed → "Verify & sign in". RLS scopes everything to the verified email.
-/// Mirrors the email-code half of the Flutter `login_page.dart`.
+/// Two ways in, one resulting session (plus passkey where supported). Faithful port of
+/// `login_page.dart`: a Church-account ↔ Email-code segmented control (only when the broker is
+/// configured), the MFA factor pick + code steps, the email-code flow with a broker-relay fallback,
+/// the "Sign in with a passkey" button, and the disclaimer text + footer.
 struct LoginView: View {
     @Environment(SessionStore.self) private var session
 
+    @State private var username = ""
+    @State private var password = ""
+    @State private var mfaCode = ""
     @State private var email = ""
-    @State private var code = ""
+    @State private var emailCode = ""
     @FocusState private var focused: Field?
 
-    enum Field { case email, code }
+    enum Field { case username, password, mfa, email, code }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Covenant Path").font(.largeTitle.bold())
-                Text("A read-only dashboard for stake and ward leaders tracking new-member "
-                     + "integration. Sign in with the email your stake has on file.")
-                    .font(.callout).foregroundStyle(.secondary)
+                Text(Disclaimer.long).font(.footnote).foregroundStyle(.secondary)
 
-                Spacer().frame(height: 8)
-
-                if !session.codeSent {
-                    emailStep
-                } else {
-                    codeStep
+                if session.brokerAvailable {
+                    Picker("Mode", selection: modeBinding) {
+                        ForEach(SessionStore.Mode.allCases, id: \.self) { m in
+                            Text(m.label).tag(m)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(session.isBusy)
                 }
 
+                if session.mode == .church && session.brokerAvailable {
+                    churchFields
+                } else {
+                    emailFields
+                }
+
+                if session.passkeyAvailable {
+                    HStack {
+                        VStack { Divider() }
+                        Text("or").font(.footnote).foregroundStyle(.secondary)
+                        VStack { Divider() }
+                    }
+                    Button {
+                        Task { await session.passkeySignIn() }
+                    } label: {
+                        Label("Sign in with a passkey", systemImage: "person.badge.key")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(session.isBusy)
+                } else if session.brokerAvailable {
+                    // Documented partial: native passkeys need an associated-domains entitlement +
+                    // a configured RP id. Until then, the button is shown disabled with a note.
+                    VStack(alignment: .leading, spacing: 4) {
+                        Button {} label: {
+                            Label("Sign in with a passkey", systemImage: "person.badge.key")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(true)
+                        Text("Passkeys aren't set up on this build — use an email code on this device.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+
+                if session.isBusy, let status = session.statusMessage {
+                    Text(status).font(.callout).foregroundStyle(.tint)
+                }
                 if let error = session.errorMessage {
                     Text(error).font(.callout).foregroundStyle(.red)
                 }
+
+                Spacer(minLength: 8)
+                Text(Disclaimer.short)
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
             }
             .padding(24)
             .frame(maxWidth: 420, alignment: .leading)
@@ -40,72 +88,115 @@ struct LoginView: View {
         .scrollDismissesKeyboard(.interactively)
     }
 
-    // MARK: - steps
-
-    private var emailStep: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            TextField("Email", text: $email)
-                .textContentType(.emailAddress)
-                .keyboardType(.emailAddress)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .focused($focused, equals: .email)
-                .submitLabel(.send)
-                .onSubmit(send)
-                .textFieldStyle(.roundedBorder)
-
-            Button(action: send) {
-                buttonLabel("Send code")
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(session.isBusy)
-        }
-        .onAppear { focused = .email }
+    private var modeBinding: Binding<SessionStore.Mode> {
+        Binding(get: { session.mode }, set: { session.selectMode($0) })
     }
 
-    private var codeStep: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Enter the 6-digit code sent to \(email).").font(.callout)
-            TextField("6-digit code", text: $code)
-                .textContentType(.oneTimeCode)
-                .keyboardType(.numberPad)
-                .focused($focused, equals: .code)
-                .textFieldStyle(.roundedBorder)
-
-            Button(action: verify) {
-                buttonLabel("Verify & sign in")
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(session.isBusy)
-
-            Button("Use a different email") {
-                code = ""
-                session.resetEmailEntry()
-            }
-            .disabled(session.isBusy)
-        }
-        .onAppear { focused = .code }
-    }
+    // MARK: - Church fields (3 steps: username/password → pick factor → enter code)
 
     @ViewBuilder
-    private func buttonLabel(_ title: String) -> some View {
-        if session.isBusy {
-            ProgressView().frame(maxWidth: .infinity).controlSize(.small)
+    private var churchFields: some View {
+        if session.factorSent != nil {
+            // Step 3: enter the MFA code.
+            Text("Enter the code sent via \(session.factorSent?.label ?? "your method").").font(.callout)
+            TextField("Verification code", text: $mfaCode)
+                .textContentType(.oneTimeCode).keyboardType(.numberPad)
+                .focused($focused, equals: .mfa)
+                .textFieldStyle(.roundedBorder)
+            primaryButton("Verify & sign in") { await session.verifyMfa(code: mfaCode) }
+            Button("Choose a different method") { session.backFromMfa() }.disabled(session.isBusy)
+        } else if session.loginID != nil {
+            // Step 2: pick a factor.
+            Text("Choose how to receive your verification code:").font(.callout)
+            ForEach(session.factors) { f in
+                Button(f.label) { Task { await session.selectFactor(f) } }
+                    .buttonStyle(.bordered).frame(maxWidth: .infinity)
+                    .disabled(session.isBusy)
+            }
+            Button("Back") { session.backToChurchStart() }.disabled(session.isBusy)
         } else {
-            Text(title).frame(maxWidth: .infinity)
+            // Step 1: username + password.
+            Text("Sign in with your Church account (same as LCR).").font(.callout)
+            TextField("Church username", text: $username)
+                .textContentType(.username).textInputAutocapitalization(.never)
+                .autocorrectionDisabled().focused($focused, equals: .username)
+                .textFieldStyle(.roundedBorder)
+            SecureField("Password", text: $password)
+                .textContentType(.password).focused($focused, equals: .password)
+                .submitLabel(.go).onSubmit(churchSignIn)
+                .textFieldStyle(.roundedBorder)
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "arrow.triangle.2.circlepath").font(.caption).foregroundStyle(.tint)
+                Text("Signing in keeps your stake synced: your Church session is stored encrypted "
+                     + "(never your password) so the data refreshes daily. You can pause this anytime "
+                     + "in Settings → Sync settings.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            primaryButton("Sign in") { await session.churchSignIn(username: username, password: password) }
         }
     }
 
-    // MARK: - actions
-
-    private func send() {
+    private func churchSignIn() {
         focused = nil
-        Task { await session.sendCode(email: email) }
+        Task { await session.churchSignIn(username: username, password: password) }
     }
 
-    private func verify() {
-        focused = nil
-        Task { await session.verify(email: email, code: code) }
+    // MARK: - Email fields (+ relay fallback)
+
+    @ViewBuilder
+    private var emailFields: some View {
+        Text("Sign in with the email your stake has on file.").font(.callout)
+        if session.useRelay {
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "shield").font(.caption).foregroundStyle(.tint)
+                Text("Backup mode: signing in through our server (for networks that block Supabase).")
+                    .font(.caption).foregroundStyle(.tint)
+            }
+        }
+        TextField("Email", text: $email)
+            .textContentType(.emailAddress).keyboardType(.emailAddress)
+            .textInputAutocapitalization(.never).autocorrectionDisabled()
+            .disabled(session.emailCodeSent)
+            .focused($focused, equals: .email)
+            .textFieldStyle(.roundedBorder)
+        if session.emailCodeSent {
+            TextField("6-digit code", text: $emailCode)
+                .textContentType(.oneTimeCode).keyboardType(.numberPad)
+                .focused($focused, equals: .code)
+                .textFieldStyle(.roundedBorder)
+        }
+        primaryButton(session.emailCodeSent ? "Verify & sign in" : "Send code") {
+            if session.emailCodeSent { await session.verify(email: email, code: emailCode) }
+            else { await session.sendCode(email: email) }
+        }
+        if session.emailCodeSent {
+            Button("Use a different email") { session.resetEmailEntry() }.disabled(session.isBusy)
+        }
+        if session.brokerAvailable && !session.useRelay {
+            Button("Can't connect? Use backup sign-in") { session.enableRelay() }
+                .disabled(session.isBusy)
+        }
+        if session.useRelay {
+            Button("Use normal sign-in") { session.disableRelay() }.disabled(session.isBusy)
+        }
+    }
+
+    // MARK: - shared button
+
+    @ViewBuilder
+    private func primaryButton(_ title: String, action: @escaping () async -> Void) -> some View {
+        Button {
+            focused = nil
+            Task { await action() }
+        } label: {
+            if session.isBusy {
+                ProgressView().frame(maxWidth: .infinity).controlSize(.small)
+            } else {
+                Text(title).frame(maxWidth: .infinity)
+            }
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(session.isBusy)
     }
 }
 #endif

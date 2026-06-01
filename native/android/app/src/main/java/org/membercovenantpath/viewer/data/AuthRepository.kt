@@ -28,6 +28,10 @@ class AuthRepository(
     val currentEmail: String?
         get() = client.auth.currentUserOrNull()?.email
 
+    /** The signed-in user's Supabase access token (Bearer for broker/admin calls), or null. */
+    val accessToken: String?
+        get() = client.auth.currentAccessTokenOrNull()
+
     /** Send a 6-digit email OTP. `createUser = true` so power-user invitees without an account work. */
     suspend fun sendEmailCode(email: String) {
         client.auth.signInWith(OTP) {
@@ -43,6 +47,24 @@ class AuthRepository(
             email = email.trim(),
             token = token.trim(),
         )
+    }
+
+    /**
+     * Adopt a broker-minted OTP as a real Supabase session — the Church-account + passkey flows: the
+     * broker authenticates server-side and returns {email, otp}, which is a verifiable email OTP.
+     * Mirrors login_page.dart `_consume`.
+     */
+    suspend fun verifyBrokerOtp(email: String, otp: String) {
+        client.auth.verifyEmailOtp(type = OtpType.Email.EMAIL, email = email.trim(), token = otp.trim())
+    }
+
+    /**
+     * Adopt a session from a refresh token (the email-relay backup: the broker verifies the code
+     * server-side and returns {access_token, refresh_token}). Mirrors `setSession(refresh_token)`.
+     */
+    suspend fun adoptRefreshToken(refreshToken: String) {
+        val session = client.auth.refreshSession(refreshToken)
+        client.auth.importSession(session)
     }
 
     suspend fun signOut() {

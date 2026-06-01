@@ -16,6 +16,16 @@ public protocol AuthService: Sendable {
     func sendCode(email: String) async throws
     func verify(email: String, code: String) async throws
     func signOut() async throws
+
+    // Broker-backed login support.
+    /// The signed-in user's email (RLS scopes on this), or nil.
+    var currentEmail: String? { get async }
+    /// The signed-in user's access token (for broker calls), or "" when signed out.
+    func accessToken() async -> String
+    /// Turn a broker-minted OTP into a real Supabase session (Church/passkey login).
+    func consume(email: String, otp: String) async throws
+    /// Adopt broker-relayed tokens (email-relay backup path).
+    func setSession(accessToken: String, refreshToken: String) async throws
 }
 
 public struct SupabaseAuthService: AuthService {
@@ -56,6 +66,22 @@ public struct SupabaseAuthService: AuthService {
 
     public func signOut() async throws {
         try await client.auth.signOut()
+    }
+
+    public var currentEmail: String? {
+        get async { (try? await client.auth.session)?.user.email }
+    }
+
+    public func accessToken() async -> String {
+        ((try? await client.auth.session)?.accessToken) ?? ""
+    }
+
+    public func consume(email: String, otp: String) async throws {
+        try await client.auth.verifyOTP(email: email.trimmed, token: otp.trimmed, type: .email)
+    }
+
+    public func setSession(accessToken: String, refreshToken: String) async throws {
+        try await client.auth.setSession(accessToken: accessToken, refreshToken: refreshToken)
     }
 }
 

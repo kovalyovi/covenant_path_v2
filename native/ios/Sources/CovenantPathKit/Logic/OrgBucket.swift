@@ -20,6 +20,17 @@ public struct OrgInfo: Sendable {
 
 public enum Org {
 
+    /// Toggle an org in the filter set, never letting the user deselect the LAST one (→ empty list).
+    /// Pure logic (UI-free, unit-tested) so it lives here, not in the SwiftUI `OrgFilterBar`. Port of
+    /// the Flutter `_toggleOrg` guard.
+    public static func toggleFilter(_ b: OrgBucket, in set: inout Set<OrgBucket>) {
+        if set.contains(b) {
+            if set.count > 1 { set.remove(b) }
+        } else {
+            set.insert(b)
+        }
+    }
+
     public static func info(_ b: OrgBucket) -> OrgInfo {
         switch b {
         case .wml: return OrgInfo(label: "Missionaries / WML", short: "WML",

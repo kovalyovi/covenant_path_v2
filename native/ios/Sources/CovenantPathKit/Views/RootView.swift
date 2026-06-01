@@ -1,13 +1,12 @@
 #if canImport(UIKit)
 import SwiftUI
 
-/// App entry point view. Three responsibilities, in order:
+/// App entry point view. Responsibilities, in order:
 ///   1. If Supabase isn't configured (empty URL/key), show a friendly "set the build config" screen
 ///      (mirrors the Flutter `_ConfigError`).
-///   2. Otherwise build the service graph (one `SupabaseService` → auth + repository).
-///   3. Switch between Login and Dashboard based on `SessionStore.phase`.
-///
-/// The iOS app target's `@main App` simply renders `RootView()` inside a `WindowGroup`.
+///   2. Otherwise build the service graph (`AppServices`) and install error reporting → broker /log.
+///   3. Switch between Login and (biometric-gated) Dashboard based on `SessionStore.phase`.
+///   4. Apply the persisted light/dark theme app-wide.
 public struct RootView: View {
     private let config: AppConfig
 
@@ -16,24 +15,34 @@ public struct RootView: View {
     }
 
     public var body: some View {
-        if let service = SupabaseService.make(config: config) {
-            ConfiguredRoot(service: service)
+        if let services = AppServices.make(config: config) {
+            ConfiguredRoot(services: services)
         } else {
             ConfigErrorView()
         }
     }
 }
 
-/// The configured app: owns the stores and routes by auth phase.
+/// The configured app: owns the stores + theme and routes by auth phase.
 private struct ConfiguredRoot: View {
     @State private var session: SessionStore
-    private let service: SupabaseService
+    @State private var theme = ThemeController()
+    private let services: AppServices
 
-    init(service: SupabaseService) {
-        self.service = service
+    init(services: AppServices) {
+        self.services = services
+        let passkey = PasskeyService(broker: services.broker, rpID: services.passkeyRPID)
         _session = State(initialValue: SessionStore(
-            auth: SupabaseAuthService(client: service.client)
+            auth: services.auth,
+            broker: services.broker,
+            passkeyAvailable: { passkey.available },
+            passkeyLogin: {
+                if #available(iOS 16.0, *) { return try await passkey.login() }
+                throw BrokerError("Passkeys need iOS 16 or later.")
+            }
         ))
+        // Install global error reporting → broker /log (port of error_reporter.installErrorReporting).
+        ErrorReporter.install(broker: services.broker)
     }
 
     var body: some View {
@@ -44,15 +53,27 @@ private struct ConfiguredRoot: View {
             case .signedOut:
                 LoginView()
             case .signedIn:
-                DashboardView(
-                    store: DashboardStore(
-                        repo: SupabaseMembersRepository(client: service.client)
-                    )
-                )
+                BiometricGateView {
+                    DashboardView(store: DashboardStore(services: services))
+                }
             }
         }
         .environment(session)
+        .environment(theme)
+        .environment(\.appServices, services)
+        .preferredColorScheme(theme.mode.colorScheme)
         .task { session.start() }
+    }
+}
+
+extension AppThemeMode {
+    /// Map to SwiftUI's optional ColorScheme (nil = follow the system).
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
     }
 }
 
@@ -73,6 +94,17 @@ struct ConfigErrorView: View {
             .multilineTextAlignment(.center)
         }
         .padding(32)
+    }
+}
+
+// AppServices is injected via @Environment using a classic EnvironmentKey (no macro, iOS-17 safe).
+private struct AppServicesKey: EnvironmentKey {
+    static let defaultValue: AppServices? = nil
+}
+extension EnvironmentValues {
+    var appServices: AppServices? {
+        get { self[AppServicesKey.self] }
+        set { self[AppServicesKey.self] = newValue }
     }
 }
 #endif

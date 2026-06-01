@@ -8,6 +8,9 @@ struct BaptismsView: View {
     let rows: [Member]
     let missionariesByUnit: [String: [Missionary]]
 
+    /// Header toggle: combined timeline (false) vs per-unit timelines (true). Port of `_byUnit`.
+    @State private var byUnit = false
+
     private struct Dated: Identifiable {
         let member: Member
         let date: Date
@@ -24,27 +27,27 @@ struct BaptismsView: View {
     }
 
     private var today: Date { Calendar.current.startOfDay(for: Date()) }
-    private var overdue: [Dated] { items.filter { $0.date < today } }
-    private var upcoming: [Dated] { items.filter { $0.date >= today } }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
-                SectionHeader(title: "Prospective Baptisms", count: items.count, accent: DashboardTab.baptisms.accent)
+                HStack {
+                    SectionHeader(title: "Prospective Baptisms", count: items.count,
+                                  accent: DashboardTab.baptisms.accent)
+                    Picker("Layout", selection: $byUnit) {
+                        Label("Unit", systemImage: "person.3").tag(true)
+                        Label("Date", systemImage: "calendar").tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 160)
+                }
 
                 if items.isEmpty {
                     EmptyHint("No prospective baptisms with a planned date.")
+                } else if byUnit {
+                    perUnit
                 } else {
-                    if !overdue.isEmpty {
-                        dateSection(title: "Needs attention — date passed",
-                                    symbol: "exclamationmark.triangle.fill",
-                                    color: Color(hex: 0xEF6C00), items: overdue, overdue: true)
-                    }
-                    if !upcoming.isEmpty {
-                        dateSection(title: "Scheduled",
-                                    symbol: "calendar.badge.checkmark",
-                                    color: DashboardTab.baptisms.accent, items: upcoming, overdue: false)
-                    }
+                    timeline(items, embedded: false)
                 }
             }
             .padding(16)
@@ -53,19 +56,66 @@ struct BaptismsView: View {
         }
     }
 
-    /// One block (overdue or scheduled): a date-rail of rows grouped by date.
-    private func dateSection(title: String, symbol: String, color: Color,
-                             items: [Dated], overdue: Bool) -> some View {
-        let groups = Dictionary(grouping: items, by: \.date)
-        let dates = groups.keys.sorted()  // soonest first (overdue: oldest-passed first)
-        return SectionCard(title: title, systemImage: symbol, iconColor: color) {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(dates.enumerated()), id: \.element) { idx, day in
-                    if idx > 0 { Divider().padding(.vertical, 9) }
-                    DateRailRow(date: day, people: groups[day] ?? [], today: today,
-                                overdue: overdue, accent: color, missionariesByUnit: missionariesByUnit)
+    /// Combined or per-unit timeline body: overdue block then Scheduled block.
+    @ViewBuilder
+    private func timeline(_ items: [Dated], embedded: Bool) -> some View {
+        let overdue = items.filter { $0.date < today }
+        let upcoming = items.filter { $0.date >= today }
+        if !overdue.isEmpty {
+            dateSection(title: "Needs attention — date passed",
+                        symbol: "exclamationmark.triangle.fill",
+                        color: Color(hex: 0xEF6C00), items: overdue, overdue: true, embedded: embedded)
+        }
+        if !upcoming.isEmpty {
+            dateSection(title: "Scheduled", symbol: "calendar.badge.checkmark",
+                        color: DashboardTab.baptisms.accent, items: upcoming, overdue: false, embedded: embedded)
+        }
+    }
+
+    /// Per-unit cards: a missionary strip then that unit's date timeline. Port of `_perUnit`.
+    private var perUnit: some View {
+        let byUnitMap = Dictionary(grouping: items) { $0.member.unitName ?? "—" }
+        let units = byUnitMap.keys.sorted()
+        return VStack(spacing: 12) {
+            ForEach(units, id: \.self) { u in
+                SectionCard(title: u, systemImage: "person.3",
+                            trailing: AnyView(CountBadge((byUnitMap[u] ?? []).count))) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if let miss = missionariesByUnit[u], !miss.isEmpty {
+                            MissionaryStrip(missionaries: miss)
+                            Divider().padding(.vertical, 12)
+                        }
+                        VStack(alignment: .leading, spacing: 8) {
+                            timeline(byUnitMap[u] ?? [], embedded: true)
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    /// One block (overdue or scheduled): a date-rail of rows grouped by date. When `embedded`, the
+    /// outer card is dropped (it lives inside a per-unit card) and an inline header is used.
+    @ViewBuilder
+    private func dateSection(title: String, symbol: String, color: Color,
+                             items: [Dated], overdue: Bool, embedded: Bool) -> some View {
+        let groups = Dictionary(grouping: items, by: \.date)
+        let dates = groups.keys.sorted()  // soonest first (overdue: oldest-passed first)
+        let rail = VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(dates.enumerated()), id: \.element) { idx, day in
+                if idx > 0 { Divider().padding(.vertical, 9) }
+                DateRailRow(date: day, people: groups[day] ?? [], today: today,
+                            overdue: overdue, accent: color)
+            }
+        }
+        if embedded {
+            VStack(alignment: .leading, spacing: 8) {
+                Label(title, systemImage: symbol)
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(color)
+                rail
+            }
+        } else {
+            SectionCard(title: title, systemImage: symbol, iconColor: color) { rail }
         }
     }
 
@@ -77,7 +127,6 @@ struct BaptismsView: View {
         let today: Date
         let overdue: Bool
         let accent: Color
-        let missionariesByUnit: [String: [Missionary]]
 
         private var relative: String {
             let days = Calendar.current.dateComponents([.day], from: today, to: date).day ?? 0
@@ -156,6 +205,49 @@ struct EmptyHint: View {
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
             .padding(32)
+    }
+}
+
+/// The full-time missionaries assigned to a unit (port of `_MissionaryStrip`): name chips; tapping a
+/// chip reveals phone/email (a Menu with call/email actions — the native analog of the tap tooltip).
+struct MissionaryStrip: View {
+    let missionaries: [Missionary]
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "person.2").font(.caption).foregroundStyle(.tint)
+            FlowLayout(spacing: 6) {
+                ForEach(Array(missionaries.enumerated()), id: \.offset) { _, m in
+                    chip(m)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func chip(_ m: Missionary) -> some View {
+        let phone = m.phone ?? ""
+        let email = m.email ?? ""
+        let label = Text(m.name ?? "")
+            .font(.caption).fontWeight(.medium)
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(Color.accentColor.opacity(0.10), in: Capsule())
+            .foregroundStyle(Color.accentColor)
+        if phone.isEmpty && email.isEmpty {
+            label
+        } else {
+            Menu {
+                if !phone.isEmpty {
+                    if let url = URL(string: "tel:\(phone.filter { !$0.isWhitespace })") {
+                        Link(destination: url) { Label(phone, systemImage: "phone") }
+                    } else { Text(phone) }
+                }
+                if !email.isEmpty {
+                    if let url = URL(string: "mailto:\(email)") {
+                        Link(destination: url) { Label(email, systemImage: "envelope") }
+                    } else { Text(email) }
+                }
+            } label: { label }
+        }
     }
 }
 #endif

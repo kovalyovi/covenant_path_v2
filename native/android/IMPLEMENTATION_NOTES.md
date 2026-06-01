@@ -1,76 +1,96 @@
 # Implementation Notes — files & purpose
 
-Root package: `org.membercovenantpath.viewer`. One module: `:app`.
+Root package: `org.membercovenantpath.viewer`. One module: `:app`. Feature parity with the Flutter
+viewer (`apps/viewer/lib`); see `PARITY_STATUS.md`.
 
 ## Gradle / config
 | File | Purpose |
 |---|---|
 | `settings.gradle.kts` | Module + repos (google + mavenCentral). |
-| `build.gradle.kts` (root) | Declares plugins `apply false`. |
-| `app/build.gradle.kts` | Android + Compose + serialization; reads `SUPABASE_URL`/`SUPABASE_ANON_KEY` from gradle props/env into `BuildConfig`. |
-| `gradle/libs.versions.toml` | Version catalog (Kotlin 2.1, Compose BOM, supabase-kt 3.1.1 BOM, Ktor, nav, Coil). |
-| `gradle.properties` | AndroidX/Compose flags; empty `SUPABASE_*` placeholders (never commit a key). |
+| `build.gradle.kts` (root) | Plugins `apply false`. |
+| `app/build.gradle.kts` | Android + Compose + serialization; `SUPABASE_URL`/`SUPABASE_ANON_KEY`/`BROKER_URL` → `BuildConfig`; biometric/credentials/datastore/fragment/material deps. |
+| `gradle/libs.versions.toml` | Version catalog (Kotlin 2.1, Compose BOM, supabase-kt 3.1.1 BOM, Ktor 3, nav, Coil, biometric, credentials, datastore, fragment, material). |
+| `gradle.properties` | AndroidX/Compose flags; empty `SUPABASE_*`/`BROKER_URL` placeholders; configuration-cache off for CI. |
 | `app/proguard-rules.pro` | Keep kotlinx-serialization serializers for `model/`. |
-| `app/src/main/AndroidManifest.xml` | INTERNET permission; single `MainActivity`. |
-| `app/src/main/res/values/{strings,themes}.xml` | App name + a Material3 launch theme. |
-| `gradle/wrapper/*`, `gradlew`, `gradlew.bat` | Gradle 8.11.1 wrapper (jar copied from the repo's Flutter android wrapper). |
+| `app/src/main/AndroidManifest.xml` | INTERNET + USE_BIOMETRIC; `<queries>` for external links/tel/mailto; single `MainActivity`. |
 
-## logic/ — pure Kotlin, ported 1:1 from `golden_hour.dart` (unit-tested)
+## logic/ — pure Kotlin (unit-tested)
 | File | Purpose |
 |---|---|
-| `DateParse.kt` | `parseMemberDate` (ISO / `6 Feb 2026` / `2/6/2026` / sentinels→null), `yearOf`, `ageNow`, `memberOneYearPlus`, `monthsSince`, `monthsDaysAgo`. |
-| `Milestones.kt` | The 6 milestones (label/abbr/icon/color + eligible/complete predicates), `forMember`, `avgCompletion`. |
-| `OrgBucket.kt` | `OrgBucket` enum + `Orgs` (info/colors, `responsibleOrg`, `responsibleParty`, `responsibilityNote`). |
+| `DateParse.kt` | Member-date parsing + tenure math (ported from `dashboard_common`/`golden_hour`). |
+| `Milestones.kt` | The 6 Golden-Hour milestones + eligibility/completion + `avgCompletion`. |
+| `OrgBucket.kt` | Org ownership (WML/EQ/RS) info, colors, `responsibleOrg`/`responsibilityNote`. |
+| `Kpis.kt` | **KPI series/bucketing math ported 1:1** from `dashboard_common.dart`/`kpis_view.dart` (`metricData`, `bucketKey`, `windowBuckets`, ALL granularity switch, `attendedDates`/`firstLessonDate`, `lessonsWithMember`, `unitCompletion`, `membersWithMemberLessons`, period range/compare labels). |
+| `Freshness.kt` | `ago`/`staleColor`/`exactLocal` (ported from `dashboard_common`). |
 
-## model/ — kotlinx-serializable; `@SerialName` == DB columns
+## model/ — kotlinx-serializable
 | File | Purpose |
 |---|---|
-| `Member.kt` | One `members` row (the Flutter `_columns` set); `status(field)` accessor. |
-| `Stake.kt` | `Stake` + `Missionary`. |
-| `Details.kt` | Typed `members.details` subtree (friends, ministers, sacrament, lessons, toggles, tags…). |
-| `DetailsParse.kt` | `Member.parsedDetails()` — lenient decode of the `details` JsonObject. |
+| `Member.kt` | A `members` row (the Flutter `_columns`); `status(field)`. |
+| `Stake.kt` | `Stake` (+ sync_state/started) + `Missionary`. |
+| `Details.kt` / `DetailsParse.kt` | Typed `members.details` subtree + lenient decode (Supabase-free Json so logic stays testable). |
+| `Comment.kt` | `member_comments` read + insert shapes. |
+| `Invitation.kt` | `Invitation`, `Unit`, `AppAdmin` (power-user + admin views). |
 
-## data/ — repository layer
+## data/ — repositories + clients
 | File | Purpose |
 |---|---|
-| `SupabaseClientProvider.kt` | Single `SupabaseClient` from `BuildConfig`; installs Auth + Postgrest; lenient kotlinx serializer; `isConfigured`. |
-| `AuthRepository.kt` | Email-OTP: `sendEmailCode` (`signInWith(OTP)`), `verifyEmailCode` (`verifyEmailOtp`), `sessionStatus`, `signOut`. |
-| `MembersRepository.kt` | `loadStakes`, `loadMembers(stakeId)` (exact column list, `.eq(stake_id)`, order unit→name), `missionariesByUnit`. |
+| `AppConfig.kt` | BuildConfig accessors (`supabaseConfigured`, `brokerAvailable`, urls). |
+| `SupabaseClientProvider.kt` | Single `SupabaseClient` (Auth + Postgrest, lenient kotlinx serializer). |
+| `AuthRepository.kt` | Email-OTP + broker-OTP adoption (`verifyBrokerOtp`, `adoptRefreshToken`), `sessionStatus`, `accessToken`, `signOut`. |
+| `MembersRepository.kt` | `loadStakes`/`loadMembers(stakeId)`/`missionariesByUnit`, `isAdmin` (rpc). |
+| `CommentsRepository.kt` | `member_comments` read/insert. |
+| `InviteRepository.kt` | invitations/units + `invite_power_user`/`revoke_power_user` rpc. |
+| `AdminRepository.kt` | `app_admins` list + `revoke_admin` rpc. |
+| `Net.kt` | Shared Ktor `HttpClient` (OkHttp) + manual JSON + `JsonObject` accessors. |
+| `BrokerClient.kt` | Church-login broker (password/MFA, email relay, enrollment, sync-now, revoke, schedule, Google Drive, contact, report) — ported from `broker_client.dart`. |
+| `AdminClient.kt` | Broker `/admin/*` + `/feedback` — ported from `admin_client.dart`. |
+| `PasskeyClient.kt` | WebAuthn via Credential Manager against `/webauthn/*` — native analog of `passkey_client.dart`. |
+| `ErrorReporter.kt` | Uncaught-error telemetry → broker `/log` (no PII). |
+| `AppPrefs.kt` | DataStore prefs: theme, app-lock, current stake, passkey-suggested. |
 
 ## viewmodel/ — MVVM (StateFlow)
 | File | Purpose |
 |---|---|
-| `AuthViewModel.kt` | `gate` (Loading/SignedOut/SignedIn from `sessionStatus`) + `LoginUiState` (email→code steps). |
-| `DashboardViewModel.kt` | Bootstraps stakes → scopes to first stake → loads members; `switchStake`, `refresh`; `DashboardUiState`. |
+| `AuthViewModel.kt` | `gate` + the 3-mode login flow (church/MFA, email/relay, passkey). |
+| `DashboardViewModel.kt` | Stakes/members, admin check, enrollment status, syncing banner, sync-now/revoke, stake persistence, passkey upsell. |
+| `ThemeViewModel.kt` / `AppLockViewModel.kt` | Persisted theme cycle / app-lock pref. |
+| `InviteViewModel.kt` | Power-user list + invite/revoke. |
+| `AdminViewModel.kt` | Independently-loaded admin panels + maintenance/rerun/revoke/sync/invite. |
+| `ActionsViewModel.kt` | Contact, feedback, report(+email), add-passkey. |
+| `SyncSettingsViewModel.kt` | Schedule + Google Drive sections. |
+| `CommentsViewModel.kt` | Member notes read/add (+ factory). |
+| `ViewModelFactory.kt` | `AppViewModelFactory` for the Context-backed ViewModels. |
 
 ## ui/ — Compose
 | File | Purpose |
 |---|---|
-| `App.kt` | Theme + auth gate + NavHost (dashboard, `detail/{uuid}`). |
-| `MainActivity.kt` | Single-Activity host; `setContent { App() }`; edge-to-edge. |
-| `theme/Color.kt` | Tab/Org/Milestone/Status/unit palettes (match the Flutter hex values). |
-| `theme/Theme.kt` | Material3 theme (indigo seed, dynamic color on Android 12+, dark mode). |
-| `screens/LoginScreen.kt` | Email + 6-digit code form. |
-| `screens/DashboardScaffold.kt` | TopAppBar (stake switcher), 5-tab `NavigationBar` (per-tab accent), body switch. |
-| `screens/PersonDetailScreen.kt` | Header + milestone pills + rich `details` sections + flat fallback. |
-| `screens/StatusScreens.kt` | Loading / error / empty-members / empty-panel. |
-| `screens/ConfigErrorScreen.kt` | Shown when `SUPABASE_*` are blank. |
-| `screens/tabs/BaptismsScreen.kt` | Date timeline (overdue → scheduled), per-date rail rows. |
-| `screens/tabs/GoldenHourScreen.kt` | Segmented New/Taught; completion card; org filter; window; list. |
-| `screens/tabs/MissingSheet.kt` | Bottom sheet of eligible members still missing a milestone. |
-| `screens/tabs/NeedsScreen.kt` | Category chips + missing list + per-unit chips + org filter + sort. |
-| `screens/tabs/TableScreen.kt` | Sortable, color-coded field grid. |
-| `screens/tabs/KpisScreen.kt` | Stub (summary numbers; charts not implemented). |
-| `components/MilestoneChips.kt` | `GoldenHourChips` (circle / labeled pills, next-step ring). |
-| `components/OrgFilterBar.kt` | WML/EQ/RS toggle chips + Clear filters. |
-| `components/MemberRow.kt` | Member list row (photo, age, date, responsibility chip, chips). |
-| `components/Common.kt` | `SectionCard`, `CountBadge`, `BigHeader`, `AccentBar`, `FlowLayout`, `MutedText`. |
-| `components/Avatars.kt` | `InitialsAvatar`, `PhotoAvatar` (Coil), `initialsOf`. |
-| `util/Dates.kt` | Display date formatters (matching the Flutter intl patterns). |
+| `App.kt` | Theme + auth gate + biometric gate + NavHost (dashboard/detail/settings/invite/admin). |
+| `MainActivity.kt` | `FragmentActivity` host; installs error reporting; `setContent { App() }`. |
+| `BiometricLock.kt` | `AppBiometric` (BiometricPrompt availability + authenticate). |
+| `theme/Color.kt` / `theme/Theme.kt` | Accent palettes + Material3 theme (persisted light/dark/system). |
+| `screens/LoginScreen.kt` | 3-mode sign-in + disclaimer + status/error. |
+| `screens/BiometricGate.kt` | Locked screen + unlock prompt. |
+| `screens/DashboardScaffold.kt` | Top bar (stake switcher, freshness chip, overflow), banners, skeleton, empty states, sheets, snackbars, passkey upsell. |
+| `screens/PersonDetailScreen.kt` | Header + open-in-LCR + milestone chips + rich `details` + notes. |
+| `screens/SettingsScreen.kt` | Appearance/Security/Support/About/Account (self-hosted dialogs + snackbar). |
+| `screens/InviteScreen.kt` | Power-user invite/revoke + unit-scope picker. |
+| `screens/AdminScreen.kt` | The full Ops console (5 panels). |
+| `screens/SyncSettingsSheet.kt` | Status + schedule + Google Drive. |
+| `screens/ReportSheet.kt` | Report totals + most-needed + outstanding + email. |
+| `screens/StatusScreens.kt` | Loading/error/empty + `EnrollmentEmptyState`. |
+| `screens/ConfigErrorScreen.kt` | Blank-Supabase config screen. |
+| `screens/tabs/*` | Baptisms, GoldenHour, Needs, **Kpis** (+ `KpiDrillSheets`), Table, MissingSheet. |
+| `components/MilestoneChips.kt`,`OrgFilterBar.kt`,`MemberRow.kt`,`Common.kt`,`Avatars.kt` | Shared list/detail widgets. |
+| `components/FreshnessChip.kt`,`Banners.kt`,`Shimmer.kt` | Freshness chip + dialog, syncing/stale banners, skeletons. |
+| `components/LineChart.kt` | Hand-drawn Canvas trend line (gradient fill, dots, value labels, prev overlay, tap→bucket). |
+| `components/MissionaryChip.kt` | Missionary name chip → call/email. |
+| `components/Dialogs.kt` | Contact/Feedback/About/Confirm dialogs + disclaimer copy. |
+| `util/Dates.kt` | Display date formatters. |
 
-## test/ — JVM unit tests (no device)
+## test/ — JVM unit tests
 | File | Purpose |
 |---|---|
-| `logic/DateParseTest.kt` | Date formats, sentinels, age, member-1yr, `monthsDaysAgo`. |
-| `logic/MilestonesTest.kt` | Eligibility (age/sex/tenure gates), completion, eligible-only averages. |
-| `logic/OrgsTest.kt` | Unassigned / first-year-WML / after-year EQ-RS / 12-month boundary. |
+| `logic/DateParseTest.kt`,`MilestonesTest.kt`,`OrgsTest.kt` | Date/milestone/org logic (existing). |
+| `logic/KpisTest.kt` | KPI windows (5 weekly / 12 monthly buckets), unique-per-bucket, event→bucket mapping, ALL year/month granularity, lessons-with-member, range labels. |
+| `logic/FreshnessTest.kt` | `ago` buckets + staleness color thresholds. |

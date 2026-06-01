@@ -14,6 +14,8 @@ data class Stake(
     @SerialName("name") val name: String? = null,
     @SerialName("unit_number") val unitNumber: String? = null,
     @SerialName("last_synced_at") val lastSyncedAt: String? = null,
+    @SerialName("sync_state") val syncState: String? = null,
+    @SerialName("sync_started_at") val syncStartedAt: String? = null,
     @SerialName("missionaries") val missionaries: JsonElement? = null,
 )
 

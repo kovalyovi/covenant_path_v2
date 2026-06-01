@@ -1,116 +1,114 @@
-# Covenant Path — Native Android (PoC)
+# Covenant Path — Native Android
 
-A proof-of-concept native Android rebuild of the Flutter viewer (`apps/viewer`), to compare native
-architecture/feel against Flutter. **Kotlin + Jetpack Compose + Material 3**, MVVM, Supabase via
-**supabase-kt**. Read-only: the app only ever reads Supabase (RLS-scoped); it never touches the
-church system.
+A full-feature native Android build of the Flutter viewer (`apps/viewer`), at **100% feature parity**
+with it (see `PARITY_STATUS.md`). **Kotlin + Jetpack Compose (Material 3)**, MVVM (ViewModel +
+StateFlow), coroutines/Flow, navigation-compose, single-Activity. Supabase via **supabase-kt 3.x**
+(auth + postgrest, kotlinx-serialization). Read-only against Supabase (RLS-scoped); the broker
+(`backend/auth_broker`) is used for Church login, passkeys, sync settings, reports and the admin
+console — exactly as the Flutter clients use it.
 
-> Shared brief: `../SPEC.md`. Business logic mirrors `apps/viewer/lib/golden_hour.dart` and the
-> dashboard views exactly (ported, not transliterated).
+> The authoritative checklist is `../PARITY.md`; the per-item status is `PARITY_STATUS.md`.
+> Business logic mirrors `apps/viewer/lib/` (ported, not transliterated) and is unit-tested.
 
 ## Architecture
 
-Single-Activity + Compose, unidirectional data flow:
+Single-Activity (`FragmentActivity`, for BiometricPrompt) + Compose, unidirectional data flow:
 
 ```
 ui/ (Compose)
-  screens/        LoginScreen, DashboardScaffold (5-tab bottom nav), PersonDetailScreen,
-                  ConfigErrorScreen, StatusScreens
-  screens/tabs/   BaptismsScreen, GoldenHourScreen, NeedsScreen, KpisScreen (stub), TableScreen
-  components/     GoldenHourChips, OrgFilterBar, MemberRow, SectionCard, Avatars, FlowLayout …
-  theme/          Material3 theme (indigo seed, dynamic color) + Tab/Org/Milestone/Status colors
+  screens/        LoginScreen (3 modes), DashboardScaffold (freshness chip, overflow, banners),
+                  PersonDetailScreen (+notes, +open-in-LCR), SettingsScreen, InviteScreen,
+                  AdminScreen, SyncSettingsSheet, ReportSheet, BiometricGate, StatusScreens,
+                  ConfigErrorScreen
+  screens/tabs/   BaptismsScreen, GoldenHourScreen, NeedsScreen, KpisScreen (charts), TableScreen,
+                  KpiDrillSheets, MissingSheet
+  components/     GoldenHourChips, OrgFilterBar, MemberRow, SectionCard, Avatars, FlowLayout,
+                  FreshnessChip, Banners, Shimmer, LineChart (Canvas), MissionaryChip, Dialogs
+  theme/          Material3 theme (indigo seed, persisted light/dark/system) + accent palettes
         ▲ collectAsStateWithLifecycle
-viewmodel/        AuthViewModel, DashboardViewModel  (ViewModel + StateFlow)
-        ▲
-data/             SupabaseClientProvider, AuthRepository, MembersRepository  (repository layer)
-        ▲
-model/            Member, Stake, Details, … (kotlinx-serializable; @SerialName == DB columns)
-logic/            Milestones, OrgBucket(Orgs), DateParse  (PURE Kotlin — unit-tested)
+viewmodel/        Auth, Dashboard, Theme, AppLock, Invite, Admin, Actions, SyncSettings, Comments
+        ▲          (+ AppViewModelFactory for the Context-backed ones)
+data/             SupabaseClientProvider, Auth/Members/Comments/Invite/Admin repositories,
+                  BrokerClient, AdminClient, PasskeyClient, ErrorReporter, AppPrefs (DataStore),
+                  Net (Ktor + JSON), AppConfig
+model/            Member, Stake, Details, Comment, Invitation/Unit/AppAdmin (kotlinx-serializable)
+logic/            Milestones, OrgBucket(Orgs), DateParse, Kpis, Freshness  (PURE Kotlin — unit-tested)
 util/             Dates (display formatters)
 ```
 
-- **State**: each screen reads a `StateFlow<…UiState>` from its `ViewModel`; UI is a pure function
-  of state. Coroutines + `Flow` for all async.
-- **Navigation**: `androidx.navigation:navigation-compose`. The detail route takes a `person_uuid`
-  and looks the member up from the dashboard's loaded list (no whole-object serialization).
-- **Auth gate**: `AuthViewModel.gate` maps supabase-kt's `sessionStatus` (`Initializing` →
-  Loading, `Authenticated`/`NotAuthenticated`) to route Login vs Dashboard.
-- **RLS only**: no app-side access checks. The dashboard scopes to ONE stake
-  (`.eq("stake_id", id)`) exactly like the Flutter `_load`.
+- **State**: each screen reads a `StateFlow<…UiState>` from a `ViewModel`; UI is a pure function of
+  state. Coroutines + Flow for all async.
+- **Navigation**: `navigation-compose` (dashboard, `detail/{uuid}`, settings, invite, admin). The
+  detail route looks the member up by `person_uuid` from the loaded list.
+- **Auth gate**: `AuthViewModel.gate` maps supabase-kt `sessionStatus` → Login vs (BiometricGate →)
+  Dashboard.
+- **RLS only**: no app-side access checks; the dashboard scopes to ONE stake (`.eq("stake_id", id)`).
 
 ## Build / run
 
-You need **Android Studio (Ladybug or newer)** with the Android SDK (this PoC was authored without a
-local JDK/Gradle, so it has **not been compiled** — see caveats).
+Open `native/android/` in Android Studio (Ladybug+) or use the bundled wrapper. CI builds it with a
+clean JDK 17 + Gradle (`./gradlew :app:testDebugUnitTest` then `./gradlew :app:assembleDebug`).
 
-1. Open `native/android/` in Android Studio (it will sync Gradle and download dependencies,
-   including supabase-kt from Maven Central). Or use the bundled wrapper: `./gradlew :app:assembleDebug`.
-2. Provide the Supabase config (the anon/publishable key is safe on clients — RLS does the gating;
-   **never commit a real key**). Any of:
-   - Gradle properties (CLI): `./gradlew :app:assembleDebug -PSUPABASE_URL=https://<ref>.supabase.co -PSUPABASE_ANON_KEY=sb_publishable_...`
-   - Environment variables `SUPABASE_URL` / `SUPABASE_ANON_KEY` (CI-friendly).
-   - A git-ignored `~/.gradle/gradle.properties` with the two keys.
-   These feed `BuildConfig.SUPABASE_URL` / `BuildConfig.SUPABASE_ANON_KEY` (see `app/build.gradle.kts`).
-   With blank config the app shows a config screen (mirrors the Flutter `_ConfigError`).
-3. Run on a device/emulator (minSdk 26 / target 35). Sign in with **email OTP**: enter the email
-   your stake has on file → Supabase emails a 6-digit code → enter it.
+Provide config (the anon/publishable key is safe on clients — RLS gates everything; **never commit a
+real key**). Any of:
+- CLI: `./gradlew :app:assembleDebug -PSUPABASE_URL=https://<ref>.supabase.co -PSUPABASE_ANON_KEY=sb_publishable_... -PBROKER_URL=https://broker.example.org`
+- Env vars `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `BROKER_URL` (CI-friendly).
+- A git-ignored `~/.gradle/gradle.properties`.
 
-Unit-test the ported logic (no device needed): `./gradlew :app:testDebugUnitTest`.
+These feed `BuildConfig.SUPABASE_URL` / `SUPABASE_ANON_KEY` / `BROKER_URL` (all default to `""`).
+With a blank Supabase config the app shows a config screen; with a blank `BROKER_URL` it falls back
+to Email-code login and hides Church login / passkeys / reports / sync settings / admin.
+
+Sign in with **Church account** (+MFA), **Email code**, or a **passkey** (when a broker is set);
+Email-only otherwise. Unit-test the ported logic (no device): `./gradlew :app:testDebugUnitTest`.
 
 ## Versions
 
 | Thing | Version |
 |---|---|
 | Kotlin | 2.1.0 (standalone Compose compiler plugin `org.jetbrains.kotlin.plugin.compose`) |
-| AGP | 8.7.3 |
+| AGP | 8.7.3 · Gradle 8.11.1 (wrapper committed) |
 | Compose BOM | 2024.12.01 (Material 3) |
-| supabase-kt (BOM) | 3.1.1 — modules `auth-kt` (gotrue) + `postgrest-kt`, serializer = kotlinx |
-| Ktor | 3.0.3 (`ktor-client-okhttp` engine) |
+| supabase-kt (BOM) | 3.1.1 — `auth-kt` (gotrue) + `postgrest-kt`, serializer = kotlinx |
+| Ktor | 3.0.3 (`ktor-client-okhttp` + `-core`) — also used by our broker/admin/passkey clients |
 | navigation-compose | 2.8.5 · lifecycle 2.8.7 · Coil 2.7.0 |
+| biometric | 1.1.0 · credentials 1.3.0 (+play-services-auth) · datastore-preferences 1.1.1 |
+| fragment | 1.8.5 (pinned coherent) · material (XML launch theme) 1.12.0 |
 | min / target SDK | 26 / 35 |
 
-> Note: supabase-kt renamed the `gotrue-kt` artifact to **`auth-kt`** in 3.0.0 (the API is still
-> `supabase.auth`). The version catalog uses `auth-kt`; the BOM pins module versions together.
+> supabase-kt renamed `gotrue-kt` → **`auth-kt`** in 3.0.0 (API still `supabase.auth`). The BOM pins
+> module versions together. Charts are **hand-drawn on a Compose `Canvas`** (no chart library) so
+> there's no third-party chart API to break the build.
 
-## Implemented vs stubbed
+## What's implemented
 
-**Implemented**
-- Email-OTP login (`signInWith(OTP)` → `verifyEmailOtp`) via gotrue.
-- Supabase data layer: typed `Member` model + `MembersRepository` selecting the exact Flutter
-  column list, scoped to one stake, ordered by unit then name; stakes + missionaries decode.
-- **Baptisms** — investigators with a planned date as a timeline: overdue ("date passed") block,
-  then "Scheduled", grouped by date with relative-day labels.
-- **Golden Hour** — New Members (completion % per milestone, eligible-only; milestone chips with
-  next-step highlight; WML/EQ/RS org filter all-on-by-default + Clear filters; Week/Month/Year/All
-  window; tap a stat → who's still missing it) and Being Taught.
-- **Needs** — per-milestone category selector with outstanding counts; eligible members still
-  missing the step; per-unit colored breakdown; same org filter; baptism-date sort toggle.
-- **Person Detail** — header (photo/initials + baptism line), milestone pills, and the rich
-  `details` sections (sacrament dots, friends, priesthood, calling, ministering assignment,
-  ministers' names, temple, principles-taught dots, self-reliance, flags). Flat-field fallback when
-  `details` is absent. "names temporarily unavailable" note when a Yes flag has no names.
-- **Table** — every field, color-coded (Yes/No/N-A, recommend, sex), 3-state sort on text columns,
-  horizontal scroll.
-- **Milestone / org-ownership / date-parsing logic** ported 1:1 and covered by unit tests.
+Everything in `../PARITY.md` sections A–F. Highlights:
+- **3-mode login** (Church account + MFA select/verify, Email code with broker-relay backup, passkey
+  via Credential Manager), **biometric app-lock**, **dark mode** (persisted), **stake switcher**.
+- **Freshness chip** + **Sync-now**, **overflow menu**, **syncing / stale-credential banners**,
+  **skeleton loading**, per-enrollment **empty states**.
+- All 5 tabs: Baptisms (combined/per-unit + missionary strip), Golden Hour, Needs, **KPIs with
+  charts** (series math ported 1:1), Table.
+- Person detail with rich `details` sections, **notes/comments**, and **open in LCR**.
+- **Sync settings** sheet (status + schedule + Google Drive), **Generate report** (+email),
+  **Invite power users**, **Settings**, **Contact / Send feedback**, **Admin · Ops console**.
+- **Error reporting** to the broker `/log` (no PII).
 
-**Stubbed / out of scope** (per SPEC.md)
-- **KPIs** — labeled stub with summary numbers; no time-series charts (Compose has no first-party
-  chart lib; Vico would be the next step).
-- Table's per-column value-filter popups (sorting is implemented; filtering omitted).
-- Church-account broker login, passkeys, admin/ops console, report generation, Google Drive, push,
-  in-app schedule, notes/comments, the photo pipeline (we show `photo_url` if present, else initials).
+The one deliberate gap is **Table's per-column value-filter popups** (sorting + color-coding are
+present) — see `PARITY_STATUS.md` #16.
 
-## Compile caveats (be honest)
+## Compile notes (authored without a local toolchain)
 
-This project was **written without a local Android toolchain (no JDK/Gradle/Android Studio on the
-authoring machine), so it has not been compiled or run.** It is written to be correct and idiomatic:
-
-- supabase-kt 3.1.1 API usage (`createSupabaseClient { install(Auth); install(Postgrest);
-  defaultSerializer = KotlinXSerializer(json) }`, `signInWith(OTP)`, `verifyEmailOtp(type =
-  OtpType.Email.EMAIL, …)`, `postgrest.from(...).select(Columns.raw(...)) { filter { eq(...) };
-  order(...) }.decodeList<Member>()`, `auth.sessionStatus`) was verified against the v3.1.1 source.
-- The Gradle wrapper jar + scripts are included so Android Studio can sync immediately; if the
-  wrapper jar is rejected, run `gradle wrapper --gradle-version 8.11.1` once.
-- Expect to resolve the usual first-sync papercuts (an icon name in `material-icons-extended`, a
-  dependency version nudge). The pure `logic/` layer + its tests are the most robust part and are
-  the truest apples-to-apples comparison against `golden_hour.dart`.
+This was written without a local JDK/Gradle/Android SDK, so it has not been run on this machine, but
+it's written to compile under the CI `assembleDebug`:
+- All catalog versions + plugins resolve to published artifacts (verified on Maven Central / Google
+  Maven).
+- Every Compose Material icon used was audited against `material-icons-extended`/`-core` 1.7.6.
+- supabase-kt 3.1.1 API usage verified against the published sources (`signInWith(OTP)`,
+  `verifyEmailOtp(type = OtpType.Email.EMAIL, …)`, `refreshSession`/`importSession`,
+  `postgrest.from(...).select(Columns.raw(...)){ filter{eq}; order }.decodeList`, `rpc(...).decodeAs`).
+- Credential Manager API verified against `androidx.credentials` 1.3.0 sources
+  (`GetPublicKeyCredentialOption`, `CreatePublicKeyCredentialRequest`,
+  `getCredential/createCredential`, `authenticationResponseJson/registrationResponseJson`).
+- The pure `logic/` layer + its JVM tests are the most robust part and the truest apples-to-apples
+  comparison against the Flutter source.

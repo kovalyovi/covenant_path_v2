@@ -1,24 +1,27 @@
 #if canImport(UIKit)
 import SwiftUI
 
-/// Every covenant-path field for baptized members, color-coded Yes(green)/No(red)/N/A(grey). The
-/// Flutter app renders a wide horizontal DataTable; on iOS a horizontally-scrolling grid is awkward,
-/// so this PoC uses an idiomatic **sortable list** (the spec explicitly allows "a basic sortable
-/// list") — one row per member with the status fields as colored cells, plus a sort menu.
+/// Every covenant-path field for baptized members in a sortable, per-column-value-filterable grid,
+/// color-coded Yes(green)/No(red)/N-A(grey)/recommend. Faithful port of `_SpreadsheetView`: a
+/// horizontally-scrolling table (the spec's iOS pattern), 3-state sort on text columns, a value-picker
+/// filter dialog per column, "N members (filtered)" + clear-filters, and row → detail.
 struct TableView: View {
     let rows: [Member]
 
-    /// (header, keyPath, kind) — mirrors `_SpreadsheetView._cols`.
     enum Kind { case text, gender, yesno, recommend }
     struct Column: Identifiable {
         let title: String
         let value: (Member) -> String
         let kind: Kind
         var id: String { title }
+        var sortable: Bool { kind == .text }
     }
 
-    @State private var sortColumn: String = "Member"
+    @State private var sortColumn: String?      // nil = no sort (3-state: asc → desc → none)
     @State private var ascending = true
+    /// Per-column EXCLUDED values (the unchecked ones). A row passes if none of its values excluded.
+    @State private var excluded: [String: Set<String>] = [:]
+    @State private var filterColumn: Column?
 
     private let columns: [Column] = [
         Column(title: "Member", value: { $0.name ?? "" }, kind: .text),
@@ -39,71 +42,141 @@ struct TableView: View {
 
     private var baptized: [Member] { rows.filter { !$0.isInvestigator } }
 
-    private var sorted: [Member] {
-        guard let col = columns.first(where: { $0.id == sortColumn }) else { return baptized }
-        return baptized.sorted {
-            let c = col.value($0).lowercased().compare(col.value($1).lowercased())
-            return ascending ? c == .orderedAscending : c == .orderedDescending
+    private func passes(_ m: Member) -> Bool {
+        for (key, set) in excluded {
+            if let col = columns.first(where: { $0.id == key }), set.contains(col.value(m)) { return false }
         }
+        return true
     }
 
-    /// Status columns to show as colored chips in each row (everything except Member/Unit/Baptism/Member-for).
-    private var chipColumns: [Column] { columns.filter { $0.kind == .yesno || $0.kind == .recommend || $0.kind == .gender } }
+    private var filtered: [Member] {
+        var r = baptized.filter(passes)
+        if let sortColumn, let col = columns.first(where: { $0.id == sortColumn }) {
+            r.sort {
+                let c = col.value($0).lowercased().compare(col.value($1).lowercased())
+                return ascending ? c == .orderedAscending : c == .orderedDescending
+            }
+        }
+        return r
+    }
+
+    private var activeFilters: Int { excluded.values.filter { !$0.isEmpty }.count }
+
+    // Column widths so the header + cells line up in the horizontal scroll.
+    private func width(_ col: Column) -> CGFloat {
+        switch col.title {
+        case "Member": return 150
+        case "Unit": return 130
+        case "Baptism": return 110
+        case "Member for": return 110
+        case "Sex": return 56
+        default: return 92
+        }
+    }
+    private let rowNumWidth: CGFloat = 40
 
     var body: some View {
-        List {
-            Section {
-                ForEach(sorted) { m in
-                    NavigationLink(value: m) { row(m) }
-                }
-            } header: {
-                HStack {
-                    Text("\(baptized.count) member\(baptized.count == 1 ? "" : "s")")
-                    Spacer()
-                    sortMenu
-                }
-                .textCase(nil)
-            }
-        }
-        .listStyle(.plain)
-    }
-
-    private func row(_ m: Member) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text(m.displayName).fontWeight(.semibold)
+        VStack(spacing: 0) {
+            HStack {
+                Text("\(filtered.count) member\(filtered.count == 1 ? "" : "s")"
+                     + (activeFilters > 0 ? " (filtered)" : ""))
+                    .font(.footnote).foregroundStyle(.secondary)
                 Spacer()
-                Text(m.unitName ?? "").font(.caption).foregroundStyle(.secondary)
+                if activeFilters > 0 {
+                    Button {
+                        excluded.removeAll()
+                    } label: {
+                        Label("Clear \(activeFilters) filter\(activeFilters == 1 ? "" : "s")",
+                              systemImage: "line.3.horizontal.decrease.circle").font(.caption)
+                    }
+                }
             }
-            if let baptism = m.baptismDate, !baptism.isEmpty, baptism != "needs-profile-api" {
-                Text("Baptized \(baptism)").font(.caption).foregroundStyle(.secondary)
-            }
-            FlowLayout(spacing: 6) {
-                ForEach(chipColumns) { col in
-                    let v = col.value(m)
-                    if !v.isEmpty { cell(title: col.title, value: v, kind: col.kind) }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+
+            ScrollView([.horizontal, .vertical]) {
+                VStack(alignment: .leading, spacing: 0) {
+                    headerRow
+                    ForEach(Array(filtered.enumerated()), id: \.element.id) { idx, m in
+                        NavigationLink(value: m) { dataRow(idx: idx, m: m) }
+                            .buttonStyle(.plain)
+                        Divider()
+                    }
                 }
             }
         }
-        .padding(.vertical, 4)
+        .sheet(item: $filterColumn) { col in
+            ColumnFilterSheet(
+                title: col.title,
+                values: distinctValues(col),
+                excluded: excluded[col.id] ?? [],
+                onApply: { newExcluded in
+                    if newExcluded.isEmpty { excluded.removeValue(forKey: col.id) }
+                    else { excluded[col.id] = newExcluded }
+                })
+        }
     }
 
-    /// A color-coded cell chip: "<short label> <value>" with the Yes/No/N-A/recommend coloring.
-    private func cell(title: String, value: String, kind: Kind) -> some View {
-        let bg = cellColor(value, kind)
-        return HStack(spacing: 4) {
-            Text(title).font(.caption2).foregroundStyle(.secondary)
-            Text(value).font(.caption2.weight(.semibold))
+    private var headerRow: some View {
+        HStack(spacing: 0) {
+            Text("#").font(.caption.bold()).foregroundStyle(.white)
+                .frame(width: rowNumWidth, alignment: .leading).padding(.horizontal, 6)
+            ForEach(columns) { col in
+                headerCell(col).frame(width: width(col), alignment: .leading).padding(.horizontal, 6)
+            }
         }
-        .padding(.horizontal, 7).padding(.vertical, 3)
-        .background(bg ?? Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))
+        .padding(.vertical, 10)
+        .background(Color.accentColor)
+    }
+
+    private func headerCell(_ col: Column) -> some View {
+        HStack(spacing: 3) {
+            Text(col.title).font(.caption.bold()).foregroundStyle(.white).lineLimit(1)
+            if col.sortable {
+                Button { toggleSort(col) } label: {
+                    Image(systemName: sortColumn == col.id
+                          ? (ascending ? "arrow.up" : "arrow.down") : "arrow.up.arrow.down")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(sortColumn == col.id ? 1 : 0.6))
+                }
+            }
+            Button { filterColumn = col } label: {
+                Image(systemName: (excluded[col.id]?.isEmpty == false) ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                    .font(.caption2)
+                    .foregroundStyle((excluded[col.id]?.isEmpty == false) ? Color(hex: 0xFFE082) : .white.opacity(0.7))
+            }
+        }
+    }
+
+    private func dataRow(idx: Int, m: Member) -> some View {
+        HStack(spacing: 0) {
+            Text("\(idx + 1)").font(.caption).foregroundStyle(.secondary)
+                .frame(width: rowNumWidth, alignment: .leading).padding(.horizontal, 6)
+            ForEach(columns) { col in
+                cell(col.value(m), col.kind)
+                    .frame(width: width(col), alignment: .leading).padding(.horizontal, 6)
+            }
+        }
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private func cell(_ value: String, _ kind: Kind) -> some View {
+        if let bg = cellColor(value, kind) {
+            Text(value).font(.caption.weight(.medium))
+                .padding(.horizontal, 7).padding(.vertical, 3)
+                .background(bg, in: RoundedRectangle(cornerRadius: 6))
+                .foregroundStyle(.black)
+        } else {
+            Text(value).font(.caption).lineLimit(1)
+        }
     }
 
     private func cellColor(_ v: String, _ kind: Kind) -> Color? {
         switch kind {
         case .gender:
-            if v == "M" { return Color(hex: 0xBBDEFB) }   // blue 100
-            if v == "F" { return Color(hex: 0xF8BBD0) }   // pink 100
+            if v == "M" { return Color(hex: 0xBBDEFB) }
+            if v == "F" { return Color(hex: 0xF8BBD0) }
             return nil
         case .yesno:
             if v == "Yes" { return StatusColor.yes }
@@ -120,26 +193,79 @@ struct TableView: View {
         }
     }
 
-    private var sortMenu: some View {
-        Menu {
-            ForEach(columns.filter { $0.kind == .text }) { col in
-                Button {
-                    if sortColumn == col.id { ascending.toggle() } else { sortColumn = col.id; ascending = true }
-                } label: {
-                    Label(col.title, systemImage: sortColumn == col.id
-                          ? (ascending ? "arrow.up" : "arrow.down") : "")
-                }
-            }
-        } label: {
-            Label("Sort: \(sortColumn)", systemImage: "arrow.up.arrow.down")
-                .font(.caption)
+    private func toggleSort(_ col: Column) {
+        if sortColumn == col.id {
+            if ascending { ascending = false } else { sortColumn = nil }  // asc → desc → none
+        } else {
+            sortColumn = col.id; ascending = true
         }
+    }
+
+    /// Distinct values for a column, with counts, for the filter dialog.
+    private func distinctValues(_ col: Column) -> [(value: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for m in baptized { counts[col.value(m), default: 0] += 1 }
+        return counts.map { (value: $0.key, count: $0.value) }.sorted { $0.value < $1.value }
     }
 
     /// Strip the redundant "Member for " prefix (header already says it) — mirrors `_display`.
     private static func membershipShort(_ m: Member) -> String {
         let v = m.membershipDuration ?? ""
         return v.replacingOccurrences(of: #"(?i)^Member for\s*"#, with: "", options: .regularExpression)
+    }
+}
+
+/// Google-Sheets-style value picker (port of `_openFilter`): each distinct value with a checkbox;
+/// unchecking hides rows with that value. Select all / Clear all + Apply.
+struct ColumnFilterSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let title: String
+    let values: [(value: String, count: Int)]
+    let onApply: (Set<String>) -> Void
+
+    @State private var excluded: Set<String>
+
+    init(title: String, values: [(value: String, count: Int)], excluded: Set<String>,
+         onApply: @escaping (Set<String>) -> Void) {
+        self.title = title; self.values = values; self.onApply = onApply
+        _excluded = State(initialValue: excluded)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack {
+                        Button("Select all") { excluded.removeAll() }
+                        Spacer()
+                        Button("Clear all") { excluded = Set(values.map { $0.value }) }
+                    }
+                    .font(.callout)
+                }
+                ForEach(values, id: \.value) { v in
+                    Button {
+                        if excluded.contains(v.value) { excluded.remove(v.value) } else { excluded.insert(v.value) }
+                    } label: {
+                        HStack {
+                            Image(systemName: excluded.contains(v.value) ? "square" : "checkmark.square.fill")
+                                .foregroundStyle(excluded.contains(v.value) ? .secondary : Color.accentColor)
+                            Text(v.value.isEmpty ? "(blank)" : v.value).foregroundStyle(.primary)
+                            Spacer()
+                            Text("\(v.count)").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Filter · \(title)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Apply") { onApply(excluded); dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }
 #endif
