@@ -16,6 +16,7 @@ class _NeedsView extends StatefulWidget {
 class _NeedsViewState extends State<_NeedsView> {
   int? _selected; // milestone index; null until defaulted to the first category with outstanding members
   bool _ascending = true; // baptism date order: oldest-baptized (most overdue) first by default
+  OrgBucket? _orgFilter; // null = all orgs; else only converts that org currently owns (#needs-org)
 
   /// Sort the "still need" list by baptism date, then unit (#feedback), honoring asc/desc.
   int _cmp(Map<String, dynamic> a, Map<String, dynamic> b) {
@@ -36,20 +37,46 @@ class _NeedsViewState extends State<_NeedsView> {
 
   @override
   Widget build(BuildContext context) {
-    final baptized = widget.rows.where((m) => m['kind'] != 'investigator').toList();
+    final all = widget.rows.where((m) => m['kind'] != 'investigator').toList();
+    // Org-ownership filter (same buckets/colors as Golden Hour): a convert's integration is owned
+    // by missionaries/WML (first year) then EQ/RS — so a leader can see who needs Friends among the
+    // people THEIR org now watches over, per unit. (#needs-org)
+    final baptized = _orgFilter == null
+        ? all
+        : all.where((m) => responsibleOrg(m) == _orgFilter).toList();
     final missingByMs = [
       for (final ms in milestones)
         baptized.where((m) => ms.eligible(m) && !ms.complete(m)).toList()..sort(_cmp),
     ];
     final total = missingByMs.fold<int>(0, (a, l) => a + l.length);
+
+    // Shown in BOTH the empty + populated states, so a filter is never a dead end.
+    final orgFilter = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      const SizedBox(height: 10),
+      _OrgFilterBar(selected: _orgFilter, onSelect: (b) => setState(() => _orgFilter = b)),
+      if (_orgFilter != null) ...[
+        const SizedBox(height: 6),
+        _SubtleNote(orgResponsibilityNote(_orgFilter!)),
+      ],
+    ]);
+
     if (total == 0) {
       return _Page(
         tier: widget.tier,
-        header: const _BigHeader(
-            text: 'Needs Action', subtitle: 'Eligible members still missing each integration step'),
-        child: const Padding(
-            padding: EdgeInsets.all(32),
-            child: Center(child: Text('Nothing outstanding — everyone eligible is on track. 🎉'))),
+        header: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const _BigHeader(
+              text: 'Needs Action', subtitle: 'Eligible members still missing each integration step'),
+          orgFilter,
+        ]),
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Center(
+              child: Text(
+                  _orgFilter == null
+                      ? 'Nothing outstanding — everyone eligible is on track. 🎉'
+                      : 'Nothing outstanding for ${orgInfo(_orgFilter!).label}. 🎉',
+                  textAlign: TextAlign.center)),
+        ),
       );
     }
     final firstNonEmpty = missingByMs.indexWhere((l) => l.isNotEmpty);
@@ -62,6 +89,7 @@ class _NeedsViewState extends State<_NeedsView> {
       header: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const _BigHeader(
             text: 'Needs Action', subtitle: 'Eligible members still missing each integration step'),
+        orgFilter,
         const SizedBox(height: 12),
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
@@ -100,29 +128,60 @@ class _NeedsViewState extends State<_NeedsView> {
       final u = (m['unit_name'] ?? '—').toString();
       byUnit[u] = (byUnit[u] ?? 0) + 1;
     }
-    final unitParts = (byUnit.entries.toList()..sort((a, b) => b.value.compareTo(a.value)))
-        .map((e) => '${e.key} ${e.value}')
-        .join('   ·   ');
+    final units = byUnit.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
     return SectionCard(
       title: 'Needs ${ms.label}',
       leadingIcon: ms.icon,
+      iconColor: ms.color, // category identity color on the card icon
       trailing: _CountBadge(missing.length),
       child: missing.isEmpty
           ? const Padding(
               padding: EdgeInsets.symmetric(vertical: 16),
               child: Text('Everyone eligible has this. 🎉'))
           : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(unitParts,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey.shade600)),
+              // per-unit breakdown as colored chips (each ward a stable color) (#ward-colors)
+              Wrap(spacing: 6, runSpacing: 6, children: [
+                for (final e in units) _UnitCountChip(unit: e.key, count: e.value),
+              ]),
               const Divider(),
               for (var i = 0; i < missing.length; i++) ...[
                 if (i > 0) const Divider(height: 1),
-                _MemberRow(m: missing[i], onOpen: widget.onOpen, showUnit: true),
+                _MemberRow(m: missing[i], onOpen: widget.onOpen, showUnit: true, showResp: true),
               ],
             ]),
     );
   }
 }
+
+/// A small colored chip for a unit's outstanding count in the Needs breakdown. Each ward gets a
+/// stable color (hash → fixed palette) so a unit reads the same hue wherever it appears.
+class _UnitCountChip extends StatelessWidget {
+  const _UnitCountChip({required this.unit, required this.count});
+  final String unit;
+  final int count;
+  @override
+  Widget build(BuildContext context) {
+    final color = _unitColor(unit);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Text('$unit · $count',
+          style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w600)),
+    );
+  }
+}
+
+// A fixed, calm palette for per-unit accents — distinct from the status/org/nav colors; indexed by
+// a stable hash of the unit name so a ward keeps the same color across the session.
+const _unitPalette = <Color>[
+  Color(0xFF00695C), Color(0xFF4527A0), Color(0xFFAD1457), Color(0xFF283593),
+  Color(0xFF558B2F), Color(0xFF6D4C41), Color(0xFF00838F), Color(0xFFC62828),
+];
+Color _unitColor(String unit) => _unitPalette[unit.hashCode.abs() % _unitPalette.length];
 
 /// A category selector chip for the Needs view: icon + label + outstanding-count badge; filled
 /// when selected. Count 0 renders dimmed (that category is fully done).
@@ -135,17 +194,19 @@ class _CategoryChip extends StatelessWidget {
   final VoidCallback onTap;
   @override
   Widget build(BuildContext context) {
-    final c = Theme.of(context).colorScheme;
     final done = count == 0;
-    final fg = selected ? c.onPrimary : (done ? c.onSurfaceVariant.withValues(alpha: 0.6) : c.onSurfaceVariant);
+    // each category carries its own identity color (ms.color); a completed category reads muted.
+    final base = done ? Colors.grey.shade500 : ms.color;
+    final fg = selected ? Colors.white : base;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(20),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         decoration: BoxDecoration(
-          color: selected ? c.primary : c.surfaceContainerHighest,
+          color: selected ? base : base.withValues(alpha: 0.10),
           borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: base.withValues(alpha: selected ? 1 : 0.35)),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Icon(done ? Icons.check_circle : ms.icon, size: 17, color: fg),
@@ -156,14 +217,13 @@ class _CategoryChip extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
               decoration: BoxDecoration(
-                color: selected ? c.onPrimary.withValues(alpha: 0.25) : c.primary.withValues(alpha: 0.12),
+                color: selected
+                    ? Colors.white.withValues(alpha: 0.25)
+                    : base.withValues(alpha: 0.16),
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Text('$count',
-                  style: TextStyle(
-                      color: selected ? c.onPrimary : c.primary,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12)),
+                  style: TextStyle(color: fg, fontWeight: FontWeight.bold, fontSize: 12)),
             ),
           ],
         ]),
@@ -243,11 +303,12 @@ class _DateList extends StatelessWidget {
 class _MemberRow extends StatelessWidget {
   const _MemberRow(
       {required this.m, required this.onOpen, this.chips = false, this.showUnit = false,
-      this.dateField = 'baptism_date'});
+      this.showResp = false, this.dateField = 'baptism_date'});
   final Map<String, dynamic> m;
   final void Function(Map<String, dynamic>) onOpen;
   final bool chips;
   final bool showUnit;
+  final bool showResp; // show the responsible-org chip even without the milestone chips (Needs view)
   final String dateField;
 
   @override
@@ -256,7 +317,7 @@ class _MemberRow extends StatelessWidget {
     final date = parseMemberDate(m[dateField]);
     final age = ageOf(m);
     final isBaptism = dateField == 'baptism_date';
-    final resp = chips ? responsibleParty(m) : null; // ownership applies to baptized converts
+    final resp = (chips || showResp) ? responsibleParty(m) : null; // ownership applies to baptized converts
     final sub = Theme.of(context).textTheme.bodySmall;
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
