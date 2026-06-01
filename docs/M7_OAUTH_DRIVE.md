@@ -1,70 +1,65 @@
-# M7 — Per-stake Google OAuth Drive (design)
+# M7 — Per-stake Google Drive ownership (OAuth)
 
-**Goal:** each stake fully **owns** its spreadsheet. A leader signs in with their own Google
-account, grants Drive access, and we create + maintain the stake's sheet **in their Drive** — the
-operator (platform owner) can't see or edit it. This is the chosen alternative to the single
-platform service account (see [[project_per_stake_sheets]] and `docs/CUSTOM_API_KEYS.md`).
+**Status: SHIPPED.** Each enrolled stake can own its own spreadsheet in its leader's Google Drive.
+This doc records what was built and where it lives (was: "designed, not yet built").
 
-Status: **designed, not built.** It is security-sensitive (OAuth + encrypted refresh tokens) and
-needs a Google Cloud OAuth client that only the project owner can create — so it ships only with
-those credentials in hand and live-tested, never rushed.
+## Why
 
-## What the owner must create first (prerequisite)
+The platform's Google **service account has zero Drive storage** — it can call the Drive API but a
+file it "creates" has no owner with quota. The fix: **each stake owns its own spreadsheet** in
+*their* Drive, shareable with *their* leaders and revocable independently. The operator's own stake
+still uses the master `SPREADSHEET_ID`.
 
-1. **Google Cloud project → OAuth consent screen** (External, "Covenant Path"), scopes:
-   `https://www.googleapis.com/auth/drive.file` (create/manage only files the app makes — minimal),
-   plus `openid email`.
-2. **OAuth 2.0 Client ID** (type: Web application). Authorized redirect URI =
-   `https://covenant-path-broker.onrender.com/auth/google/callback` (+ `http://localhost:8787/...`
-   for dev). Gives a **client ID + client secret**.
-3. Enable the **Google Drive API** + **Google Sheets API** on that project.
-4. Put on the broker (Render) + `.env`: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`,
-   `GOOGLE_OAUTH_REDIRECT`. (`.env.example` should document these when built.)
+## The approach (OAuth, per-stake)
 
-Until those exist the feature stays a **no-op** (the "Connect Google Drive" button is hidden when
-the client id is unset), exactly like the Axiom/Sentry pattern.
+A stake's sync provider connects their Google account once (OAuth, `drive.file` scope). We store an
+envelope-encrypted refresh token on the stake and use it each sync to create + maintain that stake's
+spreadsheet **in their Drive**; the OAuth identity owns the file, and the service account is shared
+in as Editor so the existing `SheetsSync` writes the data unchanged. The platform never owns the file.
 
-## Flow
+## What was built (where each piece lives)
 
-```
-Leader (app) ──"Connect Google Drive"──▶ broker /auth/google/start
-   broker redirects to Google consent (state = signed JWT of stake_id + nonce, access_type=offline)
-Google ──code──▶ broker /auth/google/callback
-   broker exchanges code → { refresh_token, access_token }
-   encrypt refresh_token with CP_TOKEN_KEY (reuse backend/credentials vault) → store on the stake
-Daily sync (that stake) ─▶ refresh access_token from the stored refresh_token
-   create the sheet in the leader's Drive (drive.file) if none stored; else update it
-   share read-only with the stake's leadership emails (Drive permissions.create)
-```
+1. **Google OAuth client** — `backend/auth_broker/google_oauth.py` (`drive.file` + `openid email`;
+   HMAC-signed, stake-bound, short-TTL `state`; `start_url`, `exchange_code`, `refresh_access_token`,
+   envelope `encrypt_refresh` / `decrypt_refresh`, `access_token_for`).
+2. **Broker routes** — `backend/auth_broker/app.py`: `GET /auth/google/status`, `POST
+   /auth/google/start`, `GET /auth/google/callback`, `POST /auth/google/disconnect` (all
+   provider-gated via `admin.provider_stake_id`).
+3. **Token store** — migrations `0027_stake_gdrive.sql` + `0028_stake_gdrive_grant.sql`:
+   `stakes.gdrive_token` (envelope-encrypted), `gdrive_email`, `gdrive_connected_at`,
+   `gdrive_file_id`. Read/write helpers in `backend/auth_broker/admin.py`
+   (`gdrive_status_for`, `store_gdrive_token`, `disconnect_gdrive`).
+4. **Sheet provisioning** — `sheets_sync/oauth_drive.py` (`ensure_sheet`: create-on-first-use in the
+   leader's Drive, write headers, share Editor→service account + reader→leadership; idempotent).
+5. **Viewer UI** — `_GoogleDriveSection` in `apps/viewer/lib/views/dashboard_shell.dart` (Sync
+   settings): provider-only "Connect Google Drive", shows the connected email + the sheet link +
+   last-refresh, and a Disconnect; self-gates (hidden) when the broker has no OAuth configured.
+6. **Daily-sync wiring** — `scripts/daily_sync.py` `_resolve_stake_sheet`: if the stake has a
+   `gdrive_token`, mint an access token (`google_oauth.access_token_for`) and use / `ensure_sheet`
+   the per-stake file; else fall back (operator's own stake → master sheet; other stakes →
+   service-account create if possible, else skip Sheets — Supabase still syncs).
 
-## Pieces to build
+## Operator prerequisite (one-time, to enable it)
 
-- **Migration 00NN:** `stakes.gdrive_token bytea` (encrypted refresh token), `stakes.gdrive_email
-  text`, `stakes.gdrive_file_id text`. (Keep `spreadsheet_id` for the service-account path; gdrive_*
-  takes precedence when present.)
-- **`backend/auth_broker/google_oauth.py`:** `start_url(stake_id)` (signed state), `exchange(code,
-  state)` → store encrypted refresh token via the existing `backend/credentials` envelope vault
-  (CP_TOKEN_KEY), `access_token_for(stake)` (refresh on demand).
-- **Broker routes:** `GET /auth/google/start?stake=…` (auth-gated to a provider of that stake) →
-  302 to Google; `GET /auth/google/callback` → store + close-the-popup HTML.
-- **`sheets_sync/oauth_drive.py`:** create/share/write a sheet with a user access token (Sheets +
-  Drive REST). `_resolve_stake_sheet` (scripts/daily_sync.py) prefers the gdrive path when the stake
-  has a token, else the per-stake service-account sheet, else (operator only) the master.
-- **App:** a "Connect Google Drive" tile in Settings / Sync settings (only when the broker reports
-  the OAuth client is configured); shows connected account + a disconnect.
+The feature is a **no-op until** a Google Cloud OAuth client exists and its creds are on the broker:
+`GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT`
+(redirect = `<broker>/auth/google/callback`), with the Drive + Sheets APIs enabled and the
+`drive.file` + `openid email` scopes on the consent screen. Until set, "Connect Google Drive" stays
+hidden (same pattern as the other optional integrations).
 
-## Security notes (must hold)
+## Resolved open questions
 
-- Store **only the refresh token, encrypted** (CP_TOKEN_KEY); never log tokens. Same vault + rules
-  as the LCR delegated credentials ([[project_delegated_onboarding]]).
-- `drive.file` scope only — the app can touch **only the files it creates**, not the leader's whole
-  Drive.
-- `state` is a signed, short-TTL JWT bound to the stake + a nonce → no CSRF / stake-swap.
-- The callback must verify the signed-in caller is a **provider for that stake** before binding.
-- Disconnect = delete the stored token (and optionally the sheet).
+- **Token refresh / failure** — each sync exchanges the stored refresh token for a fresh access
+  token (`refresh_access_token`); on failure it raises "the leader must reconnect Drive" and the
+  sync degrades (Supabase still updates). The Sync-settings section surfaces the connection state.
+- **Stakes that never connect Drive** — they simply don't get a per-stake sheet: the operator's own
+  stake falls back to the master `SPREADSHEET_ID`; other stakes skip Sheets entirely (data still
+  lands in Supabase, which is what the app reads). No stake is blocked on connecting Drive.
 
-## Tests to add
+## Possible future polish (not blocking)
 
-- `google_oauth` state sign/verify round-trip + tamper rejection (offline).
-- token encrypt/decrypt via the vault (reuse the existing token-store test pattern).
-- `_resolve_stake_sheet` precedence: gdrive → service-account → master(operator-only).
+- Proactive in-app "reconnect Drive" nudge when a stored refresh token goes stale (today the failure
+  is logged + the section shows disconnected on next load).
+- Optionally let a non-provider leader connect Drive (today only the credential provider can).
+- Sharing-by-calling precision: today the reader share list = the stake's `user_roles` emails +
+  the credential `principal_email`; a calling allowlist could narrow it further.
