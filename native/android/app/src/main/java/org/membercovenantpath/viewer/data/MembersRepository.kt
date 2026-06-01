@@ -34,10 +34,14 @@ class MembersRepository(
     /** All stakes the signed-in user may see (RLS-scoped), freshest first. */
     suspend fun loadStakes(): List<Stake> {
         val stakes = client.postgrest.from("stakes")
-            .select(Columns.raw("id, name, unit_number, last_synced_at, missionaries"))
+            .select(Columns.raw("id, name, unit_number, last_synced_at, sync_state, sync_started_at, missionaries"))
             .decodeList<Stake>()
         return stakes.sortedByDescending { it.lastSyncedAt ?: "" }
     }
+
+    /** Whether the signed-in user is an app_admin (server RPC `is_admin`). False on any error. */
+    suspend fun isAdmin(): Boolean =
+        runCatching { client.postgrest.rpc("is_admin").decodeAs<Boolean>() }.getOrDefault(false)
 
     /** Members for ONE stake, ordered by unit_name then name (matches the Flutter select). */
     suspend fun loadMembers(stakeId: String): List<Member> =

@@ -3,16 +3,21 @@ package org.membercovenantpath.viewer.ui.screens
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.EventAvailable
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PersonAddAlt
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Timelapse
+import androidx.compose.material.icons.outlined.Summarize
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -23,26 +28,41 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
+import org.membercovenantpath.viewer.data.AppConfig
+import org.membercovenantpath.viewer.data.EnrollmentStatus
 import org.membercovenantpath.viewer.model.Member
 import org.membercovenantpath.viewer.model.Stake
+import org.membercovenantpath.viewer.ui.components.ConfirmDialog
+import org.membercovenantpath.viewer.ui.components.FreshnessChip
+import org.membercovenantpath.viewer.ui.components.MemberListSkeleton
+import org.membercovenantpath.viewer.ui.components.StaleCredentialBanner
+import org.membercovenantpath.viewer.ui.components.SyncingBanner
 import org.membercovenantpath.viewer.ui.screens.tabs.BaptismsScreen
 import org.membercovenantpath.viewer.ui.screens.tabs.GoldenHourScreen
 import org.membercovenantpath.viewer.ui.screens.tabs.KpisScreen
 import org.membercovenantpath.viewer.ui.screens.tabs.NeedsScreen
 import org.membercovenantpath.viewer.ui.screens.tabs.TableScreen
 import org.membercovenantpath.viewer.ui.theme.TabColors
+import org.membercovenantpath.viewer.viewmodel.ActionsViewModel
 import org.membercovenantpath.viewer.viewmodel.DashboardUiState
+import org.membercovenantpath.viewer.viewmodel.DashboardViewModel
 import org.membercovenantpath.viewer.viewmodel.LoadState
 
 /** The five tabs, each with its own accent (mirrors dashboard_page.dart `_tabs`). */
@@ -58,29 +78,92 @@ enum class DashboardTab(val label: String, val icon: ImageVector, val color: Col
 @Composable
 fun DashboardScaffold(
     state: DashboardUiState,
+    dashVm: DashboardViewModel,
+    actionsVm: ActionsViewModel,
     onOpenMember: (Member) -> Unit,
-    onRefresh: () -> Unit,
-    onSwitchStake: (String) -> Unit,
     onSignOut: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenInvite: () -> Unit,
+    onOpenAdmin: () -> Unit,
 ) {
     var tab by remember { mutableStateOf(DashboardTab.Baptisms) }
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    fun toast(m: String) = scope.launch { snackbar.showSnackbar(m) }
+
+    // One-time post-login passkey upsell (#25), only where passkeys work.
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        dashVm.maybeSuggestPasskey {
+            scope.launch {
+                val res = snackbar.showSnackbar(
+                    message = "Tip: add a passkey to sign in without a password next time.",
+                    actionLabel = "Add passkey",
+                )
+                if (res == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                    actionsVm.addPasskey(context) { _, msg -> toast(msg) }
+                }
+            }
+        }
+    }
+
+    var showSync by remember { mutableStateOf(false) }
+    var syncStatus by remember { mutableStateOf<EnrollmentStatus?>(null) }
+    var syncLoading by remember { mutableStateOf(true) }
+    var report by remember { mutableStateOf<JsonObject?>(null) }
+    var reportBuilding by remember { mutableStateOf(false) }
+    var revokeConfirm by remember { mutableStateOf(false) }
+
+    fun openSync() {
+        if (!AppConfig.brokerAvailable) { toast("Sync settings require Church account login."); return }
+        syncLoading = true
+        showSync = true
+        dashVm.ensureEnrollStatus { s -> syncStatus = s; syncLoading = false }
+    }
+
+    fun syncNow() {
+        dashVm.syncNow { ok, info ->
+            toast(
+                if (!ok) "Couldn't start sync: $info"
+                else if (info == "partial") "Sync started — your calling can't pull every field, so some data stays blank. Takes a few minutes."
+                else "Sync started for your stake — this takes a few minutes.",
+            )
+        }
+    }
+
+    fun generateReport() {
+        if (!AppConfig.brokerAvailable) { toast("Reports need Church-account login configured."); return }
+        reportBuilding = true
+        actionsVm.report(
+            onReport = { reportBuilding = false; report = it },
+            onError = { reportBuilding = false; toast(it) },
+        )
+    }
 
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
                 title = {
-                    StakeTitle(
-                        stakes = state.stakes,
-                        currentId = state.currentStakeId,
-                        fallback = state.stakeName ?: "Covenant Path",
-                        onSelect = onSwitchStake,
-                    )
+                    StakeTitle(state.stakes, state.currentStakeId, state.stakeName ?: "Covenant Path", dashVm::switchStake)
                 },
                 actions = {
-                    IconButton(onClick = onRefresh) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+                    state.lastSyncedAt?.let {
+                        FreshnessChip(
+                            iso = it,
+                            compact = true,
+                            syncing = state.syncing,
+                            onSyncNow = if (AppConfig.brokerAvailable) ({ syncNow() }) else null,
+                        )
                     }
-                    OverflowMenu(onSignOut = onSignOut)
+                    IconButton(onClick = dashVm::refresh) { Icon(Icons.Filled.Refresh, contentDescription = "Refresh") }
+                    OverflowMenu(
+                        isAdmin = state.isAdmin,
+                        onSync = { openSync() },
+                        onReport = { generateReport() },
+                        onInvite = onOpenInvite,
+                        onAdmin = onOpenAdmin,
+                        onSettings = onOpenSettings,
+                    )
                 },
             )
         },
@@ -101,38 +184,66 @@ fun DashboardScaffold(
                 }
             }
         },
+        snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            when (val load = state.load) {
-                is LoadState.Loading -> CenteredLoading()
-                is LoadState.Error -> CenteredError(load.message, onRetry = onRefresh)
-                LoadState.Ready -> {
-                    val members = state.members
-                    if (members.isEmpty() && tab != DashboardTab.Kpis) {
-                        EmptyMembers()
-                    } else {
-                        when (tab) {
-                            DashboardTab.Baptisms -> BaptismsScreen(members, state.missionariesByUnit, onOpenMember)
-                            DashboardTab.GoldenHour -> GoldenHourScreen(members, onOpenMember)
-                            DashboardTab.Needs -> NeedsScreen(members, onOpenMember)
-                            DashboardTab.Kpis -> KpisScreen(members)
-                            DashboardTab.Table -> TableScreen(members, onOpenMember)
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            if (state.syncing) SyncingBanner(state.syncStartedAt)
+            if (state.staleCredential) StaleCredentialBanner(onReenroll = onSignOut)
+
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                when (val load = state.load) {
+                    is LoadState.Loading -> MemberListSkeleton()
+                    is LoadState.Error -> CenteredError(load.message, onRetry = dashVm::refresh)
+                    LoadState.Ready -> {
+                        val members = state.members
+                        if (members.isEmpty() && tab != DashboardTab.Kpis) {
+                            EnrollmentEmptyState(state.enrollStatus, brokerAvailable = AppConfig.brokerAvailable, onSignOut = onSignOut)
+                        } else {
+                            when (tab) {
+                                DashboardTab.Baptisms -> BaptismsScreen(members, state.missionariesByUnit, onOpenMember)
+                                DashboardTab.GoldenHour -> GoldenHourScreen(members, onOpenMember)
+                                DashboardTab.Needs -> NeedsScreen(members, onOpenMember)
+                                DashboardTab.Kpis -> KpisScreen(members, onOpenMember)
+                                DashboardTab.Table -> TableScreen(members, onOpenMember)
+                            }
                         }
+                    }
+                }
+                if (reportBuilding) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                        androidx.compose.material3.CircularProgressIndicator()
                     }
                 }
             }
         }
     }
+
+    if (showSync) {
+        SyncSettingsSheet(
+            status = syncStatus,
+            loading = syncLoading,
+            onSyncNow = { syncNow() },
+            onRevoke = { revokeConfirm = true },
+            onDismiss = { showSync = false },
+        )
+    }
+    if (revokeConfirm) {
+        ConfirmDialog(
+            title = "Revoke sync access?",
+            message = "Daily sync for your stake will stop. Re-enroll anytime by signing in again.",
+            confirmLabel = "Revoke",
+            onConfirm = { dashVm.revoke { ok, info -> toast(if (ok) "Sync access revoked." else "Could not revoke: $info") } },
+            onDismiss = { revokeConfirm = false },
+        )
+    }
+    report?.let { rep ->
+        ReportSheet(report = rep, onEmail = { actionsVm.emailReport { _, msg -> toast(msg) } }, onDismiss = { report = null })
+    }
 }
 
 /** App-bar title that doubles as a stake switcher for multi-stake power users. */
 @Composable
-private fun StakeTitle(
-    stakes: List<Stake>,
-    currentId: String?,
-    fallback: String,
-    onSelect: (String) -> Unit,
-) {
+private fun StakeTitle(stakes: List<Stake>, currentId: String?, fallback: String, onSelect: (String) -> Unit) {
     if (stakes.size < 2) {
         Text(fallback, maxLines = 1, overflow = TextOverflow.Ellipsis)
         return
@@ -153,12 +264,43 @@ private fun StakeTitle(
 }
 
 @Composable
-private fun OverflowMenu(onSignOut: () -> Unit) {
+private fun OverflowMenu(
+    isAdmin: Boolean,
+    onSync: () -> Unit,
+    onReport: () -> Unit,
+    onInvite: () -> Unit,
+    onAdmin: () -> Unit,
+    onSettings: () -> Unit,
+) {
     var open by remember { mutableStateOf(false) }
-    IconButton(onClick = { open = true }) {
-        Icon(Icons.Filled.MoreVert, contentDescription = "Menu")
-    }
+    IconButton(onClick = { open = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "Menu") }
     DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-        DropdownMenuItem(text = { Text("Sign out") }, onClick = { open = false; onSignOut() })
+        DropdownMenuItem(
+            text = { Text("Sync settings") },
+            leadingIcon = { Icon(Icons.Filled.Sync, contentDescription = null) },
+            onClick = { open = false; onSync() },
+        )
+        DropdownMenuItem(
+            text = { Text("Generate report") },
+            leadingIcon = { Icon(Icons.Outlined.Summarize, contentDescription = null) },
+            onClick = { open = false; onReport() },
+        )
+        DropdownMenuItem(
+            text = { Text("Invite a power user") },
+            leadingIcon = { Icon(Icons.Filled.PersonAddAlt, contentDescription = null) },
+            onClick = { open = false; onInvite() },
+        )
+        if (isAdmin) {
+            DropdownMenuItem(
+                text = { Text("Admin · Ops console") },
+                leadingIcon = { Icon(Icons.Filled.AdminPanelSettings, contentDescription = null) },
+                onClick = { open = false; onAdmin() },
+            )
+        }
+        DropdownMenuItem(
+            text = { Text("Settings") },
+            leadingIcon = { Icon(Icons.Filled.Settings, contentDescription = null) },
+            onClick = { open = false; onSettings() },
+        )
     }
 }

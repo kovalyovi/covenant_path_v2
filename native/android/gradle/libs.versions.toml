@@ -11,6 +11,10 @@ activityCompose = "1.9.3"
 composeBom = "2024.12.01"         # Compose BOM → aligns compose-ui / material3 / etc.
 navigationCompose = "2.8.5"
 coil = "2.7.0"                    # AsyncImage for member photo_url (Compose)
+biometric = "1.1.0"              # BiometricPrompt app-lock gate
+credentials = "1.3.0"           # Credential Manager — native passkeys (WebAuthn) via the broker
+datastore = "1.1.1"             # DataStore Preferences — persist theme/app-lock/stake choice
+fragment = "1.8.5"              # FragmentActivity host (BiometricPrompt); pin recent so it stays coherent
 
 # Supabase (supabase-kt) + Ktor + serialization
 # NOTE: artifact ids changed in 3.x — `gotrue-kt` is now published as `auth-kt`.
@@ -21,6 +25,7 @@ kotlinxSerialization = "1.7.3"
 kotlinxCoroutines = "1.9.0"
 
 # Test
+material = "1.12.0"              # Material Components — provides the Theme.Material3.* XML splash theme
 junit = "4.13.2"
 androidxJunit = "1.2.1"
 espresso = "3.6.1"
@@ -46,12 +51,24 @@ androidx-navigation-compose = { group = "androidx.navigation", name = "navigatio
 # Image loading
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 
+# Biometric app-lock + passkeys (Credential Manager) + persisted prefs (DataStore)
+androidx-biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
+androidx-credentials = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
+androidx-credentials-play-services-auth = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }
+androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
+androidx-fragment = { group = "androidx.fragment", name = "fragment", version.ref = "fragment" }
+
+# Material Components (XML) — only for the launch theme parent (Theme.Material3.DayNight.NoActionBar)
+google-android-material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+
 # Supabase BOM + modules (auth = gotrue, postgrest, serialization)
 supabase-bom = { group = "io.github.jan-tennert.supabase", name = "bom", version.ref = "supabase" }
 supabase-auth = { group = "io.github.jan-tennert.supabase", name = "auth-kt" }
 supabase-postgrest = { group = "io.github.jan-tennert.supabase", name = "postgrest-kt" }
 
-# Ktor engine for Android (required by supabase-kt at runtime)
+# Ktor engine for Android (required by supabase-kt at runtime). ktor-client-core is also used
+# directly by our broker/admin/passkey clients (manual JSON, mirroring the Flutter http clients).
+ktor-client-core = { group = "io.ktor", name = "ktor-client-core", version.ref = "ktor" }
 ktor-client-okhttp = { group = "io.ktor", name = "ktor-client-okhttp", version.ref = "ktor" }
 
 # kotlinx

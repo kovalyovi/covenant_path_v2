@@ -1,0 +1,273 @@
+import Foundation
+
+/// KPI series/bucketing math — a faithful, pure-Swift port of the Dart helpers in
+/// `apps/viewer/lib/views/dashboard_common.dart` + `kpis_view.dart`. UI-free and unit-tested so the
+/// KPIs tab (Swift Charts) renders exactly the same numbers as the Flutter `_KpiView`.
+///
+/// The three time periods mirror Flutter exactly:
+///   - `.month` — the 5 WEEKS ending this week  (weekly buckets, Monday-anchored)
+///   - `.year`  — the 12 MONTHS ending this month(monthly buckets)
+///   - `.all`   — first data → now, grouped by MONTH (≤36 months span) or by YEAR (longer)
+/// Buckets with no events render as zeros. The `prev` overlay is the immediately-preceding equal span.
+public enum KpiPeriod: String, CaseIterable, Identifiable, Sendable {
+    case month, year, all
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .month: return "Month"
+        case .year: return "Year"
+        case .all: return "All"
+        }
+    }
+
+    /// (prior-window label, latest-window label) for the compare big-stats — mirrors `_compareLabels`.
+    public var compareLabels: (prev: String, latest: String) {
+        switch self {
+        case .month: return ("Last month", "This month")
+        case .year: return ("Last year", "This year")
+        case .all: return ("Prev. month", "This month")
+        }
+    }
+}
+
+/// One chart series: the current window's per-bucket unique-people counts ([current]) overlaid on
+/// the immediately-preceding equal-length window ([prev], position-aligned; empty for `.all`/none).
+public struct KpiSeries: Sendable {
+    public var labels: [String]
+    public var current: [Double]
+    public var prev: [Double]
+    public init(labels: [String] = [], current: [Double] = [], prev: [Double] = []) {
+        self.labels = labels; self.current = current; self.prev = prev
+    }
+    public var isEmpty: Bool { current.isEmpty }
+}
+
+/// One matching event for a drill-down: a member counted toward a metric on a date, mapped to the
+/// displayed-window bucket index (its x-position). Port of `_Ev`.
+public struct KpiEvent: Identifiable, Sendable {
+    public let member: Member
+    public let date: Date
+    public let bucket: Int
+    public init(member: Member, date: Date, bucket: Int) {
+        self.member = member; self.date = date; self.bucket = bucket
+    }
+    public var id: String { "\(member.id)|\(date.timeIntervalSince1970)|\(bucket)" }
+}
+
+public enum Kpis {
+
+    // MARK: - calendar helpers (port of _dayOnly / _weekStart)
+
+    static var cal: Calendar { Calendar.current }
+
+    static func dayOnly(_ d: Date) -> Date { cal.startOfDay(for: d) }
+
+    /// Monday-anchored week start, matching Dart's `d.subtract(Duration(days: d.weekday - 1))`
+    /// where Dart weekday is Mon=1…Sun=7.
+    static func weekStart(_ d: Date) -> Date {
+        let day = dayOnly(d)
+        // Swift weekday: Sun=1…Sat=7. Convert to Dart's Mon=1…Sun=7.
+        let swWeekday = cal.component(.weekday, from: day)
+        let dartWeekday = ((swWeekday + 5) % 7) + 1  // Sun(1)->7, Mon(2)->1, …, Sat(7)->6
+        return cal.date(byAdding: .day, value: -(dartWeekday - 1), to: day) ?? day
+    }
+
+    static func ymd(_ d: Date) -> (y: Int, m: Int, d: Int) {
+        let c = cal.dateComponents([.year, .month, .day], from: d)
+        return (c.year ?? 0, c.month ?? 0, c.day ?? 0)
+    }
+
+    /// Build a local date from a (year, month) — month may be out of 1...12 and is normalized,
+    /// mirroring Dart's `DateTime(year, month, 1)` overflow behavior.
+    static func monthDate(year: Int, month: Int) -> Date {
+        var c = DateComponents(); c.year = year; c.month = month; c.day = 1
+        return cal.date(from: c) ?? Date()
+    }
+
+    // MARK: - bucket key (port of _bucketKey)
+
+    static func bucketKey(_ dt: Date, _ p: KpiPeriod, allByYear: Bool) -> Int {
+        switch p {
+        case .month:
+            let w = ymd(weekStart(dt))
+            return w.y * 10000 + w.m * 100 + w.d
+        case .year:
+            let c = ymd(dt)
+            return c.y * 100 + c.m
+        case .all:
+            let c = ymd(dt)
+            return allByYear ? c.y : c.y * 100 + c.m
+        }
+    }
+
+    // MARK: - window buckets (port of _windowBuckets)
+
+    /// Ordered (key, label) buckets of the window ending `today`, shifted back `shift` windows.
+    /// `.all` is data-driven (handled in `metricData`) so returns empty here.
+    static func windowBuckets(_ p: KpiPeriod, today: Date, shift: Int) -> [(key: Int, label: String)] {
+        switch p {
+        case .month:
+            let end = cal.date(byAdding: .day, value: -(shift * 5 * 7), to: weekStart(today)) ?? today
+            var out: [(Int, String)] = []
+            for i in stride(from: 4, through: 0, by: -1) {
+                let w = cal.date(byAdding: .day, value: -(i * 7), to: end) ?? end
+                let c = ymd(w)
+                out.append((c.y * 10000 + c.m * 100 + c.d, mdLabel(w)))
+            }
+            return out
+        case .year:
+            let t = ymd(today)
+            var out: [(Int, String)] = []
+            for i in stride(from: 11, through: 0, by: -1) {
+                let m = monthDate(year: t.y, month: t.m - shift * 12 - i)
+                let c = ymd(m)
+                out.append((c.y * 100 + c.m, monthAbbrev(m)))
+            }
+            return out
+        case .all:
+            return []
+        }
+    }
+
+    // MARK: - the core: metricData (port of _metricData)
+
+    /// Series for the chart (unique people per bucket, recent window vs the preceding one) PLUS the
+    /// underlying events so a tap can show *who*. `datesOf` yields the dates a member is counted on.
+    public static func metricData(
+        _ rows: [Member],
+        datesOf: (Member) -> [Date],
+        period: KpiPeriod,
+        now: Date = Date()
+    ) -> (series: KpiSeries, events: [KpiEvent]) {
+        let today = now
+        // (member, date) pairs up front so 'All' can choose its bucket granularity from the span.
+        var pairs: [(Member, Date)] = []
+        for m in rows {
+            for dt in datesOf(m) { pairs.append((m, dt)) }
+        }
+
+        var allByYear = false
+        if period == .all, let earliest = pairs.map({ $0.1 }).min() {
+            let e = ymd(earliest), t = ymd(today)
+            let months = (t.y - e.y) * 12 + (t.m - e.m)
+            allByYear = months > 36
+        }
+
+        var sets: [Int: Set<String>] = [:]
+        var raw: [(Member, Date, Int)] = []
+        for (m, dt) in pairs {
+            let id = m.id
+            let key = bucketKey(dt, period, allByYear: allByYear)
+            sets[key, default: []].insert(id)
+            raw.append((m, dt, key))
+        }
+
+        var cur: [(key: Int, label: String)]
+        var prev: [(key: Int, label: String)]
+        if period == .all {
+            if raw.isEmpty { return (KpiSeries(), []) }
+            let earliest = raw.map { $0.1 }.min()!
+            cur = []
+            let e = ymd(earliest), t = ymd(today)
+            if allByYear {
+                var y = e.y
+                while y <= t.y { cur.append((y, "\(y)")); y += 1 }
+            } else {
+                var y = e.y, mo = e.m
+                while y < t.y || (y == t.y && mo <= t.m) {
+                    let lbl = (y == t.y) ? monthAbbrev(monthDate(year: y, month: mo))
+                                         : monthAbbrevYear(monthDate(year: y, month: mo))
+                    cur.append((y * 100 + mo, lbl))
+                    mo += 1
+                    if mo > 12 { mo = 1; y += 1 }
+                }
+            }
+            prev = []
+        } else {
+            cur = windowBuckets(period, today: today, shift: 0)
+            prev = windowBuckets(period, today: today, shift: 1)
+        }
+
+        var idxOf: [Int: Int] = [:]
+        for (i, b) in cur.enumerated() { idxOf[b.key] = i }
+        let series = KpiSeries(
+            labels: cur.map { $0.label },
+            current: cur.map { Double(sets[$0.key]?.count ?? 0) },
+            prev: prev.map { Double(sets[$0.key]?.count ?? 0) }
+        )
+        var events: [KpiEvent] = []
+        for r in raw {
+            if let i = idxOf[r.2] { events.append(KpiEvent(member: r.0, date: r.1, bucket: i)) }
+        }
+        return (series, events)
+    }
+
+    // MARK: - date extractors (ports of _attendedDates / _firstLessonDate)
+
+    /// Sundays this person was marked present at sacrament (port of `_attendedDates`).
+    public static func attendedDates(_ m: Member) -> [Date] {
+        guard let sac = m.details?.sacrament else { return [] }
+        return sac.compactMap { $0.attended == true ? MemberDate.parse($0.date) : nil }
+    }
+
+    /// The single date this person started being taught (port of `_firstLessonDate`).
+    public static func firstLessonDate(_ m: Member) -> [Date] {
+        guard let d = MemberDate.parse(m.details?.firstLesson) else { return [] }
+        return [d]
+    }
+
+    /// Count of lessons (across all people) where a member was present for ≥1 principle.
+    /// Port of `_lessonsWithMember`.
+    public static func lessonsWithMember(_ rows: [Member]) -> Int {
+        var c = 0
+        for m in rows {
+            for l in m.details?.lessons ?? [] {
+                if (l.principles ?? []).contains(where: { $0.memberPresent == true }) { c += 1 }
+            }
+        }
+        return c
+    }
+
+    /// Members who had ≥1 member-present lesson, with that count, ranked desc. Port of
+    /// `_membersWithMemberLessons`.
+    public static func membersWithMemberLessons(_ rows: [Member]) -> [(member: Member, count: Int)] {
+        var out: [(Member, Int)] = []
+        for m in rows {
+            var c = 0
+            for l in m.details?.lessons ?? [] {
+                if (l.principles ?? []).contains(where: { $0.memberPresent == true }) { c += 1 }
+            }
+            if c > 0 { out.append((m, c)) }
+        }
+        out.sort { $0.1 > $1.1 }
+        return out
+    }
+
+    /// Average Golden Hour completion per unit, ranked high→low. Port of `_unitCompletion`.
+    public static func unitCompletion(_ baptized: [Member]) -> [(unit: String, pct: Double, n: Int)] {
+        var byUnit: [String: [Member]] = [:]
+        for m in baptized { byUnit[m.unitName ?? "—", default: []].append(m) }
+        var out = byUnit.map { (unit: $0.key, pct: Milestones.averageCompletion($0.value), n: $0.value.count) }
+        out.sort { $0.pct > $1.pct }
+        return out
+    }
+
+    // MARK: - label formatters (match Dart's DateFormat usage)
+
+    private static func mdLabel(_ d: Date) -> String {       // 'M/d'
+        let c = ymd(d)
+        return "\(c.m)/\(c.d)"
+    }
+    private static let monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    private static func monthAbbrev(_ d: Date) -> String {   // 'MMM'
+        let m = cal.component(.month, from: d)
+        return (m >= 1 && m <= 12) ? monthNames[m - 1] : ""
+    }
+    private static func monthAbbrevYear(_ d: Date) -> String { // "MMM ''yy"
+        let c = ymd(d)
+        let yy = String(format: "%02d", c.y % 100)
+        return "\(monthAbbrev(d)) '\(yy)"
+    }
+}

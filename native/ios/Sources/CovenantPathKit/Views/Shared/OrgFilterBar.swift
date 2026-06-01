@@ -13,13 +13,10 @@ public struct OrgFilterBar: View {
 
     private var allSelected: Bool { selected.count == OrgBucket.allCases.count }
 
-    /// Toggle that never lets the user deselect the last org (matches Flutter).
+    /// Toggle that never lets the user deselect the last org (delegates to the pure `Org.toggleFilter`
+    /// so the rule has one home and stays unit-testable without UIKit).
     public static func toggle(_ b: OrgBucket, in set: inout Set<OrgBucket>) {
-        if set.contains(b) {
-            if set.count > 1 { set.remove(b) }
-        } else {
-            set.insert(b)
-        }
+        Org.toggleFilter(b, in: &set)
     }
 
     public var body: some View {

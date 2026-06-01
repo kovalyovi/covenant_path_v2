@@ -23,6 +23,8 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Make gradlew executable
+        run: chmod +x native/android/gradlew
       - name: Run unit tests (pure logic)
         working-directory: native/android
         run: ./gradlew :app:testDebugUnitTest --no-daemon

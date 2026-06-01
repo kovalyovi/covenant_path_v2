@@ -1,0 +1,305 @@
+import Foundation
+
+/// Faithful port of `apps/viewer/lib/broker_client.dart` + `admin_client.dart`. The Church's Okta
+/// can't be reached directly from a client (CORS / mobile constraints); the broker authenticates
+/// server-side and hands back a Supabase OTP the app verifies. Everything here is plain `URLSession`
+/// (no SDK), so the whole service stays in the cross-platform `CovenantPathKit` module.
+///
+/// `available` mirrors `brokerUrl.isNotEmpty`. Authed calls carry the signed-in Supabase access
+/// token via the injected `tokenProvider` (the app wires it to the Supabase session).
+
+public struct BrokerError: Error, LocalizedError, Sendable {
+    public let message: String
+    public init(_ message: String) { self.message = message }
+    public var errorDescription: String? { message }
+}
+
+/// One MFA factor offered by Okta (e.g. "Text message to •••1234"). Port of `BrokerFactor`.
+public struct BrokerFactor: Identifiable, Sendable, Hashable {
+    public let id: String
+    public let label: String
+    public let method: String
+    init(json: [String: Any]) {
+        id = (json["id"] as? String) ?? ""
+        label = (json["label"] as? String) ?? (json["method"] as? String) ?? "Code"
+        method = (json["method"] as? String) ?? ""
+    }
+}
+
+/// Result of a login step: either a verifiable Supabase session, or an MFA challenge. Port of
+/// `BrokerResult`.
+public struct BrokerResult: Sendable {
+    public let email: String?
+    public let otp: String?
+    public let loginID: String?
+    public let factors: [BrokerFactor]
+    public let name: String?
+    public init(email: String? = nil, otp: String? = nil, loginID: String? = nil,
+                factors: [BrokerFactor] = [], name: String? = nil) {
+        self.email = email; self.otp = otp; self.loginID = loginID
+        self.factors = factors; self.name = name
+    }
+    public var mfaRequired: Bool { loginID != nil && otp == nil }
+}
+
+/// Credential info from /auth/enrollment-status (port of `CredentialInfo`).
+public struct CredentialInfo: Sendable {
+    public let state: String          // "none" | "active" | "revoked"
+    public let complete: Bool
+    public let principalName: String?
+    public let isProvider: Bool
+    public let enrolledAt: String?
+    public var isActive: Bool { state == "active" }
+    public var isRevoked: Bool { state == "revoked" }
+    public var isNone: Bool { state == "none" }
+    init(json: [String: Any]) {
+        state = (json["state"] as? String) ?? "none"
+        complete = (json["complete"] as? Bool) ?? false
+        principalName = json["principal_name"] as? String
+        isProvider = (json["is_provider"] as? Bool) ?? false
+        enrolledAt = json["enrolled_at"] as? String
+    }
+}
+
+/// Response from /auth/enrollment-status (port of `EnrollmentStatus`).
+public struct EnrollmentStatus: Sendable {
+    public let stakeName: String?
+    public let stakeID: String?
+    public let lastSyncedAt: String?
+    public let memberCount: Int
+    public let hasData: Bool
+    public let noRole: Bool
+    public let credential: CredentialInfo
+    init(json: [String: Any]) {
+        stakeName = json["stake_name"] as? String
+        stakeID = json["stake_id"] as? String
+        lastSyncedAt = json["last_synced_at"] as? String
+        memberCount = (json["member_count"] as? NSNumber)?.intValue ?? 0
+        hasData = (json["has_data"] as? Bool) ?? false
+        noRole = (json["status"] as? String) == "no_role"
+        credential = CredentialInfo(json: (json["credential"] as? [String: Any]) ?? [:])
+    }
+}
+
+public final class BrokerService: @unchecked Sendable {
+    public let baseURL: String
+    /// Returns the current Supabase access token (empty if signed out). Injected by the app.
+    private let tokenProvider: @Sendable () async -> String
+    /// Optional status callback for the cold-start "waking up the sign-in service" line.
+    public var onStatus: (@Sendable (String) -> Void)?
+
+    public init(baseURL: String, tokenProvider: @escaping @Sendable () async -> String) {
+        self.baseURL = baseURL
+        self.tokenProvider = tokenProvider
+    }
+
+    public var available: Bool { !baseURL.isEmpty }
+
+    // Render free hosting sleeps when idle; the first request after a sleep can fail to connect.
+    // Retry across ~63s so a cold start resolves itself (delays sum like the Flutter client).
+    private static let retryDelays: [UInt64] = [3, 6, 9, 12, 15, 18].map { $0 * 1_000_000_000 }
+
+    // MARK: - low-level
+
+    private func url(_ path: String) throws -> URL {
+        guard available, let u = URL(string: baseURL + path) else {
+            throw BrokerError("Church login is not configured (BROKER_URL).")
+        }
+        return u
+    }
+
+    /// POST with cold-start retry; returns the decoded JSON object. Port of `_postJson`.
+    @discardableResult
+    public func postJSON(_ path: String, _ body: [String: Any]) async throws -> [String: Any] {
+        let u = try url(path)
+        var lastErr: Error?
+        var data: Data?
+        var status = 0
+        for attempt in 0...Self.retryDelays.count {
+            do {
+                var req = URLRequest(url: u, timeoutInterval: 30)
+                req.httpMethod = "POST"
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                req.httpBody = try JSONSerialization.data(withJSONObject: body)
+                let (d, resp) = try await URLSession.shared.data(for: req)
+                data = d
+                status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                break
+            } catch {
+                lastErr = error
+                if attempt < Self.retryDelays.count {
+                    onStatus?("Waking up the sign-in service… this can take up to a minute on first use.")
+                    try? await Task.sleep(nanoseconds: Self.retryDelays[attempt])
+                }
+            }
+        }
+        guard let data else {
+            throw BrokerError("Could not reach the sign-in service after several tries. It may be "
+                + "starting up — please try again in a minute. (\(lastErr?.localizedDescription ?? "?"))")
+        }
+        return try Self.decode(data, status: status, fallback: "Sign-in failed (\(status)).")
+    }
+
+    private func tokenOrThrow() async throws -> String {
+        let token = await tokenProvider()
+        if token.isEmpty { throw BrokerError("Not signed in.") }
+        return token
+    }
+
+    /// Shared authed request carrying the signed-in user's Supabase token. Port of `_authed`.
+    @discardableResult
+    public func authed(_ method: String, _ path: String, body: [String: Any]? = nil) async throws -> [String: Any] {
+        let u = try url(path)
+        let token = try await tokenOrThrow()
+        var req = URLRequest(url: u, timeoutInterval: 40)
+        req.httpMethod = method
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if method != "GET" {
+            req.httpBody = try JSONSerialization.data(withJSONObject: body ?? [:])
+        }
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        if status == 403 { throw BrokerError("Not authorized (admins only).") }
+        return try Self.decode(data, status: status, fallback: "Request failed (\(status)).")
+    }
+
+    static func decode(_ data: Data, status: Int, fallback: String) throws -> [String: Any] {
+        var obj: [String: Any] = [:]
+        if !data.isEmpty {
+            if let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                obj = parsed
+            } else if status >= 400 {
+                throw BrokerError(fallback)
+            }
+        }
+        if status >= 400 {
+            let detail = (obj["detail"] as? String) ?? fallback
+            throw BrokerError(detail)
+        }
+        return obj
+    }
+
+    private func result(from data: [String: Any]) -> BrokerResult {
+        if (data["status"] as? String) == "mfa_required" {
+            let factors = ((data["factors"] as? [[String: Any]]) ?? []).map(BrokerFactor.init(json:))
+            return BrokerResult(loginID: data["login_id"] as? String, factors: factors)
+        }
+        let session = (data["session"] as? [String: Any]) ?? [:]
+        return BrokerResult(email: session["email"] as? String,
+                            otp: session["otp"] as? String,
+                            name: data["identity_name"] as? String)
+    }
+
+    // MARK: - Church account login (port of password/selectFactor/verifyMfa)
+
+    public func password(_ username: String, _ password: String, enroll: Bool = false) async throws -> BrokerResult {
+        let d = try await postJSON("/auth/password", ["username": username, "password": password, "enroll": enroll])
+        return result(from: d)
+    }
+
+    public func selectFactor(loginID: String, factorID: String) async throws {
+        _ = try await postJSON("/auth/mfa/select", ["login_id": loginID, "factor_id": factorID])
+    }
+
+    public func verifyMfa(loginID: String, code: String, enroll: Bool = false) async throws -> BrokerResult {
+        let d = try await postJSON("/auth/mfa/verify", ["login_id": loginID, "code": code, "enroll": enroll])
+        return result(from: d)
+    }
+
+    // MARK: - email relay (port of emailStart/emailVerify)
+
+    public func emailStart(_ email: String) async throws {
+        _ = try await postJSON("/auth/email/start", ["email": email])
+    }
+
+    public func emailVerify(_ email: String, _ code: String) async throws -> [String: Any] {
+        try await postJSON("/auth/email/verify", ["email": email, "code": code])
+    }
+
+    // MARK: - enrollment / sync / schedule / drive (authed)
+
+    public func enrollmentStatus() async throws -> EnrollmentStatus {
+        EnrollmentStatus(json: try await authed("GET", "/auth/enrollment-status"))
+    }
+
+    public func revoke(stakeID: String) async throws {
+        _ = try await authed("POST", "/auth/revoke", body: ["stake_id": stakeID])
+    }
+
+    @discardableResult
+    public func syncNow() async throws -> [String: Any] {
+        try await authed("POST", "/auth/sync-now")
+    }
+
+    public func getSchedule() async throws -> [String: Any] { try await authed("GET", "/auth/schedule") }
+    public func setSchedule(hourET: Int, paused: Bool) async throws -> [String: Any] {
+        try await authed("POST", "/auth/schedule", body: ["hour_et": hourET, "paused": paused])
+    }
+
+    public func googleDriveStatus() async throws -> [String: Any] { try await authed("GET", "/auth/google/status") }
+    public func googleDriveStart() async throws -> [String: Any] { try await authed("POST", "/auth/google/start") }
+    public func googleDriveDisconnect() async throws -> [String: Any] { try await authed("POST", "/auth/google/disconnect") }
+
+    // MARK: - contact / report (authed)
+
+    public func contact(subject: String, message: String) async throws {
+        _ = try await authed("POST", "/contact", body: ["subject": subject, "message": message])
+    }
+
+    public func report() async throws -> [String: Any] { try await authed("GET", "/report") }
+
+    @discardableResult
+    public func emailReport(toEmail: String? = nil) async throws -> [String: Any] {
+        var body: [String: Any] = [:]
+        if let toEmail, !toEmail.isEmpty { body["to_email"] = toEmail }
+        return try await authed("POST", "/report/email", body: body)
+    }
+
+    // MARK: - feedback (admin_client port; available to all signed-in users → GitHub issue)
+
+    public func feedback(title: String, body: String) async throws -> [String: Any] {
+        try await authed("POST", "/feedback", body: ["title": title, "body": body])
+    }
+
+    // MARK: - admin/ops (port of admin_client.dart)
+
+    public func adminSummary() async throws -> [String: Any] { try await authed("GET", "/admin/summary") }
+    public func adminActions() async throws -> [String: Any] { try await authed("GET", "/admin/actions") }
+    public func adminDiagnostics() async throws -> [String: Any] { try await authed("GET", "/admin/diagnostics") }
+    public func adminEnrolledStakes() async throws -> [String: Any] { try await authed("GET", "/admin/enrolled-stakes") }
+    public func adminRevokeStake(_ stakeID: String) async throws -> [String: Any] {
+        try await authed("POST", "/admin/stakes/\(stakeID)/revoke")
+    }
+    public func adminRun(_ workflow: String, inputs: [String: Any]? = nil) async throws -> [String: Any] {
+        var body: [String: Any] = ["workflow": workflow]
+        if let inputs { body["inputs"] = inputs }
+        return try await authed("POST", "/admin/actions/run", body: body)
+    }
+    public func adminRerun(_ runID: Int) async throws -> [String: Any] {
+        try await authed("POST", "/admin/actions/\(runID)/rerun")
+    }
+    public func adminInvite(_ email: String) async throws -> [String: Any] {
+        try await authed("POST", "/admin/invite", body: ["email": email])
+    }
+
+    // MARK: - error telemetry (port of error_reporter.dart → /log; best-effort, never throws)
+
+    public func log(type: String, message: String, surface: String, where loc: String?) {
+        guard available, let u = URL(string: baseURL + "/log") else { return }
+        let trimmed = message.count > 400 ? String(message.prefix(400)) : message
+        var context: [String: Any] = ["type": type]
+        if let loc { context["where"] = loc }
+        let body: [String: Any] = [
+            "level": "error", "event": "client.error", "surface": surface,
+            "message": trimmed, "context": context,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return }
+        var req = URLRequest(url: u, timeoutInterval: 10)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = data
+        // Fire-and-forget; telemetry must never surface an error.
+        Task { _ = try? await URLSession.shared.data(for: req) }
+    }
+}

@@ -1,176 +1,135 @@
-# Covenant Path — Native iOS (SwiftUI) Proof of Concept
+# Covenant Path — Native iOS (SwiftUI)
 
-A native iOS rebuild of the Flutter `apps/viewer`, built to compare native vs. Flutter
-architecture/feel. Read-only dashboard for stake/ward leaders tracking new-member ("Golden Hour")
+A native iOS rebuild of the Flutter `apps/viewer`, at **100% feature parity** (see
+`PARITY_STATUS.md`). Read-only dashboard for stake/ward leaders tracking new-member ("Golden Hour")
 integration. The app **only reads Supabase**, scoped by the signed-in user's role (Row-Level
-Security does all gating); it never talks to the church system directly.
+Security does all gating); it talks to the **auth broker** for Church login / sync ops / reports /
+admin, and never touches the church system directly.
 
-> Status: written **without a Swift compiler** (no macOS/Xcode in the authoring environment). The
-> code is meticulous and idiomatic, but expect to need a few small fixups in Xcode (mainly SF Symbol
-> name swaps and possibly minor SDK-signature nudges). See **Compile caveats** at the bottom.
+Swift + SwiftUI, iOS 17+, the Observation framework (`@Observable`), async/await, `NavigationStack` /
+`TabView` / `.sheet` / `Form`, **Swift Charts** (KPIs), `AuthenticationServices` (passkeys),
+`LocalAuthentication` (app lock). Supabase via **supabase-swift** (SPM).
+
+> Authored without a Swift compiler in this environment — written to be meticulous and build under
+> the CI `xcodebuild` (see **Compile caveats**). The CI workflow `build-native-ios.yml` runs
+> `xcodegen generate` then `xcodebuild` on a macOS runner.
 
 ## Architecture
 
-Everything lives in a Swift Package, `CovenantPathKit`, so the pure business logic is unit-testable
-on the command line. The iOS app target is a thin shell that renders `RootView`.
+The code is organized as `CovenantPathKit` (Models / Logic / Services / ViewModels / Views). It is
+consumed two ways:
+
+- **App build (XcodeGen → xcodebuild):** the `CovenantPath` app target compiles **all of
+  `Sources/CovenantPathKit/**` + the `App/` `@main` shell directly** and links **supabase-swift**
+  (the remote SPM package). The Xcode project is generated from `project.yml` — no `.xcodeproj` is
+  committed. (Because the sources are in the app target's own module, `App/CovenantPathApp.swift` has
+  no `import CovenantPathKit`.)
+- **Logic tests (`swift test`):** the root `Package.swift` builds the same `Sources/` as a
+  `CovenantPathKit` library + `Tests/` on macOS, so the pure logic is unit-testable on the command
+  line. The xcodeproj does **not** reference this package (keeping the build free of any root-local-
+  package resolution quirks).
 
 ```
 native/ios/
-  Package.swift                  SwiftPM manifest; declares supabase-swift 2.x dependency
-  App/                           the iOS app target (create in Xcode — see below)
+  project.yml                    XcodeGen spec → app target `CovenantPath` + local package dep
+  Package.swift                  SwiftPM manifest (CovenantPathKit library + supabase-swift)
+  App/
     CovenantPathApp.swift        @main App → RootView()
-    Info.plist                   maps SUPABASE_URL / SUPABASE_ANON_KEY from the xcconfig
-    Config.xcconfig.example      copy to Config.xcconfig (gitignored) and fill in your project
+    Info.plist                   SUPABASE_URL/ANON_KEY/BROKER_URL/PASSKEY_RP_ID from build settings
+    Config.xcconfig.example      copy to Config.xcconfig (gitignored) to inject real values locally
   Sources/CovenantPathKit/
-    Models/                      Codable structs: Member, MemberDetails (jsonb), Stake/Missionary
-    Logic/                       PURE, unit-tested ports of golden_hour.dart:
-                                   DateParsing, Milestones, OrgBucket, Recency/Initials
-    Services/                    AppConfig, SupabaseService, AuthService, MembersRepository
-    ViewModels/                  @Observable stores: SessionStore (auth), DashboardStore (data)
-    Views/                       SwiftUI; RootView, LoginView, DashboardView (TabView), tab views,
-                                   PersonDetailView, Detail/ sections, Shared/ components
-  Tests/CovenantPathKitTests/    XCTest for the pure logic + Codable decoding
+    Models/      Member, MemberDetails (jsonb), Stake/Missionary, Comment, Misc (units/invites/admins)
+    Logic/       PURE, unit-tested: DateParsing, Milestones, OrgBucket, Recency/Initials,
+                 Kpis (series/bucketing), Freshness (ago/staleness), Disclaimer
+    Services/    AppConfig, SupabaseService, AuthService, MembersRepository, SupabaseGateway,
+                 BrokerService (broker+admin+/log), AppServices (graph), AppPrefs/ThemeController,
+                 BiometricService, PasskeyService, ErrorReporter
+    ViewModels/  @Observable: SessionStore (3-mode auth), DashboardStore (shell+data), AdminStore
+    Views/       RootView, LoginView, BiometricGateView, DashboardView, Tabs/, Detail/, Sheets/,
+                 SettingsView, InviteView, AdminView, Shared/
+  Tests/CovenantPathKitTests/    XCTest: logic + Codable + KPI/freshness math
 ```
 
-**Layering** (dependencies point downward, UI is a thin shell):
-
-- **Models** — `Member` mirrors the dashboard select columns exactly (snake_case → camelCase via
-  `CodingKeys`). `MemberDetails` is a tolerant decoder for the `details` jsonb subtree (partial rows
-  and mixed-type fields must still render).
-- **Logic** — UI-free and `Sendable`. `Milestones.all` is the single milestone source (same order,
-  labels, abbrs, eligibility + completion predicates as `golden_hour.dart`). `Org` is the single org
-  ownership source (`responsible(for:)`, `info(_:)`). Colors are expressed as `UInt32` hex + SF
-  Symbol names so the logic stays platform-neutral and testable; the view layer maps hex → `Color`.
-- **Services** — `SupabaseService` wraps the SDK client. `AuthService` (email-OTP) and
-  `MembersRepository` (RLS-scoped reads) are protocols with Supabase-backed implementations.
-- **ViewModels** — `@Observable` (Observation framework). `SessionStore` drives the login/dashboard
-  switch via `auth.authStateChanges`; `DashboardStore` loads the single-stake dataset and exposes the
-  derived `newMembers` / `investigators` slices.
-- **Views** — SwiftUI, `NavigationStack` per tab, `TabView` for the 5 tabs. State is `@State`
-  (`@Observable` stores) + `@Environment`. All I/O is `async/await`.
-
 State management is the modern **Observation framework** (`@Observable`, `@State`, `@Environment`),
-not `ObservableObject`/`@Published`.
+not `ObservableObject`/`@Published`. The pure `Logic/` layer is `Sendable` and UI-free (colors are
+`UInt32` hex + SF Symbol names mapped to SwiftUI in the views), so it builds + tests on macOS.
 
-## Open / build in Xcode
+## Build / run
 
-You have two options. **Option A (recommended)** uses the package + an app target you create in
-Xcode — clean and avoids hand-maintaining a `.xcodeproj`.
+### CI (the build contract)
 
-### Option A — Swift Package + a new app target
+```sh
+cd native/ios
+brew install xcodegen
+xcodegen generate
+xcodebuild -scheme CovenantPath -destination 'generic/platform=iOS' \
+  -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO build
+swift test            # pure-logic tests on macOS (UIKit views excluded by canImport guards)
+```
 
-1. **Open the package**: `File → Open…` and select `native/ios/Package.swift`. Xcode resolves the
-   `supabase-swift` dependency (needs network on first open; see **Dependencies**). At this point
-   `swift test` / the `CovenantPathKitTests` scheme will run the pure-logic tests.
-2. **Add an app target**: `File → New → Project… → iOS → App` (Interface: SwiftUI, Language: Swift,
-   minimum deployment iOS 17). Save it (e.g. inside `native/ios/` as `CovenantPathApp`).
-   - Delete the generated `ContentView.swift` and the generated `…App.swift`.
-   - Add `App/CovenantPathApp.swift` to the target (it's the `@main` entry → `RootView()`).
-3. **Link the package**: select the project → the app target → `General → Frameworks, Libraries, and
-   Embedded Content → +` → `Add Other… → Add Package Dependency… → Add Local…` → choose this
-   `native/ios` folder → add the **`CovenantPathKit`** library product to the app target.
-   (supabase-swift comes transitively through `CovenantPathKit`.)
-4. **Configuration** (see next section) — point the target at `Config.xcconfig` and use the provided
-   `Info.plist` (or copy its two `SUPABASE_*` keys into the target's generated Info settings).
-5. Select an iOS 17+ simulator and **Run**.
+`xcodegen generate` reads `project.yml` and produces `CovenantPath.xcodeproj` (gitignored): one
+`CovenantPath` app target compiling `Sources/CovenantPathKit/**` + `App/**` and linking the
+`Supabase` + `Auth` products of supabase-swift. The app builds **unsigned** for a generic iOS
+device; with an empty config it shows the "Configuration needed" screen (fine for a compile check).
 
-### Option B — hand-written project
+### Local Xcode
 
-Not provided. A `.xcodeproj`/`.pbxproj` is fragile to author by hand without a compiler; Option A is
-the safer, cleaner deliverable. (The package alone already builds the entire app module.)
+`xcodegen generate`, then open `CovenantPath.xcodeproj` and Run on an iOS 17+ simulator. (Or open
+`Package.swift` to run `swift test` on the pure logic.)
 
-## Configuration (SUPABASE_URL / SUPABASE_ANON_KEY)
+## Configuration (no secrets in code)
 
-Secrets are **never hardcoded**. The two values are read at runtime by `AppConfig` from the app
-bundle's Info.plist keys `SUPABASE_URL` / `SUPABASE_ANON_KEY`, which are populated at build time from
-an **xcconfig** (kept out of source control).
+Four build-time values, read at runtime by `AppConfig` from the bundle's Info.plist keys
+(populated from build settings / the xcconfig), all defaulting **empty**:
 
-1. Copy `App/Config.xcconfig.example` → `App/Config.xcconfig` (already gitignored).
-2. Fill in your values:
-   - `SUPABASE_URL` — note xcconfig treats `//` as a comment, so write the scheme escaped:
-     `SUPABASE_URL = https:/$()/YOUR-REF.supabase.co`
-   - `SUPABASE_ANON_KEY = sb_publishable_…` (the anon/publishable key is **safe** on clients — RLS
-     gates everything — but we still keep it untracked).
-3. In Xcode: `Project → Info → Configurations`, set Debug and Release for the app target to use
-   `Config.xcconfig`.
-4. Ensure the target's Info.plist contains the two `SUPABASE_*` keys mapped to `$(SUPABASE_URL)` /
-   `$(SUPABASE_ANON_KEY)` (the bundled `App/Info.plist` already does — point the target at it via
-   `Build Settings → Packaging → Info.plist File`, or copy the two keys into the generated plist).
+| Key | Purpose |
+|---|---|
+| `SUPABASE_URL` / `SUPABASE_ANON_KEY` | the data layer (anon key is safe on clients — RLS gates everything) |
+| `BROKER_URL` | the auth broker (empty → only Email-code login; broker features hide) |
+| `PASSKEY_RP_ID` | native passkey relying-party id (empty → passkey button disabled with a note) |
 
-If the config is empty/missing, the app shows a friendly "Configuration needed" screen instead of
-crashing (mirrors the Flutter `_ConfigError`).
+To inject real values locally: copy `App/Config.xcconfig.example` → `App/Config.xcconfig`
+(gitignored), fill it in, and either add `configFiles: { Debug/Release: App/Config.xcconfig }` to the
+`CovenantPath` target in `project.yml` (CI keeps it out so a missing file never fails the build) or
+pass them as build settings to `xcodebuild`. xcconfig treats `//` as a comment, so escape URL
+schemes: `SUPABASE_URL = https:/$()/your-ref.supabase.co`.
 
-## Dependencies
+## What's implemented
 
-- **supabase-swift** `from: "2.20.0"` (the official SDK; 2.x major line). Declared in `Package.swift`.
-  `import Supabase` re-exports the `Auth` and `PostgREST` sub-modules we use (`@_exported import`),
-  so we get `SupabaseClient`, `Session`, `AuthChangeEvent`, `EmailOTPType`, and the Postgrest query
-  builders from the one import.
-- I could not run `swift build`/`swift test` here (no Swift toolchain), so `Package.resolved` is not
-  committed — Xcode will resolve it on first open. If the pinned minor is unavailable, bump it.
+**Everything in `PARITY.md` (1–29) — see `PARITY_STATUS.md` for the item-by-item map.** Highlights:
 
-## What's implemented vs. stubbed
-
-**Implemented (faithful ports):**
-
-- **Email-OTP login** — send code (`signInWithOTP(email:)`) → verify (`verifyOTP(email:token:type:
-  .email)`). Two-step UI with busy/error handling.
-- **Data layer** — typed `Member` model + `MembersRepository` selecting the exact dashboard column
-  list, scoped to one stake (`.eq("stake_id", …).order("unit_name").order("name")`). Stakes loaded
-  freshest-first; multi-stake users get an in-app switcher.
-- **Milestone / org / date logic** — ported **exactly** from `golden_hour.dart`: the 6 milestones
-  with their eligibility gates (by-year "turns ≥N", age-now ≥N, member-≥1yr, male) and eligible-only
-  completion math; `OrgBucket` ownership (`<12mo` WML / `≥12mo` EQ·RS via `days/30.44` floored); date
-  parsing for ISO / `6 Feb 2026` / `M/D/YYYY` / sentinels; `monthsDaysAgo`, initials.
-- **Baptisms** — investigators by planned `baptism_goal_date` as a date timeline: overdue ("date
-  passed") block first, then "Scheduled", grouped by date with a month/day rail.
-- **Golden Hour** — segmented New Members / Being Taught; New Members has the org filter (WML/EQ/RS,
-  all-on by default, can't deselect the last, Clear filters), the Week/Month/Year/All recency window
-  with a range pill, the per-milestone completion summary (% eligible-only, tap → "still need" sheet),
-  and the member list with milestone chips (next-step highlighted).
-- **Needs** — per-milestone category selector with outstanding counts, the same org filter, the
-  per-unit colored breakdown, and the eligible-missing list sorted by baptism date then unit.
-- **Person Detail** — header (photo/initials, name, unit, baptism line), labeled milestone chips,
-  then sections from `details`: sacrament dots (recent 6 + "View all"), Friends (names), Priesthood,
-  Calling, Ministering Assignment, Ministering Brothers/Sisters (names), Temple, Principles Taught
-  (taught/member-present dots), Self-Reliance toggles, Flags — with the **"names temporarily
-  unavailable"** fallback when a Yes flag has no names, and the flat-field fallback when `details` is
-  null. "Open in LCR" toolbar link.
-- **Table** — a sortable list (the spec allows "a basic sortable list") of baptized members with the
-  covenant-path fields as color-coded Yes(green)/No(red)/N/A(grey)/recommend cells, plus a sort menu.
-- **Shared components** — `GoldenHourChips`, `OrgFilterBar`, `MemberRow`, avatars, `SectionCard`,
-  `FlowLayout` (wrapping chips), loading skeleton with shimmer.
-- **Unit tests** — date parsing, eligibility, org buckets, completion math, the org-filter
-  last-selection guard, recency windows, initials, and Codable column mapping / tolerant `details`
-  decoding.
-
-**Stubbed / out of scope (per the spec's PoC non-goals):**
-
-- **KPIs** — a labeled stub: real at-a-glance counts + per-unit completion bars, but **not** the
-  Flutter time-series line charts (Month/Year/All) with drill-downs. Clearly labeled in-app.
-- **Church-account broker login, passkeys, email-relay backup** — not implemented (email-OTP only).
-- **Admin/ops console, report generation, Google Drive, sync settings, push, in-app schedule,
-  comments/notes** — not implemented.
-- **Photos pipeline** — we just render `photo_url` via `AsyncImage` if present, else initials.
+- **3-mode login** — Church account (username/password → MFA factor pick → code, via the broker) ·
+  Email code (Supabase OTP, with a broker-relay fallback) · Passkey (native ASAuthorization WebAuthn
+  against the broker — see the one **Partial** below). Disclaimer + cold-start status + error lines.
+- **Biometric app-lock** (LocalAuthentication), **dark mode** (persisted, Settings toggle).
+- **Dashboard shell** — stake switcher, freshness chip (→ Sync now), Refresh, overflow menu, syncing
+  + stale-credential banners, skeletons, enrollment-aware empty states.
+- **5 tabs** — Baptisms (overdue/scheduled timeline + per-unit + missionary strip), Golden Hour
+  (completion card + org filter + recency window + drills), Needs (category chips + per-unit + org
+  filter), **KPIs (Swift Charts** line cards with compare overlay + Overview grid + by-unit bars +
+  drills), Table (sortable + per-column value filter, color-coded).
+- **Person detail** — header + LCR link, milestone chips, all `details` sections, and **notes**
+  (read/add via `member_comments`).
+- **Sheets / screens** — Sync settings (status + schedule + Google Drive), Generate report (+email),
+  Invite power users (rpc), Settings, Contact / Feedback, **Admin · Ops console** (broker `/admin/*`).
+- **Error reporting** to broker `/log` (type + truncated message + surface; no PII).
 
 ## Compile caveats (honest)
 
-This was written **without a compiler**, so:
+Authored without a compiler, so:
 
-- **SF Symbols**: a few symbol names were chosen to echo the Flutter Material icons (e.g.
-  `hands.sparkles`, `person.text.rectangle`, `rosette`, `medal`, `timeline.selection`). If any name
-  isn't available on your iOS 17 SDK, Xcode renders a blank/placeholder — swap it for a valid symbol
-  (they're isolated in `MilestoneStyle`/`OrgInfo`/`DashboardTab` + the detail sections).
-- **SDK signatures**: verified against the current `supabase-swift` main (`signInWithOTP`,
-  `verifyOTP(…type: .email)`, `authStateChanges` as `AsyncStream<(event:session:)>`,
-  `from().select().eq(_,value:).order().execute().value`, default decoder does **not** snake-case so
-  the explicit `CodingKeys` are correct). If you pin a different 2.x minor with a renamed symbol,
-  adjust `AuthService`/`MembersRepository`.
-- **Platform guards**: the SwiftUI `Views/` are wrapped in `#if canImport(UIKit)` so the package's
-  pure logic + Codable tests build/run on macOS via `swift test`, while the full UI compiles for iOS.
-- **Store re-creation**: `DashboardStore` is created in `ConfiguredRoot.body`; SwiftUI keeps the
-  first `@State` instance (stable view identity), so the extra allocation is harmless. If you prefer,
-  hoist the stores into a single owner.
-
-Run the logic tests (on a Mac) with the `CovenantPathKitTests` scheme, or `swift test` from
-`native/ios/`.
+- **Passkey is the one documented Partial.** The full native `ASAuthorization` WebAuthn flow is
+  implemented (`PasskeyService`), but `available` is gated behind `PASSKEY_RP_ID` because platform
+  passkeys need an **associated-domains entitlement** that an unsigned CI build can't provide. Unset
+  → the button shows disabled with a "use email code on this device" note. Set + entitlement → it
+  runs end-to-end.
+- **Swift Charts** (`KPIsView`) uses `Chart`/`LineMark`/`AreaMark`/`PointMark`, `chartOverlay`
+  tap-to-drill (`proxy.value(atX:)` + `plotAreaFrame`), and `AxisMarks`. Verified against the iOS 17
+  API; `plotAreaFrame` is deprecated-but-present on iOS 17 (warning, not error).
+- **SF Symbols** were chosen to exist on the iOS 17 SDK; symbol names are strings so a wrong one only
+  renders blank at runtime (never a build error). Uncertain ones were swapped for safe equivalents.
+- **supabase-swift API** verified against 2.x: `signInWithOTP`, `verifyOTP(…type: .email)`,
+  `setSession(accessToken:refreshToken:)`, `auth.session`, `authStateChanges`,
+  `from().select().eq(_,value:).order().execute().value`, `rpc(_:)` / `rpc(_:params:)`, `insert`.
+- **macOS `swift test`** compiles the package minus the UIKit-gated Views + `PasskeyService` (their
+  `canImport` guards), so the pure logic tests run without a simulator.
