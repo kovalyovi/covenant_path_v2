@@ -25,7 +25,7 @@ class MembersRepository(
         // Mirror dashboard_page.dart `_columns` verbatim (order matters only for readability).
         val MEMBER_COLUMNS = Columns.raw(
             "person_uuid, stake_id, unit_id, name, unit_name, baptism_date, birth_date, " +
-                "membership_duration, sex, friends, aaronic_priesthood, melchizedek_priesthood, " +
+                "membership_duration, sex, friends, friends_count, aaronic_priesthood, melchizedek_priesthood, " +
                 "calling, ministering_brothers_sisters, ministering_assignment, temple_recommend, " +
                 "patriarchal_blessing, living_ordinance, details, photo_url, kind, baptism_goal_date",
         )

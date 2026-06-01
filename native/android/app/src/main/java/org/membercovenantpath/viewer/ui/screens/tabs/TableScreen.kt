@@ -254,6 +254,15 @@ private fun cellColor(v: String, kind: Kind): Color? = when (kind) {
         "F" -> StatusColors.CellFemalePink
         else -> null
     }
+    Kind.FRIENDS -> {
+        val n = v.toIntOrNull()
+        when {
+            n != null -> if (n > 0) StatusColors.CellGreen else StatusColors.CellRed
+            v == "Yes" -> StatusColors.CellGreen
+            v == "No" -> StatusColors.CellRed
+            else -> null
+        }
+    }
     Kind.TEXT -> null
 }
 
@@ -297,7 +306,7 @@ private fun FilterDialog(
     )
 }
 
-private enum class Kind { TEXT, YESNO, RECOMMEND, GENDER }
+private enum class Kind { TEXT, YESNO, RECOMMEND, GENDER, FRIENDS }
 
 private data class Col(val header: String, val kind: Kind, val width: Dp, val value: (Member) -> String)
 
@@ -310,7 +319,7 @@ private val Columns: List<Col> = listOf(
     Col("Member for", Kind.TEXT, 132.dp) {
         (it.membershipDuration ?: "").replaceFirst(Regex("^Member for\\s*", RegexOption.IGNORE_CASE), "")
     },
-    Col("Friends", Kind.YESNO, 96.dp) { it.friends ?: "" },
+    Col("Friends", Kind.FRIENDS, 96.dp) { it.friendsCount?.toString() ?: (it.friends ?: "") },
     Col("Aaronic", Kind.YESNO, 96.dp) { it.aaronicPriesthood ?: "" },
     Col("Melch.", Kind.YESNO, 92.dp) { it.melchizedekPriesthood ?: "" },
     Col("Calling", Kind.YESNO, 96.dp) { it.calling ?: "" },

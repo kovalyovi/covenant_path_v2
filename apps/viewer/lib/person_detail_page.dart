@@ -119,7 +119,10 @@ class _RichBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final left = <Widget>[
       _SacramentSection(d: d),
-      _FriendsSection(d: d, recordedYes: member['friends'] == 'Yes'),
+      _FriendsSection(
+          d: d,
+          recordedYes: member['friends'] == 'Yes',
+          count: (member['friends_count'] as num?)?.toInt()),
       _ListTextSection(
         title: 'Priesthood Ordination',
         icon: Icons.workspace_premium,
@@ -256,17 +259,23 @@ class _SacramentSectionState extends State<_SacramentSection> {
 }
 
 class _FriendsSection extends StatelessWidget {
-  const _FriendsSection({required this.d, this.recordedYes = false});
+  const _FriendsSection({required this.d, this.recordedYes = false, this.count});
   final Map<String, dynamic> d;
   final bool recordedYes;
+  final int? count;
   @override
   Widget build(BuildContext context) {
     final friends = (d['friends'] as List?)?.cast<Map>() ?? const [];
+    // prefer the recorded count; otherwise fall back to the number of named friends we have
+    final n = count ?? (friends.isNotEmpty ? friends.length : null);
     return _Section(
-      title: 'Friends in the Church',
+      title: n != null ? 'Friends in the Church · $n' : 'Friends in the Church',
       leadingIcon: Icons.people_outline,
       child: friends.isEmpty
-          ? (recordedYes ? _recordedYesNote(context) : _muted(context, 'No friends recorded yet.'))
+          ? ((count != null && count! > 0)
+              ? _muted(context,
+                  '$count friend${count == 1 ? '' : 's'} recorded (names not available).')
+              : (recordedYes ? _recordedYesNote(context) : _muted(context, 'No friends recorded yet.')))
           : Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [

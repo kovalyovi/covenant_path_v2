@@ -24,7 +24,7 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 
 # the 13 covenant-path fields + extras we persist (member dict key -> column)
 _MEMBER_COLUMNS = [
-    "person_uuid", "name", "unit_name", "baptism_date", "birth_date", "friends",
+    "person_uuid", "name", "unit_name", "baptism_date", "birth_date", "friends", "friends_count",
     "aaronic_priesthood", "melchizedek_priesthood", "calling",
     "ministering_brothers_sisters", "ministering_assignment", "temple_recommend",
     "patriarchal_blessing", "living_ordinance", "membership_duration", "sex",
@@ -48,6 +48,10 @@ def _merge_expr(c: str) -> str:
     sentinel; all other columns take the fresh value. Sentinel literals are constants (safe to inline)."""
     if c == "unit_id":
         return "unit_id = excluded.unit_id"
+    if c == "friends_count":
+        # numeric, not a sentinel: preserve the last-good count when a run couldn't determine it
+        # (incoming NULL) but accept a genuine 0 (empty friends array).
+        return "friends_count = coalesce(excluded.friends_count, members.friends_count)"
     if c in _GATED_COLUMNS:
         e = f"excluded.{c}"
         for s in _SENTINELS:

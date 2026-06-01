@@ -8,7 +8,7 @@ import SwiftUI
 struct TableView: View {
     let rows: [Member]
 
-    enum Kind { case text, gender, yesno, recommend }
+    enum Kind { case text, gender, yesno, recommend, friends }
     struct Column: Identifiable {
         let title: String
         let value: (Member) -> String
@@ -29,7 +29,7 @@ struct TableView: View {
         Column(title: "Unit", value: { $0.unitName ?? "" }, kind: .text),
         Column(title: "Baptism", value: { $0.baptismDate ?? "" }, kind: .text),
         Column(title: "Member for", value: { membershipShort($0) }, kind: .text),
-        Column(title: "Friends", value: { $0.friends ?? "" }, kind: .yesno),
+        Column(title: "Friends", value: { $0.friendsCount.map(String.init) ?? ($0.friends ?? "") }, kind: .friends),
         Column(title: "Aaronic", value: { $0.aaronicPriesthood ?? "" }, kind: .yesno),
         Column(title: "Melch.", value: { $0.melchizedekPriesthood ?? "" }, kind: .yesno),
         Column(title: "Calling", value: { $0.calling ?? "" }, kind: .yesno),
@@ -182,6 +182,11 @@ struct TableView: View {
             if v == "Yes" { return StatusColor.yes }
             if v == "No" { return StatusColor.no }
             if v == "N/A" { return StatusColor.na }
+            return nil
+        case .friends:
+            if let n = Int(v) { return n > 0 ? StatusColor.yes : StatusColor.no }
+            if v == "Yes" { return StatusColor.yes }
+            if v == "No" { return StatusColor.no }
             return nil
         case .recommend:
             if v == "Active" { return StatusColor.yes }

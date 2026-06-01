@@ -173,7 +173,7 @@ private fun HeaderCard(member: Member, d: Details?) {
 /** All the rich `details`-driven sections (LazyListScope so each is its own item). */
 private fun androidx.compose.foundation.lazy.LazyListScope.richSections(d: Details, member: Member) {
     item { SacramentSection(d) }
-    item { FriendsSection(d, recordedYes = member.friends == "Yes") }
+    item { FriendsSection(d, recordedYes = member.friends == "Yes", count = member.friendsCount) }
     item {
         ListTextSection(
             title = "Priesthood Ordination", icon = Icons.Filled.WorkspacePremium,
@@ -260,10 +260,13 @@ private fun AttendanceDot(attended: Boolean) {
 }
 
 @Composable
-private fun FriendsSection(d: Details, recordedYes: Boolean) {
-    SectionCard(title = "Friends in the Church", leadingIcon = Icons.Outlined.PeopleOutline) {
+private fun FriendsSection(d: Details, recordedYes: Boolean, count: Int? = null) {
+    val n = count ?: d.friends.size.takeIf { it > 0 }
+    val title = if (n != null) "Friends in the Church · $n" else "Friends in the Church"
+    SectionCard(title = title, leadingIcon = Icons.Outlined.PeopleOutline) {
         if (d.friends.isEmpty()) {
-            if (recordedYes) RecordedYesNote() else MutedLine("No friends recorded yet.")
+            if (count != null && count > 0) MutedLine("$count friend${if (count == 1) "" else "s"} recorded (names not available).")
+            else if (recordedYes) RecordedYesNote() else MutedLine("No friends recorded yet.")
         } else {
             Column {
                 if (d.friends.any { it.inStake }) {

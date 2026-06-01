@@ -12,7 +12,7 @@ class _SpreadsheetView extends StatefulWidget {
     ('Unit', 'unit_name', 'text'),
     ('Baptism', 'baptism_date', 'text'),
     ('Member for', 'membership_duration', 'text'),
-    ('Friends', 'friends', 'yesno'),
+    ('Friends', 'friends', 'friends'),
     ('Aaronic', 'aaronic_priesthood', 'yesno'),
     ('Melch.', 'melchizedek_priesthood', 'yesno'),
     ('Calling', 'calling', 'yesno'),
@@ -36,6 +36,12 @@ class _SpreadsheetViewState extends State<_SpreadsheetView> {
 
   /// Display value — strips the redundant "Member for " prefix (header already says it). (#31)
   static String _display(Map<String, dynamic> m, String key) {
+    if (key == 'friends') {
+      // show the recorded number of friends when we have it; fall back to the Yes/No flag
+      final c = m['friends_count'];
+      if (c != null && '$c'.isNotEmpty) return '$c';
+      return '${m['friends'] ?? ''}';
+    }
     final v = '${m[key] ?? ''}';
     return key == 'membership_duration'
         ? v.replaceFirst(RegExp(r'^Member for\s*', caseSensitive: false), '')
@@ -243,6 +249,13 @@ class _SpreadsheetViewState extends State<_SpreadsheetView> {
 
   static Color? _cellColor(String v, String kind) {
     final green = Colors.green.shade100, red = Colors.red.shade100, grey = Colors.grey.shade200;
+    if (kind == 'friends') {
+      final n = int.tryParse(v);
+      if (n != null) return n > 0 ? green : red; // a count: green if they have any, red if 0
+      if (v == 'Yes') return green;
+      if (v == 'No') return red;
+      return null;
+    }
     if (kind == 'yesno') {
       if (v == 'Yes') return green;
       if (v == 'No') return red;

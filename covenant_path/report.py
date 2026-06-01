@@ -188,6 +188,9 @@ class CovenantPathMember:
     # full progress-only subtree (sacrament, friends, lessons, ministering, commitments)
     # for the rich member view — see _progress_subtree. None if details fetch failed.
     details: dict | None = field(default=None)
+    # number of friends recorded in LCR (len of the friends array); None when this run
+    # couldn't determine it (so the merge-upsert preserves the last-good count).
+    friends_count: int | None = field(default=None)
 
 
 # --- build -------------------------------------------------------------------
@@ -279,6 +282,7 @@ def _assemble(person_raw: dict, details: dict | None, unit_name: str, birth: str
         baptism_date=NEEDS_PROFILE,
         birth_date=birth,
         friends=yes_no(bool(d.get("friends"))),
+        friends_count=(len(d["friends"]) if isinstance(d.get("friends"), list) else None),
         aaronic_priesthood=aaronic,
         melchizedek_priesthood=melch,
         calling=calling,
