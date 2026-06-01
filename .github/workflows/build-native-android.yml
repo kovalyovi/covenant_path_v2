@@ -1,0 +1,38 @@
+name: Build native Android (PoC)
+
+# Compiles the native Kotlin + Jetpack Compose app — proves the Android PoC builds + unit tests pass.
+# Manual + on changes to native/android. Debug build (no signing secrets needed).
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'native/android/**'
+      - '.github/workflows/build-native-android.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Run unit tests (pure logic)
+        working-directory: native/android
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
+      - name: Assemble debug APK
+        working-directory: native/android
+        run: ./gradlew :app:assembleDebug --no-daemon
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: covenant-path-native-android-debug
+          path: native/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: warn
+          retention-days: 14

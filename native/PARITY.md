@@ -1,0 +1,66 @@
+# Covenant Path — Native FEATURE PARITY checklist (iOS + Android)
+
+Read `native/SPEC.md` first (data contract, auth, core logic). THIS doc is the **100% feature list**:
+the native apps must cover EVERYTHING the Flutter app (`apps/viewer/lib/`) does. The PoC skipped a lot
+(KPIs charts, 3 login modes, settings, admin, reports, invites, comments, schedule, Drive UI, app-lock,
+dark mode) — all of that is now IN SCOPE. Same information + context on every screen; only the
+**placement/controls** adapt to native idioms (iOS: TabView/NavigationStack/Form/.sheet/SF Symbols;
+Android: NavigationBar/Scaffold/Material3/bottom sheets). When a Flutter widget has no native analog,
+use the platform-standard equivalent — never drop the information.
+
+Reference each behavior against the Flutter source noted in [brackets]. Translate logic exactly.
+
+## A. Entry / auth  [main.dart, login_page.dart, broker_client.dart, passkey_client.dart, biometric_*]
+1. **AuthGate**: no session → Login; session → (biometric app-lock gate) → Dashboard. Listen to auth state.
+2. **Config-error screen** when SUPABASE_URL/ANON_KEY missing [_ConfigError].
+3. **Login — 3 modes** (segmented when broker configured; else Email only):
+   - **Church account**: username + password → may return MFA → **choose factor** (list) → **enter code** → verify. (POST broker /auth/password, /auth/mfa/select, /auth/mfa/verify; on success the broker returns {email, otp} → Supabase verifyOtp.) Church sign-in always enrolls the stake (consent note).
+   - **Email code**: enter email → send OTP → enter 6-digit code → verify. Direct Supabase OTP, with a broker-relay fallback toggle [_useRelay → broker /auth/email/start,/verify].
+   - **Passkey** (WebAuthn): "Sign in with a passkey" when supported. NOTE: native passkeys use the platform AuthenticationServices (iOS ASAuthorization / Android Credential Manager) against the broker /webauthn/* begin+complete. If a full native WebAuthn impl is too deep, implement it properly IF you can; otherwise stub the button disabled with a clear "use email code on this device" note — but DOCUMENT it as the one partial item.
+   - Disclaimer text + footer [disclaimer.dart kDisclaimerLong, DisclaimerFooter]; transient status line ("waking up the sign-in service"); error line.
+4. **Biometric app-lock** [biometric_gate.dart]: optional Face ID / fingerprint required to open the app, togger in Settings. iOS LocalAuthentication; Android BiometricPrompt. Persist the on/off pref.
+5. **Dark mode** [theme controller]: light/dark/system, persisted; toggle in the menu/Settings. Full Material3 / iOS semantic theming.
+
+## B. Dashboard shell  [dashboard_page.dart, views/dashboard_shell.dart, dashboard_common.dart]
+6. **Title = stake name**, and a **stake switcher** when the user can see >1 stake (persist choice).
+7. **Freshness chip** "Updated 2h ago" (amber >2d, red >2w); tap → dialog with exact local time + a **Sync now** button (provider only) [_LastUpdated]. **Refresh** action re-pulls.
+8. **Overflow menu**: Sync settings, Generate report, Invite a power user, Admin · Ops (admins only), Settings.
+9. **Syncing banner** (elapsed timer) while a sync runs; **stale-credential banner** (revoked → re-enroll) [_SyncingBanner, _StaleBanner].
+10. **5 tabs, each its accent color** (Baptisms blue, Golden Hour gold, Needs deep-orange, KPIs green, Table purple). Single-stake scoped member query [_columns, .eq stake_id].
+11. **Loading**: content-shaped skeletons, not bare spinners [widgets/shimmer.dart]. **Empty states** with the right message per enrollment status [_EmptyState].
+
+## C. Tabs (full behavior)
+12. **Baptisms** [upcoming/baptisms_view.dart]: investigators w/ planned baptism_goal_date as a date timeline — **overdue** ("date passed") block then **Scheduled** block; combined OR per-unit (toggle); per-unit cards show the assigned full-time **missionaries** strip (name chips → tap shows phone/email) [_MissionaryStrip, stakes.missionaries].
+13. **Golden Hour** [golden_hour_view.dart]: New Members / Being Taught **segmented**; **completion card** (% per milestone, eligible-only, tap → who's missing); **org filter** = 3 colored toggles WML/EQ/RS all-on + "Clear filters", responsibility subtitle when one selected; **Week/Month/Year/All** window + **date-range pill**; **Unit/Date** layout toggle + **Oldest/Newest** sort; member rows show milestone chips + responsibility chip; drill sheets list people.
+14. **Needs** [needs_view.dart]: per-milestone **category chips** (each milestone's color + outstanding count); selected → the eligible members still missing it; **per-unit colored chips** breakdown; **org filter** (same as GH); baptism-date↕ sort; member rows.
+15. **KPIs** [kpis_view.dart]: this is the big PoC gap — build it. Metric **line charts** (use a native chart lib: iOS **Swift Charts**; Android a Compose chart — Vico, or hand-drawn Canvas if simpler) for: Investigators-at-Sacrament, New-Members-at-Sacrament, New-Friends-being-taught, each current-window vs previous overlay; **Month/Year/All** period + date-range pill + **Compare** toggle; an **Overview** stat grid (Being taught now, Lessons w/ member present, New members tracked, Golden Hour %); **Golden Hour by unit** ranked bars; tap a point/stat → drill sheet of the people. Bucketing/series math: port `dashboard_common.dart` (_metricData, _bucketKey, _windowBuckets, allByYear) + `kpis_view.dart` exactly.
+16. **Table** [table_view.dart]: every covenant-path field in a sortable, per-column-value-filterable grid, color-coded Yes(green)/No(red)/N-A(grey)/recommend; row→detail; full-page scroll; "N members (filtered)" + clear-filters. Use a native data-grid pattern (iOS: a horizontally-scrollable Grid/Table; Android: LazyColumn+LazyRow or a table composable). Keep sort (3-state) + the value-picker filter dialog per column.
+
+## D. Person detail  [person_detail_page.dart]
+17. Header (photo/initials avatar, name, unit, member-since, baptism/planned line) + **open in LCR** link.
+18. Golden Hour milestone chips (labeled, highlight next step).
+19. Sections from `details`: **Sacrament** attendance dots (recent N + view-all, missed count); **Friends** (names + unit + in-stake heading, or "names temporarily unavailable" when flagged Yes but empty); **Priesthood Ordination**; **Calling** (alert-red when none); **Ministering Assignment**; **Ministering Brothers & Sisters** (names); **Temple** ordinances+experiences; **Principles Taught** (lesson → principle dots, member-present marker); **Self-Reliance**; **Flags/tags**. Flat fallback for pre-details rows.
+20. **Notes/comments** [_CommentsSection]: read existing (member_comments table, RLS-scoped) + add a note (insert). author + timestamp.
+
+## E. Actions, sheets, secondary screens
+21. **Sync settings** sheet [_SyncSettingsSheet]: stake, last synced, members count, credential status/provider/enrolled/coverage; **Sync my stake now**; **Revoke**; **Schedule section** (daily ET hour dropdown + Pause/Resume; broker GET/POST /auth/schedule); **Google Drive section** (connect/disconnect, sheet link, last refreshed, "needs reconnect" amber state; broker /auth/google/*). All provider-gated.
+22. **Generate report** [_ReportSheet, broker GET /report]: stake name, totals (N new · on track · need attention), most-needed steps, outstanding by member; **Email to me** [POST /report/email].
+23. **Invite a power user** [invite_page.dart]: list current power users (grouped by email, scope), **invite** by email (supabase rpc invite_power_user), **revoke** (rpc revoke_power_user).
+24. **Settings** [settings_page.dart]: Appearance (theme cycle); Security (Add a passkey [Recommended]; App lock toggle); Support (Contact support; Send feedback); About & privacy (disclaimer); Account (signed in as <email>; Sign out).
+25. **Contact support** dialog [broker POST /contact]; **Send feedback** dialog [broker/admin POST /feedback → GitHub issue]. + the **one-time post-login passkey upsell** snackbar where supported.
+26. **Admin · Ops console** [admin_page.dart, admin_client.dart] (app_admins only — broker verifies): panels — **system health/summary** (members/units/stakes/admins counts, last sync, tool links), **diagnostics** (recent sync rows), **GitHub Actions** (recent runs + Run/Re-run dispatch), **enrolled stakes** (per-stake state + member count + freshness + admin revoke), **admins** (list + invite + revoke). Each panel loads independently; admin-gated.
+
+## F. Cross-cutting
+27. **Error reporting** [error_reporter.dart]: report uncaught errors to broker /log (type + truncated message + surface; never PII). iOS/Android global handlers. Optional Sentry parity is NICE-TO-HAVE, not required.
+28. **No secrets in code**; SUPABASE_URL/ANON_KEY + BROKER_URL via build config (xcconfig / BuildConfig), default empty.
+29. **Selectable text** where the Flutter app allows it (native text is selectable by default in most places — fine).
+
+## Build contract (so CI can COMPILE these — REQUIRED)
+- **iOS**: commit a **XcodeGen `native/ios/project.yml`** that defines an iOS app target named **`CovenantPath`** (bundle id `org.membercovenantpath.viewer`, iOS 17+, deployment) wiring the SwiftUI app + supabase-swift SPM package. CI runs: `brew install xcodegen` → `xcodegen generate` (in native/ios) → `xcodebuild -scheme CovenantPath -destination 'generic/platform=iOS' -skipPackagePluginValidation build CODE_SIGNING_ALLOWED=NO`. Make sure the SwiftUI views are NOT all gated behind `#if canImport(UIKit)` in a way that excludes them from the iOS app target (they SHOULD compile for iOS). Keep pure logic cross-platform. The project MUST build with `xcodebuild` for iOS, unsigned.
+- **Android**: standard Gradle. CI runs (in native/android): `./gradlew :app:assembleDebug`. Ensure the version catalog + plugins resolve; keep `BuildConfig` fields for SUPABASE_URL/ANON_KEY/BROKER_URL with empty defaults. It MUST `assembleDebug` cleanly.
+- Keep unit tests for the pure logic layer (date parsing, milestones, org buckets) and ensure they run (`swift test` for the cross-platform logic module on iOS where possible; `./gradlew :app:testDebugUnitTest` on Android).
+
+## Deliverable
+Update your app IN PLACE (native/ios or native/android). Keep the README + IMPLEMENTATION_NOTES current.
+Append a **PARITY_STATUS.md** mapping each numbered item above → Done / Partial / Stub with a one-line note,
+so a reviewer can see exactly what's covered. Do NOT run git. Stay in your directory.

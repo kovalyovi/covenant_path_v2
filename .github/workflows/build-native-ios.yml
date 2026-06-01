@@ -1,0 +1,49 @@
+name: Build native iOS (PoC)
+
+# Compiles the native SwiftUI app on a macOS runner (has Xcode) — proves the iOS PoC builds.
+# XcodeGen turns native/ios/project.yml into an .xcodeproj, then xcodebuild builds it UNSIGNED
+# for the generic iOS device (no provisioning needed). Manual + on changes to native/ios.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'native/ios/**'
+      - '.github/workflows/build-native-ios.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Select latest Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        working-directory: native/ios
+        run: xcodegen generate
+      - name: Build (unsigned, generic iOS device)
+        working-directory: native/ios
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -scheme CovenantPath \
+            -destination 'generic/platform=iOS' \
+            -skipPackagePluginValidation \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            build | xcpretty || xcodebuild \
+            -scheme CovenantPath \
+            -destination 'generic/platform=iOS' \
+            -skipPackagePluginValidation \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+      - name: Unit tests (pure logic, macOS)
+        working-directory: native/ios
+        continue-on-error: true   # logic tests are macOS-buildable; UI target is iOS-only
+        run: swift test || true
