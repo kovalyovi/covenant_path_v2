@@ -290,6 +290,7 @@ class _SyncSettingsSheet extends StatelessWidget {
                       icon: const Icon(Icons.link_off),
                       label: const Text('Revoke my sync access')),
                 ],
+                if (isProvider) const _ScheduleSection(), // #schedule: when the daily sync runs
                 const _GoogleDriveSection(), // M7: connect Drive so the stake owns its own sheet
               ],
             ],
@@ -303,6 +304,106 @@ class _SyncSettingsSheet extends StatelessWidget {
     final dt = DateTime.tryParse(iso);
     if (dt == null) return iso;
     return DateFormat('MMM d, y · h:mm a').format(dt.toLocal());
+  }
+}
+
+/// #schedule: the provider sets WHEN their stake's daily sync runs (ET hour) and can pause it.
+/// Loads the current schedule on open; saving writes it through the broker. Best-effort — hidden if
+/// the broker can't report eligibility.
+class _ScheduleSection extends StatefulWidget {
+  const _ScheduleSection();
+  @override
+  State<_ScheduleSection> createState() => _ScheduleSectionState();
+}
+
+class _ScheduleSectionState extends State<_ScheduleSection> {
+  int _hour = 7;
+  bool _paused = false;
+  bool _loaded = false;
+  bool _eligible = false;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final s = await BrokerClient().getSchedule();
+      if (!mounted) return;
+      setState(() {
+        _eligible = s['eligible'] == true;
+        _hour = (s['hour_et'] as num?)?.toInt() ?? 7;
+        _paused = s['paused'] == true;
+        _loaded = true;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loaded = true); // leave hidden on error
+    }
+  }
+
+  Future<void> _save({int? hour, bool? paused}) async {
+    final h = hour ?? _hour;
+    final p = paused ?? _paused;
+    setState(() => _busy = true);
+    try {
+      await BrokerClient().setSchedule(h, p);
+      if (mounted) setState(() { _hour = h; _paused = p; });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not save schedule: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  String _label(int h) {
+    final ampm = h < 12 ? 'AM' : 'PM';
+    final h12 = h % 12 == 0 ? 12 : h % 12;
+    return '$h12:00 $ampm ET';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_loaded || !_eligible) return const SizedBox.shrink();
+    final c = Theme.of(context).colorScheme;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Divider(height: 24),
+      Row(children: [
+        Icon(Icons.schedule, size: 18, color: c.primary),
+        const SizedBox(width: 8),
+        Text('Daily sync time', style: Theme.of(context).textTheme.titleSmall),
+      ]),
+      const SizedBox(height: 4),
+      Text(
+          _paused
+              ? 'Automatic daily sync is paused. You can still "Sync my stake now" anytime.'
+              : 'Your stake syncs automatically each day at this time.',
+          style: TextStyle(fontSize: 13, color: c.onSurfaceVariant)),
+      const SizedBox(height: 8),
+      Row(children: [
+        Opacity(
+          opacity: _paused ? 0.5 : 1,
+          child: DropdownButton<int>(
+            value: _hour,
+            onChanged: (_busy || _paused) ? null : (h) { if (h != null) _save(hour: h); },
+            items: [for (var h = 0; h < 24; h++) DropdownMenuItem(value: h, child: Text(_label(h)))],
+          ),
+        ),
+        const Spacer(),
+        if (_busy)
+          const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+        else
+          TextButton.icon(
+            onPressed: () => _save(paused: !_paused),
+            icon: Icon(_paused ? Icons.play_arrow : Icons.pause, size: 18),
+            label: Text(_paused ? 'Resume' : 'Pause'),
+          ),
+      ]),
+    ]);
   }
 }
 
