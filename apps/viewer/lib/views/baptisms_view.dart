@@ -111,7 +111,7 @@ class _Timeline extends StatelessWidget {
         ),
       if (upcoming.isNotEmpty)
         _DateSection(
-          title: 'Upcoming',
+          title: 'Scheduled',
           icon: Icons.event_available,
           color: Theme.of(context).colorScheme.primary,
           items: upcoming,
