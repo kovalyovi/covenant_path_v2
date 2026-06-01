@@ -199,6 +199,11 @@ class BrokerClient {
   /// Provider triggers a sync for their own stake. Returns {coverage_complete, last_synced_at}.
   Future<Map<String, dynamic>> syncNow() => _authed('POST', '/auth/sync-now');
 
+  /// In-app daily-sync schedule (#schedule): read {eligible, hour_et, paused}; write hour + pause.
+  Future<Map<String, dynamic>> getSchedule() => _authed('GET', '/auth/schedule');
+  Future<Map<String, dynamic>> setSchedule(int hourEt, bool paused) =>
+      _authed('POST', '/auth/schedule', body: {'hour_et': hourEt, 'paused': paused});
+
   /// M7 per-stake Google Drive: status, start the OAuth (returns {url} to open), disconnect.
   Future<Map<String, dynamic>> googleDriveStatus() => _authed('GET', '/auth/google/status');
   Future<Map<String, dynamic>> googleDriveStart() => _authed('POST', '/auth/google/start');

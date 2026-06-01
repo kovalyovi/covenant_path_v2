@@ -276,6 +276,37 @@ def provider_stake_id(email: str) -> str | None:
     return cred.get("stake_id") if cred else None
 
 
+def get_schedule_for(email: str) -> dict:
+    """The signed-in provider's stake sync schedule (in-app config, migration 0030). Defaults to
+    7:00 ET / not paused when there's no stake_settings row yet."""
+    sid = provider_stake_id(email)
+    if not sid:
+        return {"eligible": False}
+    row = _one("stake_settings", {"select": "sync_hour_et,sync_paused", "stake_id": f"eq.{sid}",
+                                  "limit": "1"}) or {}
+    return {"eligible": True, "stake_id": sid,
+            "hour_et": row.get("sync_hour_et", 7) if row.get("sync_hour_et") is not None else 7,
+            "paused": bool(row.get("sync_paused", False))}
+
+
+def set_schedule_for(email: str, hour_et: int, paused: bool) -> dict:
+    """Upsert the provider's stake sync schedule. Validates the hour (0–23). Provider-gated."""
+    sid = provider_stake_id(email)
+    if not sid:
+        raise NotAdmin("only the stake's sync provider can change the schedule")
+    if not isinstance(hour_et, int) or not (0 <= hour_et <= 23):
+        raise AdminError("hour_et must be an integer 0–23")
+    r = requests.post(
+        f"{SUPABASE_URL}/rest/v1/stake_settings",
+        headers={**_sb_headers(), "Content-Type": "application/json",
+                 "Prefer": "resolution=merge-duplicates,return=minimal"},
+        json={"stake_id": sid, "sync_hour_et": hour_et, "sync_paused": bool(paused)},
+        timeout=_TIMEOUT)
+    if r.status_code >= 300:
+        raise AdminError(f"could not save schedule ({r.status_code}): {r.text[:160]}")
+    return {"hour_et": hour_et, "paused": bool(paused)}
+
+
 def gdrive_status_for(email: str) -> dict:
     """Whether this user can connect Google Drive, and the current connection (M7). Includes the
     stake's spreadsheet link + last-sync time so the app can show actual usage, not just 'Connected'

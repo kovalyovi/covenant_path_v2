@@ -10,11 +10,12 @@ name: Daily covenant-path sync
 
 on:
   schedule:
-    # Times below are ET. Cron is UTC and can't do DST, so we fire the candidate UTC hours for both
-    # EST and EDT; daily_sync.py (_should_run_now) lists stakes only at the intended ET time —
-    # 7:00 ET daily, plus 8:20 ET Thursdays (before the 8:30 meeting). Off-target → empty matrix.
-    - cron: "0 11,12 * * *"   # 07:00 ET daily
-    - cron: "20 12,13 * * 4"  # 08:20 ET Thu
+    # Fire EVERY hour (top of the hour). The prepare step's per-stake schedule (stake_settings
+    # .sync_hour_et / sync_paused, migration 0030) decides which stakes actually sync this hour —
+    # default 7:00 ET, leader-adjustable in-app. Running hourly + gating in code means DST needs no
+    # cron edits. Plus the Thursday 8:20-ET pre-meeting pulse. Off-window hours → empty matrix.
+    - cron: "0 * * * *"       # every hour, on the hour (UTC) — ET hour matched in daily_sync.py
+    - cron: "20 12,13 * * 4"  # 08:20 ET Thu pre-meeting pulse (EST+EDT candidates)
   workflow_dispatch:
     inputs:
       with_profile:

@@ -246,12 +246,63 @@ def _mint_and_sync(args, st: dict) -> None:
     print(f"[+] {st['name']} ({st['unit_number']}): {res['members']} members synced")
 
 
+def _stake_schedules(conn) -> dict[str, dict]:
+    """stake_id -> {hour, paused} from stake_settings (in-app schedule, migration 0030). Best-effort:
+    a missing row / missing table / any error means "default" (7:00 ET, not paused) so the sync never
+    breaks over the schedule feature."""
+    out: dict[str, dict] = {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute("select stake_id, sync_hour_et, sync_paused from stake_settings")
+            for sid, hour, paused in cur.fetchall():
+                out[str(sid)] = {"hour": hour if hour is not None else 7, "paused": bool(paused)}
+    except Exception as exc:  # noqa: BLE001 — schedule is optional; default everyone on failure
+        logger.warning("stake schedule read skipped (using 7:00 ET default): %s", exc)
+        conn.rollback()
+    return out
+
+
+def _et_now():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("America/New_York"))
+
+
 def list_stake_units() -> list[int]:
-    """Credentialed stake unit numbers — the CI matrix fans out one isolated job per entry."""
+    """Credentialed stake unit numbers the CI matrix should sync RIGHT NOW. Honors each stake's
+    in-app schedule (stake_settings.sync_hour_et / sync_paused, migration 0030):
+      • a scheduled hourly run emits a stake only when the current ET hour == its configured hour
+        (default 7), skipping paused stakes;
+      • the Thursday 8:20-ET pre-meeting pulse and any manual workflow_dispatch emit every active,
+        non-paused stake regardless of hour.
+    Defaults preserve today's behavior (7:00 ET) for stakes with no settings row."""
     from backend import credentials, db
     conn = db.connect()
     try:
-        return [s["unit_number"] for s in credentials.list_active_stakes(conn) if s.get("unit_number")]
+        stakes = [s for s in credentials.list_active_stakes(conn) if s.get("unit_number")]
+        scheduled = os.getenv("GITHUB_EVENT_NAME") == "schedule"
+        if not scheduled:
+            sched = _stake_schedules(conn)  # manual run: still skip explicitly-paused stakes
+            return [s["unit_number"] for s in stakes if not sched.get(str(s["stake_id"]), {}).get("paused")]
+        try:
+            now = _et_now()
+        except Exception as exc:  # noqa: BLE001 — no tzdata? don't strand the daily sync: run all non-paused
+            logger.warning("ET time lookup failed (%s); emitting all non-paused stakes", exc)
+            sched = _stake_schedules(conn)
+            return [s["unit_number"] for s in stakes
+                    if not sched.get(str(s["stake_id"]), {}).get("paused")]
+        # Thursday 8:20-ET pre-meeting pulse: everyone active (not paused).
+        thursday_pulse = now.weekday() == 3 and now.hour == 8 and 15 <= now.minute <= 30
+        sched = _stake_schedules(conn)
+        out = []
+        for s in stakes:
+            cfg = sched.get(str(s["stake_id"]), {})
+            if cfg.get("paused"):
+                continue
+            hour = cfg.get("hour", 7)
+            if thursday_pulse or now.hour == hour:
+                out.append(s["unit_number"])
+        return out
     finally:
         conn.close()
 
@@ -336,25 +387,24 @@ def run_delegated(args, skip_unit: int | None = None) -> int:
 
 
 def _should_run_now() -> tuple[bool, str]:
-    """Scheduled runs proceed only at the intended ET times (7:00 daily, 8:20 Thursday), so
-    DST shifts never move the run off its morning slot. Manual workflow_dispatch always runs.
+    """Top-level prepare gate. The workflow fires hourly candidate UTC crons (covering EST+EDT);
+    this gate keeps a run only at a valid ET wall-clock minute, then `list_stake_units()` decides
+    WHICH stakes are due this hour (per their in-app schedule). Manual workflow_dispatch always runs.
 
-    The workflow fires candidate UTC crons for both EST and EDT; this gate keeps the one that
-    lands on the right ET wall-clock time and skips the duplicate.
+    We accept any whole ET hour at :00–:05 (so an hourly schedule lands once per hour without DST
+    drift) plus the Thursday 8:20-ET pre-meeting window. Off those minutes → skip the duplicate.
     """
     if os.getenv("GITHUB_EVENT_NAME") != "schedule":
         return True, "manual run"
     try:
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
-        now = datetime.now(ZoneInfo("America/New_York"))
+        now = _et_now()
     except Exception as exc:  # noqa: BLE001  — never let a tz lookup block the daily sync
         return True, f"tz lookup failed ({exc}); running anyway"
-    if now.hour == 7:
-        return True, f"daily 7:00 ET ({now:%a %H:%M %Z})"
+    if now.minute <= 5:
+        return True, f"top of hour {now:%a %H:%M %Z} (per-stake schedule decides who runs)"
     if now.weekday() == 3 and now.hour == 8 and 15 <= now.minute <= 30:
-        return True, f"Thursday 8:20 ET ({now:%a %H:%M %Z})"
-    return False, f"off-target ET time ({now:%a %H:%M %Z})"
+        return True, f"Thursday 8:20 ET pre-meeting pulse ({now:%a %H:%M %Z})"
+    return False, f"off-target ET minute ({now:%a %H:%M %Z})"
 
 
 def main() -> int:

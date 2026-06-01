@@ -355,6 +355,33 @@ def google_disconnect(authorization: str = Header(default="")) -> dict:
     return admin.disconnect_gdrive(stake_id)
 
 
+class ScheduleReq(BaseModel):
+    hour_et: int
+    paused: bool = False
+
+
+@app.get("/auth/schedule")
+def get_schedule(authorization: str = Header(default="")) -> dict:
+    """The provider's in-app daily-sync schedule (ET hour + paused). (#schedule)"""
+    email = admin.verify_user(authorization)
+    try:
+        return admin.get_schedule_for(email)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.post("/auth/schedule")
+def set_schedule(body: ScheduleReq, authorization: str = Header(default="")) -> dict:
+    """Provider sets WHEN their stake syncs (ET hour) and pause/resume. (#schedule)"""
+    email = admin.verify_user(authorization)
+    try:
+        return admin.set_schedule_for(email, body.hour_et, body.paused)
+    except admin.NotAdmin as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except admin.AdminError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 def _popup_html(message: str) -> str:
     return ("<!doctype html><meta charset=utf-8><title>Covenant Path</title>"
             "<body style='font-family:system-ui;padding:40px;text-align:center'>"
