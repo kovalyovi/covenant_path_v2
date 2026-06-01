@@ -19,7 +19,16 @@ class _GoldenHourViewState extends State<_GoldenHourView> {
   _Window _window = _Window.all;
   bool _byDate = false;
   bool? _asc; // null = section default; Being Taught → soonest first, New Members → newest first
-  OrgBucket? _orgFilter; // null = all orgs; else only converts that org currently owns
+  // Org-ownership filter: which orgs' converts to show. ALL selected by default (#org-filter).
+  final Set<OrgBucket> _orgs = {...OrgBucket.values};
+
+  void _toggleOrg(OrgBucket b) => setState(() {
+        if (_orgs.contains(b)) {
+          if (_orgs.length > 1) _orgs.remove(b); // never let the user deselect the last one → empty
+        } else {
+          _orgs.add(b);
+        }
+      });
 
   bool get _ascending => _asc ?? (_section == _GhSection.beingTaught);
 
@@ -93,19 +102,22 @@ class _GoldenHourViewState extends State<_GoldenHourView> {
       );
     }
 
+    final allOrgs = _orgs.length == OrgBucket.values.length;
     final rows = newMembers
         .where(_within)
-        .where((m) => _orgFilter == null || responsibleOrg(m) == _orgFilter)
+        // a convert with no baptism date (no org yet) shows only when no org filter is applied
+        .where((m) => allOrgs || _orgs.contains(responsibleOrg(m)))
         .toList();
     return _Page(
       tier: widget.tier,
       header: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         sectionToggle,
         const SizedBox(height: 8),
-        _OrgFilterBar(selected: _orgFilter, onSelect: (b) => setState(() => _orgFilter = b)),
-        if (_orgFilter != null) ...[
+        _OrgFilterBar(selected: _orgs, onToggle: _toggleOrg,
+            onClear: () => setState(() => _orgs..clear()..addAll(OrgBucket.values))),
+        if (!allOrgs && _orgs.length == 1) ...[
           const SizedBox(height: 6),
-          _SubtleNote(orgResponsibilityNote(_orgFilter!)),
+          _SubtleNote(orgResponsibilityNote(_orgs.first)),
         ],
         const SizedBox(height: 10),
         Center(
@@ -232,42 +244,47 @@ class _PctStat extends StatelessWidget {
   }
 }
 
-/// The org-ownership filter bar: All + one colored chip per org (WML / EQ / RS). Selected → filled
-/// with that org's color; unselected → colored icon + faint colored border. Colors come from
-/// orgInfo so they stay consistent with the per-member responsibility chips. (#15)
+/// The org-ownership filter bar: a colored toggle per org (WML / EQ / RS), ALL selected by default.
+/// Tapping a chip toggles whether that org's converts are shown (multi-select, additive). When not
+/// all three are on, a "Clear filters" action restores them. Selecting none shows nothing, so we
+/// guard against that by treating "empty" as a deselect-the-last no-op. Colors come from orgInfo so
+/// they stay consistent with the per-member responsibility chips. (#org-filter)
 class _OrgFilterBar extends StatelessWidget {
-  const _OrgFilterBar({required this.selected, required this.onSelect});
-  final OrgBucket? selected;
-  final void Function(OrgBucket?) onSelect;
+  const _OrgFilterBar({required this.selected, required this.onToggle, required this.onClear});
+  final Set<OrgBucket> selected;
+  final void Function(OrgBucket) onToggle;
+  final VoidCallback onClear;
+
   @override
   Widget build(BuildContext context) {
+    final all = selected.length == OrgBucket.values.length;
     return Center(
       child: Wrap(spacing: 6, runSpacing: 6, alignment: WrapAlignment.center, children: [
-        FilterChip(
-          label: const Text('All'),
-          selected: selected == null,
-          showCheckmark: false,
-          onSelected: (_) => onSelect(null),
-        ),
         for (final b in OrgBucket.values)
           () {
             final i = orgInfo(b);
-            final sel = selected == b;
-            // "Plain but colored": the org's icon + label ALWAYS carry its color; selecting just
-            // deepens the tint + border (the icon never turns white). (#org-colors)
+            final sel = selected.contains(b);
+            // The org's icon + label ALWAYS carry its color; selecting deepens the tint + border.
             return FilterChip(
               label: Text(i.label),
               avatar: Icon(i.icon, size: 16, color: i.color),
               selected: sel,
               showCheckmark: false,
-              backgroundColor: i.color.withValues(alpha: 0.08),
+              backgroundColor: i.color.withValues(alpha: 0.06),
               selectedColor: i.color.withValues(alpha: 0.22),
               labelStyle: TextStyle(
-                  color: i.color, fontWeight: sel ? FontWeight.w700 : FontWeight.w500),
-              side: BorderSide(color: i.color.withValues(alpha: sel ? 0.9 : 0.4)),
-              onSelected: (_) => onSelect(b),
+                  color: sel ? i.color : i.color.withValues(alpha: 0.6),
+                  fontWeight: sel ? FontWeight.w700 : FontWeight.w500),
+              side: BorderSide(color: i.color.withValues(alpha: sel ? 0.9 : 0.35)),
+              onSelected: (_) => onToggle(b),
             );
           }(),
+        if (!all)
+          ActionChip(
+            avatar: const Icon(Icons.filter_alt_off, size: 16),
+            label: const Text('Clear filters'),
+            onPressed: onClear,
+          ),
       ]),
     );
   }

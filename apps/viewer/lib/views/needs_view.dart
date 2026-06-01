@@ -16,7 +16,17 @@ class _NeedsView extends StatefulWidget {
 class _NeedsViewState extends State<_NeedsView> {
   int? _selected; // milestone index; null until defaulted to the first category with outstanding members
   bool _ascending = true; // baptism date order: oldest-baptized (most overdue) first by default
-  OrgBucket? _orgFilter; // null = all orgs; else only converts that org currently owns (#needs-org)
+  // Org-ownership filter (same model as Golden Hour): which orgs' converts to show, all on by
+  // default; tap a chip to toggle, "Clear filters" restores all. (#needs-org)
+  final Set<OrgBucket> _orgs = {...OrgBucket.values};
+
+  void _toggleOrg(OrgBucket b) => setState(() {
+        if (_orgs.contains(b)) {
+          if (_orgs.length > 1) _orgs.remove(b);
+        } else {
+          _orgs.add(b);
+        }
+      });
 
   /// Sort the "still need" list by baptism date, then unit (#feedback), honoring asc/desc.
   int _cmp(Map<String, dynamic> a, Map<String, dynamic> b) {
@@ -40,10 +50,10 @@ class _NeedsViewState extends State<_NeedsView> {
     final all = widget.rows.where((m) => m['kind'] != 'investigator').toList();
     // Org-ownership filter (same buckets/colors as Golden Hour): a convert's integration is owned
     // by missionaries/WML (first year) then EQ/RS — so a leader can see who needs Friends among the
-    // people THEIR org now watches over, per unit. (#needs-org)
-    final baptized = _orgFilter == null
-        ? all
-        : all.where((m) => responsibleOrg(m) == _orgFilter).toList();
+    // people THEIR org now watches over, per unit. All orgs on by default. (#needs-org)
+    final allOrgs = _orgs.length == OrgBucket.values.length;
+    final baptized =
+        allOrgs ? all : all.where((m) => _orgs.contains(responsibleOrg(m))).toList();
     final missingByMs = [
       for (final ms in milestones)
         baptized.where((m) => ms.eligible(m) && !ms.complete(m)).toList()..sort(_cmp),
@@ -53,10 +63,11 @@ class _NeedsViewState extends State<_NeedsView> {
     // Shown in BOTH the empty + populated states, so a filter is never a dead end.
     final orgFilter = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const SizedBox(height: 10),
-      _OrgFilterBar(selected: _orgFilter, onSelect: (b) => setState(() => _orgFilter = b)),
-      if (_orgFilter != null) ...[
+      _OrgFilterBar(selected: _orgs, onToggle: _toggleOrg,
+          onClear: () => setState(() => _orgs..clear()..addAll(OrgBucket.values))),
+      if (!allOrgs && _orgs.length == 1) ...[
         const SizedBox(height: 6),
-        _SubtleNote(orgResponsibilityNote(_orgFilter!)),
+        _SubtleNote(orgResponsibilityNote(_orgs.first)),
       ],
     ]);
 
@@ -72,9 +83,9 @@ class _NeedsViewState extends State<_NeedsView> {
           padding: const EdgeInsets.all(32),
           child: Center(
               child: Text(
-                  _orgFilter == null
+                  allOrgs
                       ? 'Nothing outstanding — everyone eligible is on track. 🎉'
-                      : 'Nothing outstanding for ${orgInfo(_orgFilter!).label}. 🎉',
+                      : 'Nothing outstanding for the selected orgs. 🎉',
                   textAlign: TextAlign.center)),
         ),
       );
