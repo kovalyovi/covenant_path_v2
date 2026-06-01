@@ -2,6 +2,7 @@ package org.membercovenantpath.viewer.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -59,6 +60,8 @@ class DashboardViewModel(
     private val _state = MutableStateFlow(DashboardUiState())
     val state: StateFlow<DashboardUiState> = _state.asStateFlow()
 
+    private var syncPollJob: Job? = null // N3: re-checks sync_state every ~5s while a sync runs
+
     init {
         bootstrap()
         checkAdmin()
@@ -106,6 +109,34 @@ class DashboardViewModel(
                 syncStartedAt = running,
             )
         }
+        startSyncPollIfNeeded()
+    }
+
+    /** N3: while a sync runs, re-check stakes.sync_state every ~5s so the "syncing…" banner
+     * self-clears and fresh members load without a manual refresh. The loop self-terminates when
+     * syncing turns false (incl. the 30-min crashed-run guard in applyStakeMeta). */
+    private fun startSyncPollIfNeeded() {
+        if (!_state.value.syncing || syncPollJob?.isActive == true) return
+        syncPollJob = viewModelScope.launch {
+            while (_state.value.syncing) {
+                delay(5000)
+                runCatching {
+                    val stakes = repo.loadStakes()
+                    _state.update { it.copy(stakes = stakes) }
+                    applyStakeMeta() // recomputes syncing; the isActive guard prevents a 2nd loop
+                }
+            }
+            // sync finished → pull the fresh members
+            _state.value.currentStakeId?.let { id ->
+                runCatching { repo.loadMembers(id) }
+                    .onSuccess { m -> _state.update { it.copy(members = m, load = LoadState.Ready) } }
+            }
+        }
+    }
+
+    override fun onCleared() {
+        syncPollJob?.cancel()
+        super.onCleared()
     }
 
     private fun loadEnrollStatus() {
@@ -163,6 +194,7 @@ class DashboardViewModel(
                 .onSuccess { res ->
                     val partial = res["coverage_complete"]?.toString() == "false"
                     _state.update { it.copy(syncing = true, syncStartedAt = Instant.now().toString()) }
+                    startSyncPollIfNeeded()
                     onResult(true, if (partial) "partial" else null)
                     delay(8000)
                     runCatching {

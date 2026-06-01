@@ -27,6 +27,7 @@ public final class DashboardStore {
     /// Optimistic syncing flag (set right after a Sync-now; reconciled from stakes.sync_state).
     public private(set) var syncing = false
     public private(set) var syncStartedAt: Date?
+    private var syncPollTask: Task<Void, Never>? // N3: re-checks sync_state every ~5s while syncing
 
     private let services: AppServices
     private var repo: MembersRepository { services.members }
@@ -119,6 +120,25 @@ public final class DashboardStore {
             syncing = false
             syncStartedAt = nil
         }
+        startSyncPollIfNeeded()
+    }
+
+    /// N3: while a sync runs, re-check stakes.sync_state every ~5s so the "syncing…" banner
+    /// self-clears and fresh members load without a manual refresh. `optimisticSync` keeps the
+    /// banner up during the brief window before the backend marks the run "running"; the loop ends
+    /// when syncing turns false (incl. the 30-min crashed-run guard in `Stake.isSyncing`). The weak
+    /// self loop also ends naturally if the store is deallocated.
+    private func startSyncPollIfNeeded() {
+        guard syncing, syncPollTask == nil else { return }
+        syncPollTask = Task { [weak self] in
+            while self?.syncing == true && !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)
+                if Task.isCancelled { break }
+                try? await self?.loadStakes() // recomputes syncing via applyCurrentStake
+            }
+            try? await self?.reloadMembers() // sync finished → pull the fresh members
+            self?.syncPollTask = nil
+        }
     }
 
     private var optimisticSync = false
@@ -151,6 +171,7 @@ public final class DashboardStore {
             optimisticSync = true
             syncing = true
             syncStartedAt = Date()
+            startSyncPollIfNeeded()
             Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 8 * 1_000_000_000)
                 self?.optimisticSync = false

@@ -104,6 +104,7 @@ class _DashboardPageState extends State<DashboardPage> {
   String? _lastSynced;
   bool _syncing = false;
   DateTime? _syncStartedAt;
+  Timer? _syncPoll; // N3: while a sync runs, re-checks sync_state every ~5s so the banner self-clears
   EnrollmentStatus? _enrollStatus;
   Map<String, List<Map<String, dynamic>>> _missionaries = const {}; // unit name → assigned missionaries
 
@@ -115,6 +116,12 @@ class _DashboardPageState extends State<DashboardPage> {
     // Industry-standard passkey upsell: once, after the user reaches the app, suggest enrolling a
     // passkey for password-free sign-in next time — but only where passkeys actually work.
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybeSuggestPasskey());
+  }
+
+  @override
+  void dispose() {
+    _syncPoll?.cancel();
+    super.dispose();
   }
 
   /// One-time, dismissible nudge to add a passkey (only when the platform supports it). We remember
@@ -219,6 +226,35 @@ class _DashboardPageState extends State<DashboardPage> {
       _syncing = running != null;
       _syncStartedAt = running;
     });
+    _manageSyncPoll();
+  }
+
+  /// While a sync is running, re-check the stake's sync_state every ~5s (N3) so the "syncing…"
+  /// banner clears itself and fresh data appears without a manual refresh.
+  void _manageSyncPoll() {
+    if (_syncing) {
+      _syncPoll ??= Timer.periodic(const Duration(seconds: 5), (_) => _pollSyncState());
+    } else {
+      _syncPoll?.cancel();
+      _syncPoll = null;
+    }
+  }
+
+  Future<void> _pollSyncState() async {
+    final id = _currentStakeId;
+    if (id == null) return;
+    try {
+      final rows = await supabase.from('stakes')
+          .select('id, name, last_synced_at, sync_state, sync_started_at, missionaries')
+          .eq('id', id);
+      final list = (rows as List).cast<Map<String, dynamic>>();
+      if (list.isEmpty || !mounted) return;
+      final idx = _stakes.indexWhere((e) => e['id'] == id);
+      if (idx >= 0) _stakes[idx] = list.first;
+      final wasSyncing = _syncing;
+      _applyCurrentStake(); // recomputes _syncing + (re)manages this timer
+      if (wasSyncing && !_syncing) _refresh(); // sync finished → pull the fresh members
+    } catch (_) {}
   }
 
   Future<void> _switchStake(String id) async {
@@ -445,6 +481,7 @@ class _DashboardPageState extends State<DashboardPage> {
         _syncing = true;
         _syncStartedAt = DateTime.now().toUtc();
       });
+      _manageSyncPoll();
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(partial
               ? 'Sync started — note: your calling can\'t pull every field, so some data stays blank. Takes a few minutes.'
