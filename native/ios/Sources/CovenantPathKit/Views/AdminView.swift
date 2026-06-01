@@ -84,7 +84,7 @@ struct AdminView: View {
     // MARK: - panels
 
     private func panel<Content: View>(_ title: String, error: String?,
-                                      hasData: Bool, @ViewBuilder content: () -> Content) -> some View {
+                                      hasData: Bool, @ViewBuilder content: @escaping () -> Content) -> some View {
         SectionCard(title: hasData || error != nil ? title : "\(title)…") {
             if let error {
                 Text("Couldn't load: \(error)").font(.footnote).foregroundStyle(.secondary)
