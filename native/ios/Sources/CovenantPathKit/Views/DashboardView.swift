@@ -267,7 +267,10 @@ struct SyncingBanner: View {
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
         .frame(maxWidth: .infinity)
-        .background(Color(hex: 0x1565C0).opacity(0.14))
+        // N4: frosted-glass banner (system material) tinted blue, instead of a flat fill — it
+        // overlays the scrolling member list, so the material actually frosts the content behind it.
+        .background(Color(hex: 0x1565C0).opacity(0.12))
+        .background(.ultraThinMaterial)
         .onReceive(timer) { now = $0 }
     }
 }
@@ -285,7 +288,9 @@ struct StaleBanner: View {
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
         .frame(maxWidth: .infinity)
+        // N4: frosted-glass banner (system material) tinted amber
         .background(Color.orange.opacity(0.12))
+        .background(.ultraThinMaterial)
     }
 }
 
