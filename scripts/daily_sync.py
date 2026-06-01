@@ -174,17 +174,33 @@ def _resolve_stake_sheet(client, args) -> str:
             if gdrive_token:
                 from backend.auth_broker import google_oauth
                 from sheets_sync import oauth_drive
-                access = google_oauth.access_token_for(gdrive_token)
-                fid = oauth_drive.ensure_sheet(
-                    access, f"Covenant Path — {ctx.unit_name}", _service_account_email(),
-                    sorted(emails), gdrive_file_id)
-                if fid != gdrive_file_id:
-                    with conn.cursor() as cur:
-                        cur.execute("update stakes set gdrive_file_id=%s where id=%s", (fid, stake_id))
-                    conn.commit()
-                logger.info("using OAuth-Drive sheet for %s (%s): %s", ctx.unit_name,
-                            ctx.unit_number, fid)
-                return fid
+                try:
+                    access = google_oauth.access_token_for(gdrive_token)
+                    fid = oauth_drive.ensure_sheet(
+                        access, f"Covenant Path — {ctx.unit_name}", _service_account_email(),
+                        sorted(emails), gdrive_file_id)
+                    if fid != gdrive_file_id:
+                        with conn.cursor() as cur:
+                            cur.execute("update stakes set gdrive_file_id=%s where id=%s", (fid, stake_id))
+                        conn.commit()
+                    logger.info("using OAuth-Drive sheet for %s (%s): %s", ctx.unit_name,
+                                ctx.unit_number, fid)
+                    return fid
+                except Exception as exc:  # noqa: BLE001 — stale/revoked Drive token: nudge a reconnect
+                    # Flag the connection as needing attention (clear gdrive_connected_at; KEEP the
+                    # token) so the app's Sync-settings Drive section shows "Connect" again and the
+                    # leader knows to reconnect — then fall through to the service-account/master
+                    # path so this run's Sheets write still happens (Supabase is unaffected regardless).
+                    logger.warning("OAuth-Drive token for %s (%s) failed (%s); flagging reconnect, "
+                                   "falling back to service-account sheet", ctx.unit_name,
+                                   ctx.unit_number, exc)
+                    try:
+                        with conn.cursor() as cur:
+                            cur.execute("update stakes set gdrive_connected_at=null where id=%s",
+                                        (stake_id,))
+                        conn.commit()
+                    except Exception:  # noqa: BLE001
+                        conn.rollback()
             if not sid:
                 sid = sheets_service.create_and_share_spreadsheet(
                     f"Covenant Path — {ctx.unit_name}", sorted(emails))
