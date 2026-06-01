@@ -1,8 +1,12 @@
 package org.membercovenantpath.viewer.ui
 
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -51,22 +55,26 @@ fun App() {
     val theme by themeVm.theme.collectAsStateWithLifecycle()
 
     CovenantPathTheme(choice = theme) {
-        if (!AppConfig.supabaseConfigured) {
-            ConfigErrorScreen()
-            return@CovenantPathTheme
-        }
+        // Paint the themed background behind every gate state — MaterialTheme alone doesn't fill one,
+        // so the Scaffold-less screens (Login / Loading / ConfigError) would otherwise show the dark
+        // window background even under the light scheme. (This was the "login screen is dark" bug.)
+        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            if (!AppConfig.supabaseConfigured) {
+                ConfigErrorScreen()
+            } else {
+                val authVm: AuthViewModel = viewModel(factory = factory)
+                val gate by authVm.gate.collectAsStateWithLifecycle()
 
-        val authVm: AuthViewModel = viewModel(factory = factory)
-        val gate by authVm.gate.collectAsStateWithLifecycle()
-
-        when (gate) {
-            AuthGate.Loading -> org.membercovenantpath.viewer.ui.screens.CenteredLoading()
-            AuthGate.SignedOut -> LoginScreen(authVm)
-            AuthGate.SignedIn -> {
-                val lockVm: AppLockViewModel = viewModel(factory = factory)
-                val lockOn by lockVm.enabled.collectAsStateWithLifecycle()
-                BiometricGate(lockEnabled = lockOn) {
-                    SignedInNav(themeVm = themeVm, lockVm = lockVm, factory = factory, onSignOut = authVm::signOut)
+                when (gate) {
+                    AuthGate.Loading -> org.membercovenantpath.viewer.ui.screens.CenteredLoading()
+                    AuthGate.SignedOut -> LoginScreen(authVm)
+                    AuthGate.SignedIn -> {
+                        val lockVm: AppLockViewModel = viewModel(factory = factory)
+                        val lockOn by lockVm.enabled.collectAsStateWithLifecycle()
+                        BiometricGate(lockEnabled = lockOn) {
+                            SignedInNav(themeVm = themeVm, lockVm = lockVm, factory = factory, onSignOut = authVm::signOut)
+                        }
+                    }
                 }
             }
         }
