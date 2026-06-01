@@ -56,6 +56,7 @@ import org.membercovenantpath.viewer.ui.components.BigHeader
 import org.membercovenantpath.viewer.ui.components.SectionCard
 import org.membercovenantpath.viewer.ui.theme.StatusColors
 import org.membercovenantpath.viewer.ui.theme.unitColor
+import org.membercovenantpath.viewer.ui.theme.unitColorMap
 import java.time.LocalDate
 
 /**
@@ -72,6 +73,8 @@ fun NeedsScreen(
     var selected by remember { mutableStateOf<Int?>(null) }
     var ascending by remember { mutableStateOf(true) } // oldest-baptized (most overdue) first
     val orgs = remember { OrgBucket.entries.toMutableStateList() }
+    // One distinct color per ward, assigned over ALL units (stable as org/category filters change).
+    val unitColors = remember(members) { unitColorMap(members.map { it.unitName ?: "—" }) }
 
     fun toggleOrg(b: OrgBucket) {
         if (b in orgs) { if (orgs.size > 1) orgs.remove(b) } else orgs.add(b)
@@ -170,7 +173,7 @@ fun NeedsScreen(
             }
         }
 
-        item { CategorySection(ms = ms, missing = missing, onOpen = onOpen, today = today) }
+        item { CategorySection(ms = ms, missing = missing, onOpen = onOpen, today = today, unitColors = unitColors) }
     }
 }
 
@@ -181,6 +184,7 @@ private fun CategorySection(
     missing: List<Member>,
     onOpen: (Member) -> Unit,
     today: LocalDate,
+    unitColors: Map<String, Color>,
 ) {
     val byUnit = missing.groupingBy { it.unitName ?: "—" }.eachCount()
         .entries.sortedByDescending { it.value }
@@ -192,7 +196,7 @@ private fun CategorySection(
     ) {
         Column {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                byUnit.forEach { (unit, count) -> UnitCountChip(unit, count) }
+                byUnit.forEach { (unit, count) -> UnitCountChip(unit, count, unitColors[unit] ?: unitColor(unit)) }
             }
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             missing.forEachIndexed { i, m ->
@@ -204,8 +208,7 @@ private fun CategorySection(
 }
 
 @Composable
-private fun UnitCountChip(unit: String, count: Int) {
-    val color = unitColor(unit)
+private fun UnitCountChip(unit: String, count: Int, color: Color) {
     Surface(
         color = color.copy(alpha = 0.10f),
         shape = RoundedCornerShape(20.dp),

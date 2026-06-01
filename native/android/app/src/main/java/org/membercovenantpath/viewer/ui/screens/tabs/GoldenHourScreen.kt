@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuBook
@@ -73,8 +75,8 @@ fun GoldenHourScreen(
         if (b in orgs) { if (orgs.size > 1) orgs.remove(b) } else orgs.add(b)
     }
 
-    val newMembers = members.filterNot { it.isInvestigator }
-    val beingTaught = members.filter { it.isInvestigator }
+    val newMembers = remember(members) { members.filterNot { it.isInvestigator } }
+    val beingTaught = remember(members) { members.filter { it.isInvestigator } }
 
     LazyColumn(
         modifier = Modifier.fillMaxWidth(),
@@ -96,7 +98,7 @@ fun GoldenHourScreen(
                 item { EmptyPanel("No one currently being taught.") }
             } else {
                 val sorted = beingTaught.sortedWith(byDate("baptism_goal_date", ascending = true))
-                item { ListCard(sorted, onOpen, chips = false, dateField = "baptism_goal_date", today = today) }
+                memberRows(sorted, onOpen, chips = false, dateField = "baptism_goal_date", today = today)
             }
             return@LazyColumn
         }
@@ -136,7 +138,7 @@ fun GoldenHourScreen(
             item { EmptyPanel("No new members in this window.") }
         } else {
             val sorted = rows.sortedWith(byDate("baptism_date", ascending = false))
-            item { ListCard(sorted, onOpen, chips = true, dateField = "baptism_date", today = today) }
+            memberRows(sorted, onOpen, chips = true, dateField = "baptism_date", today = today)
         }
     }
 }
@@ -208,27 +210,38 @@ private fun HeaderBar(title: String, count: Int) {
     }
 }
 
-@Composable
-private fun ListCard(
+/**
+ * Member list emitted as INDIVIDUAL lazy items (only on-screen rows compose) instead of an eager
+ * Column inside a single item — so switching into Golden Hour with a full stake (100+ baptized, each
+ * row computing 6 milestone chips + a photo) no longer builds every row up front. That eager build was
+ * the Baptisms↔Golden Hour navigation lag. Keeps the "By date" section header; rows keep dividers.
+ */
+private fun LazyListScope.memberRows(
     rows: List<Member>,
     onOpen: (Member) -> Unit,
     chips: Boolean,
     dateField: String,
     today: LocalDate,
 ) {
-    SectionCard(title = "By date") {
+    item(key = "by-date-header-$dateField") {
+        Text(
+            "By date",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(top = 14.dp, bottom = 2.dp),
+        )
+    }
+    itemsIndexed(rows, key = { _, m -> m.personUuid ?: m.name ?: m.hashCode().toString() }) { i, m ->
         Column {
-            rows.forEachIndexed { i, m ->
-                if (i > 0) HorizontalDivider()
-                MemberRow(
-                    member = m,
-                    onOpen = onOpen,
-                    chips = chips,
-                    showUnit = true,
-                    dateField = dateField,
-                    today = today,
-                )
-            }
+            if (i > 0) HorizontalDivider()
+            MemberRow(
+                member = m,
+                onOpen = onOpen,
+                chips = chips,
+                showUnit = true,
+                dateField = dateField,
+                today = today,
+            )
         }
     }
 }

@@ -15,8 +15,10 @@ import org.membercovenantpath.viewer.data.ThemeChoice
  */
 class ThemeViewModel(private val prefs: AppPrefs) : ViewModel() {
 
+    // Initial value Light so the very first frame (login) isn't dark on a dark-mode device before
+    // DataStore emits the persisted choice; an explicit saved System/Dark then takes over.
     val theme: StateFlow<ThemeChoice> =
-        prefs.theme.stateIn(viewModelScope, SharingStarted.Eagerly, ThemeChoice.System)
+        prefs.theme.stateIn(viewModelScope, SharingStarted.Eagerly, ThemeChoice.Light)
 
     fun set(choice: ThemeChoice) {
         viewModelScope.launch { prefs.setTheme(choice) }

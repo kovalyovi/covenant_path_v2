@@ -56,11 +56,24 @@ object StatusColors {
 }
 
 // ---- per-unit accent palette (needs_view.dart `_unitPalette`) ----------------
+// 16 visually distinct, text-legible hues so each ward in a stake reads as its own color. Assigned by
+// sorted index via [unitColorMap] (not by hash) — hashCode % N produced near-duplicate colors when
+// two ward names happened to collide on the modulus.
 val UnitPalette = listOf(
     Color(0xFF00695C), Color(0xFF4527A0), Color(0xFFAD1457), Color(0xFF283593),
     Color(0xFF558B2F), Color(0xFF6D4C41), Color(0xFF00838F), Color(0xFFC62828),
+    Color(0xFFEF6C00), Color(0xFF1565C0), Color(0xFF8E24AA), Color(0xFF2E7D32),
+    Color(0xFF827717), Color(0xFF006064), Color(0xFFBF360C), Color(0xFF37474F),
 )
 
-/** Stable per-unit color (hash → fixed palette), mirroring `_unitColor`. */
+/**
+ * Assign each distinct unit its own palette color by **sorted index**, so every ward gets a different
+ * hue (stable across the session and across category/org-filter changes). Only wraps the palette if a
+ * stake somehow has more units than colors (16) — rare. Mirrors Flutter `_assignUnitColors`.
+ */
+fun unitColorMap(units: Collection<String>): Map<String, Color> =
+    units.toSortedSet().withIndex().associate { (i, u) -> u to UnitPalette[i % UnitPalette.size] }
+
+/** Stable per-unit color when the full unit set isn't handy (single-unit fallback). */
 fun unitColor(unit: String): Color =
     UnitPalette[(unit.hashCode().let { if (it == Int.MIN_VALUE) 0 else kotlin.math.abs(it) }) % UnitPalette.size]

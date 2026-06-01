@@ -3,6 +3,7 @@ package org.membercovenantpath.viewer.ui.screens.tabs
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -20,12 +22,19 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.UnfoldMore
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -34,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -42,20 +52,26 @@ import org.membercovenantpath.viewer.ui.theme.StatusColors
 
 /**
  * Every covenant-path field in a sortable, color-coded grid (Yes=green / No=red / N/A=grey,
- * recommend Active/Expired/No, sex M/F). 3-state sort on text columns. Ported from
- * table_view.dart `_SpreadsheetView` (filter popups omitted for the PoC; sorting kept).
+ * recommend Active/Expired/No, sex M/F). 3-state sort on text columns + a per-column value filter on
+ * every column (tap the header funnel). Ported from table_view.dart `_SpreadsheetView`.
  */
 @Composable
 fun TableScreen(members: List<Member>, onOpen: (Member) -> Unit) {
     var sortCol by remember { mutableStateOf<Int?>(null) }
     var sortAsc by remember { mutableStateOf(true) }
+    // Per-column value filters: column index -> the set of allowed cell values (absent = unfiltered).
+    val filters = remember { mutableStateMapOf<Int, Set<String>>() }
+    var filterFor by remember { mutableStateOf<Int?>(null) } // column whose filter dialog is open
 
-    val rows = members.filterNot { it.isInvestigator }.let { list ->
-        val col = sortCol ?: return@let list
-        val key = Columns[col]
-        list.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { key.value(it) })
-            .let { if (sortAsc) it else it.reversed() }
-    }
+    val base = members.filterNot { it.isInvestigator }
+    val rows = base
+        .filter { m -> filters.all { (ci, allowed) -> Columns[ci].value(m) in allowed } }
+        .let { list ->
+            val col = sortCol ?: return@let list
+            val key = Columns[col]
+            list.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { key.value(it) })
+                .let { if (sortAsc) it else it.reversed() }
+        }
 
     fun onSort(col: Int) {
         if (sortCol == col) {
@@ -65,11 +81,24 @@ fun TableScreen(members: List<Member>, onOpen: (Member) -> Unit) {
 
     val hScroll = rememberScrollState()
     Column(Modifier.fillMaxSize()) {
-        Text(
-            "${rows.size} member${if (rows.size == 1) "" else "s"}",
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 4.dp),
-        )
+        Row(
+            Modifier.fillMaxWidth().padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "${rows.size} member${if (rows.size == 1) "" else "s"}" +
+                    (if (filters.isNotEmpty()) "  ·  filtered" else ""),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.weight(1f))
+            if (filters.isNotEmpty()) {
+                TextButton(onClick = { filters.clear() }) {
+                    Icon(Icons.Filled.Close, contentDescription = null, modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Clear filters")
+                }
+            }
+        }
         // Header row (sticky-ish: lives above the scrolling body, shares the same horizontal scroll).
         Row(
             Modifier
@@ -86,6 +115,8 @@ fun TableScreen(members: List<Member>, onOpen: (Member) -> Unit) {
                     sortable = c.kind == Kind.TEXT,
                     sortState = if (sortCol == i) (if (sortAsc) 1 else -1) else 0,
                     onSort = { onSort(i) },
+                    filtered = filters.containsKey(i),
+                    onFilter = { filterFor = i },
                 )
             }
         }
@@ -105,17 +136,52 @@ fun TableScreen(members: List<Member>, onOpen: (Member) -> Unit) {
             }
         }
     }
+
+    // Per-column filter dialog: distinct values come from the unfiltered base so options never vanish.
+    filterFor?.let { col ->
+        val c = Columns[col]
+        val options = remember(col, members) {
+            base.map { c.value(it) }.distinct().sortedWith(String.CASE_INSENSITIVE_ORDER)
+        }
+        FilterDialog(
+            title = c.header,
+            options = options,
+            initial = filters[col] ?: options.toSet(),
+            onApply = { sel ->
+                // All or none selected = no filter; otherwise keep just the chosen values.
+                if (sel.isEmpty() || sel.size == options.size) filters.remove(col) else filters[col] = sel
+                filterFor = null
+            },
+            onDismiss = { filterFor = null },
+        )
+    }
 }
 
 private val NumWidth = 36.dp
 
 @Composable
-private fun HeaderCell(label: String, width: Dp, sortable: Boolean, sortState: Int, onSort: () -> Unit) {
+private fun HeaderCell(
+    label: String,
+    width: Dp,
+    sortable: Boolean,
+    sortState: Int,
+    onSort: () -> Unit,
+    filtered: Boolean,
+    onFilter: () -> Unit,
+) {
     Row(
         modifier = Modifier.width(width).padding(horizontal = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1)
+        Text(
+            label,
+            color = MaterialTheme.colorScheme.onPrimary,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
         if (sortable) {
             Spacer(Modifier.width(2.dp))
             Icon(
@@ -129,6 +195,13 @@ private fun HeaderCell(label: String, width: Dp, sortable: Boolean, sortState: I
                 modifier = Modifier.size(14.dp).clickable(onClick = onSort),
             )
         }
+        Spacer(Modifier.width(2.dp))
+        Icon(
+            Icons.Filled.FilterList,
+            contentDescription = "Filter $label",
+            tint = MaterialTheme.colorScheme.onPrimary.copy(alpha = if (filtered) 1f else 0.45f),
+            modifier = Modifier.size(14.dp).clickable(onClick = onFilter),
+        )
     }
 }
 
@@ -184,26 +257,66 @@ private fun cellColor(v: String, kind: Kind): Color? = when (kind) {
     Kind.TEXT -> null
 }
 
+/** A multi-select value picker for one column: check the values to keep, then Apply. */
+@Composable
+private fun FilterDialog(
+    title: String,
+    options: List<String>,
+    initial: Set<String>,
+    onApply: (Set<String>) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val checked = remember { mutableStateListOf<String>().apply { addAll(initial) } }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Filter · $title") },
+        text = {
+            Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                Row {
+                    TextButton(onClick = { checked.clear(); checked.addAll(options) }) { Text("All") }
+                    TextButton(onClick = { checked.clear() }) { Text("None") }
+                }
+                options.forEach { opt ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable {
+                            if (opt in checked) checked.remove(opt) else checked.add(opt)
+                        },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = opt in checked,
+                            onCheckedChange = { if (it) checked.add(opt) else checked.remove(opt) },
+                        )
+                        Text(if (opt.isBlank()) "(blank)" else opt)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { onApply(checked.toSet()) }) { Text("Apply") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
 private enum class Kind { TEXT, YESNO, RECOMMEND, GENDER }
 
 private data class Col(val header: String, val kind: Kind, val width: Dp, val value: (Member) -> String)
 
-/** Column set mirroring table_view.dart `_cols`. */
+/** Column set mirroring table_view.dart `_cols`. Widths leave room for the header sort/filter icons. */
 private val Columns: List<Col> = listOf(
-    Col("Member", Kind.TEXT, 150.dp) { it.name ?: "" },
-    Col("Sex", Kind.GENDER, 50.dp) { it.sex ?: "" },
-    Col("Unit", Kind.TEXT, 130.dp) { it.unitName ?: "" },
-    Col("Baptism", Kind.TEXT, 100.dp) { it.baptismDate ?: "" },
-    Col("Member for", Kind.TEXT, 120.dp) {
+    Col("Member", Kind.TEXT, 158.dp) { it.name ?: "" },
+    Col("Sex", Kind.GENDER, 66.dp) { it.sex ?: "" },
+    Col("Unit", Kind.TEXT, 140.dp) { it.unitName ?: "" },
+    Col("Baptism", Kind.TEXT, 112.dp) { it.baptismDate ?: "" },
+    Col("Member for", Kind.TEXT, 132.dp) {
         (it.membershipDuration ?: "").replaceFirst(Regex("^Member for\\s*", RegexOption.IGNORE_CASE), "")
     },
-    Col("Friends", Kind.YESNO, 80.dp) { it.friends ?: "" },
-    Col("Aaronic", Kind.YESNO, 80.dp) { it.aaronicPriesthood ?: "" },
-    Col("Melch.", Kind.YESNO, 80.dp) { it.melchizedekPriesthood ?: "" },
-    Col("Calling", Kind.YESNO, 80.dp) { it.calling ?: "" },
-    Col("Has min.", Kind.YESNO, 80.dp) { it.ministeringBrothersSisters ?: "" },
-    Col("Gives min.", Kind.YESNO, 90.dp) { it.ministeringAssignment ?: "" },
-    Col("Recommend", Kind.RECOMMEND, 100.dp) { it.templeRecommend ?: "" },
-    Col("Patriarchal", Kind.YESNO, 100.dp) { it.patriarchalBlessing ?: "" },
-    Col("Endowed", Kind.YESNO, 90.dp) { it.livingOrdinance ?: "" },
+    Col("Friends", Kind.YESNO, 96.dp) { it.friends ?: "" },
+    Col("Aaronic", Kind.YESNO, 96.dp) { it.aaronicPriesthood ?: "" },
+    Col("Melch.", Kind.YESNO, 92.dp) { it.melchizedekPriesthood ?: "" },
+    Col("Calling", Kind.YESNO, 96.dp) { it.calling ?: "" },
+    Col("Has min.", Kind.YESNO, 100.dp) { it.ministeringBrothersSisters ?: "" },
+    Col("Gives min.", Kind.YESNO, 106.dp) { it.ministeringAssignment ?: "" },
+    Col("Recommend", Kind.RECOMMEND, 118.dp) { it.templeRecommend ?: "" },
+    Col("Patriarchal", Kind.YESNO, 116.dp) { it.patriarchalBlessing ?: "" },
+    Col("Endowed", Kind.YESNO, 102.dp) { it.livingOrdinance ?: "" },
 )

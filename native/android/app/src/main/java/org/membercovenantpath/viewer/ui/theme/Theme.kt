@@ -33,7 +33,10 @@ private val DarkScheme = darkColorScheme(
 
 @Composable
 fun CovenantPathTheme(
-    choice: ThemeChoice = ThemeChoice.System,
+    // Default Light (not System): the front-door login renders before any saved choice loads, and the
+    // brand/web build is light — so a dark-mode device shouldn't open the app to a dark login. An
+    // explicit Light/Dark/System pick from Settings still wins (see AppPrefs/ThemeViewModel).
+    choice: ThemeChoice = ThemeChoice.Light,
     content: @Composable () -> Unit,
 ) {
     val darkTheme = when (choice) {
