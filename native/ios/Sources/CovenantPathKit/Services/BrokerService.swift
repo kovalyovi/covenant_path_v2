@@ -34,10 +34,13 @@ public struct BrokerResult: Sendable {
     public let loginID: String?
     public let factors: [BrokerFactor]
     public let name: String?
+    /// N2: covenant-path access from the broker enroll step. nil = unknown (don't block);
+    /// false = no access → block at login.
+    public let authorized: Bool?
     public init(email: String? = nil, otp: String? = nil, loginID: String? = nil,
-                factors: [BrokerFactor] = [], name: String? = nil) {
+                factors: [BrokerFactor] = [], name: String? = nil, authorized: Bool? = nil) {
         self.email = email; self.otp = otp; self.loginID = loginID
-        self.factors = factors; self.name = name
+        self.factors = factors; self.name = name; self.authorized = authorized
     }
     public var mfaRequired: Bool { loginID != nil && otp == nil }
 }
@@ -186,9 +189,12 @@ public final class BrokerService: @unchecked Sendable {
             return BrokerResult(loginID: data["login_id"] as? String, factors: factors)
         }
         let session = (data["session"] as? [String: Any]) ?? [:]
+        let enroll = data["enroll"] as? [String: Any]
         return BrokerResult(email: session["email"] as? String,
                             otp: session["otp"] as? String,
-                            name: data["identity_name"] as? String)
+                            name: data["identity_name"] as? String,
+                            // N2: only an explicit false blocks; absent/errored enroll → nil.
+                            authorized: enroll?["authorized"] as? Bool)
     }
 
     // MARK: - Church account login (port of password/selectFactor/verifyMfa)

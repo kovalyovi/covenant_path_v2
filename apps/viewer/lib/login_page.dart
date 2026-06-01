@@ -98,6 +98,20 @@ class _LoginPageState extends State<LoginPage> {
     TextInput.finishAutofillContext();
   }
 
+  /// N2: the Church login succeeded but this calling has NO covenant-path access (the broker says
+  /// authorized:false). Don't create a session — show why and stay on the login screen, so a
+  /// regular member is never signed into an app they can't use. Only an explicit `false` blocks;
+  /// null (not enrolled / broker couldn't determine) is allowed through.
+  bool _noAccess(BrokerResult r) {
+    if (r.authorized == false) {
+      setState(() => _error =
+          "This account doesn't have access to Covenant Path. Access is granted by your calling — "
+          "if you should have access, ask your stake leadership.");
+      return true;
+    }
+    return false;
+  }
+
   Future<void> _churchSignIn() => _run(() async {
         final r = await _broker.password(_username.text.trim(), _password.text, enroll: _enroll);
         if (r.mfaRequired) {
@@ -109,6 +123,7 @@ class _LoginPageState extends State<LoginPage> {
           if (r.factors.length == 1) await _selectFactor(r.factors.first);
           return;
         }
+        if (_noAccess(r)) return;
         await _consume(r);
       });
 
@@ -119,6 +134,7 @@ class _LoginPageState extends State<LoginPage> {
 
   Future<void> _verifyMfa() => _run(() async {
         final r = await _broker.verifyMfa(_loginId!, _mfaCode.text.trim(), enroll: _enroll);
+        if (_noAccess(r)) return;
         await _consume(r);
       });
 

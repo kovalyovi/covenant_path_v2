@@ -33,7 +33,11 @@ class BrokerResult {
   final String? loginId; // present when MFA is required
   final List<BrokerFactor> factors;
   final String? name;
-  BrokerResult({this.email, this.otp, this.loginId, this.factors = const [], this.name});
+  /// N2: whether the signed-in calling has covenant-path access (from the broker enroll step).
+  /// null = unknown (not enrolled / errored) → don't block; false = no access → block at login.
+  final bool? authorized;
+  BrokerResult(
+      {this.email, this.otp, this.loginId, this.factors = const [], this.name, this.authorized});
 
   bool get mfaRequired => loginId != null && otp == null;
 }
@@ -146,10 +150,15 @@ class BrokerClient {
       );
     }
     final session = (data['session'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final enroll = (data['enroll'] as Map?)?.cast<String, dynamic>();
     return BrokerResult(
       email: session['email'] as String?,
       otp: session['otp'] as String?,
       name: data['identity_name'] as String?,
+      // N2: only a present, explicit `false` blocks; absent/errored enroll → null (don't block).
+      authorized: enroll != null && enroll.containsKey('authorized')
+          ? enroll['authorized'] as bool?
+          : null,
     );
   }
 

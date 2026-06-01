@@ -27,6 +27,9 @@ data class BrokerResult(
     val loginId: String? = null,
     val factors: List<BrokerFactor> = emptyList(),
     val name: String? = null,
+    // N2: covenant-path access from the broker enroll step. null = unknown (don't block);
+    // false = no access -> block at login.
+    val authorized: Boolean? = null,
 ) {
     val mfaRequired: Boolean get() = loginId != null && otp == null
 }
@@ -140,6 +143,8 @@ class BrokerClient(private val auth: AuthRepository = AuthRepository()) {
             email = session.str("email"),
             otp = session.str("otp"),
             name = data.str("identity_name"),
+            // N2: only an explicit false blocks; absent/errored enroll → null (don't block).
+            authorized = data.obj("enroll")?.boolOrNull("authorized"),
         )
     }
 

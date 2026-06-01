@@ -67,6 +67,13 @@ fun JsonObject.str(key: String): String? =
 fun JsonObject.bool(key: String): Boolean =
     (this[key] as? kotlinx.serialization.json.JsonPrimitive)?.content?.equals("true", true) ?: false
 
+/** Nullable bool: null when the key is absent/null/non-boolean (caller distinguishes "unknown"
+ *  from an explicit false — used by N2's `authorized` so only a real `false` blocks login). */
+fun JsonObject.boolOrNull(key: String): Boolean? =
+    (this[key] as? kotlinx.serialization.json.JsonPrimitive)
+        ?.takeIf { it !is JsonNull }
+        ?.content?.let { when (it) { "true" -> true; "false" -> false; else -> null } }
+
 fun JsonObject.int(key: String, default: Int = 0): Int =
     (this[key] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toDoubleOrNull()?.toInt() ?: default
 
