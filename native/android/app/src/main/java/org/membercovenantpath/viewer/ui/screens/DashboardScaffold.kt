@@ -193,7 +193,9 @@ fun DashboardScaffold(
             if (state.syncing) SyncingBanner(state.syncStartedAt)
             if (state.staleCredential) StaleCredentialBanner(onReenroll = onSignOut)
 
-            Box(Modifier.fillMaxWidth().weight(1f)) {
+            // N6: breathing room so the last card/row isn't flush against the bottom nav bar
+            // (the Scaffold already insets by the nav height under edge-to-edge; this just adds a gap).
+            Box(Modifier.fillMaxWidth().weight(1f).padding(bottom = 12.dp)) {
                 when (val load = state.load) {
                     is LoadState.Loading -> MemberListSkeleton()
                     is LoadState.Error -> CenteredError(load.message, onRetry = dashVm::refresh)
