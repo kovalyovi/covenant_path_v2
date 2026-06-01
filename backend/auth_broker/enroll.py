@@ -53,6 +53,25 @@ def persist(cookies: list[dict], identity: dict) -> dict:
     access = covenant_path_access(client)  # best-effort name enrichment is internally guarded
     coverage = onboarding.coverage_of(access)
     rank = onboarding.access_rank(access)
+
+    # N2: does this login's calling grant ANY covenant-path data access? can_pull_all or >=1 granted
+    # feature, OR a stake-stewardship calling (the always-allowed safety net mirrors backend/roles.py,
+    # so a clerk/high-councilor with an incomplete LCR menu matrix is NOT false-blocked). A member
+    # with no such calling is told at login they can't use the app (the broker returns authorized:
+    # False and the client blocks pre-session) and is NOT enrolled — storing a no-access session as
+    # the stake credential would be useless. We deliberately err toward allowing (only block on a
+    # clear "no access"); a degraded matrix that still names a stewardship calling stays authorized.
+    from backend.roles import _calling_always_allowed
+    positions = access.get("runner_positions") or []
+    authorized = (bool(access.get("can_pull_all")) or rank > 0
+                  or any(_calling_always_allowed(p.get("name")) for p in positions))
+    if not authorized:
+        logger.info("login has no covenant-path access (rank=%s, unit=%s); not enrolling",
+                    rank, ctx.unit_number)
+        return {"stake": ctx.unit_name, "unit_number": ctx.unit_number,
+                "authorized": False, "access_rank": rank,
+                "complete": False, "missing": coverage.get("missing") or []}
+
     role_ids = sorted({p["id"] for p in access.get("runner_positions", [])
                        if isinstance(p.get("id"), int)})
     blob = credentials._encrypt_envelope(
@@ -80,6 +99,7 @@ def persist(cookies: list[dict], identity: dict) -> dict:
                 ctx.unit_name, ctx.unit_number, coverage["complete"], rank)
     initial_sync = _kickoff_initial_sync(ctx.unit_number)
     return {"stake": ctx.unit_name, "unit_number": ctx.unit_number,
+            "authorized": True, "access_rank": rank,
             "complete": coverage["complete"], "missing": coverage["missing"],
             "initial_sync": initial_sync}
 

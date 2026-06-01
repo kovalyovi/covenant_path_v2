@@ -120,6 +120,7 @@ public final class SessionStore {
                 if r.factors.count == 1 { await self.selectFactor(r.factors[0]) }
                 return
             }
+            if r.authorized == false { throw BrokerError(SessionStore.noAccessMessage) }
             try await self.consume(r)
         }
     }
@@ -136,6 +137,7 @@ public final class SessionStore {
         guard let loginID else { return }
         await run {
             let r = try await self.broker.verifyMfa(loginID: loginID, code: code.trimmed, enroll: true)
+            if r.authorized == false { throw BrokerError(SessionStore.noAccessMessage) }
             try await self.consume(r)
         }
     }
@@ -195,6 +197,11 @@ public final class SessionStore {
     // MARK: - shared
 
     /// Turn a broker-minted OTP into a real Supabase session (port of `_consume`).
+    /// N2: shown when a Church login succeeds but the calling has no covenant-path access.
+    static let noAccessMessage =
+        "This account doesn't have access to Covenant Path. Access is granted by your calling — "
+        + "if you should have access, ask your stake leadership."
+
     private func consume(_ r: BrokerResult) async throws {
         guard let email = r.email, let otp = r.otp else {
             throw BrokerError("Sign-in service did not return a session.")

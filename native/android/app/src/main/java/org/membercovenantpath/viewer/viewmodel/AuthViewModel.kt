@@ -116,6 +116,11 @@ class AuthViewModel(
     }
 
     /** Turn a broker-minted OTP into a real Supabase session (gate then routes to the app). */
+    // N2: shown when a Church login succeeds but the calling has no covenant-path access.
+    private val NO_ACCESS_MSG =
+        "This account doesn't have access to Covenant Path. Access is granted by your calling — " +
+            "if you should have access, ask your stake leadership."
+
     private suspend fun consume(r: BrokerResult) {
         val email = r.email
         val otp = r.otp
@@ -131,6 +136,7 @@ class AuthViewModel(
             if (r.factors.size == 1) selectFactorNow(r.factors.first())
             return@run
         }
+        if (r.authorized == false) throw BrokerException(NO_ACCESS_MSG)
         consume(r)
     }
 
@@ -142,6 +148,7 @@ class AuthViewModel(
 
     fun verifyMfa() = run {
         val r = broker.verifyMfa(_login.value.loginId!!, _login.value.mfaCode.trim(), enroll = true)
+        if (r.authorized == false) throw BrokerException(NO_ACCESS_MSG)
         consume(r)
     }
 
