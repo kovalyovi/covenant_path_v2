@@ -1,0 +1,69 @@
+package org.membercovenantpath.viewer.data
+
+import io.github.jan.supabase.SupabaseClient
+import io.github.jan.supabase.postgrest.postgrest
+import io.github.jan.supabase.postgrest.query.Columns
+import io.github.jan.supabase.postgrest.query.Order
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import org.membercovenantpath.viewer.model.Member
+import org.membercovenantpath.viewer.model.Missionary
+import org.membercovenantpath.viewer.model.Stake
+
+/**
+ * Read-only Supabase access for `members` + `stakes`. The app does NO filtering of its own — RLS
+ * returns only allowed rows. We scope the dashboard to ONE stake (`.eq("stake_id", id)`) exactly
+ * like dashboard_page.dart `_load`, so a multi-stake power user never sees a merged union.
+ */
+class MembersRepository(
+    private val client: SupabaseClient = SupabaseClientProvider.client,
+) {
+    companion object {
+        // Mirror dashboard_page.dart `_columns` verbatim (order matters only for readability).
+        val MEMBER_COLUMNS = Columns.raw(
+            "person_uuid, stake_id, unit_id, name, unit_name, baptism_date, birth_date, " +
+                "membership_duration, sex, friends, aaronic_priesthood, melchizedek_priesthood, " +
+                "calling, ministering_brothers_sisters, ministering_assignment, temple_recommend, " +
+                "patriarchal_blessing, living_ordinance, details, photo_url, kind, baptism_goal_date",
+        )
+    }
+
+    /** All stakes the signed-in user may see (RLS-scoped), freshest first. */
+    suspend fun loadStakes(): List<Stake> {
+        val stakes = client.postgrest.from("stakes")
+            .select(Columns.raw("id, name, unit_number, last_synced_at, missionaries"))
+            .decodeList<Stake>()
+        return stakes.sortedByDescending { it.lastSyncedAt ?: "" }
+    }
+
+    /** Members for ONE stake, ordered by unit_name then name (matches the Flutter select). */
+    suspend fun loadMembers(stakeId: String): List<Member> =
+        client.postgrest.from("members")
+            .select(MEMBER_COLUMNS) {
+                filter { eq("stake_id", stakeId) }
+                order("unit_name", Order.ASCENDING)
+                order("name", Order.ASCENDING)
+            }
+            .decodeList<Member>()
+
+    /** Decode a stake's `missionaries` jsonb (unit name → [{name,phone,email}]). */
+    fun missionariesByUnit(stake: Stake): Map<String, List<Missionary>> {
+        val obj = stake.missionaries as? JsonObject ?: return emptyMap()
+        val out = LinkedHashMap<String, List<Missionary>>()
+        for ((unit, value) in obj) {
+            val arr = value as? JsonArray ?: continue
+            out[unit] = arr.mapNotNull { el ->
+                val o = el.jsonObject
+                Missionary(
+                    name = o["name"]?.jsonPrimitive?.contentOrNull,
+                    phone = o["phone"]?.jsonPrimitive?.contentOrNull,
+                    email = o["email"]?.jsonPrimitive?.contentOrNull,
+                )
+            }
+        }
+        return out
+    }
+}
