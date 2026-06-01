@@ -306,7 +306,7 @@ private fun StatTile(value: String, label: String, onClick: () -> Unit) {
     Column(Modifier.width(124.dp).clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(value, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(androidx.compose.material.icons.Icons.Filled.ChevronRight, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Text(label, style = MaterialTheme.typography.bodySmall)
     }
