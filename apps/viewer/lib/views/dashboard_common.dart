@@ -529,6 +529,81 @@ Iterable<DateTime> _firstLessonDate(Map<String, dynamic> m) sync* {
   if (fl != null) yield fl;
 }
 
+/// #1/#2: the window for the Baptisms-by-month stat. (YTD / trailing 12 / trailing 24 / all-time.)
+enum _BWindow { ytd, m12, m24, all }
+
+/// #1/#2: baptized converts counted by their **baptism month** over [window]. Returns the ordered
+/// monthly labels + counts (for the chart), the per-baptism events (for the by-unit drill), the
+/// total in-window, and the BEST month — the calendar month with the most baptisms, named.
+/// "Baptised and confirmed" = the convert cohort (kind != investigator), counted by baptism date
+/// (confirmation follows within days), per the product decision.
+({
+  List<String> labels,
+  List<double> counts,
+  List<_Ev> events,
+  String? bestLabel,
+  int bestCount,
+  int total,
+}) _baptismsByMonth(Iterable<Map<String, dynamic>> baptized, _BWindow window) {
+  final today = DateTime.now();
+  final DateTime? start = switch (window) {
+    _BWindow.ytd => DateTime(today.year, 1, 1),
+    _BWindow.m12 => DateTime(today.year, today.month - 11, 1),
+    _BWindow.m24 => DateTime(today.year, today.month - 23, 1),
+    _BWindow.all => null,
+  };
+  final pairs = <(Map<String, dynamic>, DateTime)>[];
+  for (final m in baptized) {
+    final dt = parseMemberDate(m['baptism_date']);
+    if (dt == null || dt.isAfter(today)) continue; // no real baptism date / future-dated → skip
+    if (start != null && dt.isBefore(start)) continue;
+    pairs.add((m, dt));
+  }
+  final DateTime rangeStart = start ??
+      (pairs.isEmpty
+          ? DateTime(today.year, today.month, 1)
+          : (() {
+              final e = pairs.map((p) => p.$2).reduce((a, b) => a.isBefore(b) ? a : b);
+              return DateTime(e.year, e.month, 1);
+            })());
+  final labels = <String>[];
+  final keys = <int>[];
+  var y = rangeStart.year, mo = rangeStart.month;
+  while (y < today.year || (y == today.year && mo <= today.month)) {
+    keys.add(y * 100 + mo);
+    labels.add(DateFormat(y == today.year ? 'MMM' : "MMM ''yy").format(DateTime(y, mo)));
+    if (++mo > 12) {
+      mo = 1;
+      y++;
+    }
+  }
+  final idxOf = {for (var i = 0; i < keys.length; i++) keys[i]: i};
+  final counts = List<double>.filled(keys.length, 0);
+  final events = <_Ev>[];
+  for (final (m, dt) in pairs) {
+    final i = idxOf[dt.year * 100 + dt.month];
+    if (i == null) continue;
+    counts[i] += 1; // a convert is baptized once → counted once, in their baptism month
+    events.add(_Ev(m, dt, i));
+  }
+  var bi = -1;
+  var bc = 0.0;
+  for (var i = 0; i < counts.length; i++) {
+    if (counts[i] > bc) {
+      bc = counts[i];
+      bi = i;
+    }
+  }
+  return (
+    labels: labels,
+    counts: counts,
+    events: events,
+    bestLabel: bi >= 0 ? DateFormat('MMMM y').format(DateTime(keys[bi] ~/ 100, keys[bi] % 100)) : null,
+    bestCount: bc.round(),
+    total: counts.fold<double>(0, (a, b) => a + b).round(),
+  );
+}
+
 /// Count of lessons taught (across all people) where a member was present for ≥1 principle.
 int _lessonsWithMember(List<Map<String, dynamic>> rows) {
   var c = 0;

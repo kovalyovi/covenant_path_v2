@@ -33,6 +33,19 @@ data class KpiEvent(val member: Member, val date: LocalDate, val bucket: Int)
 /** The series + the underlying events (so a tap can show *who*, by unit or chronologically). */
 data class KpiMetric(val series: KpiSeries, val events: List<KpiEvent>)
 
+/** #1/#2: window for the Baptisms-by-month stat (year-to-date / trailing 12 / 24 / all-time). */
+enum class BaptismWindow { YTD, M12, M24, ALL }
+
+/** #1/#2: monthly baptism counts over a window + the best month (named) + total in-window. */
+data class BaptismsByMonth(
+    val labels: List<String>,
+    val counts: List<Double>,
+    val events: List<KpiEvent>,
+    val bestLabel: String?,
+    val bestCount: Int,
+    val total: Int,
+)
+
 object Kpis {
 
     private val MD = DateTimeFormatter.ofPattern("M/d", Locale.US)   // "2/6"
@@ -41,6 +54,7 @@ object Kpis {
     private val MD_Y = DateTimeFormatter.ofPattern("MMM d, yyyy", Locale.US)
     private val M_Y = DateTimeFormatter.ofPattern("MMM yyyy", Locale.US)
     private val MON_YY = DateTimeFormatter.ofPattern("MMM ''yy", Locale.US) // "Feb '25"
+    private val MMMM_Y = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.US) // "March 2026" (best month)
 
     private fun weekStart(d: LocalDate): LocalDate = d.minusDays((d.dayOfWeek.value - 1).toLong()) // Monday
 
@@ -207,5 +221,57 @@ object Kpis {
         KpiPeriod.MONTH -> "Last month" to "This month"
         KpiPeriod.YEAR -> "Last year" to "This year"
         KpiPeriod.ALL -> "Prev. month" to "This month"
+    }
+
+    /**
+     * #1/#2: baptized-convert cohort counted by baptism MONTH over [window], with the best month
+     * named. Mirrors `_baptismsByMonth` in dashboard_common.dart. "Baptised and confirmed" = the
+     * convert cohort, counted by baptism date (confirmation follows within days).
+     */
+    fun baptismsByMonth(
+        baptized: List<Member>,
+        window: BaptismWindow,
+        today: LocalDate = LocalDate.now(),
+    ): BaptismsByMonth {
+        val start: LocalDate? = when (window) {
+            BaptismWindow.YTD -> LocalDate.of(today.year, 1, 1)
+            BaptismWindow.M12 -> LocalDate.of(today.year, 1, 1).plusMonths((today.monthValue - 1 - 11).toLong())
+            BaptismWindow.M24 -> LocalDate.of(today.year, 1, 1).plusMonths((today.monthValue - 1 - 23).toLong())
+            BaptismWindow.ALL -> null
+        }
+        val pairs = ArrayList<Pair<Member, LocalDate>>()
+        for (m in baptized) {
+            val dt = DateParse.parseMemberDate(m.baptismDate) ?: continue
+            if (dt.isAfter(today)) continue
+            if (start != null && dt.isBefore(start)) continue
+            pairs.add(m to dt)
+        }
+        val rangeStart: LocalDate = start
+            ?: (pairs.minOfOrNull { it.second }?.withDayOfMonth(1) ?: LocalDate.of(today.year, today.monthValue, 1))
+        val labels = ArrayList<String>()
+        val keys = ArrayList<Int>()
+        var y = rangeStart.year
+        var mo = rangeStart.monthValue
+        while (y < today.year || (y == today.year && mo <= today.monthValue)) {
+            keys.add(y * 100 + mo)
+            val d = LocalDate.of(y, mo, 1)
+            labels.add(if (y == today.year) MON.format(d) else MON_YY.format(d))
+            mo++
+            if (mo > 12) { mo = 1; y++ }
+        }
+        val idxOf = HashMap<Int, Int>()
+        keys.forEachIndexed { i, k -> idxOf[k] = i }
+        val counts = DoubleArray(keys.size)
+        val events = ArrayList<KpiEvent>()
+        for ((m, dt) in pairs) {
+            val i = idxOf[dt.year * 100 + dt.monthValue] ?: continue
+            counts[i] += 1 // a convert is baptized once → counted once, in their baptism month
+            events.add(KpiEvent(m, dt, i))
+        }
+        var bi = -1
+        var bc = 0.0
+        for (i in counts.indices) if (counts[i] > bc) { bc = counts[i]; bi = i }
+        val bestLabel = if (bi >= 0) MMMM_Y.format(LocalDate.of(keys[bi] / 100, keys[bi] % 100, 1)) else null
+        return BaptismsByMonth(labels, counts.toList(), events, bestLabel, bc.toInt(), counts.sum().toInt())
     }
 }

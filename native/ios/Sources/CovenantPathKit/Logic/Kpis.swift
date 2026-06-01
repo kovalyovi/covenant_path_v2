@@ -55,6 +55,30 @@ public struct KpiEvent: Identifiable, Sendable {
     public var id: String { "\(member.id)|\(date.timeIntervalSince1970)|\(bucket)" }
 }
 
+/// #1/#2: window for the Baptisms-by-month stat (year-to-date / trailing 12 / 24 / all-time).
+public enum BaptismWindow: String, CaseIterable, Identifiable, Sendable {
+    case ytd, m12, m24, all
+    public var id: String { rawValue }
+    public var label: String {
+        switch self {
+        case .ytd: return "YTD"
+        case .m12: return "12 mo"
+        case .m24: return "24 mo"
+        case .all: return "All"
+        }
+    }
+}
+
+/// #1/#2: monthly baptism counts over a window + the best month (named) + total in-window.
+public struct BaptismsByMonth: Sendable {
+    public var labels: [String]
+    public var counts: [Double]
+    public var events: [KpiEvent]
+    public var bestLabel: String?
+    public var bestCount: Int
+    public var total: Int
+}
+
 public enum Kpis {
 
     // MARK: - calendar helpers (port of _dayOnly / _weekStart)
@@ -253,6 +277,65 @@ public enum Kpis {
         return out
     }
 
+    // MARK: - #1/#2 baptisms by month (port of _baptismsByMonth)
+
+    /// Baptized-convert cohort counted by baptism MONTH over `window`, with the best month named.
+    /// "Baptised and confirmed" = the convert cohort, counted by baptism date (confirmation follows).
+    public static func baptismsByMonth(_ baptized: [Member], window: BaptismWindow, now: Date = Date()) -> BaptismsByMonth {
+        let today = now
+        let t = ymd(today)
+        let start: Date?
+        switch window {
+        case .ytd: start = monthDate(year: t.y, month: 1)
+        case .m12: start = monthDate(year: t.y, month: t.m - 11)
+        case .m24: start = monthDate(year: t.y, month: t.m - 23)
+        case .all: start = nil
+        }
+        var pairs: [(Member, Date)] = []
+        for m in baptized {
+            guard let dt = MemberDate.parse(m.baptismDate) else { continue }
+            if dt > today { continue }                 // no real / future baptism date → skip
+            if let s = start, dt < s { continue }
+            pairs.append((m, dt))
+        }
+        let rangeStart: Date
+        if let s = start {
+            rangeStart = s
+        } else if let earliest = pairs.map({ $0.1 }).min() {
+            let e = ymd(earliest); rangeStart = monthDate(year: e.y, month: e.m)
+        } else {
+            rangeStart = monthDate(year: t.y, month: t.m)
+        }
+        let rs = ymd(rangeStart)
+        var labels: [String] = []
+        var keys: [Int] = []
+        var y = rs.y, mo = rs.m
+        while y < t.y || (y == t.y && mo <= t.m) {
+            keys.append(y * 100 + mo)
+            let d = monthDate(year: y, month: mo)
+            labels.append(y == t.y ? monthAbbrev(d) : monthAbbrevYear(d))
+            mo += 1
+            if mo > 12 { mo = 1; y += 1 }
+        }
+        var idxOf: [Int: Int] = [:]
+        for (i, k) in keys.enumerated() { idxOf[k] = i }
+        var counts = [Double](repeating: 0, count: keys.count)
+        var events: [KpiEvent] = []
+        for (m, dt) in pairs {
+            let c = ymd(dt)
+            if let i = idxOf[c.y * 100 + c.m] {
+                counts[i] += 1                          // a convert is baptized once → counted once
+                events.append(KpiEvent(member: m, date: dt, bucket: i))
+            }
+        }
+        var bi = -1
+        var bc = 0.0
+        for i in counts.indices where counts[i] > bc { bc = counts[i]; bi = i }
+        let bestLabel: String? = bi >= 0 ? fullMonth(monthDate(year: keys[bi] / 100, month: keys[bi] % 100)) : nil
+        return BaptismsByMonth(labels: labels, counts: counts, events: events,
+                               bestLabel: bestLabel, bestCount: Int(bc), total: Int(counts.reduce(0, +)))
+    }
+
     // MARK: - label formatters (match Dart's DateFormat usage)
 
     private static func mdLabel(_ d: Date) -> String {       // 'M/d'
@@ -269,5 +352,11 @@ public enum Kpis {
         let c = ymd(d)
         let yy = String(format: "%02d", c.y % 100)
         return "\(monthAbbrev(d)) '\(yy)"
+    }
+    private static let fullMonthNames = ["January", "February", "March", "April", "May", "June",
+                                         "July", "August", "September", "October", "November", "December"]
+    private static func fullMonth(_ d: Date) -> String {       // "MMMM yyyy" → "March 2026" (best month)
+        let c = ymd(d)
+        return (c.m >= 1 && c.m <= 12) ? "\(fullMonthNames[c.m - 1]) \(c.y)" : "\(c.y)"
     }
 }

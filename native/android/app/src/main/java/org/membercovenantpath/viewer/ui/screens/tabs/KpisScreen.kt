@@ -22,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CompareArrows
+import androidx.compose.material.icons.filled.EventAvailable
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Leaderboard
@@ -51,6 +52,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.membercovenantpath.viewer.logic.BaptismWindow
 import org.membercovenantpath.viewer.logic.DateParse
 import org.membercovenantpath.viewer.logic.KpiEvent
 import org.membercovenantpath.viewer.logic.KpiMetric
@@ -128,6 +130,9 @@ fun KpisScreen(members: List<Member>, onOpen: (Member) -> Unit, today: LocalDate
         }
 
         item {
+            BaptismsCard(baptized, today) { title, events, lbl -> drill = Drill.Events(title, events, lbl) }
+        }
+        item {
             MetricChartCard("Investigators at Sacrament", Icons.Filled.Groups, Color(0xFFEF6C00),
                 friendsAtSac, allUnits, priorLabel, latestLabel, compare,
                 "people being taught who attended sacrament",
@@ -202,6 +207,66 @@ private fun UnitDropdown(unit: String?, units: List<String>, onSelect: (String?)
 private fun RangePill(text: String) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(20.dp)) {
         Text(text, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp))
+    }
+}
+
+@Composable
+private fun BaptismsCard(
+    baptized: List<Member>,
+    today: LocalDate,
+    onDrill: (String, List<KpiEvent>, String?) -> Unit,
+) {
+    var window by remember { mutableStateOf(BaptismWindow.M12) }
+    val d = Kpis.baptismsByMonth(baptized, window, today)
+    val color = Color(0xFF0277BD)
+    SectionCard(title = "Baptisms by month", leadingIcon = Icons.Filled.EventAvailable, iconColor = color) {
+        val opts = listOf(
+            BaptismWindow.YTD to "YTD", BaptismWindow.M12 to "12 mo",
+            BaptismWindow.M24 to "24 mo", BaptismWindow.ALL to "All",
+        )
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            opts.forEachIndexed { i, (w, lbl) ->
+                SegmentedButton(
+                    selected = window == w,
+                    onClick = { window = w },
+                    shape = SegmentedButtonDefaults.itemShape(i, opts.size),
+                ) { Text(lbl) }
+            }
+        }
+        Spacer(Modifier.size(14.dp))
+        Row(Modifier.fillMaxWidth()) {
+            BaptismStat("Baptized in window", "${d.total}", Modifier.weight(1f))
+            BaptismStat("Best month", d.bestLabel?.let { "$it · ${d.bestCount}" } ?: "—", Modifier.weight(1f))
+        }
+        Spacer(Modifier.size(14.dp))
+        LineChart(
+            values = d.counts, labels = d.labels, color = color,
+            modifier = Modifier.fillMaxWidth().height(170.dp),
+            onBucketTap = { i -> onDrill("Baptisms", d.events.filter { it.bucket == i }, d.labels.getOrNull(i)) },
+        )
+        Spacer(Modifier.size(8.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Baptized & confirmed converts, counted by baptism month.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = { onDrill("Baptisms", d.events, null) }) {
+                Icon(Icons.Filled.Groups, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.size(4.dp))
+                Text("By unit")
+            }
+        }
+    }
+}
+
+@Composable
+private fun BaptismStat(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.size(2.dp))
+        Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
     }
 }
 

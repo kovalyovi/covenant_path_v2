@@ -37,6 +37,8 @@ struct KPIsView: View {
                 let newAtSac = Kpis.metricData(baptized, datesOf: Kpis.attendedDates, period: period)
                 let newFriends = Kpis.metricData(investigators, datesOf: Kpis.firstLessonDate, period: period)
 
+                BaptismsCard(baptized: baptized, allUnits: allUnits, onDrill: { drill = $0 })
+
                 MetricChartCard(title: "Investigators at Sacrament", symbol: "person.3",
                                 hex: 0xEF6C00, data: friendsAtSac, period: period, compare: compare,
                                 suffix: "people being taught who attended sacrament",
@@ -202,6 +204,106 @@ struct DrillPayload: Identifiable {
     let allUnits: Set<String>
     var bucketLabel: String?
     var id: String { title + (bucketLabel ?? "") }
+}
+
+/// #1/#2: baptized-convert cohort by baptism month over YTD / 12 mo / 24 mo / All, with the best
+/// month named and a by-unit drill. Its own window selector (independent of the page period).
+struct BaptismsCard: View {
+    let baptized: [Member]
+    let allUnits: Set<String>
+    let onDrill: (DrillPayload) -> Void
+
+    @State private var window: BaptismWindow = .m12
+    private let color = Color(hex: 0x0277BD)
+
+    var body: some View {
+        let d = Kpis.baptismsByMonth(baptized, window: window)
+        SectionCard(title: "Baptisms by month", systemImage: "drop.fill", iconColor: color) {
+            VStack(alignment: .leading, spacing: 14) {
+                Picker("Window", selection: $window) {
+                    ForEach(BaptismWindow.allCases) { w in Text(w.label).tag(w) }
+                }
+                .pickerStyle(.segmented)
+
+                HStack(alignment: .top) {
+                    statKV("Baptized in window", "\(d.total)")
+                    Divider().frame(height: 36)
+                    statKV("Best month", d.bestLabel.map { "\($0) · \(d.bestCount)" } ?? "—")
+                }
+
+                chart(d)
+
+                HStack {
+                    Text("Baptized & confirmed converts, counted by baptism month.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        onDrill(DrillPayload(title: "Baptisms", events: d.events, allUnits: allUnits))
+                    } label: { Label("By unit", systemImage: "person.3").font(.caption) }
+                }
+            }
+        }
+    }
+
+    private func statKV(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.headline)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func chart(_ d: BaptismsByMonth) -> some View {
+        if d.counts.isEmpty || d.total == 0 {
+            Text("No baptisms in this window").foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 150)
+        } else {
+            let yMax = (d.counts.max() ?? 0) * 1.35 + 1
+            let step = max(1, Int((Double(d.counts.count) / 3.0).rounded(.up)))
+            let ticks = Array(stride(from: 0, to: d.counts.count, by: step))
+            Chart {
+                ForEach(Array(d.counts.enumerated()), id: \.offset) { i, v in
+                    LineMark(x: .value("i", i), y: .value("count", v))
+                        .foregroundStyle(color)
+                        .interpolationMethod(.catmullRom)
+                    AreaMark(x: .value("i", i), y: .value("count", v))
+                        .foregroundStyle(.linearGradient(colors: [color.opacity(0.28), color.opacity(0.02)],
+                                                         startPoint: .top, endPoint: .bottom))
+                        .interpolationMethod(.catmullRom)
+                    PointMark(x: .value("i", i), y: .value("count", v))
+                        .foregroundStyle(color)
+                        .symbolSize(60)
+                        .annotation(position: .top, spacing: 2) {
+                            Text("\(Int(v))").font(.system(size: 10, weight: .bold)).foregroundStyle(color)
+                        }
+                }
+            }
+            .chartYScale(domain: 0...yMax)
+            .chartXAxis {
+                AxisMarks(values: ticks) { value in
+                    if let i = value.as(Int.self), i >= 0, i < d.labels.count {
+                        AxisValueLabel { Text(d.labels[i]).font(.system(size: 10)).foregroundStyle(.secondary) }
+                    }
+                }
+            }
+            .chartYAxis(.hidden)
+            .frame(height: 170)
+            .chartOverlay { proxy in
+                GeometryReader { geo in
+                    Rectangle().fill(.clear).contentShape(Rectangle())
+                        .onTapGesture { location in
+                            if let i: Int = proxy.value(atX: location.x - geo[proxy.plotAreaFrame].origin.x) {
+                                let clamped = max(0, min(d.counts.count - 1, i))
+                                let evs = d.events.filter { $0.bucket == clamped }
+                                let label = clamped < d.labels.count ? d.labels[clamped] : nil
+                                onDrill(DrillPayload(title: "Baptisms", events: evs, allUnits: allUnits, bucketLabel: label))
+                            }
+                        }
+                }
+            }
+        }
+    }
 }
 
 /// One metric line chart card: big prior/latest stats + a Swift Charts line (current vs previous

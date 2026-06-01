@@ -66,6 +66,7 @@ class _KpiViewState extends State<_KpiView> {
         [for (final m in ms) _Ev(m, parseMemberDate(m[dateField]) ?? DateTime.now(), 0)];
 
     final cards = <Widget>[
+      _BaptismsCard(baptized: baptized, allUnits: allUnits, onOpen: onOpen),
       _MetricChartCard(
         title: 'Investigators at Sacrament',
         icon: Icons.groups,
@@ -169,6 +170,106 @@ class _KpiViewState extends State<_KpiView> {
       child: _Columns(cols: _cols(widget.tier).clamp(1, 2), children: cards),
     );
   }
+}
+
+/// #1/#2: baptized-convert cohort counted by baptism month over YTD / 12 mo / 24 mo / All, with the
+/// best month named and a by-unit drill. Its own window selector (independent of the page period).
+class _BaptismsCard extends StatefulWidget {
+  const _BaptismsCard({required this.baptized, required this.allUnits, required this.onOpen});
+  final List<Map<String, dynamic>> baptized;
+  final Set<String> allUnits;
+  final void Function(Map<String, dynamic>) onOpen;
+  @override
+  State<_BaptismsCard> createState() => _BaptismsCardState();
+}
+
+class _BaptismsCardState extends State<_BaptismsCard> {
+  _BWindow _w = _BWindow.m12;
+  static const _color = Color(0xFF0277BD); // baptisms blue (matches the nav accent)
+
+  @override
+  Widget build(BuildContext context) {
+    final d = _baptismsByMonth(widget.baptized, _w);
+    return SectionCard(
+      title: 'Baptisms by month',
+      leadingIcon: Icons.water_drop_outlined,
+      iconColor: _color,
+      onTap: d.events.isEmpty
+          ? null
+          : () => _showDrill(context, title: 'Baptisms', events: d.events,
+              allUnits: widget.allUnits, onOpen: widget.onOpen),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Center(
+          child: SegmentedButton<_BWindow>(
+            showSelectedIcon: false,
+            segments: const [
+              ButtonSegment(value: _BWindow.ytd, label: Text('YTD')),
+              ButtonSegment(value: _BWindow.m12, label: Text('12 mo')),
+              ButtonSegment(value: _BWindow.m24, label: Text('24 mo')),
+              ButtonSegment(value: _BWindow.all, label: Text('All')),
+            ],
+            selected: {_w},
+            onSelectionChanged: (s) => setState(() => _w = s.first),
+          ),
+        ),
+        const SizedBox(height: 14),
+        IntrinsicHeight(
+          child: Row(children: [
+            Expanded(child: _kv(context, 'Baptized in window', '${d.total}')),
+            Container(
+                width: 1,
+                color: Theme.of(context).colorScheme.outlineVariant,
+                margin: const EdgeInsets.symmetric(horizontal: 14)),
+            Expanded(
+                child: _kv(context, 'Best month',
+                    d.bestLabel == null ? '—' : '${d.bestLabel!}  ·  ${d.bestCount}')),
+          ]),
+        ),
+        const SizedBox(height: 14),
+        SizedBox(
+          height: 170,
+          child: _Line(
+            values: d.counts,
+            labels: d.labels,
+            color: _color,
+            onBucketTap: (i) => _showDrill(context,
+                title: 'Baptisms',
+                events: d.events.where((e) => e.bucket == i).toList(),
+                allUnits: widget.allUnits,
+                onOpen: widget.onOpen,
+                bucketLabel: i < d.labels.length ? d.labels[i] : null),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Row(children: [
+          Expanded(
+            child: Text('Baptized & confirmed converts, counted by baptism month.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey.shade600)),
+          ),
+          TextButton.icon(
+            onPressed: d.events.isEmpty
+                ? null
+                : () => _showDrill(context, title: 'Baptisms', events: d.events,
+                    allUnits: widget.allUnits, onOpen: widget.onOpen),
+            icon: const Icon(Icons.groups, size: 16),
+            label: const Text('By unit'),
+            style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+          ),
+        ]),
+      ]),
+    );
+  }
+
+  Widget _kv(BuildContext context, String label, String value) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey.shade600)),
+          const SizedBox(height: 2),
+          Text(value,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+        ],
+      );
 }
 
 class _MetricChartCard extends StatefulWidget {

@@ -47,8 +47,8 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done. Surfaces: **F**=Flutter,
   grouped-background convention (material there has nothing to frost). **iOS** ✓
 
 ## Phase 2 — medium
-- [ ] **#1/#2** Baptized-convert cohort by **unit × month** over YTD/12/24/all + **best
-  month** (named). **F/iOS/A**
+- [x] **#1/#2** ✓ "Baptisms by month" KPI card — convert cohort by month over **YTD/12mo/24mo/All**
+  + **best month** named + by-unit drill. Shared `baptismsByMonth` ported to all 3 surfaces. **F/iOS/A**
 - [ ] **#4** `docs/RULES.md` (priesthood eligibility by age/sex/tenure · calling→data-access
   matrix · convert-care ownership by tenure) **+ in-app Rules page / ⓘ icons**. **F/iOS/A + docs**
 - [ ] **N5** Login performance + robustness — investigate broker cold-start / Supabase auth /
