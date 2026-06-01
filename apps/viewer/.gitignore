@@ -6,13 +6,14 @@ build/
 .flutter-plugins-dependencies
 pubspec.lock
 
-# Generated platform folders (run `flutter create .` to (re)create locally)
-android/
+# android/ is COMMITTED (source) so the APK builds reproducibly in CI. Generated/secret bits are
+# excluded by android/.gitignore (.gradle, build/, local.properties, keystores). The other native
+# folders aren't built yet → still generated locally via `flutter create .`.
 ios/
 linux/
 macos/
 windows/
-# web/ is committed — it contains custom _headers, favicon, and index.html
+# web/ + android/ are committed; web/ also carries custom _headers, favicon, index.html.
 
 # IDE
 .idea/
