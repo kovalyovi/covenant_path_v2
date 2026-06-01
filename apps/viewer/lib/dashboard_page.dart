@@ -46,12 +46,15 @@ const _columns =
     'ministering_assignment, temple_recommend, patriarchal_blessing, living_ordinance, details, photo_url, '
     'kind, baptism_goal_date';
 
+// Each tab carries its own accent color so the nav reads at a glance (#nav). "Baptisms" = people
+// being taught who have a planned baptism date (the old "Upcoming"). Colors are a distinct nav
+// palette (not the status green/amber/red or the org teal/blue/rose).
 const _tabs = [
-  (icon: Icons.event, label: 'Upcoming'),
-  (icon: Icons.timelapse, label: 'Golden Hour'),
-  (icon: Icons.checklist, label: 'Needs'),
-  (icon: Icons.insights, label: 'KPIs'),
-  (icon: Icons.grid_on, label: 'Table'),
+  (icon: Icons.event_available, label: 'Baptisms', color: Color(0xFF0277BD)),   // blue
+  (icon: Icons.timelapse, label: 'Golden Hour', color: Color(0xFFF9A825)),      // gold/amber
+  (icon: Icons.checklist, label: 'Needs', color: Color(0xFFD84315)),            // deep orange
+  (icon: Icons.insights, label: 'KPIs', color: Color(0xFF2E7D32)),             // green
+  (icon: Icons.grid_on, label: 'Table', color: Color(0xFF5E35B1)),            // deep purple
 ];
 
 /// App-bar title that doubles as a stake switcher when the viewer can see more than one stake
@@ -587,7 +590,11 @@ class _DashboardPageState extends State<DashboardPage> {
                 selectedIndex: _tab,
                 onDestinationSelected: (i) => setState(() => _tab = i),
                 destinations: [
-                  for (final t in _tabs) NavigationDestination(icon: Icon(t.icon), label: t.label),
+                  for (final t in _tabs)
+                    NavigationDestination(
+                        icon: Icon(t.icon, color: t.color.withValues(alpha: 0.6)),
+                        selectedIcon: Icon(t.icon, color: t.color),
+                        label: t.label),
                 ],
               ),
             ),
@@ -605,7 +612,10 @@ class _DashboardPageState extends State<DashboardPage> {
             minExtendedWidth: 168,
             destinations: [
               for (final t in _tabs)
-                NavigationRailDestination(icon: Icon(t.icon), label: Text(t.label)),
+                NavigationRailDestination(
+                    icon: Icon(t.icon, color: t.color.withValues(alpha: 0.6)),
+                    selectedIcon: Icon(t.icon, color: t.color),
+                    label: Text(t.label)),
             ],
           ),
           const VerticalDivider(width: 1),

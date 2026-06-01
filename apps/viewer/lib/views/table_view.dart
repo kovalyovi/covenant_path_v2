@@ -135,58 +135,58 @@ class _SpreadsheetViewState extends State<_SpreadsheetView> {
       });
     }
     final active = _excluded.length;
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-        child: Row(children: [
-          Text('${rows.length} member${rows.length == 1 ? '' : 's'}'
-              '${active > 0 ? ' (filtered)' : ''}', style: scheme.textTheme.bodySmall),
-          const Spacer(),
-          if (active > 0)
-            TextButton.icon(
-              onPressed: () => setState(_excluded.clear),
-              icon: const Icon(Icons.filter_alt_off, size: 16),
-              label: Text('Clear $active filter${active == 1 ? '' : 's'}'),
-            ),
-        ]),
-      ),
-      Expanded(
-        child: SingleChildScrollView(
-          scrollDirection: Axis.vertical,
-          // clear the glass bottom nav on mobile so the last rows aren't hidden (#41)
-          padding: EdgeInsets.only(bottom: MediaQuery.of(context).size.width < 600 ? 92 : 12),
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: DataTable(
-              showCheckboxColumn: false, // #33: no bulk-select; first column is a row number
-              headingRowColor: WidgetStatePropertyAll(scheme.colorScheme.primary),
-              headingTextStyle:
-                  TextStyle(color: scheme.colorScheme.onPrimary, fontWeight: FontWeight.bold),
-              headingRowHeight: 48,
-              dataRowMinHeight: 40,
-              dataRowMaxHeight: 48,
-              columnSpacing: 14,
-              columns: [
-                const DataColumn(label: Text('#')),
-                for (var i = 0; i < _SpreadsheetView._cols.length; i++)
-                  DataColumn(label: _header(i)),
-              ],
-              rows: [
-                for (var r = 0; r < rows.length; r++)
-                  DataRow(
-                    onSelectChanged: (_) => widget.onOpen(rows[r]),
-                    cells: [
-                      DataCell(Text('${r + 1}', style: TextStyle(color: Colors.grey.shade500))),
-                      for (final c in _SpreadsheetView._cols)
-                        _cell(_display(rows[r], c.$2), c.$3),
-                    ],
-                  ),
-              ],
-            ),
+    // ONE outer vertical scroll wraps the whole view (count row + table) so the FULL page scrolls,
+    // not just the table body (#full-page-scroll); the table still scrolls horizontally inside it.
+    return SingleChildScrollView(
+      scrollDirection: Axis.vertical,
+      // clear the glass bottom nav on mobile so the last rows aren't hidden (#41)
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).size.width < 600 ? 92 : 12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          child: Row(children: [
+            Text('${rows.length} member${rows.length == 1 ? '' : 's'}'
+                '${active > 0 ? ' (filtered)' : ''}', style: scheme.textTheme.bodySmall),
+            const Spacer(),
+            if (active > 0)
+              TextButton.icon(
+                onPressed: () => setState(_excluded.clear),
+                icon: const Icon(Icons.filter_alt_off, size: 16),
+                label: Text('Clear $active filter${active == 1 ? '' : 's'}'),
+              ),
+          ]),
+        ),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: DataTable(
+            showCheckboxColumn: false, // #33: no bulk-select; first column is a row number
+            headingRowColor: WidgetStatePropertyAll(scheme.colorScheme.primary),
+            headingTextStyle:
+                TextStyle(color: scheme.colorScheme.onPrimary, fontWeight: FontWeight.bold),
+            headingRowHeight: 48,
+            dataRowMinHeight: 40,
+            dataRowMaxHeight: 48,
+            columnSpacing: 14,
+            columns: [
+              const DataColumn(label: Text('#')),
+              for (var i = 0; i < _SpreadsheetView._cols.length; i++)
+                DataColumn(label: _header(i)),
+            ],
+            rows: [
+              for (var r = 0; r < rows.length; r++)
+                DataRow(
+                  onSelectChanged: (_) => widget.onOpen(rows[r]),
+                  cells: [
+                    DataCell(Text('${r + 1}', style: TextStyle(color: Colors.grey.shade500))),
+                    for (final c in _SpreadsheetView._cols)
+                      _cell(_display(rows[r], c.$2), c.$3),
+                  ],
+                ),
+            ],
           ),
         ),
-      ),
-    ]);
+      ]),
+    );
   }
 
   /// Header: label + (text columns) a 3-state sort toggle + (all columns) a value-filter icon.

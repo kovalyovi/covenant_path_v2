@@ -253,15 +253,18 @@ class _OrgFilterBar extends StatelessWidget {
           () {
             final i = orgInfo(b);
             final sel = selected == b;
+            // "Plain but colored": the org's icon + label ALWAYS carry its color; selecting just
+            // deepens the tint + border (the icon never turns white). (#org-colors)
             return FilterChip(
               label: Text(i.label),
-              avatar: Icon(i.icon, size: 16, color: sel ? Colors.white : i.color),
+              avatar: Icon(i.icon, size: 16, color: i.color),
               selected: sel,
               showCheckmark: false,
-              selectedColor: i.color,
+              backgroundColor: i.color.withValues(alpha: 0.08),
+              selectedColor: i.color.withValues(alpha: 0.22),
               labelStyle: TextStyle(
-                  color: sel ? Colors.white : null, fontWeight: FontWeight.w500),
-              side: BorderSide(color: i.color.withValues(alpha: sel ? 1 : 0.45)),
+                  color: i.color, fontWeight: sel ? FontWeight.w700 : FontWeight.w500),
+              side: BorderSide(color: i.color.withValues(alpha: sel ? 0.9 : 0.4)),
               onSelected: (_) => onSelect(b),
             );
           }(),
