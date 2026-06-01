@@ -30,6 +30,12 @@ jobs:
         run: ./gradlew :app:testDebugUnitTest --no-daemon
       - name: Assemble debug APK
         working-directory: native/android
+        # Inject real config (anon key is RLS-safe; broker enables Church login) so the artifact is a
+        # working build, not the config-error screen. Empty values still build a valid APK.
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          BROKER_URL: ${{ secrets.BROKER_URL }}
         run: ./gradlew :app:assembleDebug --no-daemon
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
