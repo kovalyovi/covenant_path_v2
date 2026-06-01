@@ -1,5 +1,6 @@
 package org.membercovenantpath.viewer.ui.screens
 
+import org.membercovenantpath.viewer.ui.AppBiometric
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize

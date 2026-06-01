@@ -12,7 +12,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 
 /**
- * Passwordless passkey (WebAuthn) login + registration, against the broker's /webauthn/* routes —
+ * Passwordless passkey (WebAuthn) login + registration, against the broker's /webauthn  routes —
  * the native analog of passkey_client.dart. The broker returns standard WebAuthn options JSON,
  * which Android's Credential Manager consumes directly (GetPublicKeyCredentialOption /
  * CreatePublicKeyCredentialRequest), and returns the credential JSON the broker's /complete expects.
