@@ -19,7 +19,7 @@ import 'settings_page.dart';
 import 'widgets/shimmer.dart';
 
 part 'views/dashboard_shell.dart';
-part 'views/upcoming_view.dart';
+part 'views/baptisms_view.dart';
 part 'views/golden_hour_view.dart';
 part 'views/needs_view.dart';
 part 'views/kpis_view.dart';
@@ -27,7 +27,7 @@ part 'views/table_view.dart';
 part 'views/dashboard_common.dart';
 
 /// RLS-scoped dashboard. Four tabs mirroring the reference iOS app (+ our spreadsheet):
-///  • Upcoming    — prospective baptisms (people being taught), by planned baptism date.
+///  • Baptisms    — prospective baptisms (people being taught), by planned baptism date.
 ///  • Golden Hour — Being Taught + New-Member integration milestones (recency-filtered).
 ///  • KPIs        — stake metrics as line-chart cards.
 ///  • Table       — every covenant-path field, color-coded like the master sheet.
