@@ -6,10 +6,12 @@ class Milestone {
   final String label; // full name (detail + accessibility)
   final String abbr;  // chip label (1-2 chars)
   final IconData icon; // category icon (Needs tabs, summaries)
+  final Color color;   // category identity color (Needs category pills + section-card icon)
   final bool Function(Map<String, dynamic>) complete;
   final bool Function(Map<String, dynamic>) eligible; // who this milestone can apply to
   const Milestone(this.label, this.abbr, this.complete,
-      {this.eligible = _everyone, this.icon = Icons.flag_outlined});
+      {this.eligible = _everyone, this.icon = Icons.flag_outlined,
+      this.color = const Color(0xFF5E35B1)});
 }
 
 bool _everyone(Map<String, dynamic> m) => true;
@@ -73,18 +75,22 @@ bool _male(Map<String, dynamic> m) => m['sex'] == 'M';
 // actually apply to (age / sex / tenure) so completion stats don't penalize the ineligible.
 // Baptism is intentionally NOT a milestone; the longer-horizon ordinances live on the detail page.
 final milestones = <Milestone>[
-  Milestone('Friends', 'F', (m) => m['friends'] == 'Yes', icon: Icons.handshake_outlined), // everyone
+  Milestone('Friends', 'F', (m) => m['friends'] == 'Yes',
+      icon: Icons.handshake_outlined, color: const Color(0xFFD81B60)), // pink · everyone
   Milestone('Calling', 'C', (m) => m['calling'] == 'Yes',
-      eligible: (m) => _turnsAtLeast(m, 12), icon: Icons.badge_outlined),
+      eligible: (m) => _turnsAtLeast(m, 12), icon: Icons.badge_outlined,
+      color: const Color(0xFF6A1B9A)), // purple
   Milestone('Has ministers', 'M', (m) => m['ministering_brothers_sisters'] == 'Yes',
-      icon: Icons.support_agent), // everyone
+      icon: Icons.support_agent, color: const Color(0xFF00838F)), // cyan · everyone
   Milestone('Ministering assignment', 'MA', (m) => m['ministering_assignment'] == 'Yes',
-      eligible: (m) => _turnsAtLeast(m, 14), icon: Icons.volunteer_activism), // gives ministering: 14+
+      eligible: (m) => _turnsAtLeast(m, 14), icon: Icons.volunteer_activism,
+      color: const Color(0xFFEF6C00)), // orange · gives ministering: 14+
   Milestone('Aaronic Priesthood', 'AP', (m) => m['aaronic_priesthood'] == 'Yes',
-      eligible: (m) => _male(m) && _turnsAtLeast(m, 12), icon: Icons.military_tech_outlined),
+      eligible: (m) => _male(m) && _turnsAtLeast(m, 12), icon: Icons.military_tech_outlined,
+      color: const Color(0xFF1565C0)), // blue
   Milestone('Melchizedek Priesthood', 'MP', (m) => m['melchizedek_priesthood'] == 'Yes',
       eligible: (m) => _male(m) && _ageNowAtLeast(m, 18) && _memberOneYearPlus(m),
-      icon: Icons.workspace_premium_outlined),
+      icon: Icons.workspace_premium_outlined, color: const Color(0xFF2E7D32)), // green
 ];
 
 List<Milestone> milestonesFor(Map<String, dynamic> m) =>
