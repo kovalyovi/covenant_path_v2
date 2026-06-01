@@ -1,0 +1,21 @@
+// Build configuration for the Covenant Path iOS app target.
+//
+// 1. Copy this file to `Config.xcconfig` (which should be gitignored — never commit real keys).
+// 2. In Xcode, set the app target's build configuration to use `Config.xcconfig`
+//    (Project → Info → Configurations → set Debug/Release to this file), OR add it via
+//    "Add files to project" and select it under the configuration.
+// 3. The Info.plist references these via $(SUPABASE_URL) / $(SUPABASE_ANON_KEY) so they reach the
+//    app bundle, where `AppConfig` reads them.
+//
+// The anon/publishable key is SAFE to ship in a client (Row-Level Security does all access gating),
+// but we still keep it out of source control via this untracked xcconfig.
+
+// Your Supabase project URL, e.g. https://abcdefgh.supabase.co
+// NOTE: xcconfig treats `//` as a comment even inside values, so the scheme's slashes must be
+// escaped by splitting the variable — the simplest workaround is to store only the host and
+// prepend https:// in code, OR use the $() trick below. Here we store the full URL using the
+// documented escape: write it as SUPABASE_URL = https:/$()/your-ref.supabase.co
+SUPABASE_URL = https:/$()/YOUR-REF.supabase.co
+
+// Your Supabase anon (publishable) key.
+SUPABASE_ANON_KEY = YOUR_SUPABASE_ANON_KEY

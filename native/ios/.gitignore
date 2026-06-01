@@ -1,0 +1,11 @@
+# Real Supabase config — NEVER commit. Only the .example template is tracked.
+App/Config.xcconfig
+
+# Xcode / SwiftPM build artifacts
+.build/
+.swiftpm/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+Package.resolved
