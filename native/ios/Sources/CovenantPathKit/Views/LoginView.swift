@@ -127,9 +127,10 @@ struct LoginView: View {
                 .textFieldStyle(.roundedBorder)
             HStack(alignment: .top, spacing: 6) {
                 Image(systemName: "arrow.triangle.2.circlepath").font(.caption).foregroundStyle(.tint)
-                Text("Signing in keeps your stake synced: your Church session is stored encrypted "
-                     + "(never your password) so the data refreshes daily. You can pause this anytime "
-                     + "in Settings → Sync settings.")
+                Text("Your stake syncs through one connected leader's Church session — whichever has "
+                     + "the most access. Signing in connects yours only if your stake has no equal-or-better "
+                     + "link yet; if so it's stored encrypted (never your password) to refresh data daily. "
+                     + "Pause or revoke anytime in Settings → Sync settings.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             primaryButton("Sign in") { await session.churchSignIn(username: username, password: password) }

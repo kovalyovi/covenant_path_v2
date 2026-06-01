@@ -103,7 +103,8 @@ object Disclaimer {
     const val LONG = "Covenant Path is an independent tool built by ILYA Kovalyov to help leaders track new and " +
         "prospective members' covenant path. It is NOT an official product of The Church of Jesus Christ of " +
         "Latter-day Saints."
-    const val PRIVACY = "Sign in with your Church (LCR) account is used to retrieve your stake's data on your behalf. " +
-        "Your session is stored encrypted — your password is never stored — access is scoped to your calling, and " +
-        "you can revoke it at any time."
+    const val PRIVACY = "You only ever see the data your calling allows. Your stake's data is gathered through one " +
+        "connected leader's Church (LCR) session — the one with the most access — so your Church login is used for " +
+        "syncing only when your stake has no equal-or-better connection yet. Stored sessions are encrypted (never " +
+        "your password) and you can revoke access anytime in Settings."
 }

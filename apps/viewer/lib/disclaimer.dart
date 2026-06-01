@@ -10,9 +10,10 @@ const kDisclaimerLong =
     "Christ of Latter-day Saints.";
 
 const kPrivacyNote =
-    "Sign in with your Church (LCR) account is used to retrieve your stake's data on your behalf. "
-    "Your session is stored encrypted — your password is never stored — access is scoped to your "
-    "calling, and you can revoke it at any time.";
+    "You only ever see the data your calling allows. Your stake's data is gathered through one "
+    "connected leader's Church (LCR) session — the one with the most access — so your Church login "
+    "is used for syncing only when your stake has no equal-or-better connection yet. Stored sessions "
+    "are encrypted (never your password) and you can revoke access anytime in Settings.";
 
 /// Small grey footer line for the bottom of a page.
 class DisclaimerFooter extends StatelessWidget {

@@ -291,9 +291,10 @@ class _LoginPageState extends State<LoginPage> {
         const SizedBox(width: 6),
         Expanded(
           child: Text(
-              'Signing in keeps your stake synced: your Church session is stored encrypted '
-              '(never your password) so the data refreshes daily. You can pause this anytime in '
-              'Settings → Sync settings.',
+              'Your stake syncs through one connected leader\'s Church session — whichever has the '
+              'most access. Signing in connects yours only if your stake has no equal-or-better link '
+              'yet; if so it\'s stored encrypted (never your password) to refresh data daily. Pause '
+              'or revoke anytime in Settings → Sync settings.',
               style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
         ),
       ]),
