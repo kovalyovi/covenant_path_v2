@@ -34,7 +34,7 @@ class MembersRepository(
     /** All stakes the signed-in user may see (RLS-scoped), freshest first. */
     suspend fun loadStakes(): List<Stake> {
         val stakes = client.postgrest.from("stakes")
-            .select(Columns.raw("id, name, unit_number, last_synced_at, sync_state, sync_started_at, missionaries"))
+            .select(Columns.raw("id, name, unit_number, last_synced_at, sync_state, sync_started_at, missionaries, sheets_enabled"))
             .decodeList<Stake>()
         return stakes.sortedByDescending { it.lastSyncedAt ?: "" }
     }
@@ -42,6 +42,14 @@ class MembersRepository(
     /** Whether the signed-in user is an app_admin (server RPC `is_admin`). False on any error. */
     suspend fun isAdmin(): Boolean =
         runCatching { client.postgrest.rpc("is_admin").decodeAs<Boolean>() }.getOrDefault(false)
+
+    /** #5b: a stake leader toggles Google-Sheet generation for their stake (RPC enforces the role). */
+    suspend fun setStakeSheetsEnabled(stakeId: String, enabled: Boolean) {
+        client.postgrest.rpc("set_stake_sheets_enabled", kotlinx.serialization.json.buildJsonObject {
+            put("p_stake_id", kotlinx.serialization.json.JsonPrimitive(stakeId))
+            put("p_enabled", kotlinx.serialization.json.JsonPrimitive(enabled))
+        })
+    }
 
     /** Members for ONE stake, ordered by unit_name then name (matches the Flutter select). */
     suspend fun loadMembers(stakeId: String): List<Member> =

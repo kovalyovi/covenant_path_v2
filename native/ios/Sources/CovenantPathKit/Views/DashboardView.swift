@@ -201,7 +201,8 @@ struct DashboardView: View {
         case .admin:
             AdminView()
         case .settings:
-            SettingsView(onSignOut: { Task { await session.signOut() } })
+            SettingsView(onSignOut: { Task { await session.signOut() } },
+                         stakeID: store.currentStake?.id, sheetsEnabled: store.currentStake?.sheetsEnabled ?? false)
         }
     }
 

@@ -66,6 +66,9 @@ fun SettingsScreen(
     email: String,
     onBack: () -> Unit,
     onSignOut: () -> Unit,
+    stakeId: String? = null,            // #5b Google Sheets toggle (null → hide)
+    sheetsEnabled: Boolean = false,
+    onToggleSheets: (Boolean) -> Unit = {},
 ) {
     val theme by themeVm.theme.collectAsStateWithLifecycle()
     val lockOn by lockVm.enabled.collectAsStateWithLifecycle()
@@ -165,6 +168,26 @@ fun SettingsScreen(
             }
             item { HorizontalDivider() }
 
+            if (stakeId != null) {
+                item { HorizontalDivider() }
+                item { Header("Google Sheets") }
+                item {
+                    var sheetsOn by remember(sheetsEnabled) { mutableStateOf(sheetsEnabled) }
+                    ListItem(
+                        leadingContent = { Icon(Icons.Outlined.Info, contentDescription = null) },
+                        headlineContent = { Text("Generate Google Sheets for this stake") },
+                        supportingContent = {
+                            Text("Creates a stake master sheet + a sheet per ward in the authorized " +
+                                "leader’s Drive, shared read-only with the relevant leaders & " +
+                                "missionaries and refreshed each sync. Off by default — the same " +
+                                "data is always in this app.")
+                        },
+                        trailingContent = {
+                            Switch(checked = sheetsOn, onCheckedChange = { sheetsOn = it; onToggleSheets(it) })
+                        },
+                    )
+                }
+            }
             item { Header("About") }
             item {
                 ListItem(

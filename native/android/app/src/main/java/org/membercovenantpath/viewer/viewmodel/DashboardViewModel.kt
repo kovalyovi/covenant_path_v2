@@ -221,6 +221,21 @@ class DashboardViewModel(
 
     fun signOutToReenroll(signOut: () -> Unit) = signOut()
 
+    /** #5b: a stake leader toggles Google-Sheet generation; reflect it locally on success. */
+    fun setSheetsEnabled(stakeId: String?, enabled: Boolean, onResult: (Boolean) -> Unit = {}) {
+        if (stakeId == null) return
+        viewModelScope.launch {
+            runCatching { repo.setStakeSheetsEnabled(stakeId, enabled) }
+                .onSuccess {
+                    _state.update { s -> s.copy(stakes = s.stakes.map {
+                        if (it.id == stakeId) it.copy(sheetsEnabled = enabled) else it
+                    }) }
+                    onResult(true)
+                }
+                .onFailure { onResult(false) }
+        }
+    }
+
     /**
      * One-time, dismissible passkey upsell (#25): the first time the user reaches the app — and only
      * where passkeys work (broker configured) — suggest adding one. Remembered so we never nag.

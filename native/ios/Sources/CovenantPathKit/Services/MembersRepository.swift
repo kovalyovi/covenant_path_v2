@@ -26,7 +26,7 @@ public struct SupabaseMembersRepository: MembersRepository {
     public func stakes() async throws -> [Stake] {
         let rows: [Stake] = try await client
             .from("stakes")
-            .select("id, name, unit_number, last_synced_at, sync_state, sync_started_at, missionaries")
+            .select("id, name, unit_number, last_synced_at, sync_state, sync_started_at, missionaries, sheets_enabled")
             .execute()
             .value
         // Freshest stake first, so an unset default lands on the most recent scrape (matches the

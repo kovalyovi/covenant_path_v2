@@ -100,7 +100,15 @@ public struct SupabaseGatewayImpl: SupabaseGateway {
     public func revokeAdmin(email: String) async throws {
         try await client.rpc("revoke_admin", params: EmailParam(p_email: email)).execute()
     }
+
+    /// #5b: a stake leader toggles Google-Sheet generation for their stake (the RPC enforces the role).
+    public func setStakeSheetsEnabled(stakeID: String, enabled: Bool) async throws {
+        try await client.rpc("set_stake_sheets_enabled",
+                             params: SheetsToggleParam(p_stake_id: stakeID, p_enabled: enabled)).execute()
+    }
 }
+
+private struct SheetsToggleParam: Encodable { let p_stake_id: String; let p_enabled: Bool }
 
 // MARK: - RPC param payloads (Encodable so supabase-swift can serialize them)
 

@@ -123,6 +123,9 @@ private fun SignedInNav(
                 email = AuthViewModelEmail(),
                 onBack = { nav.popBackStack() },
                 onSignOut = { onSignOut() },
+                stakeId = state.currentStakeId,
+                sheetsEnabled = state.currentStake?.sheetsEnabled ?: false,
+                onToggleSheets = { dashVm.setSheetsEnabled(state.currentStakeId, it) },
             )
         }
         composable(Routes.INVITE) { InviteScreen(onBack = { nav.popBackStack() }) }

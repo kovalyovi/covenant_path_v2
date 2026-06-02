@@ -9,6 +9,8 @@ struct SettingsView: View {
     @Environment(\.appServices) private var services
     @Environment(ThemeController.self) private var theme
     let onSignOut: () -> Void
+    var stakeID: String? = nil       // #5b Google Sheets toggle (nil → hide the section)
+    var sheetsEnabled: Bool = false
 
     @State private var lockAvailable = false
     @State private var lockOn = false
@@ -25,6 +27,9 @@ struct SettingsView: View {
         return PasskeyService(broker: services.broker, rpID: services.passkeyRPID).available
     }
     @State private var resolvedEmail = "—"
+    @State private var sheetsOn = false       // #5b Google Sheets toggle
+    @State private var sheetsBusy = false
+    @State private var sheetsError: String?
 
     /// #4 Rules & definitions — plain-language summary (full reference: docs/RULES.md). Mirrors the
     /// Flutter `showRulesDialog` content; kept in sync across surfaces.
@@ -111,6 +116,33 @@ struct SettingsView: View {
                     if let supportToast { Text(supportToast).font(.caption).foregroundStyle(.secondary) }
                 }
 
+                if let stakeID {
+                    Section("Google Sheets") {
+                        Toggle(isOn: Binding(get: { sheetsOn }, set: { newVal in
+                            sheetsOn = newVal
+                            sheetsBusy = true
+                            sheetsError = nil
+                            Task {
+                                do {
+                                    try await services?.gateway.setStakeSheetsEnabled(stakeID: stakeID, enabled: newVal)
+                                } catch {
+                                    sheetsOn = !newVal
+                                    sheetsError = "Only a stake leader can change this."
+                                }
+                                sheetsBusy = false
+                            }
+                        })) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Generate Google Sheets for this stake")
+                                Text("Creates a stake master sheet + a sheet per ward in the authorized leader's Drive, shared read-only with the relevant leaders & missionaries and refreshed each sync. Off by default — the same data is always in this app.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .disabled(sheetsBusy)
+                        if let sheetsError { Text(sheetsError).font(.caption).foregroundStyle(.red) }
+                    }
+                }
+
                 Section("About") {
                     Button { aboutShown = true } label: {
                         Label("About & privacy", systemImage: "info.circle")
@@ -136,6 +168,7 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .onAppear { sheetsOn = sheetsEnabled }
             .task { await checkLock() }
             .task { resolvedEmail = (await services?.auth.currentEmail) ?? "—" }
             .alert("About & privacy", isPresented: $aboutShown) {

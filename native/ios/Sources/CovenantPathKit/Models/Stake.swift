@@ -11,6 +11,7 @@ public struct Stake: Codable, Identifiable, Hashable, Sendable {
     public let syncState: String?
     public let syncStartedAt: String?
     public let missionaries: [String: [Missionary]]?
+    public let sheetsEnabled: Bool   // #5b: whether per-stake Google Sheets are generated this run
 
     public enum CodingKeys: String, CodingKey {
         case id, name
@@ -19,14 +20,15 @@ public struct Stake: Codable, Identifiable, Hashable, Sendable {
         case syncState = "sync_state"
         case syncStartedAt = "sync_started_at"
         case missionaries
+        case sheetsEnabled = "sheets_enabled"
     }
 
     public init(id: String, name: String? = nil, unitNumber: String? = nil,
                 lastSyncedAt: String? = nil, syncState: String? = nil, syncStartedAt: String? = nil,
-                missionaries: [String: [Missionary]]? = nil) {
+                missionaries: [String: [Missionary]]? = nil, sheetsEnabled: Bool = false) {
         self.id = id; self.name = name; self.unitNumber = unitNumber
         self.lastSyncedAt = lastSyncedAt; self.syncState = syncState; self.syncStartedAt = syncStartedAt
-        self.missionaries = missionaries
+        self.missionaries = missionaries; self.sheetsEnabled = sheetsEnabled
     }
 
     public init(from decoder: Decoder) throws {
@@ -41,6 +43,7 @@ public struct Stake: Codable, Identifiable, Hashable, Sendable {
         // missionaries may be null or an object; decode tolerantly so a malformed map never blocks
         // the stake from loading (the missionary strip is decorative).
         missionaries = (try? c.decodeIfPresent([String: [Missionary]].self, forKey: .missionaries)) ?? nil
+        sheetsEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .sheetsEnabled)) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -52,6 +55,7 @@ public struct Stake: Codable, Identifiable, Hashable, Sendable {
         try c.encodeIfPresent(syncState, forKey: .syncState)
         try c.encodeIfPresent(syncStartedAt, forKey: .syncStartedAt)
         try c.encodeIfPresent(missionaries, forKey: .missionaries)
+        try c.encode(sheetsEnabled, forKey: .sheetsEnabled)
     }
 
     /// True if a scrape is currently running and started recently (<30 min) — guards a crashed run

@@ -17,6 +17,7 @@ data class Stake(
     @SerialName("sync_state") val syncState: String? = null,
     @SerialName("sync_started_at") val syncStartedAt: String? = null,
     @SerialName("missionaries") val missionaries: JsonElement? = null,
+    @SerialName("sheets_enabled") val sheetsEnabled: Boolean = false, // #5b Google Sheets toggle
 )
 
 @Serializable
