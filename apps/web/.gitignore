@@ -9,6 +9,9 @@ dist-ssr
 coverage
 *.local
 
+# TypeScript incremental build cache
+*.tsbuildinfo
+
 # Env — never commit real secrets
 .env
 .env.*
