@@ -153,7 +153,30 @@ object Kpis {
             prev = prev.map { (sets[it.first]?.size ?: 0).toDouble() },
         )
         val events = raw.mapNotNull { (m, dt, key) -> idxOf[key]?.let { KpiEvent(m, dt, it) } }
-        return KpiMetric(series, events)
+        return trimEmptyBuckets(series, events)
+    }
+
+    /**
+     * N9: trim leading AND trailing all-zero buckets so a short/sparse history shows just its data
+     * span (e.g. 5 weeks, or 2 months → 2 points) instead of a long run of padded 0s. Interior gaps
+     * stay; all-zero (no data) → empty series so the chart shows its empty state. Mirrors
+     * `_trimEmptyBuckets` in dashboard_common.dart exactly (prev overlay cut to the same indices).
+     */
+    private fun trimEmptyBuckets(s: KpiSeries, events: List<KpiEvent>): KpiMetric {
+        val first = s.current.indexOfFirst { it > 0 }
+        if (first < 0) return KpiMetric(KpiSeries(emptyList(), emptyList(), emptyList()), emptyList())
+        val last = s.current.indexOfLast { it > 0 }
+        if (first == 0 && last == s.current.size - 1) return KpiMetric(s, events)
+        fun cut(xs: List<Double>): List<Double> =
+            if (first < xs.size) xs.subList(first, (last + 1).coerceIn(first, xs.size)).toList() else emptyList()
+        return KpiMetric(
+            KpiSeries(
+                labels = s.labels.subList(first, last + 1).toList(),
+                current = s.current.subList(first, last + 1).toList(),
+                prev = cut(s.prev),
+            ),
+            events.filter { it.bucket in first..last }.map { KpiEvent(it.member, it.date, it.bucket - first) },
+        )
     }
 
     /** Sundays this person was marked present at sacrament (details.sacrament[].attended==true). */
@@ -272,6 +295,19 @@ object Kpis {
         var bc = 0.0
         for (i in counts.indices) if (counts[i] > bc) { bc = counts[i]; bi = i }
         val bestLabel = if (bi >= 0) MMMM_Y.format(LocalDate.of(keys[bi] / 100, keys[bi] % 100, 1)) else null
-        return BaptismsByMonth(labels, counts.toList(), events, bestLabel, bc.toInt(), counts.sum().toInt())
+        val total = counts.sum().toInt()
+        // N9: trim leading & trailing empty months — show just the data span, not padded 0s. (Total &
+        // best are over the full in-window range, but trimmed buckets are all 0, so they're unchanged.)
+        val first = counts.indexOfFirst { it > 0 }
+        if (first < 0) return BaptismsByMonth(emptyList(), emptyList(), emptyList(), null, 0, 0)
+        val last = counts.indexOfLast { it > 0 }
+        return BaptismsByMonth(
+            labels.subList(first, last + 1).toList(),
+            counts.toList().subList(first, last + 1).toList(),
+            events.filter { it.bucket in first..last }.map { KpiEvent(it.member, it.date, it.bucket - first) },
+            bestLabel,
+            bc.toInt(),
+            total,
+        )
     }
 }

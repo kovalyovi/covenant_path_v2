@@ -25,7 +25,12 @@ class KpisTest {
     }
 
     @Test fun monthWindowHasFiveWeeklyBuckets() {
-        val m = Kpis.metricData(emptyList(), { Kpis.attendedDates(it) }, KpiPeriod.MONTH, today)
+        // Data in the first (4 weeks ago) AND last (this week) bucket so the N9 trim keeps all 5.
+        val people = listOf(
+            memberWithSacrament("first", today.minusDays(28).toString()),
+            memberWithSacrament("last", today.toString()),
+        )
+        val m = Kpis.metricData(people, { Kpis.attendedDates(it) }, KpiPeriod.MONTH, today)
         assertEquals(5, m.series.labels.size)
         assertEquals(5, m.series.current.size)
         // previous-window overlay is also 5 buckets
@@ -33,10 +38,34 @@ class KpisTest {
     }
 
     @Test fun yearWindowHasTwelveMonthlyBuckets() {
-        val m = Kpis.metricData(emptyList(), { Kpis.attendedDates(it) }, KpiPeriod.YEAR, today)
+        // First (Jul 2025) AND current (Jun 2026) month populated → trim keeps the full 12 buckets.
+        val people = listOf(
+            memberWithSacrament("first", today.minusMonths(11).toString()),
+            memberWithSacrament("last", today.toString()),
+        )
+        val m = Kpis.metricData(people, { Kpis.attendedDates(it) }, KpiPeriod.YEAR, today)
         assertEquals(12, m.series.labels.size)
         // ends on the current month
         assertEquals("Jun", m.series.labels.last())
+    }
+
+    @Test fun emptyWindowCollapsesToEmptySeries() {
+        // N9: no data → no padded-0 buckets (so the chart shows its empty state, not a flat line).
+        val month = Kpis.metricData(emptyList(), { Kpis.attendedDates(it) }, KpiPeriod.MONTH, today)
+        assertTrue(month.series.labels.isEmpty())
+        assertTrue(month.series.current.isEmpty())
+        assertTrue(month.events.isEmpty())
+        val year = Kpis.metricData(emptyList(), { Kpis.attendedDates(it) }, KpiPeriod.YEAR, today)
+        assertTrue(year.series.labels.isEmpty())
+    }
+
+    @Test fun trimsToDataSpanWhenLeadingMonthsEmpty() {
+        // Only the current week has data → MONTH collapses to that single bucket (not 5 with four 0s).
+        val people = listOf(memberWithSacrament("p1", today.toString()))
+        val m = Kpis.metricData(people, { Kpis.attendedDates(it) }, KpiPeriod.MONTH, today)
+        assertEquals(1, m.series.labels.size)
+        assertEquals(1.0, m.series.current.last(), 1e-9)
+        assertEquals(0, m.events.first().bucket) // event rebucketed to the trimmed index
     }
 
     @Test fun uniquePeoplePerBucketCountedOnce() {
@@ -90,6 +119,20 @@ class KpisTest {
         assertEquals(1, Kpis.lessonsWithMember(listOf(m)))
         assertEquals(1, Kpis.membersWithMemberLessons(listOf(m)).size)
         assertEquals(1, Kpis.membersWithMemberLessons(listOf(m)).first().count)
+    }
+
+    @Test fun baptismsByMonthTrimsToSpan() {
+        // Two baptisms three months apart inside a 12-month window → 4 contiguous months (Mar…Jun),
+        // not the full 12 with leading 0s. Total still reflects the data; events rebucket to the span.
+        val people = listOf(
+            Member(personUuid = "a", baptismDate = "2026-03-15", unitName = "A"),
+            Member(personUuid = "b", baptismDate = "2026-06-01", unitName = "A"),
+        )
+        val r = Kpis.baptismsByMonth(people, BaptismWindow.M12, today)
+        assertEquals(listOf("Mar", "Apr", "May", "Jun"), r.labels)
+        assertEquals(listOf(1.0, 0.0, 0.0, 1.0), r.counts)
+        assertEquals(2, r.total)
+        assertEquals(listOf(0, 3), r.events.map { it.bucket }.sorted())
     }
 
     @Test fun periodRangeLabelOnlyForMonthAndYear() {

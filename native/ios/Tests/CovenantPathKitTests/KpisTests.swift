@@ -54,23 +54,60 @@ final class KpisTests: XCTestCase {
     // MARK: - metricData bucketing
 
     func testMonthSeriesHasFiveWeeklyBuckets() {
-        let now = Date()
-        let iso = isoDaysAgo(3)
-        let m = member(uuid: "m1", sacramentDates: [iso])
-        let (series, events) = Kpis.metricData([m], datesOf: Kpis.attendedDates, period: .month, now: now)
+        let now = fixedMonday
+        // Populate the FIRST (4 weeks ago) AND LAST (this week) bucket so the N9 trim keeps all 5.
+        let first = member(uuid: "first", sacramentDates: [ymdStr(daysBefore(28, now))])
+        let last = member(uuid: "last", sacramentDates: [ymdStr(now)])
+        let (series, events) = Kpis.metricData([first, last], datesOf: Kpis.attendedDates, period: .month, now: now)
         XCTAssertEqual(series.labels.count, 5)            // 5 weeks
         XCTAssertEqual(series.current.count, 5)
-        // The recent attendance lands in the last (current) bucket.
-        XCTAssertEqual(series.current.last, 1)
-        XCTAssertEqual(events.count, 1)
-        XCTAssertEqual(events.first?.bucket, 4)
+        XCTAssertEqual(series.current.last, 1)            // this week
+        XCTAssertEqual(series.current.first, 1)           // 4 weeks ago
+        XCTAssertEqual(events.count, 2)
     }
 
     func testYearSeriesHasTwelveMonthlyBuckets() {
-        let m = member(uuid: "m2", sacramentDates: [isoDaysAgo(2)])
-        let (series, _) = Kpis.metricData([m], datesOf: Kpis.attendedDates, period: .year)
+        let now = fixedMonday
+        // First (11 months ago) AND current month populated → trim keeps the full 12 buckets.
+        let first = member(uuid: "first", sacramentDates: [ymdStr(monthsBefore(11, now))])
+        let last = member(uuid: "last", sacramentDates: [ymdStr(now)])
+        let (series, _) = Kpis.metricData([first, last], datesOf: Kpis.attendedDates, period: .year, now: now)
         XCTAssertEqual(series.labels.count, 12)
         XCTAssertEqual(series.current.last, 1)           // this month
+    }
+
+    // MARK: - N9: no 0-padding — collapse/trim to the data span
+
+    func testEmptyWindowCollapsesToEmptySeries() {
+        // No data → no padded-0 buckets (the chart shows its empty state, not a flat zero line).
+        let none = member(uuid: "none")
+        let (month, mEvents) = Kpis.metricData([none], datesOf: Kpis.attendedDates, period: .month, now: fixedMonday)
+        XCTAssertTrue(month.isEmpty)
+        XCTAssertTrue(mEvents.isEmpty)
+        let (year, _) = Kpis.metricData([none], datesOf: Kpis.attendedDates, period: .year, now: fixedMonday)
+        XCTAssertTrue(year.labels.isEmpty)
+    }
+
+    func testTrimsToDataSpanWhenLeadingBucketsEmpty() {
+        // Only this week has data → MONTH collapses to that single bucket (not 5, four of them 0).
+        let m = member(uuid: "m1", sacramentDates: [ymdStr(fixedMonday)])
+        let (series, events) = Kpis.metricData([m], datesOf: Kpis.attendedDates, period: .month, now: fixedMonday)
+        XCTAssertEqual(series.labels.count, 1)
+        XCTAssertEqual(series.current.last, 1)
+        XCTAssertEqual(events.first?.bucket, 0)           // event rebucketed to the trimmed index
+    }
+
+    func testBaptismsByMonthTrimsToSpan() {
+        // Two baptisms three months apart inside a 12-month window → 4 contiguous months (Mar…Jun),
+        // not the full 12 with leading 0s. Best month + total still reflect the data.
+        let now = fixedMonday // 2026-06-01
+        let a = Member(personUUID: "a", unitName: "A", baptismDate: "2026-03-15", kind: "convert")
+        let b = Member(personUUID: "b", unitName: "A", baptismDate: "2026-06-01", kind: "convert")
+        let r = Kpis.baptismsByMonth([a, b], window: .m12, now: now)
+        XCTAssertEqual(r.labels, ["Mar", "Apr", "May", "Jun"])
+        XCTAssertEqual(r.counts, [1, 0, 0, 1])
+        XCTAssertEqual(r.total, 2)
+        XCTAssertEqual(r.events.map { $0.bucket }.sorted(), [0, 3]) // rebucketed to the trimmed range
     }
 
     func testUniquePeoplePerBucketCountedOnce() {
@@ -120,6 +157,17 @@ final class KpisTests: XCTestCase {
         let c = Calendar.current.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", c.year!, c.month!, c.day!)
     }
+    /// A fixed Monday (2026-06-01) so the weekly/monthly windows are deterministic (N9 trim tests).
+    private var fixedMonday: Date {
+        var c = DateComponents(); c.year = 2026; c.month = 6; c.day = 1
+        return Calendar.current.date(from: c)!
+    }
+    private func ymdStr(_ d: Date) -> String {
+        let c = Calendar.current.dateComponents([.year, .month, .day], from: d)
+        return String(format: "%04d-%02d-%02d", c.year!, c.month!, c.day!)
+    }
+    private func daysBefore(_ n: Int, _ d: Date) -> Date { Calendar.current.date(byAdding: .day, value: -n, to: d)! }
+    private func monthsBefore(_ n: Int, _ d: Date) -> Date { Calendar.current.date(byAdding: .month, value: -n, to: d)! }
     private func iso(_ d: Date) -> String {
         let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]
         return f.string(from: d)

@@ -224,7 +224,29 @@ public enum Kpis {
         for r in raw {
             if let i = idxOf[r.2] { events.append(KpiEvent(member: r.0, date: r.1, bucket: i)) }
         }
-        return (series, events)
+        return trimEmptyBuckets(series, events)
+    }
+
+    /// N9: trim leading AND trailing all-zero buckets so a short/sparse history shows just its data
+    /// span (e.g. 5 weeks, or 2 months → 2 points) instead of a long run of padded 0s. Interior gaps
+    /// stay; all-zero (no data) → empty series so the chart shows its empty state. Mirrors
+    /// `_trimEmptyBuckets` in dashboard_common.dart (the prev overlay is cut to the same indices).
+    static func trimEmptyBuckets(_ s: KpiSeries, _ events: [KpiEvent]) -> (series: KpiSeries, events: [KpiEvent]) {
+        guard let first = s.current.firstIndex(where: { $0 > 0 }) else { return (KpiSeries(), []) }
+        let last = s.current.lastIndex(where: { $0 > 0 })!
+        if first == 0 && last == s.current.count - 1 { return (s, events) }
+        func cut(_ xs: [Double]) -> [Double] {
+            first < xs.count ? Array(xs[first..<min(last + 1, xs.count)]) : []
+        }
+        let trimmed = KpiSeries(
+            labels: Array(s.labels[first...last]),
+            current: Array(s.current[first...last]),
+            prev: cut(s.prev)
+        )
+        let evs = events.compactMap { e -> KpiEvent? in
+            (e.bucket >= first && e.bucket <= last) ? KpiEvent(member: e.member, date: e.date, bucket: e.bucket - first) : nil
+        }
+        return (trimmed, evs)
     }
 
     // MARK: - date extractors (ports of _attendedDates / _firstLessonDate)
@@ -332,8 +354,18 @@ public enum Kpis {
         var bc = 0.0
         for i in counts.indices where counts[i] > bc { bc = counts[i]; bi = i }
         let bestLabel: String? = bi >= 0 ? fullMonth(monthDate(year: keys[bi] / 100, month: keys[bi] % 100)) : nil
-        return BaptismsByMonth(labels: labels, counts: counts, events: events,
-                               bestLabel: bestLabel, bestCount: Int(bc), total: Int(counts.reduce(0, +)))
+        let total = Int(counts.reduce(0, +))
+        // N9: trim leading & trailing empty months — show just the data span, not padded 0s. (Total &
+        // best span the full in-window range, but trimmed buckets are all 0, so they're unchanged.)
+        guard let first = counts.firstIndex(where: { $0 > 0 }) else {
+            return BaptismsByMonth(labels: [], counts: [], events: [], bestLabel: nil, bestCount: 0, total: 0)
+        }
+        let last = counts.lastIndex(where: { $0 > 0 })!
+        let evs = events.compactMap { e -> KpiEvent? in
+            (e.bucket >= first && e.bucket <= last) ? KpiEvent(member: e.member, date: e.date, bucket: e.bucket - first) : nil
+        }
+        return BaptismsByMonth(labels: Array(labels[first...last]), counts: Array(counts[first...last]), events: evs,
+                               bestLabel: bestLabel, bestCount: Int(bc), total: total)
     }
 
     // MARK: - label formatters (match Dart's DateFormat usage)
