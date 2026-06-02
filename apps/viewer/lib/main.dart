@@ -3,11 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'biometric_gate.dart';
 import 'config.dart';
-import 'dashboard_page.dart';
 import 'error_reporter.dart';
-import 'login_page.dart';
+import 'router.dart';
 import 'theme/app_theme.dart';
 
 Future<void> main() async {
@@ -55,7 +53,7 @@ class ViewerApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return ValueListenableBuilder<ThemeMode>(
       valueListenable: themeController,
-      builder: (context, mode, _) => MaterialApp(
+      builder: (context, mode, _) => MaterialApp.router(
         title: 'Covenant Path',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light,
@@ -64,27 +62,8 @@ class ViewerApp extends StatelessWidget {
         // Make all text selectable app-wide (text fields manage their own selection and are
         // excluded automatically); taps/buttons still work inside a SelectionArea.
         builder: (context, child) => SelectionArea(child: child ?? const SizedBox.shrink()),
-        home: const AuthGate(),
+        routerConfig: appRouter,
       ),
-    );
-  }
-}
-
-/// Shows the login page until there's a session, then the dashboard. RLS scopes
-/// everything the dashboard reads to the signed-in user's calling.
-class AuthGate extends StatelessWidget {
-  const AuthGate({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<AuthState>(
-      stream: supabase.auth.onAuthStateChange,
-      builder: (context, _) {
-        final session = supabase.auth.currentSession;
-        return session == null
-            ? const LoginPage()
-            : const BiometricGate(child: DashboardPage());
-      },
     );
   }
 }

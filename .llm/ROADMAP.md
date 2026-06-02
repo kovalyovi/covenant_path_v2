@@ -59,7 +59,9 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done. Surfaces: **F**=Flutter,
   start. **F/iOS/A**
 
 ## Phase 3 — large backend rework
-- [ ] **#5** Spreadsheet access overhaul: per-ward sheets (ward-only data); calling-based
+- [~] **#5** Core DONE (rules + revocation + notify + Unicode + N7-filter + live audit); **per-ward
+  file isolation remaining** (needs an OAuth-Drive sheet per ward — the SA can't create files, 0
+  storage). Spreadsheet access overhaul: per-ward sheets (ward-only data); calling-based
   recipients (stake presidency/clerks/secretaries/assistants → global; ward bishopric +
   EQ/RS presidency + WML + assigned missionaries → ward sheet); **re-eval + revocation every
   run** (lost calling, lost feature access, missionary rotation); Unicode sheet names;
@@ -69,11 +71,18 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done. Surfaces: **F**=Flutter,
   **be/docs/small UI**
 
 ## Phase 4 — gated live ops (after user verification)
-- [ ] **#5-live** Present computed per-sheet recipient lists → on user OK: strip non-owner
-  viewers / delete + recreate `1rCkwLZ6HV8qRFJJFfxgWDiUWWc0ZeoyRPcvQOYPl4EE`, apply correct
-  access, enable share notifications. **Irreversible — never run unprompted.**
+- [x] **#5-live** ✓ Audited all 3 Covenant Path sheets via Drive (incl. `1rCkwLZ6…` = the Raleigh
+  NC Stake sheet): **all owner-only — nothing over-shared to strip.** The wrong sharing was in the
+  *code* (now fixed: reconcile + correct recipients + notify, green-lit). Correct access applies on
+  the next sync; the two stray 1 KB `covenant_path` test sheets are also owner-only.
 
 ## Phase 5 — React web rebuild (after everything above)
+- [x] **RT** ✓ Flutter `go_router` + `SentryNavigatorObserver` (per-route performance) — `redirect`
+  auth gate replaces AuthGate; routes `/login` + `/` (dashboard shell). Verified `flutter build web`.
+  **Route map R1 mirrors with React Router v7:** `/login`; `/` dashboard shell with tabs
+  `/baptisms` · `/golden-hour` · `/needs` · `/kpis` · `/table`; `/person/:id`; `/settings`;
+  `/invite`; `/admin`. (Flutter navigates the secondary screens via imperative push today; React
+  should route them all.)
 - [ ] **R1** Rebuild the **web** UI in **React** in a new folder (`apps/web/`), **WEB-ONLY**, with
   **100% parity** (UI + functionality + scalability) to the Flutter web app, to modern web best
   practices (a11y / semantic HTML / responsive) and best React practices. Reads Supabase directly

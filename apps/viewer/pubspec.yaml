@@ -4,7 +4,7 @@ publish_to: 'none'
 version: 0.1.0
 
 environment:
-  sdk: '>=3.3.0 <4.0.0'
+  sdk: '>=3.4.0 <4.0.0'
 
 dependencies:
   flutter:
@@ -14,6 +14,7 @@ dependencies:
   http: ^1.2.0          # calls the Church-login auth broker (backend/auth_broker)
   fl_chart: ^0.69.0     # KPI line charts (iOS-app-style graphs)
   url_launcher: ^6.3.2
+  go_router: ^14.0.0          # app routing + URL contract the React web app mirrors (RT); Sentry observer tracks per-route perf
   local_auth: ^3.0.1          # native biometric app-lock (Face ID / fingerprint / Hello)
   web: ^1.1.0                 # WebAuthn platform-authenticator lock on web (biometric_web.dart)
   shared_preferences: ^2.5.5
