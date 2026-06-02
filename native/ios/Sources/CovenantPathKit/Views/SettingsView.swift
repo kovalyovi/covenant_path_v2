@@ -59,111 +59,12 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Appearance") {
-                    Button {
-                        theme.cycle()
-                    } label: {
-                        HStack {
-                            Label("Theme", systemImage: "circle.lefthalf.filled")
-                            Spacer()
-                            Text(theme.mode.label).foregroundStyle(.secondary)
-                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
-                        }
-                    }
-                    .tint(.primary)
-                }
-
-                Section("Security") {
-                    if passkeyAvailable {
-                        Button {
-                            Task { await addPasskey() }
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Label("Add a passkey", systemImage: "key")
-                                Text("Recommended — sign in with your face, fingerprint, or PIN instead of a password")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                        .tint(.primary)
-                    }
-                    if lockAvailable {
-                        Toggle(isOn: Binding(get: { lockOn }, set: { toggleLock($0) })) {
-                            Label {
-                                VStack(alignment: .leading) {
-                                    Text("App lock")
-                                    Text("Require biometrics to open the app")
-                                        .font(.caption).foregroundStyle(.secondary)
-                                }
-                            } icon: { Image(systemName: "faceid") }
-                        }
-                    }
-                    if !passkeyAvailable && !lockAvailable {
-                        Label("No extra security options on this device", systemImage: "lock")
-                            .foregroundStyle(.secondary)
-                    }
-                    if let m = passkeyMessage {
-                        Text(m).font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-
-                Section("Support") {
-                    Button { supportSheet = .contact } label: {
-                        Label("Contact support", systemImage: "bubble.left.and.bubble.right")
-                    }.tint(.primary)
-                    Button { supportSheet = .feedback } label: {
-                        Label("Send feedback", systemImage: "exclamationmark.bubble")
-                    }.tint(.primary)
-                    if let supportToast { Text(supportToast).font(.caption).foregroundStyle(.secondary) }
-                }
-
-                if let stakeID {
-                    Section("Google Sheets") {
-                        Toggle(isOn: Binding(get: { sheetsOn }, set: { newVal in
-                            sheetsOn = newVal
-                            sheetsBusy = true
-                            sheetsError = nil
-                            Task {
-                                do {
-                                    try await services?.gateway.setStakeSheetsEnabled(stakeID: stakeID, enabled: newVal)
-                                } catch {
-                                    sheetsOn = !newVal
-                                    sheetsError = "Only a stake leader can change this."
-                                }
-                                sheetsBusy = false
-                            }
-                        })) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Generate Google Sheets for this stake")
-                                Text("Creates a stake master sheet + a sheet per ward in the authorized leader's Drive, shared read-only with the relevant leaders & missionaries and refreshed each sync. Off by default — the same data is always in this app.")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                        .disabled(sheetsBusy)
-                        if let sheetsError { Text(sheetsError).font(.caption).foregroundStyle(.red) }
-                    }
-                }
-
-                Section("About") {
-                    Button { aboutShown = true } label: {
-                        Label("About & privacy", systemImage: "info.circle")
-                    }.tint(.primary)
-                    Button { rulesShown = true } label: {
-                        Label("Rules & definitions", systemImage: "list.bullet.rectangle")
-                    }.tint(.primary)
-                }
-
-                Section("Account") {
-                    LabeledContent {
-                        Text(resolvedEmail).foregroundStyle(.secondary)
-                    } label: {
-                        Label("Signed in as", systemImage: "person.crop.circle")
-                    }
-                    Button(role: .destructive) {
-                        dismiss(); onSignOut()
-                    } label: {
-                        Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
-                    }
-                }
+                appearanceSection
+                securitySection
+                supportSection
+                sheetsSection
+                aboutSection
+                accountSection
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -176,30 +77,7 @@ struct SettingsView: View {
             } message: {
                 Text(Disclaimer.long + "\n\nPrivacy\n" + Disclaimer.privacy)
             }
-            .sheet(isPresented: $rulesShown) {
-                NavigationStack {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 16) {
-                            ForEach(Self.rulesSections, id: \.0) { section in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(section.0).font(.headline)
-                                    ForEach(section.1, id: \.self) { p in
-                                        HStack(alignment: .top, spacing: 6) {
-                                            Text("•").foregroundStyle(.secondary)
-                                            Text(p).font(.callout)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding()
-                    }
-                    .navigationTitle("Rules & definitions")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { rulesShown = false } } }
-                }
-            }
+            .sheet(isPresented: $rulesShown) { rulesSheet }
             .sheet(item: $supportSheet) { kind in
                 Group {
                     switch kind {
@@ -209,6 +87,155 @@ struct SettingsView: View {
                 }
                 .environment(\.appServices, services)
             }
+        }
+    }
+
+    // MARK: - sections (extracted so the Form body type-checks quickly — Swift was timing out on
+    // the single large `body` expression once the Google Sheets toggle was added.)
+
+    @ViewBuilder private var appearanceSection: some View {
+        Section("Appearance") {
+            Button {
+                theme.cycle()
+            } label: {
+                HStack {
+                    Label("Theme", systemImage: "circle.lefthalf.filled")
+                    Spacer()
+                    Text(theme.mode.label).foregroundStyle(.secondary)
+                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                }
+            }
+            .tint(.primary)
+        }
+    }
+
+    @ViewBuilder private var securitySection: some View {
+        Section("Security") {
+            if passkeyAvailable {
+                Button {
+                    Task { await addPasskey() }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label("Add a passkey", systemImage: "key")
+                        Text("Recommended — sign in with your face, fingerprint, or PIN instead of a password")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .tint(.primary)
+            }
+            if lockAvailable {
+                Toggle(isOn: Binding(get: { lockOn }, set: { toggleLock($0) })) {
+                    Label {
+                        VStack(alignment: .leading) {
+                            Text("App lock")
+                            Text("Require biometrics to open the app")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    } icon: { Image(systemName: "faceid") }
+                }
+            }
+            if !passkeyAvailable && !lockAvailable {
+                Label("No extra security options on this device", systemImage: "lock")
+                    .foregroundStyle(.secondary)
+            }
+            if let m = passkeyMessage {
+                Text(m).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder private var supportSection: some View {
+        Section("Support") {
+            Button { supportSheet = .contact } label: {
+                Label("Contact support", systemImage: "bubble.left.and.bubble.right")
+            }.tint(.primary)
+            Button { supportSheet = .feedback } label: {
+                Label("Send feedback", systemImage: "exclamationmark.bubble")
+            }.tint(.primary)
+            if let supportToast { Text(supportToast).font(.caption).foregroundStyle(.secondary) }
+        }
+    }
+
+    @ViewBuilder private var sheetsSection: some View {
+        if let stakeID {
+            Section("Google Sheets") {
+                Toggle(isOn: Binding(get: { sheetsOn }, set: { setSheets($0, stakeID: stakeID) })) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Generate Google Sheets for this stake")
+                        Text("Creates a stake master sheet + a sheet per ward in the authorized leader's Drive, shared read-only with the relevant leaders & missionaries and refreshed each sync. Off by default — the same data is always in this app.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(sheetsBusy)
+                if let sheetsError { Text(sheetsError).font(.caption).foregroundStyle(.red) }
+            }
+        }
+    }
+
+    @ViewBuilder private var aboutSection: some View {
+        Section("About") {
+            Button { aboutShown = true } label: {
+                Label("About & privacy", systemImage: "info.circle")
+            }.tint(.primary)
+            Button { rulesShown = true } label: {
+                Label("Rules & definitions", systemImage: "list.bullet.rectangle")
+            }.tint(.primary)
+        }
+    }
+
+    @ViewBuilder private var accountSection: some View {
+        Section("Account") {
+            LabeledContent {
+                Text(resolvedEmail).foregroundStyle(.secondary)
+            } label: {
+                Label("Signed in as", systemImage: "person.crop.circle")
+            }
+            Button(role: .destructive) {
+                dismiss(); onSignOut()
+            } label: {
+                Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
+            }
+        }
+    }
+
+    @ViewBuilder private var rulesSheet: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    ForEach(Self.rulesSections, id: \.0) { section in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(section.0).font(.headline)
+                            ForEach(section.1, id: \.self) { p in
+                                HStack(alignment: .top, spacing: 6) {
+                                    Text("•").foregroundStyle(.secondary)
+                                    Text(p).font(.callout)
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+            }
+            .navigationTitle("Rules & definitions")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { rulesShown = false } } }
+        }
+    }
+
+    /// #5b toggle handler — extracted from the Binding so the Section type-checks fast.
+    private func setSheets(_ newVal: Bool, stakeID: String) {
+        sheetsOn = newVal
+        sheetsBusy = true
+        sheetsError = nil
+        Task {
+            do {
+                try await services?.gateway.setStakeSheetsEnabled(stakeID: stakeID, enabled: newVal)
+            } catch {
+                sheetsOn = !newVal
+                sheetsError = "Only a stake leader can change this."
+            }
+            sheetsBusy = false
         }
     }
 
