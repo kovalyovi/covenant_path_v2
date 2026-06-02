@@ -508,7 +508,27 @@ class _Ev {
     for (final r in raw)
       if (idxOf.containsKey(r.$3)) _Ev(r.$1, r.$2, idxOf[r.$3]!),
   ];
-  return (series: series, events: events);
+  return _trimEmptyBuckets(series, events);
+}
+
+/// N9: trim leading AND trailing all-zero buckets so a short/sparse history shows just its data
+/// span (e.g. 5 weeks, or 2 months → 2 points) instead of a long run of padded 0s. Interior gaps
+/// stay; all-zero (no data) → empty series so the chart shows its empty state.
+({_Series series, List<_Ev> events}) _trimEmptyBuckets(_Series s, List<_Ev> events) {
+  final first = s.current.indexWhere((v) => v > 0);
+  if (first < 0) return (series: (labels: [], current: [], prev: []), events: []);
+  final last = s.current.lastIndexWhere((v) => v > 0);
+  if (first == 0 && last == s.current.length - 1) return (series: s, events: events);
+  List<double> cut(List<double> xs) =>
+      first < xs.length ? xs.sublist(first, (last + 1).clamp(first, xs.length)) : const <double>[];
+  return (
+    series: (
+      labels: s.labels.sublist(first, last + 1),
+      current: s.current.sublist(first, last + 1),
+      prev: cut(s.prev),
+    ),
+    events: [for (final e in events) if (e.bucket >= first && e.bucket <= last) _Ev(e.m, e.date, e.bucket - first)],
+  );
 }
 
 /// Sundays this person was marked present at sacrament.
@@ -594,13 +614,21 @@ enum _BWindow { ytd, m12, m24, all }
       bi = i;
     }
   }
+  final bestLabel = bi >= 0 ? DateFormat('MMMM y').format(DateTime(keys[bi] ~/ 100, keys[bi] % 100)) : null;
+  final total = counts.fold<double>(0, (a, b) => a + b).round();
+  // N9: trim leading & trailing empty months — show just the data span, not padded 0s.
+  final first = counts.indexWhere((v) => v > 0);
+  if (first < 0) {
+    return (labels: <String>[], counts: <double>[], events: <_Ev>[], bestLabel: null, bestCount: 0, total: 0);
+  }
+  final last = counts.lastIndexWhere((v) => v > 0);
   return (
-    labels: labels,
-    counts: counts,
-    events: events,
-    bestLabel: bi >= 0 ? DateFormat('MMMM y').format(DateTime(keys[bi] ~/ 100, keys[bi] % 100)) : null,
+    labels: labels.sublist(first, last + 1),
+    counts: counts.sublist(first, last + 1),
+    events: [for (final e in events) if (e.bucket >= first && e.bucket <= last) _Ev(e.m, e.date, e.bucket - first)],
+    bestLabel: bestLabel,
     bestCount: bc.round(),
-    total: counts.fold<double>(0, (a, b) => a + b).round(),
+    total: total,
   );
 }
 
