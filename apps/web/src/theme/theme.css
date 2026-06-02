@@ -1,0 +1,162 @@
+/* Covenant Path web — design system. Material-3-inspired (indigo seed) light + dark, mirroring the
+   Flutter app's ColorScheme.fromSeed(Colors.indigo). Tokens drive every component; flip
+   [data-theme] on <html> to switch. Spacing/radii mirror apps/viewer/lib/theme/tokens.dart. */
+
+:root {
+  /* Light scheme (indigo seed) */
+  --primary: #4554b8;
+  --on-primary: #ffffff;
+  --primary-container: #dfe0ff;
+  --on-primary-container: #00105c;
+  --secondary-container: #e1e0f9;
+  --on-secondary-container: #191a2c;
+  --surface: #fbf8ff;
+  --surface-container: #f0eef7;
+  --surface-container-high: #eae7f1;
+  --surface-container-highest: #e4e1ec;
+  --on-surface: #1b1b21;
+  --on-surface-variant: #46464f;
+  --outline: #777680;
+  --outline-variant: #c8c5d0;
+  --error: #ba1a1a;
+  --on-error: #ffffff;
+  --scrim: rgba(0, 0, 0, 0.4);
+
+  /* Status (semantic) */
+  --success: #2e7d32;
+  --success-fg: #43a047;
+  --warning: #ef6c00;
+  --info: #1e88e5;
+  --danger: #e53935;
+
+  /* Spacing scale (mirrors AppSpacing) */
+  --xs: 4px;
+  --sm: 8px;
+  --md: 12px;
+  --lg: 16px;
+  --xl: 24px;
+  --xxl: 32px;
+
+  /* Radii (mirrors AppRadius) */
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-card: 16px;
+  --radius-pill: 20px;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.06);
+
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --primary: #bcc2ff;
+  --on-primary: #1b2678;
+  --primary-container: #333e90;
+  --on-primary-container: #dfe0ff;
+  --secondary-container: #3e3e52;
+  --on-secondary-container: #e1e0f9;
+  --surface: #131318;
+  --surface-container: #1f1f25;
+  --surface-container-high: #2a2930;
+  --surface-container-highest: #35343b;
+  --on-surface: #e4e1e9;
+  --on-surface-variant: #c8c5d0;
+  --outline: #918f9a;
+  --outline-variant: #46464f;
+  --error: #ffb4ab;
+  --on-error: #690005;
+  --scrim: rgba(0, 0, 0, 0.6);
+
+  --success: #81c784;
+  --success-fg: #66bb6a;
+  --warning: #ffb74d;
+  --info: #64b5f6;
+  --danger: #ef9a9a;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', 'Segoe UI', Roboto, system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  background: var(--surface);
+  color: var(--on-surface);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  line-height: 1.4;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+figure {
+  margin: 0;
+}
+
+a {
+  color: var(--primary);
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+/* Visible, consistent focus ring for keyboard users (a11y). */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Respect reduced-motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Screen-reader-only utility. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Skip link for keyboard nav. */
+.skip-link {
+  position: absolute;
+  left: var(--sm);
+  top: -48px;
+  z-index: 100;
+  background: var(--primary);
+  color: var(--on-primary);
+  padding: var(--sm) var(--md);
+  border-radius: var(--radius-md);
+  transition: top 0.15s ease;
+}
+.skip-link:focus {
+  top: var(--sm);
+}
