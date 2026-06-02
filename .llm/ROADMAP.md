@@ -61,8 +61,8 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done. Surfaces: **F**=Flutter,
 ## Phase 3 — large backend rework
 - [x] **#5/#5b** DONE: rules (+ High Council) · revocation + notify · Unicode · N7-filter · live
   audit · **per-ward sheets** (SA-created, ward-only data + recipients, reconciled) · **opt-in
-  Settings toggle** (default OFF + consent copy; `set_stake_sheets_enabled` RPC). Flutter toggle
-  done; iOS/Android toggle parity in progress. Original scope: per-ward sheets (ward-only data); calling-based
+  Settings toggle** (default OFF + consent copy; `set_stake_sheets_enabled` RPC) on **F/iOS/A**.
+  Original scope: per-ward sheets (ward-only data); calling-based
   recipients (stake presidency/clerks/secretaries/assistants → global; ward bishopric +
   EQ/RS presidency + WML + assigned missionaries → ward sheet); **re-eval + revocation every
   run** (lost calling, lost feature access, missionary rotation); Unicode sheet names;
@@ -76,6 +76,17 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done. Surfaces: **F**=Flutter,
   NC Stake sheet): **all owner-only — nothing over-shared to strip.** The wrong sharing was in the
   *code* (now fixed: reconcile + correct recipients + notify, green-lit). Correct access applies on
   the next sync; the two stray 1 KB `covenant_path` test sheets are also owner-only.
+
+## Phase 4b — polish (later feedback, 2026-06-01)
+- [x] **N8** ✓ Content-shaped skeletons that match the real layout **and styles** — Golden Hour
+  (section toggle · org filter chips · window selector · "Golden Hour completion" card of % stats ·
+  per-unit grid) and KPIs/Baptisms (header · period selector · chart cards w/ window selector + two
+  big stats + 170px chart + caption · Overview grid). Per-tab skeleton chosen in the loading state;
+  list tabs keep the member-row skeleton. Shared `SkelCard` mirrors `SectionCard`. **F/iOS/A**
+- [x] **N9** ✓ KPI charts no longer 0-pad: trim leading **and** trailing empty buckets so a short
+  history shows just its data span (5 weeks → 5 points; 2 months → 2 points; no data → empty state,
+  not a flat zero line). `metricData` + `baptismsByMonth`, events re-bucketed; prev overlay cut to
+  the same indices. **F/iOS/A** (+ native KPI tests updated/added).
 
 ## Phase 5 — React web rebuild (after everything above)
 - [x] **RT** ✓ Flutter `go_router` + `SentryNavigatorObserver` (per-route performance) — `redirect`
