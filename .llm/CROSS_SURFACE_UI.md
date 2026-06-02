@@ -12,8 +12,11 @@ hand-written native ports that must mirror it feature-for-feature.
 | **Flutter** (reference impl) | `apps/viewer/lib/` | Dart / Flutter | web · iOS · macOS · Android |
 | **Native iOS** | `native/ios/` | Swift / SwiftUI (`CovenantPathKit`) | iOS |
 | **Native Android** | `native/android/` | Kotlin / Jetpack Compose | Android |
+| **React web** (web rebuild) | `apps/web/` | Vite + React + TypeScript | web |
 
-So a UI change is **three edits**: `apps/viewer/lib` → `native/ios` → `native/android`.
+So a UI change is **four edits**: `apps/viewer/lib` → `native/ios` → `native/android` → `apps/web`.
+(`apps/web` is the standalone React rebuild of the **web** UI — keep web-facing changes in parity
+there too. It reads Supabase + the broker exactly like Flutter; web-only, so no iOS/macOS concerns.)
 
 ## What counts as "UI-facing"
 
@@ -49,6 +52,8 @@ Authoritative parity trackers — **update these when you add/change a feature**
 - **iOS**: SwiftUI; compiles via the CI workflow (`.github/workflows/*ios*`).
 - **Android**: APK builds via CI (Supabase/broker config injected as **secrets, not vars**);
   verify on the **Pixel_10 AVD** by signing in with a Gmail OTP. See `native/android/README.md`.
+- **React web**: `cd apps/web` → `npm run typecheck` (0 errors) + `npm run lint` (ESLint + jsx-a11y,
+  0 errors) + `npm run test` (vitest) + `npm run build` (clean). See `apps/web/README.md`.
 
 ## Workflow for any UI change
 

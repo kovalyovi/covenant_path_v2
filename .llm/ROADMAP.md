@@ -95,12 +95,17 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done. Surfaces: **F**=Flutter,
   `/baptisms` · `/golden-hour` · `/needs` · `/kpis` · `/table`; `/person/:id`; `/settings`;
   `/invite`; `/admin`. (Flutter navigates the secondary screens via imperative push today; React
   should route them all.)
-- [ ] **R1** Rebuild the **web** UI in **React** in a new folder (`apps/web/`), **WEB-ONLY**, with
-  **100% parity** (UI + functionality + scalability) to the Flutter web app, to modern web best
-  practices (a11y / semantic HTML / responsive) and best React practices. Reads Supabase directly
-  + the broker exactly like today. Done fully autonomously in one pass.
-  _Stack (best-judgment, revisit at build time): Vite + React + TypeScript + React Router +
-  `@supabase/supabase-js` + TanStack Query; charts via Recharts; accessible component primitives._
+- [x] **R1** ✓ Rebuilt the **web** UI in **React** at `apps/web/` (Vite + React + TypeScript +
+  React Router v7 + `@supabase/supabase-js`; charts via Recharts, lazy-loaded). Full parity: 3-mode
+  login (Church+MFA / email code / passkey) with the #6 wording + N2 block + N5 warm-up; the 5 tabs
+  incl. #1/#2 baptisms-by-month + #3 friends count; N7 investigator filtering; N3 sync poll; rich
+  detail + notes; #4 Rules; power-user invites; admin/ops; N1 OG/SEO. All secondary screens are
+  **routed** (`/person/:id` · `/settings` · `/invite` · `/admin`), code-split KPIs+Admin, a11y-first
+  (semantic HTML, ARIA, focus-trapped modals, skip link, reduced-motion). Built by a background agent
+  in a worktree; **cherry-picked onto `main`** (6 commits, `apps/web/` only — linear tree, no merge).
+  Verified on `main`: typecheck 0 · ESLint+jsx-a11y 0 · 28/28 vitest · `npm run build` clean.
+  _Intentional web gaps:_ biometric **app-lock** not ported (web-inappropriate; passwordless **passkey
+  login** is); Recharts pinned to 2.x (lazy-loaded). `apps/web/.gitignore` covers node_modules/dist/.env.
 
 ## Git / workflow rule (locked)
 - **Always `main`, never branch** — one repo, one commit tree, push every change to `origin/main`.
