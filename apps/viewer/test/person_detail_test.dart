@@ -58,7 +58,7 @@ void main() {
     expect(find.text('Member for 3 months'), findsOneWidget);
     expect(find.text('Attended Sacrament Meeting'), findsOneWidget);
     expect(find.text('2 sacrament meetings missed'), findsOneWidget);
-    expect(find.text('Friends in the Church'), findsOneWidget);
+    expect(find.textContaining('Friends in the Church'), findsOneWidget); // now "… · N" with the count (#3)
     expect(find.text('Clayton Adam Blater'), findsOneWidget);
     expect(find.text('Not yet been given a calling.'), findsOneWidget);
     expect(find.text('Ministering Brothers & Sisters'), findsOneWidget);
