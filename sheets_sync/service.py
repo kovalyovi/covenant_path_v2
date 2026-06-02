@@ -62,12 +62,17 @@ def _service_account_file() -> str:
     )
 
 
+def _clean_emails(viewer_emails: list[str]) -> set[str]:
+    return {e.strip().lower() for e in viewer_emails if e and "@" in e}
+
+
 def create_and_share_spreadsheet(title: str, viewer_emails: list[str],
-                                 service_account_file: str | None = None) -> str:
-    """Create a NEW spreadsheet for one stake and share it READ-ONLY with the given emails (the
-    stake's leadership + onboarder). Returns the new spreadsheet id. Best-effort sharing — a bad
-    email is skipped. Requires the Drive API enabled on the GCP project (else raises; the caller
-    degrades gracefully)."""
+                                 service_account_file: str | None = None,
+                                 notify: bool = True) -> str:
+    """Create a NEW spreadsheet (title may contain non-English characters — the Sheets API stores
+    UTF-8 titles verbatim) and share it READ-ONLY with the given emails. `notify` sends Google's
+    "shared with you" email (#5 — on once who-can-see is verified). Returns the new spreadsheet id.
+    Best-effort sharing. Requires the Drive API enabled (else raises; the caller degrades)."""
     creds = Credentials.from_service_account_file(
         service_account_file or _service_account_file(), scopes=CREATE_SCOPES)
     sheets = build("sheets", "v4", credentials=creds)
@@ -76,10 +81,10 @@ def create_and_share_spreadsheet(title: str, viewer_emails: list[str],
         body={"properties": {"title": title},
               "sheets": [{"properties": {"title": DEFAULT_SHEET}}]}).execute()
     sid = ss["spreadsheetId"]
-    for em in {e.strip().lower() for e in viewer_emails if e and "@" in e}:
+    for em in _clean_emails(viewer_emails):
         try:
             drive.permissions().create(
-                fileId=sid, sendNotificationEmail=False,
+                fileId=sid, sendNotificationEmail=notify,
                 body={"type": "user", "role": "reader", "emailAddress": em}).execute()
         except Exception:  # noqa: BLE001 — one bad address shouldn't block the rest
             pass
@@ -87,18 +92,70 @@ def create_and_share_spreadsheet(title: str, viewer_emails: list[str],
 
 
 def share_spreadsheet(spreadsheet_id: str, viewer_emails: list[str],
-                      service_account_file: str | None = None) -> None:
+                      service_account_file: str | None = None, notify: bool = True) -> None:
     """Add read-only viewers to an existing (app-created) spreadsheet. Idempotent per email."""
     creds = Credentials.from_service_account_file(
         service_account_file or _service_account_file(), scopes=CREATE_SCOPES)
     drive = build("drive", "v3", credentials=creds)
-    for em in {e.strip().lower() for e in viewer_emails if e and "@" in e}:
+    for em in _clean_emails(viewer_emails):
         try:
             drive.permissions().create(
-                fileId=spreadsheet_id, sendNotificationEmail=False,
+                fileId=spreadsheet_id, sendNotificationEmail=notify,
                 body={"type": "user", "role": "reader", "emailAddress": em}).execute()
         except Exception:  # noqa: BLE001
             pass
+
+
+def reconcile_viewers(spreadsheet_id: str, target_emails, service_account_file: str | None = None,
+                      notify: bool = True) -> dict:
+    """#5: make the file's user viewers EXACTLY `target_emails` (read-only) — add the missing
+    (optionally with a notification email) and REMOVE everyone no longer entitled. Never removes
+    the file's owner or the service account itself. Recomputed every sync, so released leaders /
+    rotated missionaries / callings that lost access drop off automatically. Best-effort per email;
+    requires the SA to manage the file's permissions (true for app/SA-created sheets).
+
+    Returns {added, removed, kept}."""
+    creds = Credentials.from_service_account_file(
+        service_account_file or _service_account_file(), scopes=CREATE_SCOPES)
+    drive = build("drive", "v3", credentials=creds)
+    sa_email = (getattr(creds, "service_account_email", "") or "").lower()
+    targets = _clean_emails(list(target_emails))
+
+    have: dict[str, dict] = {}
+    page = None
+    while True:
+        resp = drive.permissions().list(
+            fileId=spreadsheet_id,
+            fields="permissions(id,emailAddress,role,type),nextPageToken",
+            pageToken=page).execute()
+        for p in resp.get("permissions", []):
+            em = (p.get("emailAddress") or "").lower()
+            if p.get("type") == "user" and em:
+                have[em] = p
+        page = resp.get("nextPageToken")
+        if not page:
+            break
+
+    added = removed = 0
+    for em in targets - have.keys():
+        try:
+            drive.permissions().create(
+                fileId=spreadsheet_id, sendNotificationEmail=notify,
+                body={"type": "user", "role": "reader", "emailAddress": em}).execute()
+            added += 1
+        except Exception:  # noqa: BLE001
+            pass
+    for em, p in have.items():
+        if em in targets or em == sa_email or p.get("role") == "owner":
+            continue
+        try:
+            drive.permissions().delete(fileId=spreadsheet_id, permissionId=p["id"]).execute()
+            removed += 1
+        except Exception:  # noqa: BLE001
+            pass
+    logger.info("reconciled viewers on %s: +%d -%d (=%d target)", spreadsheet_id, added, removed,
+                len(targets))
+    return {"added": added, "removed": removed, "kept": len(targets) - added}
 
 
 class SheetsSync:

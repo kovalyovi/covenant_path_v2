@@ -84,7 +84,10 @@ def _sync_one(args) -> dict:
         else:
             # preserve_units keeps failed units' existing rows (Sheets is a full-replace);
             # Supabase upserts are non-destructive so stale rows simply persist there.
-            summary = SheetsSync(sheet_id).sync(dicts, preserve_units=failed_units)
+            # N7: the spreadsheet is a master list → omit investigators (not yet baptized); they're
+            # tracked in-app under Being-Taught, not in the flat sheet.
+            sheet_rows = [d for d in dicts if d.get("kind") != "investigator"]
+            summary = SheetsSync(sheet_id).sync(sheet_rows, preserve_units=failed_units)
             result["sheets"] = summary
             logger.info("sheets[%s]: %s", sheet_id, summary)
     if args.supabase:
@@ -162,12 +165,32 @@ def _resolve_stake_sheet(client, args) -> str:
             gdrive_token = row[3] if row else None
             gdrive_file_id = row[4] if row else None
             with conn.cursor() as cur:
-                cur.execute("select distinct lower(email) from user_roles "
-                            "where stake_id=%s and email is not null", (stake_id,))
-                emails = {r[0] for r in cur.fetchall()}
+                # #5: compute sheet recipients from CURRENT callings (not "anyone with a role"): the
+                # stake sheet (all units' data) goes only to stake-level leadership. Recomputed every
+                # run, so a released leader / rotated missionary / calling that lost access drops off
+                # (reconcile_viewers removes them below).
+                cur.execute("""select lower(ur.email), ur.calling_name, ur.role, ur.unit_id, u.name
+                               from user_roles ur left join units u on u.id = ur.unit_id
+                               where ur.stake_id=%s and ur.email is not null""", (stake_id,))
+                role_rows = [{"email": r[0], "calling_name": r[1], "role": r[2],
+                              "unit_id": r[3], "unit_name": r[4]} for r in cur.fetchall()]
                 cur.execute("select lower(principal_email) from stake_credentials "
                             "where stake_id=%s and principal_email is not null", (stake_id,))
-                emails |= {r[0] for r in cur.fetchall()}
+                provider_emails = {r[0] for r in cur.fetchall()}
+                cur.execute("select missionaries from stakes where id=%s", (stake_id,))
+                mrow = cur.fetchone()
+            from backend import sheet_access
+            recipients = sheet_access.compute_recipients(
+                role_rows, mrow[0] if mrow and mrow[0] else {})
+            # The stake sheet holds ALL units' data. Full per-ward ISOLATION needs a separate sheet
+            # per ward in the stake's OAuth Drive (the service account can't create files — 0 storage,
+            # the documented M7 reason); that's the next step. For now share the stake sheet with all
+            # sheet-eligible leadership (stake + ward + assigned missionaries) — NOT the old "anyone
+            # with any role" — so nobody loses access, and reconcile_viewers still REVOKES anyone no
+            # longer eligible (released leaders, rotated missionaries, ward clerks who used to slip in).
+            emails = set(recipients["stake"]) | provider_emails
+            for _ward_emails in recipients["wards"].values():
+                emails |= _ward_emails
             # M7: a stake that connected Google Drive OWNS its sheet in the leader's Drive — the
             # service account can't create files (0 storage), so OAuth provides the create + the SA
             # (shared in) writes the data. Takes precedence over the service-account/master paths.
@@ -203,15 +226,17 @@ def _resolve_stake_sheet(client, args) -> str:
                         conn.rollback()
             if not sid:
                 sid = sheets_service.create_and_share_spreadsheet(
-                    f"Covenant Path — {ctx.unit_name}", sorted(emails))
+                    f"Covenant Path — {ctx.unit_name}", sorted(emails), notify=True)
                 with conn.cursor() as cur:
                     cur.execute("update stakes set spreadsheet_id=%s, spreadsheet_shared=%s where id=%s",
                                 (sid, sorted(emails), stake_id))
                 conn.commit()
                 logger.info("created per-stake spreadsheet for %s (%s): %s",
                             ctx.unit_name, ctx.unit_number, sid)
-            elif emails - shared:
-                sheets_service.share_spreadsheet(sid, sorted(emails - shared))
+            elif set(emails) != shared:
+                # #5: reconcile to EXACTLY the current stake recipients — add new leaders (notified),
+                # REMOVE released ones (replaces the old add-only share, which never revoked).
+                sheets_service.reconcile_viewers(sid, emails, notify=True)
                 with conn.cursor() as cur:
                     cur.execute("update stakes set spreadsheet_shared=%s where id=%s",
                                 (sorted(emails), stake_id))
