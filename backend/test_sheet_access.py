@@ -21,7 +21,9 @@ def main() -> int:
               "Stake Assistant Clerk", "Stake Executive Secretary",
               "Stake Assistant Executive Secretary"]:
         ok &= _check(f"stake-sheet: {c!r}", is_stake_sheet_calling(c))
-    for c in ["High Councilor", "Bishop", "Elders Quorum President", "", None]:
+    for c in ["High Councilor", "High Council"]:  # stake-wide stewardship → master + all wards
+        ok &= _check(f"stake-sheet: {c!r}", is_stake_sheet_calling(c))
+    for c in ["Bishop", "Elders Quorum President", "Ward Clerk", "", None]:
         ok &= _check(f"NOT stake-sheet: {c!r}", not is_stake_sheet_calling(c))
 
     # --- ward-sheet callings ---
@@ -48,13 +50,13 @@ def main() -> int:
             "Ward Z (unmatched)": [{"email": "stray@x.org"}]}
     r = compute_recipients(roles, miss)
 
-    ok &= _check("stake = president + clerk (lowercased), no HC",
-                 r["stake"] == {"prezstake@x.org", "sclerk@x.org"})
-    ok &= _check("ward A = bishop+EQ+missionary + stake (no ward clerk)",
+    ok &= _check("stake = president + clerk + High Council",
+                 r["stake"] == {"prezstake@x.org", "sclerk@x.org", "hc@x.org"})
+    ok &= _check("ward A = bishop+EQ+missionary + stake (incl HC; no ward clerk)",
                  r["wards"]["wA"] == {"bishopa@x.org", "eqa@x.org", "eldersmith@missionary.org",
-                                      "prezstake@x.org", "sclerk@x.org"})
-    ok &= _check("ward B = bishop + stake (RS pres had no email)",
-                 r["wards"]["wB"] == {"bishopb@x.org", "prezstake@x.org", "sclerk@x.org"})
+                                      "prezstake@x.org", "sclerk@x.org", "hc@x.org"})
+    ok &= _check("ward B = bishop + stake (incl HC; RS pres had no email)",
+                 r["wards"]["wB"] == {"bishopb@x.org", "prezstake@x.org", "sclerk@x.org", "hc@x.org"})
     ok &= _check("unmatched missionary unit is ignored",
                  all("stray@x.org" not in s for s in r["wards"].values()))
     ok &= _check("ward names mapped", r["ward_names"].get("wA") == "Ward A")

@@ -8,13 +8,14 @@ roster) on every sync, so a released leader / rotated missionary / calling that 
 dropped automatically (just don't appear in the fresh recipient set → reconcile removes them).
 
 Recipient lists (per the access policy):
-  • STAKE sheet  → stake presidency + their clerks / executive secretaries / assistants.
+  • STAKE (master) sheet → stake presidency + High Council + their clerks / executive
+                   secretaries / assistants.
   • WARD  sheet  → ward bishopric + EQ & RS presidencies + ward mission leader + assigned
                    full-time missionaries, PLUS all stake-sheet recipients (stake sees all).
 
-This is intentionally TIGHTER than the in-app data-access gate (backend/roles.py): e.g. a High
-Councilor can see stake data in the app but is not auto-added to the spreadsheet. Pure functions,
-unit-tested — no I/O here; the orchestrator (scripts/daily_sync.py) feeds it DB rows.
+Still TIGHTER than the in-app data-access gate (backend/roles.py) — only the callings on the
+sharing policy are auto-added (ward clerks, instructors, etc. are not). Pure functions, unit-tested
+— no I/O here; the orchestrator (scripts/daily_sync.py) feeds it DB rows.
 """
 
 from __future__ import annotations
@@ -24,16 +25,19 @@ from collections import defaultdict
 
 # --- calling → which sheet(s) ------------------------------------------------
 
-# Stake-sheet callings: the stake presidency and the secretaries/clerks/assistants who serve it.
-# (High Council is deliberately excluded — they have in-app data access, not a sheet share.)
+# Stake-sheet callings: the stake presidency + the secretaries/clerks/assistants who serve it, AND
+# the High Council (stake-wide stewardship — on the sheet-sharing policy).
 _STAKE = re.compile(r"\bstake\b", re.I)
 _PRES_CLERK_SEC = re.compile(r"president|presidency|clerk|secretary", re.I)
 
 
 def is_stake_sheet_calling(calling: str | None) -> bool:
-    """A stake-level calling that receives the stake-wide sheet: Stake President / Counselor in the
-    Stake Presidency / Stake (Assistant) Clerk / Stake (Assistant) Executive Secretary."""
+    """A stake-level calling that receives the stake-wide (master) sheet AND every ward sheet: Stake
+    President / Counselor in the Stake Presidency / Stake (Assistant) Clerk / Stake (Assistant)
+    Executive Secretary, and the High Council (stake-wide stewardship)."""
     c = calling or ""
+    if re.search(r"high council", c, re.I):
+        return True
     return bool(_STAKE.search(c) and _PRES_CLERK_SEC.search(c))
 
 

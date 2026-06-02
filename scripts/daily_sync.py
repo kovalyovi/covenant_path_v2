@@ -90,6 +90,7 @@ def _sync_one(args) -> dict:
             summary = SheetsSync(sheet_id).sync(sheet_rows, preserve_units=failed_units)
             result["sheets"] = summary
             logger.info("sheets[%s]: %s", sheet_id, summary)
+            _sync_ward_sheets(client, dicts)  # #5b: per-ward sheets (ward-only data + ward recipients)
     if args.supabase:
         from backend import db, sync as bsync
         conn = db.connect()
@@ -142,6 +143,66 @@ def _service_account_email() -> str | None:
         return None
 
 
+def _sync_ward_sheets(client, dicts) -> None:
+    """#5b: when sheet generation is enabled for a stake, also maintain a SEPARATE spreadsheet per
+    ward/branch — that ward's data only, shared with the ward's leadership + assigned missionaries
+    PLUS the stake-level recipients (stake leaders see every ward). Recipients are recomputed from
+    current callings each run and reconciled (add new + REVOKE released, with notifications). Fully
+    guarded — a sheet problem must never affect the Supabase sync."""
+    if not os.getenv("SUPABASE_DB_URL"):
+        return
+    try:
+        import psycopg2.extras
+        from backend import db, sheet_access
+        from sheets_sync import service as sheets_service
+        from sheets_sync.service import SheetsSync
+        ctx = client.user_context()
+        conn = db.connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("select id, sheets_enabled, ward_spreadsheets, missionaries "
+                            "from stakes where unit_number=%s", (ctx.unit_number,))
+                row = cur.fetchone()
+                if not (row and row[1]):  # no stake row / sheets disabled → nothing to do
+                    return
+                stake_id, ward_sheets, missionaries = row[0], (row[2] or {}), (row[3] or {})
+                cur.execute("""select lower(ur.email), ur.calling_name, ur.role, ur.unit_id, u.name
+                               from user_roles ur left join units u on u.id = ur.unit_id
+                               where ur.stake_id=%s and ur.email is not null""", (stake_id,))
+                role_rows = [{"email": r[0], "calling_name": r[1], "role": r[2],
+                              "unit_id": r[3], "unit_name": r[4]} for r in cur.fetchall()]
+            rec = sheet_access.compute_recipients(role_rows, missionaries)
+            baptized = [d for d in dicts if d.get("kind") != "investigator"]
+            updated = dict(ward_sheets)
+            for unit_id, emails in rec["wards"].items():
+                if not emails:
+                    continue
+                ward_name = rec["ward_names"].get(unit_id) or unit_id
+                ward_members = [d for d in baptized
+                                if (d.get("unit") or d.get("unit_name")) == ward_name]
+                wsid = ward_sheets.get(unit_id)
+                try:
+                    if not wsid:
+                        wsid = sheets_service.create_and_share_spreadsheet(
+                            f"Covenant Path — {ward_name}", sorted(emails), notify=True)
+                        updated[unit_id] = wsid
+                    else:
+                        sheets_service.reconcile_viewers(wsid, emails, notify=True)
+                    SheetsSync(wsid).sync(ward_members)
+                except Exception as exc:  # noqa: BLE001 — one ward's sheet never blocks the rest
+                    logger.warning("ward sheet for %s (%s) failed: %s", ward_name, unit_id, exc)
+            if updated != ward_sheets:
+                with conn.cursor() as cur:
+                    cur.execute("update stakes set ward_spreadsheets=%s where id=%s",
+                                (psycopg2.extras.Json(updated), stake_id))
+                conn.commit()
+            logger.info("ward sheets maintained for %s: %d ward(s)", ctx.unit_name, len(rec["wards"]))
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ward sheets skipped: %s", exc)
+
+
 def _resolve_stake_sheet(client, args) -> str:
     """Per-stake spreadsheet id: reuse the stored one, else create + share it read-only with the
     stake's leadership (user_roles emails) + the credential provider, and store it. Falls back to
@@ -157,13 +218,19 @@ def _resolve_stake_sheet(client, args) -> str:
         try:
             with conn.cursor() as cur:
                 cur.execute("select id, spreadsheet_id, spreadsheet_shared, gdrive_token, "
-                            "gdrive_file_id from stakes where unit_number=%s", (ctx.unit_number,))
+                            "gdrive_file_id, sheets_enabled from stakes where unit_number=%s",
+                            (ctx.unit_number,))
                 row = cur.fetchone()
-            stake_id = row[0] if row else db.upsert_stake(conn, ctx.unit_number, ctx.unit_name)
-            sid = row[1] if row else None
-            shared = set(row[2] or []) if row and row[2] else set()
-            gdrive_token = row[3] if row else None
-            gdrive_file_id = row[4] if row else None
+            # #5b: sheet generation is opt-in per stake (Settings toggle, default off — leaders
+            # consent). Disabled → create/maintain nothing (the data already lives in the app).
+            if not (row and row[5]):
+                logger.info("sheets disabled for %s (%s); skipping Sheets", ctx.unit_name, ctx.unit_number)
+                return None
+            stake_id = row[0]
+            sid = row[1]
+            shared = set(row[2] or []) if row[2] else set()
+            gdrive_token = row[3]
+            gdrive_file_id = row[4]
             with conn.cursor() as cur:
                 # #5: compute sheet recipients from CURRENT callings (not "anyone with a role"): the
                 # stake sheet (all units' data) goes only to stake-level leadership. Recomputed every
