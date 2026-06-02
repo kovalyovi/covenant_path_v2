@@ -18,8 +18,14 @@ class _Body extends StatelessWidget {
       future: future,
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
-          // content-shaped skeleton instead of a spinner, so the layout doesn't pop in (#shimmer)
-          return const MemberListSkeleton();
+          // content-shaped skeleton per tab so the layout doesn't pop in — the Golden Hour and KPI
+          // tabs get skeletons shaped like THEIR content (filters/completion/charts), not a member
+          // list (#shimmer, N8). List-style tabs (On Date, Needs, Spreadsheet) use the row skeleton.
+          return switch (tab) {
+            1 => const GoldenHourSkeleton(),
+            3 => const KpiSkeleton(),
+            _ => const MemberListSkeleton(),
+          };
         }
         if (snap.hasError) {
           return Center(child: Padding(padding: const EdgeInsets.all(24),
