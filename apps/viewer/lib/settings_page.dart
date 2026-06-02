@@ -14,10 +14,14 @@ class SettingsPage extends StatefulWidget {
     required this.onFeedback,
     required this.onContact,
     required this.onAddPasskey,
+    this.stakeId,
+    this.sheetsEnabled = false,
   });
   final VoidCallback onFeedback;
   final VoidCallback onContact;
   final VoidCallback onAddPasskey;
+  final String? stakeId; // current stake (for the #5b Google Sheets toggle); null → hide the toggle
+  final bool sheetsEnabled;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -26,6 +30,8 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   bool _lockAvailable = false;
   bool _lockOn = false;
+  late bool _sheetsEnabled = widget.sheetsEnabled; // #5b Google Sheets toggle
+  bool _sheetsBusy = false;
 
   @override
   void initState() {
@@ -53,6 +59,23 @@ class _SettingsPageState extends State<SettingsPage> {
       return;
     }
     setState(() => _lockOn = target);
+  }
+
+  /// #5b: a stake leader toggles Google-Sheet generation for the stake (the RPC enforces the role).
+  Future<void> _toggleSheets(bool target) async {
+    setState(() => _sheetsBusy = true);
+    try {
+      await supabase.rpc('set_stake_sheets_enabled',
+          params: {'p_stake_id': widget.stakeId, 'p_enabled': target});
+      if (mounted) setState(() => _sheetsEnabled = target);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Couldn\'t change this — only a stake leader can toggle Google Sheets.')));
+      }
+    } finally {
+      if (mounted) setState(() => _sheetsBusy = false);
+    }
   }
 
   @override
@@ -112,6 +135,21 @@ class _SettingsPageState extends State<SettingsPage> {
             subtitle: const Text('Report a bug or suggest an improvement'),
             onTap: widget.onFeedback,
           ),
+          if (widget.stakeId != null) ...[
+            const Divider(height: 1),
+            _header(context, 'Google Sheets'),
+            SwitchListTile(
+              secondary: const Icon(Icons.table_chart_outlined),
+              title: const Text('Generate Google Sheets for this stake'),
+              subtitle: const Text(
+                  'Creates a stake master sheet plus a sheet per ward in the authorized leader’s '
+                  'Google Drive, shared read-only with the relevant leaders & missionaries and '
+                  'refreshed each sync. Off by default — the same data is always in this app.'),
+              isThreeLine: true,
+              value: _sheetsEnabled,
+              onChanged: _sheetsBusy ? null : _toggleSheets,
+            ),
+          ],
           const Divider(height: 1),
           _header(context, 'About'),
           ListTile(

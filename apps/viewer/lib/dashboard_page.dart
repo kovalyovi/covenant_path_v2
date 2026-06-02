@@ -171,7 +171,7 @@ class _DashboardPageState extends State<DashboardPage> {
   Future<void> _loadStakes() async {
     try {
       final rows = await supabase.from('stakes')
-          .select('id, name, last_synced_at, sync_state, sync_started_at, missionaries');
+          .select('id, name, last_synced_at, sync_state, sync_started_at, missionaries, sheets_enabled');
       final list = (rows as List).cast<Map<String, dynamic>>();
       if (list.isEmpty) return;
       // freshest stake first, so an unset default lands on the most recent scrape
@@ -441,9 +441,14 @@ class _DashboardPageState extends State<DashboardPage> {
       Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AdminPage()));
   void _openInvite() =>
       Navigator.of(context).push(MaterialPageRoute(builder: (_) => const InvitePage()));
-  void _openSettings() => Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => SettingsPage(
-          onFeedback: _sendFeedback, onContact: _contactSupport, onAddPasskey: _addPasskey)));
+  void _openSettings() {
+    final stake = _stakes.firstWhere((s) => s['id'] == _currentStakeId,
+        orElse: () => const <String, dynamic>{});
+    Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => SettingsPage(
+            onFeedback: _sendFeedback, onContact: _contactSupport, onAddPasskey: _addPasskey,
+            stakeId: _currentStakeId, sheetsEnabled: stake['sheets_enabled'] == true)));
+  }
 
   void _openSyncSettings() {
     final broker = BrokerClient();

@@ -59,9 +59,10 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done. Surfaces: **F**=Flutter,
   start. **F/iOS/A**
 
 ## Phase 3 — large backend rework
-- [~] **#5** Core DONE (rules + revocation + notify + Unicode + N7-filter + live audit); **per-ward
-  file isolation remaining** (needs an OAuth-Drive sheet per ward — the SA can't create files, 0
-  storage). Spreadsheet access overhaul: per-ward sheets (ward-only data); calling-based
+- [x] **#5/#5b** DONE: rules (+ High Council) · revocation + notify · Unicode · N7-filter · live
+  audit · **per-ward sheets** (SA-created, ward-only data + recipients, reconciled) · **opt-in
+  Settings toggle** (default OFF + consent copy; `set_stake_sheets_enabled` RPC). Flutter toggle
+  done; iOS/Android toggle parity in progress. Original scope: per-ward sheets (ward-only data); calling-based
   recipients (stake presidency/clerks/secretaries/assistants → global; ward bishopric +
   EQ/RS presidency + WML + assigned missionaries → ward sheet); **re-eval + revocation every
   run** (lost calling, lost feature access, missionary rotation); Unicode sheet names;
