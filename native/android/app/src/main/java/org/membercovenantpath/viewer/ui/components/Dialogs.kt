@@ -79,6 +79,53 @@ fun AboutDialog(onDismiss: () -> Unit) {
     )
 }
 
+/** "Rules & definitions" (#4) — plain-language summary of eligibility / access / convert-care
+ * (full reference: docs/RULES.md). Mirrors showRulesDialog (Flutter) + SettingsView.rulesSections (iOS). */
+@Composable
+fun RulesDialog(onDismiss: () -> Unit) {
+    val sections = listOf(
+        "Who can see the data" to listOf(
+            "Access is rebuilt from LCR callings every sync — no manual setup.",
+            "A calling can see covenant-path data if it has the progress record, member list, or member profiles (stake presidency / clerks / high council always can).",
+            "Stake callings see the whole stake; ward/branch callings see their unit only.",
+            "Released leaders lose access automatically next sync. Power users get an exact copy of someone's access.",
+        ),
+        "Priesthood & ordinance eligibility" to listOf(
+            "Calling applies at 12+, giving ministering at 14+.",
+            "Aaronic Priesthood: brothers 12+. Melchizedek: brothers 18+ who have been members 1+ year.",
+            "Friends and assigned ministers apply to everyone.",
+            "People who don't qualify (age / sex / tenure) show N/A, not \"No\", so stats aren't skewed.",
+        ),
+        "Who watches over a convert" to listOf(
+            "First year after baptism: the full-time missionaries + ward mission leader.",
+            "After a year: Elders Quorum (brothers) / Relief Society (sisters).",
+        ),
+        "Who shows where" to listOf(
+            "People being taught (not yet baptized) appear only in Baptisms and Golden Hour's \"Being Taught\".",
+            "Baptised & confirmed counts use the convert's baptism month.",
+        ),
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rules & definitions") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                sections.forEachIndexed { i, section ->
+                    val (title, points) = section
+                    if (i > 0) Spacer(Modifier.size(12.dp))
+                    Text(title, style = androidx.compose.material3.MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.size(4.dp))
+                    points.forEach { p ->
+                        Text("•  $p", style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.size(3.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
 /** A simple yes/no confirmation dialog (revoke, sync, etc.). */
 @Composable
 fun ConfirmDialog(

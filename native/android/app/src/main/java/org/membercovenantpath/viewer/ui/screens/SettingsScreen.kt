@@ -44,6 +44,7 @@ import kotlinx.coroutines.launch
 import org.membercovenantpath.viewer.data.AppConfig
 import org.membercovenantpath.viewer.ui.AppBiometric
 import org.membercovenantpath.viewer.ui.components.AboutDialog
+import org.membercovenantpath.viewer.ui.components.RulesDialog
 import org.membercovenantpath.viewer.ui.components.ContactDialog
 import org.membercovenantpath.viewer.ui.components.FeedbackDialog
 import org.membercovenantpath.viewer.viewmodel.ActionsViewModel
@@ -78,6 +79,7 @@ fun SettingsScreen(
     var contactOpen by remember { mutableStateOf(false) }
     var feedbackOpen by remember { mutableStateOf(false) }
     var aboutOpen by remember { mutableStateOf(false) }
+    var rulesOpen by remember { mutableStateOf(false) }
 
     fun toast(msg: String) = scope.launch { snackbar.showSnackbar(msg) }
 
@@ -171,6 +173,14 @@ fun SettingsScreen(
                     modifier = Modifier.clickable { aboutOpen = true },
                 )
             }
+            item {
+                ListItem(
+                    leadingContent = { Icon(Icons.Outlined.Info, contentDescription = null) },
+                    headlineContent = { Text("Rules & definitions") },
+                    supportingContent = { Text("Eligibility, data access & convert-care") },
+                    modifier = Modifier.clickable { rulesOpen = true },
+                )
+            }
             item { HorizontalDivider() }
 
             item { Header("Account") }
@@ -195,6 +205,7 @@ fun SettingsScreen(
     if (contactOpen) ContactDialog(onDismiss = { contactOpen = false }) { subj, msg -> actionsVm.contact(subj, msg) { _, r -> toast(r) } }
     if (feedbackOpen) FeedbackDialog(onDismiss = { feedbackOpen = false }) { title, body -> actionsVm.feedback(title, body) { _, r -> toast(r) } }
     if (aboutOpen) AboutDialog(onDismiss = { aboutOpen = false })
+    if (rulesOpen) RulesDialog(onDismiss = { rulesOpen = false })
 }
 
 @Composable

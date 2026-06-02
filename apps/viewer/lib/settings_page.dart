@@ -119,6 +119,12 @@ class _SettingsPageState extends State<SettingsPage> {
             title: const Text('About & privacy'),
             onTap: () => showAboutDisclaimer(context),
           ),
+          ListTile(
+            leading: const Icon(Icons.rule),
+            title: const Text('Rules & definitions'),
+            subtitle: const Text('Eligibility, data access & convert-care'),
+            onTap: () => showRulesDialog(context),
+          ),
           const Divider(height: 1),
           _header(context, 'Account'),
           ListTile(

@@ -13,6 +13,7 @@ struct SettingsView: View {
     @State private var lockAvailable = false
     @State private var lockOn = false
     @State private var aboutShown = false
+    @State private var rulesShown = false
     @State private var passkeyMessage: String?
     @State private var supportSheet: SupportKind?
     @State private var supportToast: String?
@@ -24,6 +25,31 @@ struct SettingsView: View {
         return PasskeyService(broker: services.broker, rpID: services.passkeyRPID).available
     }
     @State private var resolvedEmail = "—"
+
+    /// #4 Rules & definitions — plain-language summary (full reference: docs/RULES.md). Mirrors the
+    /// Flutter `showRulesDialog` content; kept in sync across surfaces.
+    static let rulesSections: [(String, [String])] = [
+        ("Who can see the data", [
+            "Access is rebuilt from LCR callings every sync — no manual setup.",
+            "A calling can see covenant-path data if it has the progress record, member list, or member profiles (stake presidency / clerks / high council always can).",
+            "Stake callings see the whole stake; ward/branch callings see their unit only.",
+            "Released leaders lose access automatically next sync. Power users get an exact copy of someone's access.",
+        ]),
+        ("Priesthood & ordinance eligibility", [
+            "Calling applies at 12+, giving ministering at 14+.",
+            "Aaronic Priesthood: brothers 12+. Melchizedek: brothers 18+ who have been members 1+ year.",
+            "Friends and assigned ministers apply to everyone.",
+            "People who don't qualify (age / sex / tenure) show N/A, not \"No\", so stats aren't skewed.",
+        ]),
+        ("Who watches over a convert", [
+            "First year after baptism: the full-time missionaries + ward mission leader.",
+            "After a year: Elders Quorum (brothers) / Relief Society (sisters).",
+        ]),
+        ("Who shows where", [
+            "People being taught (not yet baptized) appear only in Baptisms and Golden Hour's \"Being Taught\".",
+            "Baptised & confirmed counts use the convert's baptism month.",
+        ]),
+    ]
 
     var body: some View {
         NavigationStack {
@@ -89,6 +115,9 @@ struct SettingsView: View {
                     Button { aboutShown = true } label: {
                         Label("About & privacy", systemImage: "info.circle")
                     }.tint(.primary)
+                    Button { rulesShown = true } label: {
+                        Label("Rules & definitions", systemImage: "list.bullet.rectangle")
+                    }.tint(.primary)
                 }
 
                 Section("Account") {
@@ -113,6 +142,30 @@ struct SettingsView: View {
                 Button("Close", role: .cancel) {}
             } message: {
                 Text(Disclaimer.long + "\n\nPrivacy\n" + Disclaimer.privacy)
+            }
+            .sheet(isPresented: $rulesShown) {
+                NavigationStack {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            ForEach(Self.rulesSections, id: \.0) { section in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(section.0).font(.headline)
+                                    ForEach(section.1, id: \.self) { p in
+                                        HStack(alignment: .top, spacing: 6) {
+                                            Text("•").foregroundStyle(.secondary)
+                                            Text(p).font(.callout)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                    }
+                    .navigationTitle("Rules & definitions")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { rulesShown = false } } }
+                }
             }
             .sheet(item: $supportSheet) { kind in
                 Group {
