@@ -54,6 +54,8 @@ import org.membercovenantpath.viewer.model.Member
 import org.membercovenantpath.viewer.model.Stake
 import org.membercovenantpath.viewer.ui.components.ConfirmDialog
 import org.membercovenantpath.viewer.ui.components.FreshnessChip
+import org.membercovenantpath.viewer.ui.components.GoldenHourSkeleton
+import org.membercovenantpath.viewer.ui.components.KpiSkeleton
 import org.membercovenantpath.viewer.ui.components.MemberListSkeleton
 import org.membercovenantpath.viewer.ui.components.StaleCredentialBanner
 import org.membercovenantpath.viewer.ui.components.SyncingBanner
@@ -197,7 +199,12 @@ fun DashboardScaffold(
             // (the Scaffold already insets by the nav height under edge-to-edge; this just adds a gap).
             Box(Modifier.fillMaxWidth().weight(1f).padding(bottom = 12.dp)) {
                 when (val load = state.load) {
-                    is LoadState.Loading -> MemberListSkeleton()
+                    // Per-tab content-shaped skeleton (N8) so Golden Hour / KPIs don't flash member rows.
+                    is LoadState.Loading -> when (tab) {
+                        DashboardTab.GoldenHour -> GoldenHourSkeleton()
+                        DashboardTab.Kpis -> KpiSkeleton()
+                        else -> MemberListSkeleton()
+                    }
                     is LoadState.Error -> CenteredError(load.message, onRetry = dashVm::refresh)
                     LoadState.Ready -> {
                         val members = state.members

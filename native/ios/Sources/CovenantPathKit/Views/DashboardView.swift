@@ -80,7 +80,12 @@ struct DashboardView: View {
     private func pageBody(_ t: DashboardTab) -> some View {
         switch store.state {
         case .idle, .loading:
-            MemberListSkeleton()
+            // Per-tab content-shaped skeleton (N8) so Golden Hour / KPIs don't flash member rows.
+            switch t {
+            case .goldenHour: GoldenHourSkeleton()
+            case .kpis:       KpiSkeleton()
+            default:          MemberListSkeleton()
+            }
         case .failed(let message):
             ContentUnavailableView {
                 Label("Couldn't load data", systemImage: "exclamationmark.triangle")
