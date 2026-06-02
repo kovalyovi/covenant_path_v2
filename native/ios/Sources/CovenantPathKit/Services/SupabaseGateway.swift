@@ -18,6 +18,9 @@ public protocol SupabaseGateway: Sendable {
 
     func appAdmins() async throws -> [AppAdmin]
     func revokeAdmin(email: String) async throws
+
+    /// #5b: a stake leader opts their stake in/out of Google-Sheet generation (RPC enforces the role).
+    func setStakeSheetsEnabled(stakeID: String, enabled: Bool) async throws
 }
 
 public struct SupabaseGatewayImpl: SupabaseGateway {
