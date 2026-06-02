@@ -52,8 +52,11 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done. Surfaces: **F**=Flutter,
 - [x] **#4** ✓ `docs/RULES.md` (priesthood eligibility by age/sex/tenure · calling→data-access
   matrix · convert-care ownership by tenure) + in-app **Settings → Rules & definitions** on all 3
   surfaces. **F/iOS/A + docs**
-- [ ] **N5** Login performance + robustness — investigate broker cold-start / Supabase auth /
-  first-fetch; report before risky changes, then improve. **F/iOS/A/be**
+- [x] **N5** ✓ Login performance. **Finding:** dominant latency = the free-tier broker **cold
+  start** (~30–60s on the first request after idle; clients already retry across ~63s). Supabase
+  auth + first fetch are minor. **Fix (low-risk, no auth change):** `warmUp()` pings `/health` the
+  moment the login screen opens, so the broker spins up while the user types — hiding the cold
+  start. **F/iOS/A**
 
 ## Phase 3 — large backend rework
 - [ ] **#5** Spreadsheet access overhaul: per-ward sheets (ward-only data); calling-based

@@ -35,6 +35,7 @@ class _LoginPageState extends State<LoginPage> {
     _broker.onStatus = (m) {
       if (mounted) setState(() => _status = m);
     };
+    _broker.warmUp(); // N5: start waking the broker now, while the user types — hides cold start
   }
 
   // Church-account fields

@@ -95,6 +95,17 @@ class BrokerClient {
   /// "waking up the sign-in service…" message. Set once by the login page.
   void Function(String message)? onStatus;
 
+  /// N5: wake the free-tier broker early — fire a cheap /health ping when the login screen appears,
+  /// so it spins up WHILE the user types their credentials, hiding the ~30-60s cold start that
+  /// otherwise lands on the first login request. Fire-and-forget; errors ignored.
+  void warmUp() {
+    if (!available) return;
+    http
+        .get(Uri.parse('$brokerUrl/health'))
+        .timeout(const Duration(seconds: 30))
+        .then((_) {}, onError: (_) {});
+  }
+
   // Free hosting (Render) sleeps when idle; the first request after a sleep hits a holding
   // page with no CORS header (browser reports "Failed to fetch"). Retry across ~60s so a
   // cold start resolves itself instead of erroring out. Delays sum to ~63s.

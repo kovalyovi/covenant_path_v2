@@ -55,6 +55,7 @@ public final class SessionStore {
         self.passkeyAvailableProvider = passkeyAvailable
         self.passkeyLogin = passkeyLogin
         self.mode = broker.available ? .church : .email
+        Task { await broker.warmUp() } // N5: warm the broker at startup, before the user submits
         // Surface the broker's cold-start status line in the login screen.
         broker.onStatus = { [weak self] m in
             Task { @MainActor in self?.statusMessage = m }

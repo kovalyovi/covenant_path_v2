@@ -64,6 +64,7 @@ class AuthViewModel(
 
     init {
         broker.onStatus = { msg -> _login.update { if (it.busy) it.copy(status = msg) else it } }
+        viewModelScope.launch { broker.warmUp() } // N5: warm the broker at startup, before submit
     }
 
     /** Maps supabase-kt's SessionStatus to a simple gate; starts Loading until the first emission. */

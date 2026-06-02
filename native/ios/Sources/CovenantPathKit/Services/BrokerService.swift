@@ -98,6 +98,13 @@ public final class BrokerService: @unchecked Sendable {
 
     public var available: Bool { !baseURL.isEmpty }
 
+    /// N5: wake the free-tier broker early (cheap /health GET) so it's warm by the time the user
+    /// submits credentials, hiding the ~60s cold start. Best-effort; errors ignored.
+    public func warmUp() async {
+        guard available, let u = URL(string: baseURL + "/health") else { return }
+        _ = try? await URLSession.shared.data(from: u)
+    }
+
     // Render free hosting sleeps when idle; the first request after a sleep can fail to connect.
     // Retry across ~63s so a cold start resolves itself (delays sum like the Flutter client).
     private static let retryDelays: [UInt64] = [3, 6, 9, 12, 15, 18].map { $0 * 1_000_000_000 }

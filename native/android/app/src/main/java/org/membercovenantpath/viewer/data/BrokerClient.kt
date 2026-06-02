@@ -93,6 +93,13 @@ class BrokerClient(private val auth: AuthRepository = AuthRepository()) {
     /** Called when a network attempt fails and we're about to retry — UI shows a "waking up…" note. */
     var onStatus: ((String) -> Unit)? = null
 
+    /** N5: wake the free-tier broker early (cheap /health ping) so it's warm by the time the user
+     *  submits credentials, hiding the ~60s cold start. Best-effort; errors swallowed. */
+    suspend fun warmUp() {
+        if (!available) return
+        runCatching { Net.getJson("$base/health") }
+    }
+
     // Free hosting (Render) sleeps when idle; the first request after a sleep fails. Retry across
     // ~60s so a cold start resolves itself instead of erroring out. Delays sum to ~63s (matches Dart).
     private val retryDelaysMs = longArrayOf(3000, 6000, 9000, 12000, 15000, 18000)
