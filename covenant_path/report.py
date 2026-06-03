@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -259,6 +260,23 @@ def _build_member_maps(client: LcrClient, unit_number: int) -> dict[str, dict]:
     return out
 
 
+def _friend_count(person_raw: dict, d: dict) -> int | None:
+    """Number of friends in the church for a new member. Prefer the explicit names list from the
+    one-work *details* endpoint when we have it; otherwise fall back to the count display string
+    (`numberOfFriendsDisplayString`) carried by the one-work *progress record*. That fallback
+    matters because the details endpoint is frequently down (the "no number of friends" bug) while
+    the progress record — where the count comes from — keeps working, so the number still shows."""
+    fr = d.get("friends")
+    if isinstance(fr, list):
+        return len(fr)
+    s = d.get("numberOfFriendsDisplayString") or person_raw.get("numberOfFriendsDisplayString")
+    if s is not None:
+        m = re.search(r"\d+", str(s))
+        if m:
+            return int(m.group())
+    return None
+
+
 def _assemble(person_raw: dict, details: dict | None, unit_name: str, birth: str | None,
               kind: str = "new_member") -> CovenantPathMember:
     d = details or person_raw
@@ -276,13 +294,16 @@ def _assemble(person_raw: dict, details: dict | None, unit_name: str, birth: str
     living = parse_endowment(d.get("templeOrdinances")) if _has("templeOrdinances") else NEEDS_PROFILE
     ministering = d.get("ministering") or {}
     has_ministers = bool(ministering.get("ministeringBrothers") or ministering.get("ministeringSisters"))
+    friend_count = _friend_count(person_raw, d)
     return CovenantPathMember(
         name=d.get("name") or person_raw.get("name"),
         unit=unit_name,
         baptism_date=NEEDS_PROFILE,
         birth_date=birth,
-        friends=yes_no(bool(d.get("friends"))),
-        friends_count=(len(d["friends"]) if isinstance(d.get("friends"), list) else None),
+        # "Yes" if the details list says so OR the progress-record count is positive (keeps the flag
+        # consistent with friends_count when details is down but the count came through).
+        friends=yes_no(bool(d.get("friends")) or bool(friend_count)),
+        friends_count=friend_count,
         aaronic_priesthood=aaronic,
         melchizedek_priesthood=melch,
         calling=calling,
