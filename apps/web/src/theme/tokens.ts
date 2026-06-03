@@ -25,6 +25,7 @@ export const TABS: TabDef[] = [
   { path: 'needs', label: 'Needs', icon: 'checklist', color: '#D84315' },
   { path: 'kpis', label: 'KPIs', icon: 'insights', color: '#2E7D32' },
   { path: 'table', label: 'Table', icon: 'grid_on', color: '#5E35B1' },
+  { path: 'by-month', label: 'By Month', icon: 'water_drop', color: '#00838F' },
 ];
 
 /** Soft tinted background for a status pill/tag of [hex] (alpha ~0.12, like AppColors.tint). */

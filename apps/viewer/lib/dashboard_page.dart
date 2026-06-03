@@ -24,6 +24,7 @@ part 'views/golden_hour_view.dart';
 part 'views/needs_view.dart';
 part 'views/kpis_view.dart';
 part 'views/table_view.dart';
+part 'views/baptisms_by_month_view.dart';
 part 'views/dashboard_common.dart';
 
 /// RLS-scoped dashboard. Four tabs mirroring the reference iOS app (+ our spreadsheet):
@@ -55,6 +56,7 @@ const _tabs = [
   (icon: Icons.checklist, label: 'Needs', color: Color(0xFFD84315)),            // deep orange
   (icon: Icons.insights, label: 'KPIs', color: Color(0xFF2E7D32)),             // green
   (icon: Icons.grid_on, label: 'Table', color: Color(0xFF5E35B1)),            // deep purple
+  (icon: Icons.water_drop_outlined, label: 'By Month', color: Color(0xFF00838F)), // baptisms-by-month, cyan
 ];
 
 /// App-bar title that doubles as a stake switcher when the viewer can see more than one stake

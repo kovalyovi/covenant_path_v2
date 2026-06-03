@@ -66,7 +66,8 @@ class _KpiViewState extends State<_KpiView> {
         [for (final m in ms) _Ev(m, parseMemberDate(m[dateField]) ?? DateTime.now(), 0)];
 
     final cards = <Widget>[
-      _BaptismsCard(baptized: baptized, allUnits: allUnits, onOpen: onOpen),
+      // "Baptisms by month" now lives in its own dedicated tab (the last one) — see
+      // _BaptismsByMonthView in baptisms_by_month_view.dart.
       _MetricChartCard(
         title: 'Investigators at Sacrament',
         icon: Icons.groups,
@@ -184,7 +185,7 @@ class _BaptismsCard extends StatefulWidget {
 }
 
 class _BaptismsCardState extends State<_BaptismsCard> {
-  _BWindow _w = _BWindow.m12;
+  _BWindow _w = _BWindow.ytd; // default to year-to-date (the dedicated "By Month" tab opens here)
   static const _color = Color(0xFF0277BD); // baptisms blue (matches the nav accent)
 
   @override

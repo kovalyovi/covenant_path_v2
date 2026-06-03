@@ -129,9 +129,8 @@ fun KpisScreen(members: List<Member>, onOpen: (Member) -> Unit, today: LocalDate
             Spacer(Modifier.size(6.dp))
         }
 
-        item {
-            BaptismsCard(baptized, today) { title, events, lbl -> drill = Drill.Events(title, events, lbl) }
-        }
+        // "Baptisms by month" now lives in its own dedicated tab (the last one) — see
+        // BaptismsByMonthScreen below.
         item {
             MetricChartCard("Investigators at Sacrament", Icons.Filled.Groups, Color(0xFFEF6C00),
                 friendsAtSac, allUnits, priorLabel, latestLabel, compare,
@@ -180,6 +179,43 @@ fun KpisScreen(members: List<Member>, onOpen: (Member) -> Unit, today: LocalDate
     }
 }
 
+/**
+ * Dedicated "By Month" tab (the last tab): baptized-convert counts by baptism month, with its own
+ * window filter that defaults to year-to-date. Mirrors `_BaptismsByMonthView`
+ * (apps/viewer/lib/views/baptisms_by_month_view.dart). Adds a stake-wide unit filter on top of the
+ * reusable [BaptismsCard] (which owns the YTD / 12 mo / 24 mo / All window + chart + by-unit drill).
+ */
+@Composable
+fun BaptismsByMonthScreen(members: List<Member>, onOpen: (Member) -> Unit, today: LocalDate = LocalDate.now()) {
+    var unit by remember { mutableStateOf<String?>(null) }
+    var drill by remember { mutableStateOf<Drill?>(null) }
+
+    val units = remember(members) {
+        members.mapNotNull { it.unitName?.takeIf { u -> u.isNotEmpty() } }.distinct().sorted()
+    }
+    val rows = if (unit == null) members else members.filter { it.unitName == unit }
+    val baptized = rows.filterNot { it.isInvestigator }
+    val allUnits = rows.map { it.unitName ?: "—" }.toSet()
+
+    LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(14.dp)) {
+        item {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) { BigHeader("Baptisms by Month", "Baptized & confirmed converts") }
+                if (units.size > 1) UnitDropdown(unit, units) { unit = it }
+            }
+            Spacer(Modifier.size(10.dp))
+        }
+        item {
+            BaptismsCard(baptized, today) { title, events, lbl -> drill = Drill.Events(title, events, lbl) }
+        }
+    }
+
+    when (val d = drill) {
+        is Drill.Events -> KpiDrillSheet(d.title, d.events, allUnits, d.bucketLabel, onOpen) { drill = null }
+        else -> {}
+    }
+}
+
 @Composable
 private fun PeriodSelector(period: KpiPeriod, onChange: (KpiPeriod) -> Unit) {
     val opts = listOf(KpiPeriod.MONTH to "Month", KpiPeriod.YEAR to "Year", KpiPeriod.ALL to "All")
@@ -216,7 +252,7 @@ private fun BaptismsCard(
     today: LocalDate,
     onDrill: (String, List<KpiEvent>, String?) -> Unit,
 ) {
-    var window by remember { mutableStateOf(BaptismWindow.M12) }
+    var window by remember { mutableStateOf(BaptismWindow.YTD) } // default to year-to-date
     val d = Kpis.baptismsByMonth(baptized, window, today)
     val color = Color(0xFF0277BD)
     SectionCard(title = "Baptisms by month", leadingIcon = Icons.Filled.EventAvailable, iconColor = color) {

@@ -37,7 +37,8 @@ struct KPIsView: View {
                 let newAtSac = Kpis.metricData(baptized, datesOf: Kpis.attendedDates, period: period)
                 let newFriends = Kpis.metricData(investigators, datesOf: Kpis.firstLessonDate, period: period)
 
-                BaptismsCard(baptized: baptized, allUnits: allUnits, onDrill: { drill = $0 })
+                // "Baptisms by month" now lives in its own dedicated tab (the last one) — see
+                // BaptismsByMonthView.
 
                 MetricChartCard(title: "Investigators at Sacrament", symbol: "person.3",
                                 hex: 0xEF6C00, data: friendsAtSac, period: period, compare: compare,
@@ -213,7 +214,7 @@ struct BaptismsCard: View {
     let allUnits: Set<String>
     let onDrill: (DrillPayload) -> Void
 
-    @State private var window: BaptismWindow = .m12
+    @State private var window: BaptismWindow = .ytd // default to year-to-date
     private let color = Color(hex: 0x0277BD)
 
     var body: some View {

@@ -16,6 +16,7 @@ import { BaptismsTab } from './pages/tabs/BaptismsTab';
 import { GoldenHourTab } from './pages/tabs/GoldenHourTab';
 import { NeedsTab } from './pages/tabs/NeedsTab';
 import { TableTab } from './pages/tabs/TableTab';
+import { BaptismsByMonthTab } from './pages/tabs/BaptismsByMonthTab';
 import { PersonDetailPage } from './pages/PersonDetailPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { InvitePage } from './pages/InvitePage';
@@ -74,6 +75,7 @@ export const router = createBrowserRouter([
           { path: 'needs', element: <NeedsTab /> },
           { path: 'kpis', element: <LazyRoute><KpisTab /></LazyRoute> },
           { path: 'table', element: <TableTab /> },
+          { path: 'by-month', element: <BaptismsByMonthTab /> },
         ],
       },
       { path: 'person/:id', element: <PersonDetailPage /> },

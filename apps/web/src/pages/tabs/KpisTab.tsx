@@ -13,8 +13,8 @@ import { isInvestigator } from '../../lib/member';
 import { parseMemberDate, fmtMonShort, fmtMonYear } from '../../logic/dates';
 import { avgCompletion } from '../../logic/milestones';
 import {
-  baptismsByMonth, metricData, attendedDates, firstLessonDate, lessonsWithMember,
-  membersWithMemberLessons, unitCompletion, type Period, type BWindow, type Ev, type Series,
+  metricData, attendedDates, firstLessonDate, lessonsWithMember,
+  membersWithMemberLessons, unitCompletion, type Period, type Ev, type Series,
 } from '../../logic/kpis';
 import { Icon, type IconName } from '../../components/Icon';
 import { SectionCard, Segmented, RangePill, Progress } from '../../components/ui';
@@ -75,7 +75,7 @@ function KpisBody() {
   const rangeLabel = periodRangeLabel();
 
   const cards: React.ReactNode[] = [
-    <BaptismsCard key="baptisms" baptized={baptized} allUnits={allUnits} onDrill={setDrill} />,
+    // "Baptisms by month" now lives in its own dedicated tab (the last one) — see BaptismsByMonthTab.
     <MetricCard
       key="friends-sac"
       title="Investigators at Sacrament"
@@ -212,89 +212,6 @@ function KpisBody() {
       </PageScaffold>
       <DrillHost drill={drill} onClose={() => setDrill(null)} />
     </>
-  );
-}
-
-// ---- Baptisms by month (#1/#2) ----------------------------------------------------------------
-
-function BaptismsCard({
-  baptized,
-  allUnits,
-  onDrill,
-}: {
-  baptized: Member[];
-  allUnits: Set<string>;
-  onDrill: (d: Drill) => void;
-}) {
-  const [w, setW] = useState<BWindow>('m12');
-  const color = '#0277BD';
-  const d = baptismsByMonth(baptized, w);
-  return (
-    <SectionCard
-      title="Baptisms by month"
-      icon="water_drop"
-      iconColor={color}
-      onClick={d.events.length === 0 ? undefined : () => onDrill({ kind: 'metric', title: 'Baptisms', events: d.events, allUnits })}
-    >
-      <div style={{ display: 'flex', justifyContent: 'center' }}>
-        <Segmented<BWindow>
-          ariaLabel="Baptisms window"
-          value={w}
-          onChange={setW}
-          options={[
-            { value: 'ytd', label: 'YTD' },
-            { value: 'm12', label: '12 mo' },
-            { value: 'm24', label: '24 mo' },
-            { value: 'all', label: 'All' },
-          ]}
-        />
-      </div>
-      <div style={{ height: 14 }} />
-      <div className="row" style={{ alignItems: 'stretch' }}>
-        <Kv label="Baptized in window" value={String(d.total)} />
-        <div style={{ width: 1, background: 'var(--outline-variant)', margin: '0 14px' }} />
-        <Kv label="Best month" value={d.bestLabel == null ? '—' : `${d.bestLabel}  ·  ${d.bestCount}`} />
-      </div>
-      <div style={{ height: 14 }} />
-      <TrendLine
-        values={d.counts}
-        labels={d.labels}
-        color={color}
-        onBucketTap={(i) =>
-          onDrill({
-            kind: 'metric',
-            title: 'Baptisms',
-            events: d.events.filter((e) => e.bucket === i),
-            allUnits,
-            bucketLabel: i < d.labels.length ? d.labels[i] : null,
-          })
-        }
-      />
-      <div className="row" style={{ justifyContent: 'space-between', marginTop: 4 }}>
-        <span className="small muted">Baptized & confirmed converts, counted by baptism month.</span>
-        <button
-          type="button"
-          className="btn btn--text"
-          disabled={d.events.length === 0}
-          onClick={(e) => {
-            e.stopPropagation();
-            onDrill({ kind: 'metric', title: 'Baptisms', events: d.events, allUnits });
-          }}
-        >
-          <Icon name="groups" size={16} />
-          By unit
-        </button>
-      </div>
-    </SectionCard>
-  );
-}
-
-function Kv({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ flex: 1 }}>
-      <div className="small muted">{label}</div>
-      <div style={{ fontWeight: 700, fontSize: '1rem', marginTop: 2 }}>{value}</div>
-    </div>
   );
 }
 

@@ -18,6 +18,7 @@ object TabColors {
     val Needs = Color(0xFFD84315)      // deep orange
     val Kpis = Color(0xFF2E7D32)       // green
     val Table = Color(0xFF5E35B1)      // deep purple
+    val ByMonth = Color(0xFF00838F)    // cyan (baptisms-by-month)
 }
 
 // ---- org-ownership identity colors (golden_hour.dart `orgInfo`) --------------

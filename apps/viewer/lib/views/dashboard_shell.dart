@@ -23,7 +23,7 @@ class _Body extends StatelessWidget {
           // list (#shimmer, N8). List-style tabs (On Date, Needs, Spreadsheet) use the row skeleton.
           return switch (tab) {
             1 => const GoldenHourSkeleton(),
-            3 => const KpiSkeleton(),
+            3 || 5 => const KpiSkeleton(),
             _ => const MemberListSkeleton(),
           };
         }
@@ -40,7 +40,8 @@ class _Body extends StatelessWidget {
           1 => _GoldenHourView(rows: rows, tier: tier, onOpen: onOpen),
           2 => _NeedsView(rows: rows, tier: tier, onOpen: onOpen),
           3 => _KpiView(rows: rows, tier: tier, onOpen: onOpen),
-          _ => _SpreadsheetView(rows: rows, onOpen: onOpen),
+          4 => _SpreadsheetView(rows: rows, onOpen: onOpen),
+          _ => _BaptismsByMonthView(rows: rows, tier: tier, onOpen: onOpen),
         };
         return RefreshIndicator(onRefresh: onRefresh, child: view);
       },

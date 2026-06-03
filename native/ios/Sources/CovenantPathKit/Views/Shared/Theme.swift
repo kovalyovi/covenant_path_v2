@@ -27,7 +27,7 @@ public enum StatusColor {
 
 /// The 5 dashboard tabs, each with its own accent color + SF Symbol (mirrors `_tabs`).
 public enum DashboardTab: Int, CaseIterable, Identifiable {
-    case baptisms, goldenHour, needs, kpis, table
+    case baptisms, goldenHour, needs, kpis, table, byMonth
     public var id: Int { rawValue }
 
     public var title: String {
@@ -37,6 +37,7 @@ public enum DashboardTab: Int, CaseIterable, Identifiable {
         case .needs: return "Needs"
         case .kpis: return "KPIs"
         case .table: return "Table"
+        case .byMonth: return "By Month"
         }
     }
 
@@ -47,6 +48,7 @@ public enum DashboardTab: Int, CaseIterable, Identifiable {
         case .needs: return "checklist"
         case .kpis: return "chart.line.uptrend.xyaxis"
         case .table: return "tablecells"
+        case .byMonth: return "drop"
         }
     }
 
@@ -57,6 +59,7 @@ public enum DashboardTab: Int, CaseIterable, Identifiable {
         case .needs: return Color(hex: 0xD84315)       // deep orange
         case .kpis: return Color(hex: 0x2E7D32)        // green
         case .table: return Color(hex: 0x5E35B1)       // deep purple
+        case .byMonth: return Color(hex: 0x00838F)     // cyan (baptisms-by-month)
         }
     }
 }
