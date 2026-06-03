@@ -26,6 +26,24 @@ public enum Freshness {
         return "\(days)d ago"
     }
 
+    /// Human duration for a job's execution time (seconds → "45s", "2m 13s", "1h 4m"). Mirrors `_dur`.
+    public static func dur(_ seconds: Any?) -> String {
+        let s: Int?
+        switch seconds {
+        case let n as NSNumber: s = n.intValue
+        case let i as Int: s = i
+        case let d as Double: s = Int(d)
+        case let str as String: s = Int(str)
+        default: s = nil
+        }
+        guard let s, s >= 0 else { return "" }
+        if s < 60 { return "\(s)s" }
+        let m = s / 60, rs = s % 60
+        if m < 60 { return rs == 0 ? "\(m)m" : "\(m)m \(rs)s" }
+        let h = m / 60, rm = m % 60
+        return rm == 0 ? "\(h)h" : "\(h)h \(rm)m"
+    }
+
     /// Exact local time string, e.g. "May 30, 2026 · 2:14 PM" + tz — mirrors `_LastUpdated._exact`.
     public static func exact(_ iso: String?) -> String {
         guard let t = parse(iso) else { return iso ?? "" }

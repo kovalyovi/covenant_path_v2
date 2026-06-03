@@ -536,11 +536,40 @@ def _gh_headers() -> dict:
             "X-GitHub-Api-Version": "2022-11-28"}
 
 
+def _parse_iso(s: str | None):
+    """Parse a GitHub ISO-8601 timestamp ('...Z') to an aware datetime, or None."""
+    from datetime import datetime
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
+def _run_duration_seconds(w: dict):
+    """Wall-clock execution time of a run, in whole seconds. For a finished run that's
+    updated_at − run_started_at; for one still going it's now − run_started_at (a live elapsed),
+    so the ops console can show a ticking timer. None when we can't tell yet."""
+    from datetime import datetime, timezone
+    start = _parse_iso(w.get("run_started_at") or w.get("created_at"))
+    if not start:
+        return None
+    end = _parse_iso(w.get("updated_at")) if w.get("status") == "completed" \
+        else datetime.now(timezone.utc)
+    if not end:
+        return None
+    return max(0, int((end - start).total_seconds()))
+
+
 def _run_dto(w: dict) -> dict:
     return {"id": w.get("id"), "name": w.get("name"), "status": w.get("status"),
             "conclusion": w.get("conclusion"), "event": w.get("event"),
             "run_number": w.get("run_number"), "created_at": w.get("created_at"),
-            "updated_at": w.get("updated_at"), "html_url": w.get("html_url"),
+            "run_started_at": w.get("run_started_at"),
+            "updated_at": w.get("updated_at"),
+            "duration_seconds": _run_duration_seconds(w),
+            "html_url": w.get("html_url"),
             "workflow_path": (w.get("path") or "").split("/")[-1]}
 
 

@@ -358,7 +358,9 @@ private fun RunsCard(actions: JsonObject, busy: Boolean, onRerun: (Long) -> Unit
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
                         Text("${r.str("name")} #${r.int("run_number")}")
-                        Text("${r.str("event")} · ${Freshness.ago(r.str("created_at"))}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        val d = Freshness.dur(r.str("duration_seconds"))
+                        val dLabel = if (d.isEmpty()) "" else " · ${if (status == "completed") "took" else "running"} $d"
+                        Text("${r.str("event")} · ${Freshness.ago(r.str("created_at"))}$dLabel", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     if (!inProgress) {
                         IconButton(onClick = { (r["id"]?.toString()?.toLongOrNull())?.let(onRerun) }, enabled = !busy) {

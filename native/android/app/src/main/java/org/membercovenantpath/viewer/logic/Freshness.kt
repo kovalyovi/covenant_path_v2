@@ -39,6 +39,21 @@ object Freshness {
         return "${ChronoUnit.DAYS.between(t, now)}d ago"
     }
 
+    /** Human duration for a job's execution time (seconds → "45s", "2m 13s", "1h 4m"). Mirrors `_dur`. */
+    fun dur(seconds: Any?): String {
+        val s = when (seconds) {
+            is Number -> seconds.toLong()
+            is String -> seconds.toLongOrNull()
+            else -> null
+        } ?: return ""
+        if (s < 0) return ""
+        if (s < 60) return "${s}s"
+        val m = s / 60; val rs = s % 60
+        if (m < 60) return if (rs == 0L) "${m}m" else "${m}m ${rs}s"
+        val h = m / 60; val rm = m % 60
+        return if (rm == 0L) "${h}h" else "${h}h ${rm}m"
+    }
+
     /**
      * Staleness color for a last-synced timestamp (#18): red after 2 weeks, amber after 2 days,
      * null (fresh / default) otherwise. Never-synced reads as red. Mirrors `_staleColor`.

@@ -179,6 +179,17 @@ export function agoOrNever(iso: unknown): string {
   return `${Math.floor(diffH / 24)}d ago`;
 }
 
+/** Human duration for a job's execution time (seconds → "45s", "2m 13s", "1h 4m"). Mirrors `_dur`. */
+export function dur(seconds: unknown): string {
+  const s = typeof seconds === 'number' ? Math.trunc(seconds) : Number.parseInt(String(seconds ?? ''), 10);
+  if (Number.isNaN(s) || s < 0) return '';
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60), rs = s % 60;
+  if (m < 60) return rs === 0 ? `${m}m` : `${m}m ${rs}s`;
+  const h = Math.floor(m / 60), rm = m % 60;
+  return rm === 0 ? `${h}h` : `${h}h ${rm}m`;
+}
+
 export type Staleness = 'fresh' | 'warn' | 'stale';
 
 /**

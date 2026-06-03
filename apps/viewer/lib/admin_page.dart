@@ -668,7 +668,14 @@ class _RunsCard extends StatelessWidget {
                     onTap: r['html_url'] != null ? () => _open('${r['html_url']}') : null,
                     leading: _RunStatus(status: '${r['status']}', conclusion: '${r['conclusion']}'),
                     title: Text('${r['name']} #${r['run_number']}'),
-                    subtitle: Text('${r['event']} · ${_ago(r['created_at'])}'),
+                    subtitle: Text([
+                      '${r['event']}',
+                      _ago(r['created_at']),
+                      if (_dur(r['duration_seconds']).isNotEmpty)
+                        ('${r['status']}' == 'completed'
+                            ? 'took ${_dur(r['duration_seconds'])}'
+                            : 'running ${_dur(r['duration_seconds'])}'),
+                    ].join(' · ')),
                     trailing: ('${r['status']}' != 'in_progress' && '${r['status']}' != 'queued')
                         ? IconButton(
                             tooltip: 'Re-run',
@@ -815,4 +822,15 @@ String _ago(dynamic iso) {
   if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
   if (diff.inHours < 24) return '${diff.inHours}h ago';
   return '${diff.inDays}d ago';
+}
+
+/// Human duration for a job's execution time (seconds → "45s", "2m 13s", "1h 4m").
+String _dur(dynamic seconds) {
+  final s = (seconds is num) ? seconds.toInt() : int.tryParse('${seconds ?? ''}');
+  if (s == null || s < 0) return '';
+  if (s < 60) return '${s}s';
+  final m = s ~/ 60, rs = s % 60;
+  if (m < 60) return rs == 0 ? '${m}m' : '${m}m ${rs}s';
+  final h = m ~/ 60, rm = m % 60;
+  return rm == 0 ? '${h}h' : '${h}h ${rm}m';
 }

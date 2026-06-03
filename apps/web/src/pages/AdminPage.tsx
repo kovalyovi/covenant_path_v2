@@ -9,7 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { admin } from '../lib/admin';
 import { status as statusColors } from '../theme/tokens';
-import { agoOrNever } from '../logic/dates';
+import { agoOrNever, dur } from '../logic/dates';
 import { Icon } from '../components/Icon';
 import { IconButton, Button } from '../components/ui';
 import { CardSkeleton } from '../components/Skeletons';
@@ -584,6 +584,8 @@ function RunsCard({ actions, busy, onRerun }: { actions: Json; busy: boolean; on
                 </span>
                 <span className="small muted" style={{ display: 'block' }}>
                   {String(r['event'])} · {agoOrNever(r['created_at'])}
+                  {dur(r['duration_seconds']) &&
+                    ` · ${r['status'] === 'completed' ? 'took' : 'running'} ${dur(r['duration_seconds'])}`}
                 </span>
               </button>
               {!inProgress ? (

@@ -312,7 +312,7 @@ struct AdminView: View {
             runIcon(status: status, conclusion: conclusion)
             VStack(alignment: .leading) {
                 Text("\(r["name"] as? String ?? "") #\(r["run_number"].map { "\($0)" } ?? "")")
-                Text("\(r["event"] as? String ?? "") · \(Freshness.ago(r["created_at"] as? String))")
+                Text("\(r["event"] as? String ?? "") · \(Freshness.ago(r["created_at"] as? String))\(durLabel(r, status: status))")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
@@ -323,6 +323,13 @@ struct AdminView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// " · took 2m 13s" / " · running 45s" suffix for a run, or "" when duration is unknown.
+    private func durLabel(_ r: [String: Any], status: String) -> String {
+        let d = Freshness.dur(r["duration_seconds"])
+        guard !d.isEmpty else { return "" }
+        return " · \(status == "completed" ? "took" : "running") \(d)"
     }
 
     private func runIcon(status: String, conclusion: String) -> some View {
