@@ -111,9 +111,15 @@ public final class SessionStore {
 
     // MARK: - Church account
 
-    public func churchSignIn(username: String, password: String) async {
+    /// The leader's explicit consent to store their session for daily sync. Default OFF — signing in
+    /// no longer captures a credential automatically. Carried across the MFA steps so verifyMfa stores
+    /// only when the leader authorized it.
+    private var enrollConsent = false
+
+    public func churchSignIn(username: String, password: String, authorizeSync: Bool = false) async {
+        enrollConsent = authorizeSync
         await run {
-            let r = try await self.broker.password(username.trimmed, password, enroll: true)
+            let r = try await self.broker.password(username.trimmed, password, enroll: authorizeSync)
             if r.mfaRequired {
                 self.loginID = r.loginID
                 self.factors = r.factors
@@ -137,7 +143,7 @@ public final class SessionStore {
     public func verifyMfa(code: String) async {
         guard let loginID else { return }
         await run {
-            let r = try await self.broker.verifyMfa(loginID: loginID, code: code.trimmed, enroll: true)
+            let r = try await self.broker.verifyMfa(loginID: loginID, code: code.trimmed, enroll: self.enrollConsent)
             if r.authorized == false { throw BrokerError(SessionStore.noAccessMessage) }
             try await self.consume(r)
         }

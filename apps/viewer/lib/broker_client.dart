@@ -36,8 +36,17 @@ class BrokerResult {
   /// N2: whether the signed-in calling has covenant-path access (from the broker enroll step).
   /// null = unknown (not enrolled / errored) → don't block; false = no access → block at login.
   final bool? authorized;
+  /// Whether the broker actually STORED this session as the stake credential (true only when the
+  /// leader authorized it). Default sign-in no longer captures, so this is false unless they consent.
+  final bool stored;
+  /// The stake this session can sync, and the higher-access "you can improve the sync" offer: true
+  /// when the stake already has an INSUFFICIENT credential that THIS session would strictly improve.
+  final bool canImprove;
+  final String? stake;
+  final List<String> missing; // covenant-path features this session/credential can't pull
   BrokerResult(
-      {this.email, this.otp, this.loginId, this.factors = const [], this.name, this.authorized});
+      {this.email, this.otp, this.loginId, this.factors = const [], this.name, this.authorized,
+      this.stored = false, this.canImprove = false, this.stake, this.missing = const []});
 
   bool get mfaRequired => loginId != null && otp == null;
 }
@@ -170,6 +179,10 @@ class BrokerClient {
       authorized: enroll != null && enroll.containsKey('authorized')
           ? enroll['authorized'] as bool?
           : null,
+      stored: enroll?['stored'] == true,
+      canImprove: enroll?['can_improve'] == true,
+      stake: enroll?['stake'] as String?,
+      missing: ((enroll?['missing'] as List?) ?? const []).map((e) => e.toString()).toList(),
     );
   }
 

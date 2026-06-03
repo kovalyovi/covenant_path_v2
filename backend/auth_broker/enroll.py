@@ -40,13 +40,40 @@ def _client_from_cookies(cookies: list[dict]):
     return LcrClient(session=session)
 
 
-def persist(cookies: list[dict], identity: dict) -> dict:
-    """Resolve the enroller's stake + coverage and store the encrypted credential. Returns a
-    status dict ({stake, unit_number, complete, missing}). Raises on hard failure (caller guards)."""
+def _stored_credential_summary(unit_number: int) -> dict | None:
+    """The stake's current non-revoked credential coverage + access_rank (or None). Used to decide
+    whether a newly-signed-in leader would IMPROVE the sync (onboarding.should_take_over)."""
+    try:
+        sb = {"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}"}
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/stakes", headers=sb,
+            params={"select": "id,stake_credentials(coverage,access_rank,revoked)",
+                    "unit_number": f"eq.{unit_number}", "limit": "1"}, timeout=30)
+        rows = r.json() if r.status_code == 200 else []
+        if not rows:
+            return None
+        cred = next((c for c in (rows[0].get("stake_credentials") or []) if not c.get("revoked")), None)
+        if not cred:
+            return None
+        return {"coverage": cred.get("coverage") or {}, "access_rank": cred.get("access_rank")}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stored-credential lookup skipped: %s", exc)
+        return None
+
+
+def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool) -> dict:
+    """The single login-time entry point. ALWAYS evaluates the captured session's covenant-path
+    access — so the no-access gate (N2) and the higher-access "you can improve the sync" offer work
+    on every Church login — but STORES the encrypted credential (and kicks off the first sync) ONLY
+    when `store` is true, i.e. the leader EXPLICITLY authorized it. Signing in no longer captures a
+    credential as a side effect; that now requires deliberate consent. Raises on hard failure (caller
+    guards). Returns {stake, unit_number, authorized, access_rank, complete, missing, can_improve,
+    stored[, initial_sync]}."""
     if not (SUPABASE_URL and SERVICE_KEY):
         raise RuntimeError("supabase not configured (SUPABASE_URL / SERVICE_ROLE_KEY)")
     from lcr_client.access import covenant_path_access
     from backend import credentials, onboarding
+    from backend.roles import _calling_always_allowed
 
     client = _client_from_cookies(cookies)
     ctx = client.user_context()
@@ -57,26 +84,38 @@ def persist(cookies: list[dict], identity: dict) -> dict:
     # N2: does this login's calling grant ANY covenant-path data access? can_pull_all or >=1 granted
     # feature, OR a stake-stewardship calling (the always-allowed safety net mirrors backend/roles.py,
     # so a clerk/high-councilor with an incomplete LCR menu matrix is NOT false-blocked). A member
-    # with no such calling is told at login they can't use the app (the broker returns authorized:
-    # False and the client blocks pre-session) and is NOT enrolled — storing a no-access session as
-    # the stake credential would be useless. We deliberately err toward allowing (only block on a
-    # clear "no access"); a degraded matrix that still names a stewardship calling stays authorized.
-    from backend.roles import _calling_always_allowed
+    # with no such calling is told at login they can't use the app (authorized:False blocks the client
+    # pre-session). We deliberately err toward allowing (only block on a clear "no access").
     positions = access.get("runner_positions") or []
     authorized = (bool(access.get("can_pull_all")) or rank > 0
                   or any(_calling_always_allowed(p.get("name")) for p in positions))
+
+    # Higher-access transfer offer: when the stake ALREADY has a credential that's insufficient
+    # (incomplete or lower access) and THIS session would strictly improve it, tell the client so it
+    # can offer this leader to take over the sync. (The enroll RPC enforces the same rule on write,
+    # so authorizing actually replaces the weaker credential.)
+    active = _stored_credential_summary(ctx.unit_number)
+    can_improve = bool(authorized and active is not None
+                       and onboarding.should_take_over(active, access))
+
+    base = {"stake": ctx.unit_name, "unit_number": ctx.unit_number,
+            "authorized": authorized, "access_rank": rank,
+            "complete": coverage["complete"], "missing": coverage["missing"],
+            "can_improve": can_improve, "stored": False}
+
     if not authorized:
         logger.info("login has no covenant-path access (rank=%s, unit=%s); not enrolling",
                     rank, ctx.unit_number)
-        return {"stake": ctx.unit_name, "unit_number": ctx.unit_number,
-                "authorized": False, "access_rank": rank,
-                "complete": False, "missing": coverage.get("missing") or []}
+        return base
+    if not store:
+        logger.info("authorized login for %s (%s) without sync consent — not storing credential",
+                    ctx.unit_name, ctx.unit_number)
+        return base
 
-    role_ids = sorted({p["id"] for p in access.get("runner_positions", [])
-                       if isinstance(p.get("id"), int)})
+    # Explicit consent → store the credential. The RPC keeps "most-elevated-wins-if-incomplete".
+    role_ids = sorted({p["id"] for p in positions if isinstance(p.get("id"), int)})
     blob = credentials._encrypt_envelope(
         json.dumps({"cookies": cookies, "refresh_token": identity.get("refresh_token")}).encode("utf-8"))
-
     r = requests.post(
         f"{SUPABASE_URL}/rest/v1/rpc/enroll_stake_credential",
         headers={"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}",
@@ -98,10 +137,42 @@ def persist(cookies: list[dict], identity: dict) -> dict:
     logger.info("enrolled stake %s (%s): coverage_complete=%s rank=%s",
                 ctx.unit_name, ctx.unit_number, coverage["complete"], rank)
     initial_sync = _kickoff_initial_sync(ctx.unit_number)
-    return {"stake": ctx.unit_name, "unit_number": ctx.unit_number,
-            "authorized": True, "access_rank": rank,
-            "complete": coverage["complete"], "missing": coverage["missing"],
-            "initial_sync": initial_sync}
+    base["stored"] = True
+    base["initial_sync"] = initial_sync
+    _notify_enrolled(identity, ctx, coverage, initial_sync)
+    return base
+
+
+def persist(cookies: list[dict], identity: dict) -> dict:
+    """Back-compat shim: enroll WITH consent (always stores). Prefer evaluate_and_maybe_store."""
+    return evaluate_and_maybe_store(cookies, identity, store=True)
+
+
+def _notify_enrolled(identity: dict, ctx, coverage: dict, initial_sync: bool) -> None:
+    """Email the leader confirming their stake's daily sync is now set up (the "then notify them"
+    step). Best-effort — a notification problem must never affect the enrollment that just succeeded."""
+    email = (identity.get("email") or "").strip()
+    if not email:
+        return
+    try:
+        from backend.auth_broker import admin
+        name = identity.get("name") or "there"
+        cov_line = ("Your access can pull the full covenant-path dataset."
+                    if coverage.get("complete")
+                    else "Some fields need a leader with broader access — the app shows who to ask, "
+                         "and a leader with more access can take over the sync.")
+        sync_line = ("The first sync is running now — your stake's data will appear in a few minutes."
+                     if initial_sync else "Your stake will refresh on the daily schedule.")
+        html = (f"<p>Hi {name},</p>"
+                f"<p>You authorized <b>Covenant Path</b> to keep <b>{ctx.unit_name}</b> synced daily "
+                f"using your Church (LCR) session. It is encrypted server-side — your password is "
+                f"never stored — and you can pause or revoke it anytime in the app under "
+                f"<b>Settings → Sync settings</b>.</p>"
+                f"<p>{cov_line} {sync_line}</p>")
+        admin._send_email(email, f"Covenant Path — daily sync enabled for {ctx.unit_name}", html)
+        logger.info("sent enroll confirmation to %s", email)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("enroll notification skipped (non-fatal): %s", exc)
 
 
 def _kickoff_initial_sync(unit_number: int) -> bool:

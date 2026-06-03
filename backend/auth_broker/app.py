@@ -97,18 +97,21 @@ def require_user(authorization: str = Header(default="")) -> str:
         raise HTTPException(status_code=503, detail=str(e))
 
 
-def _try_enroll(res: dict, want: bool, rid: str) -> dict | None:
-    """If the leader consented, persist their captured session as the stake credential. Always
+def _login_eval(res: dict, store: bool, rid: str) -> dict | None:
+    """Evaluate the captured session on EVERY Church login (so the no-access gate and the
+    higher-access "you can improve the sync" offer work), and STORE the credential only when the
+    leader consented (`store`). Signing in no longer captures a credential by default. Always
     guarded — a failure here must never break the login that just succeeded."""
-    if not want or not res.get("cookies"):
+    if not res.get("cookies"):
         return None
     try:
         from backend.auth_broker import enroll
-        out = enroll.persist(res["cookies"], res["identity"])
-        logger.info("[req %s] enrolled stake (complete=%s)", rid, out.get("complete"))
+        out = enroll.evaluate_and_maybe_store(res["cookies"], res["identity"], store)
+        logger.info("[req %s] login eval (authorized=%s stored=%s can_improve=%s)", rid,
+                    out.get("authorized"), out.get("stored"), out.get("can_improve"))
         return out
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[req %s] enroll persist failed (login still ok): %s", rid, exc)
+        logger.warning("[req %s] login eval failed (login still ok): %s", rid, exc)
         return {"error": str(exc)}
 
 
@@ -228,7 +231,7 @@ def auth_password(req: PasswordReq) -> dict:
         raise HTTPException(status_code=401, detail=str(e))
     if res["status"] == "mfa_required":
         return {"status": "mfa_required", "login_id": res["login_id"], "factors": res["factors"]}
-    enrolled = _try_enroll(res, req.enroll, rid)
+    enrolled = _login_eval(res, req.enroll, rid)
     return {"status": "ok", "session": _mint(res["identity"], rid),
             "identity_name": res["identity"].get("name"), "enroll": enrolled}
 
@@ -251,7 +254,7 @@ def auth_mfa_verify(req: MfaReq) -> dict:
         res = okta_flow.verify_mfa(req.login_id, req.code.strip())
     except okta_flow.AuthError as e:
         raise HTTPException(status_code=401, detail=str(e))
-    enrolled = _try_enroll(res, req.enroll, rid)
+    enrolled = _login_eval(res, req.enroll, rid)
     return {"status": "ok", "session": _mint(res["identity"], rid),
             "identity_name": res["identity"].get("name"), "enroll": enrolled}
 
@@ -265,7 +268,7 @@ def auth_session(req: SessionReq) -> dict:
         res = okta_flow.verify_captured_session(req.cookies)
     except okta_flow.AuthError as e:
         raise HTTPException(status_code=401, detail=str(e))
-    enrolled = _try_enroll(res, req.enroll, rid)
+    enrolled = _login_eval(res, req.enroll, rid)
     return {"status": "ok", "session": _mint(res["identity"], rid),
             "identity_name": res["identity"].get("name"), "enroll": enrolled}
 

@@ -51,6 +51,9 @@ data class LoginUiState(
     val emailCode: String = "",
     val emailCodeSent: Boolean = false,
     val useRelay: Boolean = false,
+
+    // Explicit, default-OFF authorization — signing in alone never captures the leader's session.
+    val authorizeSync: Boolean = false,
 ) {
     val brokerAvailable: Boolean get() = AppConfig.brokerAvailable
     val passkeyAvailable: Boolean get() = AppConfig.brokerAvailable
@@ -129,9 +132,11 @@ class AuthViewModel(
         repo.verifyBrokerOtp(email, otp)
     }
 
+    fun setAuthorizeSync(v: Boolean) = _login.update { it.copy(authorizeSync = v) }
+
     // ---- Church account ----
     fun churchSignIn() = run {
-        val r = broker.password(_login.value.username.trim(), _login.value.password, enroll = true)
+        val r = broker.password(_login.value.username.trim(), _login.value.password, enroll = _login.value.authorizeSync)
         if (r.mfaRequired) {
             _login.update { it.copy(loginId = r.loginId, factors = r.factors) }
             if (r.factors.size == 1) selectFactorNow(r.factors.first())
@@ -148,7 +153,7 @@ class AuthViewModel(
     }
 
     fun verifyMfa() = run {
-        val r = broker.verifyMfa(_login.value.loginId!!, _login.value.mfaCode.trim(), enroll = true)
+        val r = broker.verifyMfa(_login.value.loginId!!, _login.value.mfaCode.trim(), enroll = _login.value.authorizeSync)
         if (r.authorized == false) throw BrokerException(NO_ACCESS_MSG)
         consume(r)
     }

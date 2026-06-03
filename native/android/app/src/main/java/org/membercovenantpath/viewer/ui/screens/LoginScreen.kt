@@ -15,9 +15,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Fingerprint
-import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -39,7 +39,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import org.membercovenantpath.viewer.ui.components.Disclaimer
 import org.membercovenantpath.viewer.viewmodel.AuthViewModel
 import org.membercovenantpath.viewer.viewmodel.LoginMode
 
@@ -60,12 +59,7 @@ fun LoginScreen(vm: AuthViewModel) {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text("Covenant Path", style = MaterialTheme.typography.headlineSmall)
-            Text(
-                Disclaimer.LONG,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 8.dp, bottom = 16.dp),
-            )
+            Spacer(Modifier.size(16.dp))
 
             if (s.brokerAvailable) {
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
@@ -109,14 +103,6 @@ fun LoginScreen(vm: AuthViewModel) {
                 Spacer(Modifier.size(12.dp))
                 Text(s.error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
             }
-
-            Spacer(Modifier.size(20.dp))
-            Text(
-                Disclaimer.SHORT,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
         }
     }
 }
@@ -165,12 +151,14 @@ private fun ChurchFields(vm: AuthViewModel, s: org.membercovenantpath.viewer.vie
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.size(10.dp))
+            // Explicit, default-OFF authorization — signing in alone never captures the session.
             Row(verticalAlignment = Alignment.Top) {
-                Icon(Icons.Filled.Sync, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(15.dp))
+                Checkbox(checked = s.authorizeSync, onCheckedChange = { vm.setAuthorizeSync(it) }, enabled = !s.busy)
                 Spacer(Modifier.size(6.dp))
                 Text(
-                    "Your stake syncs through one connected leader's Church session — whichever has the most access. Signing in connects yours only if your stake has no equal-or-better link yet; if so it's stored encrypted (never your password) to refresh data daily. Pause or revoke anytime in Settings → Sync settings.",
+                    "Authorize daily sync for my stake. Stores this Church session (encrypted — never your password) so your stake's data refreshes daily. Optional — leave it off to just view. Revoke anytime in Settings.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp),
                 )
             }
             Spacer(Modifier.size(10.dp))

@@ -13,6 +13,8 @@ struct LoginView: View {
     @State private var mfaCode = ""
     @State private var email = ""
     @State private var emailCode = ""
+    // Explicit, default-OFF authorization — signing in alone never captures the leader's session.
+    @State private var authorizeSync = false
     @FocusState private var focused: Field?
 
     enum Field { case username, password, mfa, email, code }
@@ -21,7 +23,6 @@ struct LoginView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Covenant Path").font(.largeTitle.bold())
-                Text(Disclaimer.long).font(.footnote).foregroundStyle(.secondary)
 
                 if session.brokerAvailable {
                     Picker("Mode", selection: modeBinding) {
@@ -74,12 +75,6 @@ struct LoginView: View {
                 if let error = session.errorMessage {
                     Text(error).font(.callout).foregroundStyle(.red)
                 }
-
-                Spacer(minLength: 8)
-                Text(Disclaimer.short)
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
             }
             .padding(24)
             .frame(maxWidth: 420, alignment: .leading)
@@ -125,21 +120,25 @@ struct LoginView: View {
                 .textContentType(.password).focused($focused, equals: .password)
                 .submitLabel(.go).onSubmit(churchSignIn)
                 .textFieldStyle(.roundedBorder)
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "arrow.triangle.2.circlepath").font(.caption).foregroundStyle(.tint)
-                Text("Your stake syncs through one connected leader's Church session — whichever has "
-                     + "the most access. Signing in connects yours only if your stake has no equal-or-better "
-                     + "link yet; if so it's stored encrypted (never your password) to refresh data daily. "
-                     + "Pause or revoke anytime in Settings → Sync settings.")
-                    .font(.caption).foregroundStyle(.secondary)
+            Toggle(isOn: $authorizeSync) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Authorize daily sync for my stake").font(.callout)
+                    Text("Stores this Church session (encrypted — never your password) so your stake's "
+                         + "data refreshes daily. Optional — leave it off to just view. Revoke anytime "
+                         + "in Settings.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
-            primaryButton("Sign in") { await session.churchSignIn(username: username, password: password) }
+            .disabled(session.isBusy)
+            primaryButton("Sign in") {
+                await session.churchSignIn(username: username, password: password, authorizeSync: authorizeSync)
+            }
         }
     }
 
     private func churchSignIn() {
         focused = nil
-        Task { await session.churchSignIn(username: username, password: password) }
+        Task { await session.churchSignIn(username: username, password: password, authorizeSync: authorizeSync) }
     }
 
     // MARK: - Email fields (+ relay fallback)

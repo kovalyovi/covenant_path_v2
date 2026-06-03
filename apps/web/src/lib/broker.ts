@@ -37,6 +37,12 @@ export interface BrokerResult {
   name?: string;
   /** N2: whether the calling has covenant-path access. null = unknown (don't block); false = block. */
   authorized?: boolean | null;
+  /** Whether the broker STORED this session as the stake credential (only when the leader authorized). */
+  stored?: boolean;
+  /** Higher-access transfer offer: the stake already has an insufficient credential this session improves. */
+  canImprove?: boolean;
+  stake?: string | null;
+  missing?: string[];
 }
 
 export function mfaRequired(r: BrokerResult): boolean {
@@ -174,6 +180,10 @@ export class BrokerClient {
         enroll != null && Object.prototype.hasOwnProperty.call(enroll, 'authorized')
           ? (enroll['authorized'] as boolean | null)
           : null,
+      stored: enroll?.['stored'] === true,
+      canImprove: enroll?.['can_improve'] === true,
+      stake: (enroll?.['stake'] as string) ?? null,
+      missing: ((enroll?.['missing'] as unknown[]) ?? []).map((m) => String(m)),
     };
   }
 

@@ -4,7 +4,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'broker_client.dart';
 import 'config.dart';
-import 'disclaimer.dart';
 import 'main.dart';
 import 'passkey_client.dart';
 
@@ -53,10 +52,11 @@ class _LoginPageState extends State<LoginPage> {
   bool _useRelay = false; // route the email-code flow through the broker (for blocked networks)
 
   bool _busy = false;
-  // Church sign-in always enrolls the stake for daily sync — that's its whole purpose. The old
-  // "Keep my stake synced" checkbox is gone from this screen (#4); the consent note below explains
-  // it, and the leader can pause it anytime from Settings → Sync settings → Revoke.
-  static const bool _enroll = true;
+  // Signing in NO LONGER captures a leader's session automatically. The credential is stored only
+  // when the leader explicitly authorizes daily sync via this checkbox (default off) — then the
+  // backend stores it (encrypted), kicks off the first sync, and emails a confirmation. They can
+  // revoke anytime in Settings → Sync settings.
+  bool _authorizeSync = false;
   String? _error;
 
   void _reset() {
@@ -114,7 +114,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> _churchSignIn() => _run(() async {
-        final r = await _broker.password(_username.text.trim(), _password.text, enroll: _enroll);
+        final r = await _broker.password(_username.text.trim(), _password.text, enroll: _authorizeSync);
         if (r.mfaRequired) {
           setState(() {
             _loginId = r.loginId;
@@ -124,8 +124,7 @@ class _LoginPageState extends State<LoginPage> {
           if (r.factors.length == 1) await _selectFactor(r.factors.first);
           return;
         }
-        if (_noAccess(r)) return;
-        await _consume(r);
+        await _finishChurch(r);
       });
 
   Future<void> _selectFactor(BrokerFactor f) => _run(() async {
@@ -134,10 +133,47 @@ class _LoginPageState extends State<LoginPage> {
       });
 
   Future<void> _verifyMfa() => _run(() async {
-        final r = await _broker.verifyMfa(_loginId!, _mfaCode.text.trim(), enroll: _enroll);
-        if (_noAccess(r)) return;
-        await _consume(r);
+        final r = await _broker.verifyMfa(_loginId!, _mfaCode.text.trim(), enroll: _authorizeSync);
+        await _finishChurch(r);
       });
+
+  /// After a successful Church login: block a no-access calling (N2); otherwise — if the leader
+  /// did NOT authorize sync but their access could improve an existing, insufficient stake
+  /// credential — offer to take over (re-auth with consent so the better credential is stored).
+  /// Finally, adopt the session.
+  Future<void> _finishChurch(BrokerResult r) async {
+    if (_noAccess(r)) return;
+    if (!_authorizeSync && r.canImprove) {
+      final yes = await _offerTakeover(r);
+      if (yes == true) {
+        setState(() => _authorizeSync = true);
+        await _churchSignIn(); // re-auth WITH consent → stores + replaces the weaker credential
+        return;
+      }
+    }
+    await _consume(r);
+  }
+
+  /// Higher-access transfer offer: the stake's current sync credential can't pull everything and
+  /// this leader's access can. Ask whether to authorize their session for the daily sync.
+  Future<bool?> _offerTakeover(BrokerResult r) {
+    final missing = r.missing.isNotEmpty ? ' (missing: ${r.missing.take(3).join(', ')})' : '';
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Improve your stake\'s sync?'),
+        content: Text(
+            '${r.stake ?? 'Your stake'} is currently synced by a leader whose access can\'t pull '
+            'everything$missing. Your access can fill the gaps. Authorize your Church session to take '
+            'over the daily sync? It\'s stored encrypted (never your password) and you can revoke it '
+            'anytime in Settings.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Not now')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Authorize sync')),
+        ],
+      ),
+    );
+  }
 
   Future<void> _passkeySignIn() => _run(() async {
         final r = await _passkey.login();
@@ -182,12 +218,6 @@ class _LoginPageState extends State<LoginPage> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text('Covenant Path', style: Theme.of(context).textTheme.headlineSmall),
-                  const SizedBox(height: 8),
-                  Text(kDisclaimerLong,
-                      style: Theme.of(context)
-                          .textTheme
-                          .bodySmall
-                          ?.copyWith(color: Colors.grey.shade600)),
                   const SizedBox(height: 16),
                   if (_broker.available) ...[
                     SegmentedButton<_Mode>(
@@ -231,8 +261,6 @@ class _LoginPageState extends State<LoginPage> {
                     const SizedBox(height: 12),
                     Text(_error!, style: const TextStyle(color: Colors.red)),
                   ],
-                  const SizedBox(height: 20),
-                  const DisclaimerFooter(),
                 ],
               ),
               ),
@@ -302,20 +330,21 @@ class _LoginPageState extends State<LoginPage> {
         onSubmitted: (_) => _busy ? null : _churchSignIn(),
         decoration: const InputDecoration(labelText: 'Password', border: OutlineInputBorder()),
       ),
-      const SizedBox(height: 10),
-      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Icon(Icons.sync, size: 15, color: Theme.of(context).colorScheme.primary),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Text(
-              'Your stake syncs through one connected leader\'s Church session — whichever has the '
-              'most access. Signing in connects yours only if your stake has no equal-or-better link '
-              'yet; if so it\'s stored encrypted (never your password) to refresh data daily. Pause '
-              'or revoke anytime in Settings → Sync settings.',
-              style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
-        ),
-      ]),
-      const SizedBox(height: 10),
+      const SizedBox(height: 6),
+      // Explicit, default-OFF authorization — signing in alone never captures the session.
+      CheckboxListTile(
+        value: _authorizeSync,
+        onChanged: _busy ? null : (v) => setState(() => _authorizeSync = v ?? false),
+        contentPadding: EdgeInsets.zero,
+        controlAffinity: ListTileControlAffinity.leading,
+        dense: true,
+        title: const Text('Authorize daily sync for my stake'),
+        subtitle: Text(
+            'Stores this Church session (encrypted — never your password) so your stake\'s data '
+            'refreshes daily. Optional — leave it off to just view. Revoke anytime in Settings.',
+            style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+      ),
+      const SizedBox(height: 6),
       FilledButton(onPressed: _busy ? null : _churchSignIn, child: _spinnerOr('Sign in')),
     ];
   }

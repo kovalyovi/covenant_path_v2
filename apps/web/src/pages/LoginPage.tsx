@@ -10,10 +10,9 @@ import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { broker, BrokerError, mfaRequired, type BrokerFactor, type BrokerResult } from '../lib/broker';
 import { passkey } from '../lib/passkey';
-import { kDisclaimerLong, kChurchSyncNote, kNoAccessMessage } from '../lib/disclaimer';
+import { kNoAccessMessage } from '../lib/disclaimer';
 import { Button, Segmented } from '../components/ui';
 import { Icon } from '../components/Icon';
-import { DisclaimerFooter } from '../components/Disclaimer';
 
 type Mode = 'church' | 'email';
 
@@ -33,6 +32,8 @@ export function LoginPage() {
   const [loginId, setLoginId] = useState<string | null>(null);
   const [factors, setFactors] = useState<BrokerFactor[]>([]);
   const [factorSent, setFactorSent] = useState<BrokerFactor | null>(null);
+  // Explicit, default-OFF authorization — signing in alone never captures the leader's session.
+  const [authorizeSync, setAuthorizeSync] = useState(false);
 
   // Email-code fields
   const [email, setEmail] = useState('');
@@ -94,15 +95,14 @@ export function LoginPage() {
 
   const churchSignIn = () =>
     run(async () => {
-      const r = await broker.password(username.trim(), password, true);
+      const r = await broker.password(username.trim(), password, authorizeSync);
       if (mfaRequired(r)) {
         setLoginId(r.loginId ?? null);
         setFactors(r.factors);
         if (r.factors.length === 1) await selectFactor(r.factors[0]);
         return;
       }
-      if (noAccess(r)) return;
-      await consume(r);
+      await finishChurch(r);
     });
 
   const selectFactor = (f: BrokerFactor) =>
@@ -113,10 +113,37 @@ export function LoginPage() {
 
   const verifyMfa = () =>
     run(async () => {
-      const r = await broker.verifyMfa(loginId!, mfaCode.trim(), true);
-      if (noAccess(r)) return;
-      await consume(r);
+      const r = await broker.verifyMfa(loginId!, mfaCode.trim(), authorizeSync);
+      await finishChurch(r);
     });
+
+  // After a successful Church login: block a no-access calling (N2); else — if the leader did NOT
+  // authorize sync but their access could improve an existing, insufficient stake credential — offer
+  // to take over (re-auth WITH consent so the better credential is stored). Finally, adopt the session.
+  async function finishChurch(r: BrokerResult) {
+    if (noAccess(r)) return;
+    if (!authorizeSync && r.canImprove) {
+      const missing = r.missing && r.missing.length ? ` (missing: ${r.missing.slice(0, 3).join(', ')})` : '';
+      const yes = window.confirm(
+        `${r.stake ?? 'Your stake'} is currently synced by a leader whose access can't pull everything${missing}. ` +
+          `Authorize your Church session to take over the daily sync? It's stored encrypted (never your password) and revocable anytime.`,
+      );
+      if (yes) {
+        const r2 = await broker.password(username.trim(), password, true); // re-auth WITH consent
+        if (mfaRequired(r2)) {
+          setAuthorizeSync(true); // so completing MFA stores the credential
+          setLoginId(r2.loginId ?? null);
+          setFactors(r2.factors);
+          if (r2.factors.length === 1) await selectFactor(r2.factors[0]);
+          return;
+        }
+        if (noAccess(r2)) return;
+        await consume(r2);
+        return;
+      }
+    }
+    await consume(r);
+  }
 
   const passkeySignIn = () =>
     run(async () => {
@@ -163,7 +190,6 @@ export function LoginPage() {
         }}
       >
         <h1 style={{ fontSize: '1.4rem' }}>Covenant Path</h1>
-        <p className="tiny muted">{kDisclaimerLong}</p>
 
         {brokerAvailable && (
           <Segmented<Mode>
@@ -190,6 +216,8 @@ export function LoginPage() {
             loginId={loginId}
             factors={factors}
             factorSent={factorSent}
+            authorizeSync={authorizeSync}
+            setAuthorizeSync={setAuthorizeSync}
             setUsername={setUsername}
             setPassword={setPassword}
             setMfaCode={setMfaCode}
@@ -242,8 +270,6 @@ export function LoginPage() {
             {error}
           </p>
         )}
-
-        <DisclaimerFooter />
       </form>
     </main>
   );
@@ -257,6 +283,8 @@ interface ChurchProps {
   loginId: string | null;
   factors: BrokerFactor[];
   factorSent: BrokerFactor | null;
+  authorizeSync: boolean;
+  setAuthorizeSync: (v: boolean) => void;
   setUsername: (v: string) => void;
   setPassword: (v: string) => void;
   setMfaCode: (v: string) => void;
@@ -334,10 +362,19 @@ function ChurchFields(p: ChurchProps) {
           }}
         />
       </label>
-      <div className="row" style={{ alignItems: 'flex-start' }}>
-        <Icon name="sync" size={15} color="var(--primary)" />
-        <span className="tiny muted">{kChurchSyncNote}</span>
-      </div>
+      <label className="row" style={{ alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
+        <input
+          type="checkbox"
+          checked={p.authorizeSync}
+          disabled={p.busy}
+          onChange={(e) => p.setAuthorizeSync(e.target.checked)}
+        />
+        <span className="tiny muted">
+          <strong>Authorize daily sync for my stake.</strong> Stores this Church session (encrypted —
+          never your password) so your stake's data refreshes daily. Optional — leave it off to just
+          view. Revoke anytime in Settings.
+        </span>
+      </label>
       <Button variant="filled" onClick={p.onSignIn} disabled={p.busy} loading={p.busy} type="submit">
         Sign in
       </Button>
