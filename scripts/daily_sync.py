@@ -376,11 +376,49 @@ def _et_now():
     return datetime.now(ZoneInfo("America/New_York"))
 
 
+def _stake_last_synced(conn) -> dict[str, object]:
+    """stake_id -> last successful sync time (stakes.last_synced_at, a tz-aware timestamptz, or
+    None). Best-effort: any error means "treat everyone as never-synced" so a read problem can
+    only ever cause an extra sync, never a missed one."""
+    out: dict[str, object] = {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute("select id, last_synced_at from stakes")
+            for sid, ts in cur.fetchall():
+                out[str(sid)] = ts
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("last-synced read skipped (treating all as due): %s", exc)
+        conn.rollback()
+    return out
+
+
+def _due_today(now, hour: int, last_synced) -> bool:
+    """Is a stake due to sync? True once the ET wall clock reaches its configured `hour` and it
+    hasn't already synced since that hour opened *today*.
+
+    This replaces an exact `now.hour == configured_hour` match, which was fragile: GitHub
+    frequently DELAYS scheduled cron dispatch (observed 10–50 min, worst at the top of the hour),
+    so the one fire that matched the hour often arrived after the old :00–:05 gate and the whole
+    day was skipped. With a due-window check, *whichever* hourly fire actually lands at/after the
+    window picks the stake up, a fire that slips across the hour boundary still counts, and
+    last_synced_at keeps it to exactly one run/day (a failed run simply stays due and retries)."""
+    if now.hour < hour:
+        return False
+    window_open = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if last_synced is None:
+        return True
+    ls = last_synced
+    if getattr(ls, "tzinfo", None) is None:  # a naive timestamp → assume the ET wall clock
+        ls = ls.replace(tzinfo=now.tzinfo)
+    return ls < window_open
+
+
 def list_stake_units() -> list[int]:
     """Credentialed stake unit numbers the CI matrix should sync RIGHT NOW. Honors each stake's
     in-app schedule (stake_settings.sync_hour_et / sync_paused, migration 0030):
-      • a scheduled hourly run emits a stake only when the current ET hour == its configured hour
-        (default 7), skipping paused stakes;
+      • a scheduled run emits a stake once it is DUE — i.e. the current ET hour has reached the
+        stake's configured hour (default 7) and it hasn't synced since that hour today (see
+        _due_today) — skipping paused stakes. This tolerates GitHub's variable cron-dispatch delay;
       • the Thursday 8:20-ET pre-meeting pulse and any manual workflow_dispatch emit every active,
         non-paused stake regardless of hour.
     Defaults preserve today's behavior (7:00 ET) for stakes with no settings row."""
@@ -388,27 +426,30 @@ def list_stake_units() -> list[int]:
     conn = db.connect()
     try:
         stakes = [s for s in credentials.list_active_stakes(conn) if s.get("unit_number")]
+        sched = _stake_schedules(conn)
         scheduled = os.getenv("GITHUB_EVENT_NAME") == "schedule"
         if not scheduled:
-            sched = _stake_schedules(conn)  # manual run: still skip explicitly-paused stakes
+            # manual run: every non-paused stake (the operator explicitly asked for it)
             return [s["unit_number"] for s in stakes if not sched.get(str(s["stake_id"]), {}).get("paused")]
         try:
             now = _et_now()
         except Exception as exc:  # noqa: BLE001 — no tzdata? don't strand the daily sync: run all non-paused
             logger.warning("ET time lookup failed (%s); emitting all non-paused stakes", exc)
-            sched = _stake_schedules(conn)
             return [s["unit_number"] for s in stakes
                     if not sched.get(str(s["stake_id"]), {}).get("paused")]
-        # Thursday 8:20-ET pre-meeting pulse: everyone active (not paused).
+        # Thursday 8:20-ET pre-meeting pulse: everyone active (not paused), regardless of last sync.
         thursday_pulse = now.weekday() == 3 and now.hour == 8 and 15 <= now.minute <= 30
-        sched = _stake_schedules(conn)
+        last = _stake_last_synced(conn)
         out = []
         for s in stakes:
             cfg = sched.get(str(s["stake_id"]), {})
             if cfg.get("paused"):
                 continue
+            if thursday_pulse:
+                out.append(s["unit_number"])
+                continue
             hour = cfg.get("hour", 7)
-            if thursday_pulse or now.hour == hour:
+            if _due_today(now, hour, last.get(str(s["stake_id"]))):
                 out.append(s["unit_number"])
         return out
     finally:
@@ -495,24 +536,23 @@ def run_delegated(args, skip_unit: int | None = None) -> int:
 
 
 def _should_run_now() -> tuple[bool, str]:
-    """Top-level prepare gate. The workflow fires hourly candidate UTC crons (covering EST+EDT);
-    this gate keeps a run only at a valid ET wall-clock minute, then `list_stake_units()` decides
-    WHICH stakes are due this hour (per their in-app schedule). Manual workflow_dispatch always runs.
+    """Top-level prepare gate. The workflow fires an hourly cron; `list_stake_units()` then decides
+    WHICH stakes are actually due (per their in-app schedule + last_synced_at).
 
-    We accept any whole ET hour at :00–:05 (so an hourly schedule lands once per hour without DST
-    drift) plus the Thursday 8:20-ET pre-meeting window. Off those minutes → skip the duplicate.
-    """
+    We used to also reject a run here unless its ET wall-clock minute was :00–:05. That was the bug
+    behind "the sync keeps skipping": GitHub routinely delays scheduled dispatch (observed 10–50 min
+    past the hour, since the top of the hour is the most congested cron slot), so nearly every real
+    scheduled fire landed outside the window and emitted an empty matrix — the daily sync effectively
+    never ran on schedule. The per-stake due-window check in list_stake_units() is delay-robust, so
+    this gate no longer filters on the minute: a scheduled fire always proceeds to the due check.
+    Manual workflow_dispatch always runs."""
     if os.getenv("GITHUB_EVENT_NAME") != "schedule":
         return True, "manual run"
     try:
         now = _et_now()
+        return True, f"scheduled fire {now:%a %H:%M %Z} (per-stake due check decides who runs)"
     except Exception as exc:  # noqa: BLE001  — never let a tz lookup block the daily sync
-        return True, f"tz lookup failed ({exc}); running anyway"
-    if now.minute <= 5:
-        return True, f"top of hour {now:%a %H:%M %Z} (per-stake schedule decides who runs)"
-    if now.weekday() == 3 and now.hour == 8 and 15 <= now.minute <= 30:
-        return True, f"Thursday 8:20 ET pre-meeting pulse ({now:%a %H:%M %Z})"
-    return False, f"off-target ET minute ({now:%a %H:%M %Z})"
+        return True, f"scheduled fire (tz lookup failed: {exc}); running anyway"
 
 
 def main() -> int:
