@@ -45,8 +45,11 @@ struct PersonDetailView: View {
         .navigationTitle(member.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            // /mlt = Member List Tool app: renders the person's covenant-path / "new member"
+            // record. The bare /records/member-profile/{uuid} path is a raw RSC data route the
+            // browser downloads instead of showing — hence the /mlt prefix.
             if let uuid = member.personUUID, !uuid.isEmpty,
-               let url = URL(string: "https://lcr.churchofjesuschrist.org/records/member-profile/\(uuid)?lang=eng") {
+               let url = URL(string: "https://lcr.churchofjesuschrist.org/mlt/records/member-profile/\(uuid)?lang=eng") {
                 ToolbarItem(placement: .topBarTrailing) {
                     Link(destination: url) { Image(systemName: "arrow.up.right.square") }
                         .accessibilityLabel("Open in LCR")

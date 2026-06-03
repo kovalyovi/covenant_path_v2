@@ -94,10 +94,13 @@ fun PersonDetailScreen(member: Member, onBack: () -> Unit) {
                     }
                 },
                 actions = {
-                    // Open in LCR (compare data) — same deep link the Flutter detail page uses.
+                    // Open this person in LCR — same deep link the Flutter detail page uses.
+                    // /mlt = Member List Tool app: renders the covenant-path / "new member" record.
+                    // The bare /records/member-profile/{uuid} path is a raw RSC data route the
+                    // browser downloads instead of showing — hence the /mlt prefix.
                     if (!uuid.isNullOrEmpty()) {
                         IconButton(onClick = {
-                            val url = "https://lcr.churchofjesuschrist.org/records/member-profile/$uuid?lang=eng"
+                            val url = "https://lcr.churchofjesuschrist.org/mlt/records/member-profile/$uuid?lang=eng"
                             runCatching {
                                 context.startActivity(
                                     android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)),

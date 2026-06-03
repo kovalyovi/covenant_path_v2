@@ -42,10 +42,13 @@ class PersonDetailPage extends StatelessWidget {
       appBar: AppBar(title: Text(name), actions: [
         if (uuid != null && uuid.isNotEmpty)
           IconButton(
-            tooltip: 'Open in LCR (compare data)',
+            tooltip: 'Open this person in LCR',
             icon: const Icon(Icons.open_in_new),
+            // The Member List Tool profile page (/mlt/...) renders the person's covenant-path /
+            // "new member" record. The bare /records/member-profile/{uuid} path is a raw RSC data
+            // route that the browser downloads instead of showing — hence the /mlt prefix.
             onPressed: () => launchUrl(
-                Uri.parse('https://lcr.churchofjesuschrist.org/records/member-profile/$uuid?lang=eng'),
+                Uri.parse('https://lcr.churchofjesuschrist.org/mlt/records/member-profile/$uuid?lang=eng'),
                 mode: LaunchMode.externalApplication),
           ),
       ]),

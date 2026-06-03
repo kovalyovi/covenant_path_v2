@@ -90,11 +90,14 @@ function DetailAppBar({ title, uuid, onBack }: { title: string; uuid?: string; o
       {uuid && (
         <a
           className="iconbtn"
-          href={`https://lcr.churchofjesuschrist.org/records/member-profile/${uuid}?lang=eng`}
+          /* /mlt = Member List Tool app: renders the person's covenant-path / "new member"
+             record. The bare /records/member-profile/{uuid} path is a raw RSC data route the
+             browser downloads instead of showing — hence the /mlt prefix. */
+          href={`https://lcr.churchofjesuschrist.org/mlt/records/member-profile/${uuid}?lang=eng`}
           target="_blank"
           rel="noopener"
-          aria-label="Open in LCR (compare data)"
-          title="Open in LCR (compare data)"
+          aria-label="Open this person in LCR"
+          title="Open this person in LCR"
         >
           <Icon name="open_in_new" size={22} />
         </a>
