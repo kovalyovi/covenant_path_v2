@@ -30,6 +30,11 @@ data class BrokerResult(
     // N2: covenant-path access from the broker enroll step. null = unknown (don't block);
     // false = no access -> block at login.
     val authorized: Boolean? = null,
+    // #8: the stake already has an INSUFFICIENT credential this session would improve.
+    val canImprove: Boolean = false,
+    // #8: the stake has NO usable credential yet and this authorized leader could set one up.
+    val canEnroll: Boolean = false,
+    val stake: String? = null,
 ) {
     val mfaRequired: Boolean get() = loginId != null && otp == null
 }
@@ -61,6 +66,8 @@ data class CredentialInfo(
 data class EnrollmentStatus(
     val stakeName: String? = null,
     val stakeId: String? = null,
+    /** LCR stake unit number — the stable ID shown to users (stakes get renamed). */
+    val unitNumber: Int? = null,
     val lastSyncedAt: String? = null,
     val memberCount: Int = 0,
     val hasData: Boolean = false,
@@ -71,6 +78,7 @@ data class EnrollmentStatus(
         fun from(j: JsonObject) = EnrollmentStatus(
             stakeName = j.str("stake_name"),
             stakeId = j.str("stake_id"),
+            unitNumber = j.int("unit_number").takeIf { it > 0 },  // unit numbers are always > 0
             lastSyncedAt = j.str("last_synced_at"),
             memberCount = j.int("member_count"),
             hasData = j.bool("has_data"),
@@ -152,6 +160,9 @@ class BrokerClient(private val auth: AuthRepository = AuthRepository()) {
             name = data.str("identity_name"),
             // N2: only an explicit false blocks; absent/errored enroll → null (don't block).
             authorized = data.obj("enroll")?.boolOrNull("authorized"),
+            canImprove = data.obj("enroll")?.boolOrNull("can_improve") == true,
+            canEnroll = data.obj("enroll")?.boolOrNull("can_enroll") == true,
+            stake = data.obj("enroll")?.str("stake"),
         )
     }
 

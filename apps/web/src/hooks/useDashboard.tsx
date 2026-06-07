@@ -186,7 +186,8 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     };
   }, [syncing, pollSyncState]);
 
-  // Bootstrap: resolve stakes, then load members; if empty, fetch enrollment status for the empty state.
+  // Bootstrap: resolve stakes, then load members; prefetch enrollment status in the background once
+  // the page is ready (#11) so opening Sync settings is instant — and it's also needed for the empty state.
   useEffect(() => {
     let active = true;
     (async () => {
@@ -197,7 +198,8 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         const rows = await loadMembers(currentIdRef.current);
         if (!active) return;
         setMembers(rows);
-        if (rows.length === 0) void reloadEnrollStatus();
+        // Not awaited — never delays first paint; caches enrollStatus for the Sync-settings sheet (#11).
+        void reloadEnrollStatus();
       } catch (e) {
         if (active) setError(e instanceof Error ? e.message : String(e));
       } finally {

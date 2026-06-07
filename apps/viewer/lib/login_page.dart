@@ -52,10 +52,10 @@ class _LoginPageState extends State<LoginPage> {
   bool _useRelay = false; // route the email-code flow through the broker (for blocked networks)
 
   bool _busy = false;
-  // Signing in NO LONGER captures a leader's session automatically. The credential is stored only
-  // when the leader explicitly authorizes daily sync via this checkbox (default off) — then the
-  // backend stores it (encrypted), kicks off the first sync, and emails a confirmation. They can
-  // revoke anytime in Settings → Sync settings.
+  // Signing in NEVER captures a leader's session by itself. Consent is no longer a checkbox on the
+  // login form (#8): after a successful sign-in we OFFER to set up daily sync (a dialog) only when
+  // the stake has no sufficient credential. This flag is the "this auth pass should enroll" signal —
+  // set true just before we re-authenticate with consent, so the broker stores the credential.
   bool _authorizeSync = false;
   String? _error;
 
@@ -137,39 +137,46 @@ class _LoginPageState extends State<LoginPage> {
         await _finishChurch(r);
       });
 
-  /// After a successful Church login: block a no-access calling (N2); otherwise — if the leader
-  /// did NOT authorize sync but their access could improve an existing, insufficient stake
-  /// credential — offer to take over (re-auth with consent so the better credential is stored).
-  /// Finally, adopt the session.
+  /// After a successful Church login: block a no-access calling (N2); otherwise, if the stake has no
+  /// sufficient sync credential and this leader could provide one (set one up, or improve a weaker
+  /// existing one), OFFER it post-login (#8 — consent is no longer a login-form checkbox). On accept
+  /// we re-authenticate with consent so the broker stores the credential. Finally, adopt the session.
   Future<void> _finishChurch(BrokerResult r) async {
     if (_noAccess(r)) return;
-    if (!_authorizeSync && r.canImprove) {
-      final yes = await _offerTakeover(r);
+    if (!_authorizeSync && (r.canEnroll || r.canImprove)) {
+      final yes = await _offerEnroll(r);
       if (yes == true) {
         setState(() => _authorizeSync = true);
-        await _churchSignIn(); // re-auth WITH consent → stores + replaces the weaker credential
+        await _churchSignIn(); // re-auth WITH consent → stores (or replaces the weaker) credential
         return;
       }
     }
     await _consume(r);
   }
 
-  /// Higher-access transfer offer: the stake's current sync credential can't pull everything and
-  /// this leader's access can. Ask whether to authorize their session for the daily sync.
-  Future<bool?> _offerTakeover(BrokerResult r) {
-    final missing = r.missing.isNotEmpty ? ' (missing: ${r.missing.take(3).join(', ')})' : '';
+  /// Post-login sync offer (#8). Two shapes: set up sync for a stake with NO credential (canEnroll),
+  /// or take over from a leader whose access can't pull everything (canImprove). Either way the
+  /// session is stored encrypted (never the password) and is revocable in Settings.
+  Future<bool?> _offerEnroll(BrokerResult r) {
+    final improving = r.canImprove;
+    final missing = (improving && r.missing.isNotEmpty)
+        ? ' (missing: ${r.missing.take(3).join(', ')})' : '';
     return showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Improve your stake\'s sync?'),
-        content: Text(
-            '${r.stake ?? 'Your stake'} is currently synced by a leader whose access can\'t pull '
-            'everything$missing. Your access can fill the gaps. Authorize your Church session to take '
-            'over the daily sync? It\'s stored encrypted (never your password) and you can revoke it '
-            'anytime in Settings.'),
+        title: Text(improving ? 'Improve your stake\'s sync?' : 'Set up daily sync?'),
+        content: Text(improving
+            ? '${r.stake ?? 'Your stake'} is currently synced by a leader whose access can\'t pull '
+                'everything$missing. Your access can fill the gaps. Authorize your Church session to '
+                'take over the daily sync? It\'s stored encrypted (never your password) and you can '
+                'revoke it anytime in Settings.'
+            : '${r.stake ?? 'Your stake'} isn\'t set up for daily sync yet. Authorize your Church '
+                'session so your stake\'s data refreshes automatically each day? It\'s stored '
+                'encrypted (never your password) and you can revoke it anytime in Settings.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Not now')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Authorize sync')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true),
+              child: Text(improving ? 'Authorize sync' : 'Set up sync')),
         ],
       ),
     );
@@ -330,21 +337,9 @@ class _LoginPageState extends State<LoginPage> {
         onSubmitted: (_) => _busy ? null : _churchSignIn(),
         decoration: const InputDecoration(labelText: 'Password', border: OutlineInputBorder()),
       ),
-      const SizedBox(height: 6),
-      // Explicit, default-OFF authorization — signing in alone never captures the session.
-      CheckboxListTile(
-        value: _authorizeSync,
-        onChanged: _busy ? null : (v) => setState(() => _authorizeSync = v ?? false),
-        contentPadding: EdgeInsets.zero,
-        controlAffinity: ListTileControlAffinity.leading,
-        dense: true,
-        title: const Text('Authorize daily sync for my stake'),
-        subtitle: Text(
-            'Stores this Church session (encrypted — never your password) so your stake\'s data '
-            'refreshes daily. Optional — leave it off to just view. Revoke anytime in Settings.',
-            style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
-      ),
-      const SizedBox(height: 6),
+      const SizedBox(height: 16),
+      // No "authorize daily sync" checkbox here (#8): signing in only views. If the stake isn't
+      // synced yet, we offer to set it up in a dialog AFTER a successful sign-in.
       FilledButton(onPressed: _busy ? null : _churchSignIn, child: _spinnerOr('Sign in')),
     ];
   }

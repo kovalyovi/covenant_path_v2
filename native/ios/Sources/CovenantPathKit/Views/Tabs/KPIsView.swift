@@ -37,9 +37,6 @@ struct KPIsView: View {
                 let newAtSac = Kpis.metricData(baptized, datesOf: Kpis.attendedDates, period: period)
                 let newFriends = Kpis.metricData(investigators, datesOf: Kpis.firstLessonDate, period: period)
 
-                // "Baptisms by month" now lives in its own dedicated tab (the last one) — see
-                // BaptismsByMonthView.
-
                 MetricChartCard(title: "Investigators at Sacrament", symbol: "person.3",
                                 hex: 0xEF6C00, data: friendsAtSac, period: period, compare: compare,
                                 suffix: "people being taught who attended sacrament",
@@ -58,6 +55,10 @@ struct KPIsView: View {
                 if unit == nil && units.count > 1 {
                     unitCompletionCard
                 }
+
+                // #1: baptisms-by-month chart, folded in from its old "By Month" tab — at the bottom,
+                // respecting the unit filter (owns its own YTD/12mo/24mo/All window + by-unit drill).
+                BaptismsCard(baptized: baptized, allUnits: allUnits, onDrill: { drill = $0 })
             }
             .padding(16)
             .frame(maxWidth: 760)

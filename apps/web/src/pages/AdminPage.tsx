@@ -504,6 +504,8 @@ function EnrolledStakesCard({
         const cred = s['credential'] as Json | undefined;
         const name = String(s['name'] ?? '—');
         const stakeId = String(s['stake_id']);
+        const unitNumber = String(s['unit_number'] ?? '');
+        const jobs7d = Number(s['jobs_7d'] ?? 0) || 0;
         const members = s['member_count'] ?? 0;
         const running = s['sync_state'] === 'running';
         let credLabel: string;
@@ -525,7 +527,14 @@ function EnrolledStakesCard({
         return (
           <div key={i} style={{ padding: '6px 0' }}>
             <div className="row">
-              <strong style={{ flex: 1 }}>{name}</strong>
+              <strong>{name}</strong>
+              {/* Stable LCR stake ID — stakes get renamed, so the ID is how you identify them (#9). */}
+              {unitNumber && unitNumber !== 'null' && (
+                <span className="small muted" style={{ fontFamily: 'monospace', marginLeft: 8, flex: 1 }}>
+                  ID {unitNumber}
+                </span>
+              )}
+              {(!unitNumber || unitNumber === 'null') && <span style={{ flex: 1 }} />}
               {running && <span className="spinner" aria-hidden="true" style={{ width: 14, height: 14 }} />}
               {!running && cred && cred['state'] === 'active' && (
                 <IconButton icon="sync" label="Sync this stake now" size={18} disabled={busy} onClick={() => onSync(String(s['unit_number'] ?? ''), name)} />
@@ -540,6 +549,10 @@ function EnrolledStakesCard({
               </span>
               <span className="small muted">{String(members)} members</span>
               <span className="small muted">· synced {agoOrNever(s['last_synced_at'])}</span>
+              {/* Sync jobs that actually ran for this stake in the last 7 days (#9). Amber when zero. */}
+              <span className="small" style={{ color: jobs7d === 0 ? statusColors.warning : 'var(--muted)' }}>
+                · {jobs7d} job{jobs7d === 1 ? '' : 's'}/7d
+              </span>
               {cred?.['principal_name'] != null && <span className="small muted">· by {String(cred['principal_name'])}</span>}
             </div>
             {cred && cred['complete'] !== true && missing.length > 0 && (

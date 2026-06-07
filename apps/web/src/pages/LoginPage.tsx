@@ -117,18 +117,21 @@ export function LoginPage() {
       await finishChurch(r);
     });
 
-  // After a successful Church login: block a no-access calling (N2); else — if the leader did NOT
-  // authorize sync but their access could improve an existing, insufficient stake credential — offer
-  // to take over (re-auth WITH consent so the better credential is stored). Finally, adopt the session.
+  // After a successful Church login: block a no-access calling (N2); else, if the stake has no
+  // sufficient sync credential and this leader could provide one (set one up, or improve a weaker
+  // existing one), OFFER it post-login (#8 — consent is no longer a login-form checkbox). On accept,
+  // re-auth WITH consent so the broker stores the credential. Finally, adopt the session.
   async function finishChurch(r: BrokerResult) {
     if (noAccess(r)) return;
-    if (!authorizeSync && r.canImprove) {
-      const missing = r.missing && r.missing.length ? ` (missing: ${r.missing.slice(0, 3).join(', ')})` : '';
-      const yes = window.confirm(
-        `${r.stake ?? 'Your stake'} is currently synced by a leader whose access can't pull everything${missing}. ` +
-          `Authorize your Church session to take over the daily sync? It's stored encrypted (never your password) and revocable anytime.`,
-      );
-      if (yes) {
+    if (!authorizeSync && (r.canEnroll || r.canImprove)) {
+      const stake = r.stake ?? 'Your stake';
+      const missing = r.canImprove && r.missing?.length ? ` (missing: ${r.missing.slice(0, 3).join(', ')})` : '';
+      const msg = r.canImprove
+        ? `${stake} is currently synced by a leader whose access can't pull everything${missing}. ` +
+          `Authorize your Church session to take over the daily sync? It's stored encrypted (never your password) and revocable anytime.`
+        : `${stake} isn't set up for daily sync yet. Authorize your Church session so your stake's ` +
+          `data refreshes automatically each day? It's stored encrypted (never your password) and revocable anytime.`;
+      if (window.confirm(msg)) {
         const r2 = await broker.password(username.trim(), password, true); // re-auth WITH consent
         if (mfaRequired(r2)) {
           setAuthorizeSync(true); // so completing MFA stores the credential
@@ -216,8 +219,6 @@ export function LoginPage() {
             loginId={loginId}
             factors={factors}
             factorSent={factorSent}
-            authorizeSync={authorizeSync}
-            setAuthorizeSync={setAuthorizeSync}
             setUsername={setUsername}
             setPassword={setPassword}
             setMfaCode={setMfaCode}
@@ -283,8 +284,6 @@ interface ChurchProps {
   loginId: string | null;
   factors: BrokerFactor[];
   factorSent: BrokerFactor | null;
-  authorizeSync: boolean;
-  setAuthorizeSync: (v: boolean) => void;
   setUsername: (v: string) => void;
   setPassword: (v: string) => void;
   setMfaCode: (v: string) => void;
@@ -362,19 +361,8 @@ function ChurchFields(p: ChurchProps) {
           }}
         />
       </label>
-      <label className="row" style={{ alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
-        <input
-          type="checkbox"
-          checked={p.authorizeSync}
-          disabled={p.busy}
-          onChange={(e) => p.setAuthorizeSync(e.target.checked)}
-        />
-        <span className="tiny muted">
-          <strong>Authorize daily sync for my stake.</strong> Stores this Church session (encrypted —
-          never your password) so your stake's data refreshes daily. Optional — leave it off to just
-          view. Revoke anytime in Settings.
-        </span>
-      </label>
+      {/* No "authorize daily sync" checkbox here (#8): signing in only views. If the stake isn't
+          synced yet, we offer to set it up in a dialog AFTER a successful sign-in. */}
       <Button variant="filled" onClick={p.onSignIn} disabled={p.busy} loading={p.busy} type="submit">
         Sign in
       </Button>

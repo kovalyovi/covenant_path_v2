@@ -52,6 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -302,11 +303,20 @@ private fun EnrolledStakesCard(
                 val cred = st.obj("credential")
                 val name = st.str("name") ?: "—"
                 val stakeId = st.str("stake_id") ?: ""
+                val unitNumber = st.int("unit_number").takeIf { it > 0 }
+                val jobs7d = st.int("jobs_7d")
                 val members = st.int("member_count")
                 val running = st.str("sync_state") == "running"
                 val (credLabel, credColor) = credBadge(cred)
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(name, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    Text(name, fontWeight = FontWeight.SemiBold)
+                    // Stable LCR stake ID — stakes get renamed, so the ID is how you identify them (#9).
+                    if (unitNumber != null) {
+                        Spacer(Modifier.width(8.dp))
+                        Text("ID $unitNumber", style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.outline)
+                    }
+                    Spacer(Modifier.weight(1f))
                     if (running) CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
                     if (!running && cred?.str("state") == "active") {
                         IconButton(onClick = { confirm = "Sync $name now?" to { onSync(st.str("unit_number") ?: "", name) } }, enabled = !busy) {
@@ -322,6 +332,10 @@ private fun EnrolledStakesCard(
                     Tag(credLabel, credColor)
                     Text("$members members", style = MaterialTheme.typography.bodySmall)
                     Text("· synced ${Freshness.ago(st.str("last_synced_at"))}", style = MaterialTheme.typography.bodySmall)
+                    // Sync jobs that ran for this stake in the last 7 days (#9). Amber when none ran.
+                    Text("· $jobs7d job${if (jobs7d == 1) "" else "s"}/7d",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (jobs7d == 0) Color(0xFFEF6C00) else MaterialTheme.colorScheme.onSurfaceVariant)
                     cred?.str("principal_name")?.let { Text("· by $it", style = MaterialTheme.typography.bodySmall) }
                 }
                 HorizontalDivider(Modifier.padding(vertical = 8.dp))

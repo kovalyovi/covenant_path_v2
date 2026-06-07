@@ -19,6 +19,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -55,6 +56,9 @@ fun MemberRow(
     val ageLabel = DateParse.ageLabel(member.birthDate, today)
     val resp = if (chips || showResp) Orgs.responsibleParty(member, today) else null
     val subStyle = MaterialTheme.typography.bodySmall
+    // #12: on a phone the name takes the whole first row and age drops to the line below (not a
+    // cramped second column); inline on wider screens.
+    val isMobile = LocalConfiguration.current.screenWidthDp < 600
 
     Row(
         modifier = modifier
@@ -66,11 +70,16 @@ fun MemberRow(
         PhotoAvatar(name = name, photoUrl = member.photoUrl, size = 44.dp)
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            if (isMobile || ageLabel == null) {
                 Text(name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (ageLabel != null) {
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text("  · $ageLabel", color = StatusColors.GreyText, fontSize = 13.sp)
                 }
+            }
+            if (isMobile && ageLabel != null) {
+                Text(ageLabel, color = StatusColors.GreyText, fontSize = 12.5.sp)
             }
             if (date != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {

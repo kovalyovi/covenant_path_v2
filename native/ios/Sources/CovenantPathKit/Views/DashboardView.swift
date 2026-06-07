@@ -83,7 +83,7 @@ struct DashboardView: View {
             // Per-tab content-shaped skeleton (N8) so Golden Hour / KPIs don't flash member rows.
             switch t {
             case .goldenHour:    GoldenHourSkeleton()
-            case .kpis, .byMonth: KpiSkeleton()
+            case .kpis:          KpiSkeleton()
             default:             MemberListSkeleton()
             }
         case .failed(let message):
@@ -114,7 +114,6 @@ struct DashboardView: View {
         case .needs:      NeedsView(rows: store.members)
         case .kpis:       KPIsView(rows: store.members)
         case .table:      TableView(rows: store.members)
-        case .byMonth:    BaptismsByMonthView(rows: store.members)
         }
     }
 

@@ -60,7 +60,6 @@ import org.membercovenantpath.viewer.ui.components.KpiSkeleton
 import org.membercovenantpath.viewer.ui.components.MemberListSkeleton
 import org.membercovenantpath.viewer.ui.components.StaleCredentialBanner
 import org.membercovenantpath.viewer.ui.components.SyncingBanner
-import org.membercovenantpath.viewer.ui.screens.tabs.BaptismsByMonthScreen
 import org.membercovenantpath.viewer.ui.screens.tabs.BaptismsScreen
 import org.membercovenantpath.viewer.ui.screens.tabs.GoldenHourScreen
 import org.membercovenantpath.viewer.ui.screens.tabs.KpisScreen
@@ -72,14 +71,14 @@ import org.membercovenantpath.viewer.viewmodel.DashboardUiState
 import org.membercovenantpath.viewer.viewmodel.DashboardViewModel
 import org.membercovenantpath.viewer.viewmodel.LoadState
 
-/** The six tabs, each with its own accent (mirrors dashboard_page.dart `_tabs`). */
+/** The five tabs, each with its own accent (mirrors dashboard_page.dart `_tabs`). "By Month" is no
+ *  longer its own tab — the baptisms-by-month chart now lives at the bottom of KPIs (#1). */
 enum class DashboardTab(val label: String, val icon: ImageVector, val color: Color) {
     Baptisms("Baptisms", Icons.Filled.EventAvailable, TabColors.Baptisms),
     GoldenHour("Golden Hour", Icons.Filled.Timelapse, TabColors.GoldenHour),
     Needs("Needs", Icons.Filled.Checklist, TabColors.Needs),
     Kpis("KPIs", Icons.Filled.Insights, TabColors.Kpis),
     Table("Table", Icons.Filled.GridOn, TabColors.Table),
-    ByMonth("By Month", Icons.Filled.WaterDrop, TabColors.ByMonth),
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -205,7 +204,7 @@ fun DashboardScaffold(
                     // Per-tab content-shaped skeleton (N8) so Golden Hour / KPIs don't flash member rows.
                     is LoadState.Loading -> when (tab) {
                         DashboardTab.GoldenHour -> GoldenHourSkeleton()
-                        DashboardTab.Kpis, DashboardTab.ByMonth -> KpiSkeleton()
+                        DashboardTab.Kpis -> KpiSkeleton()
                         else -> MemberListSkeleton()
                     }
                     is LoadState.Error -> CenteredError(load.message, onRetry = dashVm::refresh)
@@ -220,7 +219,6 @@ fun DashboardScaffold(
                                 DashboardTab.Needs -> NeedsScreen(members, onOpenMember)
                                 DashboardTab.Kpis -> KpisScreen(members, onOpenMember)
                                 DashboardTab.Table -> TableScreen(members, onOpenMember)
-                                DashboardTab.ByMonth -> BaptismsByMonthScreen(members, onOpenMember)
                             }
                         }
                     }

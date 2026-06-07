@@ -48,6 +48,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import org.membercovenantpath.viewer.data.EnrollmentStatus
 import org.membercovenantpath.viewer.logic.Freshness
 import org.membercovenantpath.viewer.ui.components.CardSkeleton
+import org.membercovenantpath.viewer.ui.components.SyncSubsectionSkeleton
 import org.membercovenantpath.viewer.viewmodel.SyncSettingsViewModel
 
 /**
@@ -91,6 +92,8 @@ fun SyncSettingsSheet(
             }
 
             KeyRow("Stake", status.stakeName ?: "—")
+            // Stable LCR stake ID — stakes get renamed, so the ID reliably identifies the stake (#9).
+            status.unitNumber?.let { KeyRow("Stake ID", "$it") }
             KeyRow("Last synced", status.lastSyncedAt?.let { Freshness.exactLocal(it) } ?: "Never")
             KeyRow("Members", "${status.memberCount}")
             HorizontalDivider(Modifier.padding(vertical = 12.dp))
@@ -100,7 +103,9 @@ fun SyncSettingsSheet(
                     Icon(Icons.Filled.WarningAmber, contentDescription = null, tint = Color(0xFFEF6C00))
                     Spacer(Modifier.width(10.dp))
                     Column {
-                        Text("No sync credential", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            status.unitNumber?.let { "No sync credential for stake $it" } ?: "No sync credential",
+                            fontWeight = FontWeight.SemiBold)
                         Text("Sign in with your Church account to enable daily updates.", style = MaterialTheme.typography.bodySmall)
                     }
                 }
@@ -143,7 +148,8 @@ private fun KeyRow(label: String, value: String, color: Color? = null) {
 
 @Composable
 private fun ScheduleSection(s: org.membercovenantpath.viewer.viewmodel.ScheduleState, vm: SyncSettingsViewModel) {
-    if (!s.loaded || !s.eligible) return
+    if (!s.loaded) { SyncSubsectionSkeleton(); return }  // #16: skeleton while loading, not a pop-in
+    if (!s.eligible) return
     var menuOpen by remember { mutableStateOf(false) }
     fun label(h: Int): String {
         val ampm = if (h < 12) "AM" else "PM"; val h12 = if (h % 12 == 0) 12 else h % 12
@@ -185,7 +191,8 @@ private fun GoogleDriveSection(
     vm: SyncSettingsViewModel,
     onOpenUrl: (String) -> Unit,
 ) {
-    if (!d.loaded || !d.eligible) return
+    if (!d.loaded) { SyncSubsectionSkeleton(); return }  // #16: skeleton while loading, not a pop-in
+    if (!d.eligible) return
     HorizontalDivider(Modifier.padding(vertical = 16.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(Icons.Filled.AddToDrive, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))

@@ -37,10 +37,19 @@ public struct BrokerResult: Sendable {
     /// N2: covenant-path access from the broker enroll step. nil = unknown (don't block);
     /// false = no access → block at login.
     public let authorized: Bool?
+    /// #8: the stake already has an INSUFFICIENT credential this session would improve.
+    public let canImprove: Bool
+    /// #8: the stake has NO usable credential yet and this authorized leader could set one up.
+    public let canEnroll: Bool
+    public let stake: String?
+    public let missing: [String]
     public init(email: String? = nil, otp: String? = nil, loginID: String? = nil,
-                factors: [BrokerFactor] = [], name: String? = nil, authorized: Bool? = nil) {
+                factors: [BrokerFactor] = [], name: String? = nil, authorized: Bool? = nil,
+                canImprove: Bool = false, canEnroll: Bool = false, stake: String? = nil,
+                missing: [String] = []) {
         self.email = email; self.otp = otp; self.loginID = loginID
         self.factors = factors; self.name = name; self.authorized = authorized
+        self.canImprove = canImprove; self.canEnroll = canEnroll; self.stake = stake; self.missing = missing
     }
     public var mfaRequired: Bool { loginID != nil && otp == nil }
 }
@@ -68,6 +77,8 @@ public struct CredentialInfo: Sendable {
 public struct EnrollmentStatus: Sendable {
     public let stakeName: String?
     public let stakeID: String?
+    /// LCR stake unit number — the stable ID shown to users (stakes get renamed).
+    public let unitNumber: Int?
     public let lastSyncedAt: String?
     public let memberCount: Int
     public let hasData: Bool
@@ -76,6 +87,7 @@ public struct EnrollmentStatus: Sendable {
     init(json: [String: Any]) {
         stakeName = json["stake_name"] as? String
         stakeID = json["stake_id"] as? String
+        unitNumber = (json["unit_number"] as? NSNumber)?.intValue
         lastSyncedAt = json["last_synced_at"] as? String
         memberCount = (json["member_count"] as? NSNumber)?.intValue ?? 0
         hasData = (json["has_data"] as? Bool) ?? false
@@ -201,7 +213,11 @@ public final class BrokerService: @unchecked Sendable {
                             otp: session["otp"] as? String,
                             name: data["identity_name"] as? String,
                             // N2: only an explicit false blocks; absent/errored enroll → nil.
-                            authorized: enroll?["authorized"] as? Bool)
+                            authorized: enroll?["authorized"] as? Bool,
+                            canImprove: (enroll?["can_improve"] as? Bool) ?? false,
+                            canEnroll: (enroll?["can_enroll"] as? Bool) ?? false,
+                            stake: enroll?["stake"] as? String,
+                            missing: (enroll?["missing"] as? [Any])?.compactMap { $0 as? String } ?? [])
     }
 
     // MARK: - Church account login (port of password/selectFactor/verifyMfa)

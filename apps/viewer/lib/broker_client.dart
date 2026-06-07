@@ -42,11 +42,15 @@ class BrokerResult {
   /// The stake this session can sync, and the higher-access "you can improve the sync" offer: true
   /// when the stake already has an INSUFFICIENT credential that THIS session would strictly improve.
   final bool canImprove;
+  /// #8: true when the stake has NO usable credential yet and this authorized leader could set one
+  /// up. Drives the POST-login "Authorize daily sync?" offer (consent moved off the login form).
+  final bool canEnroll;
   final String? stake;
   final List<String> missing; // covenant-path features this session/credential can't pull
   BrokerResult(
       {this.email, this.otp, this.loginId, this.factors = const [], this.name, this.authorized,
-      this.stored = false, this.canImprove = false, this.stake, this.missing = const []});
+      this.stored = false, this.canImprove = false, this.canEnroll = false, this.stake,
+      this.missing = const []});
 
   bool get mfaRequired => loginId != null && otp == null;
 }
@@ -75,19 +79,32 @@ class CredentialInfo {
 class EnrollmentStatus {
   final String? stakeName;
   final String? stakeId;
+  final int? unitNumber; // LCR stake unit number — the stable ID shown to users (stakes get renamed)
   final String? lastSyncedAt;
   final int memberCount;
   final bool hasData;
   final bool noRole; // true if the user has no user_roles row yet
   final CredentialInfo credential;
-  const EnrollmentStatus({this.stakeName, this.stakeId, this.lastSyncedAt,
+  const EnrollmentStatus({this.stakeName, this.stakeId, this.unitNumber, this.lastSyncedAt,
       this.memberCount = 0, this.hasData = false, this.noRole = false,
       required this.credential});
+
+  /// "Name · ID 503991" (or just one when the other is missing). The ID is the stable LCR unit
+  /// number — preferred over the name because stakes get renamed (#9).
+  String get label {
+    final parts = <String>[
+      if (stakeName != null && stakeName!.isNotEmpty) stakeName!,
+      if (unitNumber != null) 'ID $unitNumber',
+    ];
+    return parts.isEmpty ? '—' : parts.join('  ·  ');
+  }
+
   factory EnrollmentStatus.fromJson(Map<String, dynamic> j) {
     final isNoRole = j['status'] == 'no_role';
     return EnrollmentStatus(
         stakeName: j['stake_name'] as String?,
         stakeId: j['stake_id'] as String?,
+        unitNumber: (j['unit_number'] as num?)?.toInt(),
         lastSyncedAt: j['last_synced_at'] as String?,
         memberCount: (j['member_count'] as num?)?.toInt() ?? 0,
         hasData: j['has_data'] as bool? ?? false,
@@ -181,6 +198,7 @@ class BrokerClient {
           : null,
       stored: enroll?['stored'] == true,
       canImprove: enroll?['can_improve'] == true,
+      canEnroll: enroll?['can_enroll'] == true,
       stake: enroll?['stake'] as String?,
       missing: ((enroll?['missing'] as List?) ?? const []).map((e) => e.toString()).toList(),
     );

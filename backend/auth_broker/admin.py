@@ -132,8 +132,9 @@ def _count_where(table: str, params: dict) -> int | None:
     return None
 
 
-def recent_diagnostics(limit: int = 12) -> list[dict]:
-    """Recent sync/probe diagnostics rows (latest first)."""
+def recent_diagnostics(limit: int = 60) -> list[dict]:
+    """Recent sync/probe diagnostics rows (latest first). Enough history (default 60) for the
+    endpoint-troubleshoot console to chart latency/error trends and scope per-stake (#13–15)."""
     try:
         r = requests.get(f"{SUPABASE_URL}/rest/v1/sync_diagnostics", headers=_sb_headers(),
                          params={"select": "run_at,kind,stake_id,payload",
@@ -141,6 +142,25 @@ def recent_diagnostics(limit: int = 12) -> list[dict]:
     except requests.RequestException:
         return []
     return r.json() if r.status_code == 200 else []
+
+
+def _jobs_last_7d() -> dict:
+    """stake_id -> number of sync runs in the last 7 days (from sync_diagnostics), for the ops
+    cross-stake view (#9). One query, tallied client-side (no per-stake round trips)."""
+    from datetime import datetime, timedelta, timezone
+    since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/sync_diagnostics", headers=_sb_headers(),
+                         params={"select": "stake_id", "kind": "eq.sync",
+                                 "run_at": f"gte.{since}", "limit": "10000"}, timeout=_TIMEOUT)
+    except requests.RequestException:
+        return {}
+    out: dict[str, int] = {}
+    for row in (r.json() if r.status_code == 200 else []):
+        sid = row.get("stake_id")
+        if sid:
+            out[sid] = out.get(sid, 0) + 1
+    return out
 
 
 def _jwt_sub(token: str) -> str:
@@ -159,11 +179,18 @@ def enrollment_status(email: str, auth_id: str) -> dict:
     """Return stake enrollment status for a signed-in user (email + auth_id from JWT).
     Queries user_roles -> stakes -> stake_credentials via service-role REST."""
     headers = _sb_headers()
-    # 1. Find user's role → stake_id
-    roles_r = requests.get(f"{SUPABASE_URL}/rest/v1/user_roles", headers=headers,
-                           params={"select": "stake_id,role", "auth_id": f"eq.{auth_id}",
-                                   "limit": "10"}, timeout=_TIMEOUT)
-    roles = roles_r.json() if roles_r.status_code == 200 else []
+    # 1. Find user's role → stake_id. Match by bound auth_id OR verified email, mirroring RLS
+    #    (migration 0004) and reports._scope: an email/Google login's auth_id is the Supabase uid —
+    #    never the LCR person uuid (calling-derived rows) nor the trigger-bound email — so the old
+    #    auth_id-only lookup missed every email-login leader (e.g. a stake president), wrongly showing
+    #    "sync not enabled / no members" for a fully-synced stake (#9).
+    def _roles_by(params: dict) -> list:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/user_roles", headers=headers,
+                         params={"select": "stake_id,role", "limit": "10", **params}, timeout=_TIMEOUT)
+        return r.json() if r.status_code == 200 else []
+    roles = _roles_by({"auth_id": f"eq.{auth_id}"}) if auth_id else []
+    if not roles and email:
+        roles = _roles_by({"email": f"eq.{email.lower()}"})
     if not roles:
         # No calling-derived role yet — but a brand-new stake's FIRST enroller has no role until
         # the first sync provisions one. Fall back to the credential they just created (matched by
@@ -172,14 +199,15 @@ def enrollment_status(email: str, auth_id: str) -> dict:
                     {"select": "stake_id,principal_name,revoked,coverage,updated_at",
                      "principal_email": f"eq.{email.lower()}", "limit": "1"})
         if cred:
-            stake = _one("stakes", {"select": "name,last_synced_at",
+            stake = _one("stakes", {"select": "name,unit_number,last_synced_at",
                                     "id": f"eq.{cred['stake_id']}", "limit": "1"}) or {}
             cov = cred.get("coverage") or {}
             # Real member count for the provider's stake (was hardcoded 0 → "Members 0" in settings
             # even when the stake is fully synced; the auth_id just didn't match a user_roles row).
             mc = _count_where("members", {"stake_id": f"eq.{cred['stake_id']}"}) or 0
             return {"status": "no_role", "stake_name": stake.get("name"),
-                    "stake_id": cred["stake_id"], "last_synced_at": stake.get("last_synced_at"),
+                    "stake_id": cred["stake_id"], "unit_number": stake.get("unit_number"),
+                    "last_synced_at": stake.get("last_synced_at"),
                     "member_count": mc, "has_data": mc > 0,
                     "credential": {
                         "state": "revoked" if cred.get("revoked") else "active",
@@ -191,7 +219,7 @@ def enrollment_status(email: str, auth_id: str) -> dict:
 
     # 2. Get stake info
     stakes_r = requests.get(f"{SUPABASE_URL}/rest/v1/stakes", headers=headers,
-                            params={"select": "name,last_synced_at", "id": f"eq.{stake_id}",
+                            params={"select": "name,unit_number,last_synced_at", "id": f"eq.{stake_id}",
                                     "limit": "1"}, timeout=_TIMEOUT)
     stake = (stakes_r.json() or [{}])[0] if stakes_r.status_code == 200 else {}
 
@@ -230,6 +258,7 @@ def enrollment_status(email: str, auth_id: str) -> dict:
     return {
         "stake_name": stake.get("name"),
         "stake_id": stake_id,
+        "unit_number": stake.get("unit_number"),
         "last_synced_at": stake.get("last_synced_at"),
         "member_count": member_count,
         "has_data": member_count > 0,
@@ -369,6 +398,7 @@ def enrolled_stakes() -> list[dict]:
         timeout=_TIMEOUT)
     if r.status_code != 200:
         raise AdminError(f"could not list stakes ({r.status_code}): {r.text[:160]}")
+    jobs = _jobs_last_7d()  # stake_id -> sync runs in the last 7 days (#9)
     out = []
     for s in r.json():
         creds = s.get("stake_credentials") or []
@@ -381,6 +411,7 @@ def enrolled_stakes() -> list[dict]:
             "last_synced_at": s.get("last_synced_at"),
             "sync_state": s.get("sync_state"),
             "onboarded_at": s.get("onboarded_at"),
+            "jobs_7d": jobs.get(s["id"], 0),
             "member_count": _count_where("members", {"stake_id": f"eq.{s['id']}"}) or 0,
             "credential": None if not cred else {
                 "state": "revoked" if cred.get("revoked") else "active",

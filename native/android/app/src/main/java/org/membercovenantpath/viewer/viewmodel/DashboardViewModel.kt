@@ -83,7 +83,9 @@ class DashboardViewModel(
                 if (current != null) repo.loadMembers(current) else emptyList()
             }.onSuccess { members ->
                 _state.update { it.copy(members = members, load = LoadState.Ready) }
-                if (members.isEmpty()) loadEnrollStatus()
+                // #11: prefetch enrollment status in the background (own coroutine) so opening Sync
+                // settings is instant; it's also needed for the empty state.
+                loadEnrollStatus()
             }.onFailure { e ->
                 _state.update { it.copy(load = LoadState.Error(e.message ?: "Could not load data.")) }
             }

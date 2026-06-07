@@ -13,8 +13,6 @@ struct LoginView: View {
     @State private var mfaCode = ""
     @State private var email = ""
     @State private var emailCode = ""
-    // Explicit, default-OFF authorization — signing in alone never captures the leader's session.
-    @State private var authorizeSync = false
     @FocusState private var focused: Field?
 
     enum Field { case username, password, mfa, email, code }
@@ -81,6 +79,27 @@ struct LoginView: View {
             .frame(maxWidth: .infinity)
         }
         .scrollDismissesKeyboard(.interactively)
+        // #8: post-login offer to set up / improve daily sync (consent moved off the login form).
+        .alert(session.enrollOffer?.improving == true ? "Improve your stake's sync?" : "Set up daily sync?",
+               isPresented: enrollOfferBinding, presenting: session.enrollOffer) { _ in
+            Button(session.enrollOffer?.improving == true ? "Authorize sync" : "Set up sync") {
+                Task { await session.confirmEnroll() }
+            }
+            Button("Not now", role: .cancel) { Task { await session.declineEnroll() } }
+        } message: { offer in
+            Text(offer.improving
+                 ? "\(offer.stake) is currently synced by a leader whose access can't pull everything. "
+                   + "Authorize your Church session to take over the daily sync? It's stored encrypted "
+                   + "(never your password) and revocable anytime in Settings."
+                 : "\(offer.stake) isn't set up for daily sync yet. Authorize your Church session so your "
+                   + "stake's data refreshes automatically each day? It's stored encrypted (never your "
+                   + "password) and revocable anytime in Settings.")
+        }
+    }
+
+    private var enrollOfferBinding: Binding<Bool> {
+        Binding(get: { session.enrollOffer != nil },
+                set: { if !$0 && session.enrollOffer != nil { Task { await session.declineEnroll() } } })
     }
 
     private var modeBinding: Binding<SessionStore.Mode> {
@@ -120,25 +139,17 @@ struct LoginView: View {
                 .textContentType(.password).focused($focused, equals: .password)
                 .submitLabel(.go).onSubmit(churchSignIn)
                 .textFieldStyle(.roundedBorder)
-            Toggle(isOn: $authorizeSync) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Authorize daily sync for my stake").font(.callout)
-                    Text("Stores this Church session (encrypted — never your password) so your stake's "
-                         + "data refreshes daily. Optional — leave it off to just view. Revoke anytime "
-                         + "in Settings.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            .disabled(session.isBusy)
+            // No "authorize daily sync" toggle here (#8): signing in only views. If the stake isn't
+            // synced yet, we offer to set it up in an alert AFTER a successful sign-in.
             primaryButton("Sign in") {
-                await session.churchSignIn(username: username, password: password, authorizeSync: authorizeSync)
+                await session.churchSignIn(username: username, password: password)
             }
         }
     }
 
     private func churchSignIn() {
         focused = nil
-        Task { await session.churchSignIn(username: username, password: password, authorizeSync: authorizeSync) }
+        Task { await session.churchSignIn(username: username, password: password) }
     }
 
     // MARK: - Email fields (+ relay fallback)

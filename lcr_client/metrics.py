@@ -15,15 +15,27 @@ from urllib.parse import urlparse
 _lock = threading.Lock()
 _events: list[dict] = []
 
-_UUID = re.compile(r"/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
-_NUM = re.compile(r"/\d+")
+_DASHED_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+_HEX_ID = re.compile(r"^[0-9a-f]{16,}$", re.I)  # dashless uuid / long hex id (LCR's 32-char person ids)
+_DIGITS = re.compile(r"^\d+$")
+
+
+def _is_id_segment(seg: str) -> bool:
+    """A path segment that is an opaque id (so all calls to the same route aggregate): a dashed
+    UUID, a DASHLESS hex id (>=16 hex chars — LCR's one-work/details ids are 32-char hex), or a
+    pure-numeric id. Matched as a WHOLE segment, never a substring — a substring sub mangled ids
+    that start with digits into "/{id}<hextail>" and left letter-starting hex ids raw, exploding
+    the per-endpoint metrics into dozens of unique rows."""
+    return bool(_DASHED_UUID.match(seg) or _HEX_ID.match(seg) or _DIGITS.match(seg))
 
 
 def normalize(url: str) -> str:
+    """Collapse opaque ids in the URL path to {id} so per-route metrics aggregate. The query
+    string is dropped (urlparse().path); segments are normalized whole, never partially."""
     path = urlparse(url).path
-    path = _UUID.sub("/{id}", path)
-    path = _NUM.sub("/{id}", path)
-    return path or url
+    if not path:
+        return url
+    return "/".join("{id}" if seg and _is_id_segment(seg) else seg for seg in path.split("/"))
 
 
 def record(url: str, status: int, ms: float, error: str | None = None) -> None:

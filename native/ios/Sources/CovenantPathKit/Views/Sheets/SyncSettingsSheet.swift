@@ -45,6 +45,8 @@ struct SyncSettingsSheet: View {
         let isProvider = cred.isProvider
 
         InfoRow(label: "Stake", value: s.stakeName ?? "—")
+        // Stable LCR stake ID — stakes get renamed, so the ID reliably identifies the stake (#9).
+        if let unit = s.unitNumber { InfoRow(label: "Stake ID", value: "\(unit)") }
         InfoRow(label: "Last synced", value: s.lastSyncedAt.map(Freshness.exact) ?? "Never")
         InfoRow(label: "Members", value: "\(s.memberCount)")
         Divider().padding(.vertical, 8)
@@ -52,7 +54,7 @@ struct SyncSettingsSheet: View {
         if cred.isNone {
             Label {
                 VStack(alignment: .leading) {
-                    Text("No sync credential")
+                    Text(s.unitNumber.map { "No sync credential for stake \($0)" } ?? "No sync credential")
                     Text("Sign in with your Church account to enable daily updates.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -149,7 +151,9 @@ struct ScheduleSection: View {
 
     var body: some View {
         Group {
-            if loaded && eligible {
+            if !loaded {
+                SyncSubsectionSkeleton()   // #16: skeleton while loading, not a blank pop-in
+            } else if eligible {
                 VStack(alignment: .leading, spacing: 8) {
                     Divider().padding(.vertical, 8)
                     Label("Daily sync time", systemImage: "clock").font(.headline)
@@ -222,12 +226,15 @@ struct GoogleDriveSection: View {
     let onToast: (String) -> Void
 
     @State private var status: [String: Any]?
+    @State private var loaded = false   // #16: tell "loading" apart from "loaded, not eligible"
     @State private var busy = false
     @Environment(\.openURL) private var openURL
 
     var body: some View {
         Group {
-            if let s = status, (s["eligible"] as? Bool) == true {
+            if !loaded {
+                SyncSubsectionSkeleton()   // #16: skeleton while the status loads, not a pop-in
+            } else if let s = status, (s["eligible"] as? Bool) == true {
                 driveBody(for: s)
             }
         }
@@ -286,8 +293,9 @@ struct GoogleDriveSection: View {
     }
 
     private func load() async {
-        guard let broker else { return }
+        guard let broker else { loaded = true; return }
         status = try? await broker.googleDriveStatus()
+        loaded = true
     }
     private func connect() async {
         guard let broker else { return }

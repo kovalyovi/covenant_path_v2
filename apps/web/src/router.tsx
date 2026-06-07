@@ -16,7 +16,6 @@ import { BaptismsTab } from './pages/tabs/BaptismsTab';
 import { GoldenHourTab } from './pages/tabs/GoldenHourTab';
 import { NeedsTab } from './pages/tabs/NeedsTab';
 import { TableTab } from './pages/tabs/TableTab';
-import { BaptismsByMonthTab } from './pages/tabs/BaptismsByMonthTab';
 import { PersonDetailPage } from './pages/PersonDetailPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { InvitePage } from './pages/InvitePage';
@@ -75,7 +74,8 @@ export const router = createBrowserRouter([
           { path: 'needs', element: <NeedsTab /> },
           { path: 'kpis', element: <LazyRoute><KpisTab /></LazyRoute> },
           { path: 'table', element: <TableTab /> },
-          { path: 'by-month', element: <BaptismsByMonthTab /> },
+          // "By Month" is no longer its own tab — the chart now lives at the bottom of KPIs (#1).
+          { path: 'by-month', element: <Navigate to="/kpis" replace /> },
         ],
       },
       { path: 'person/:id', element: <PersonDetailPage /> },

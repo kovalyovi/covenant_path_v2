@@ -68,15 +68,28 @@ def kpi_subtree(dash: dict) -> dict:
 
 def sync_stake(client: LcrClient, members: list[dict], conn) -> dict:
     ctx = client.user_context()
+    # Stake identity is keyed by unit_number (stable), so a stake RENAME just updates stakes.name —
+    # never a duplicate. Units are upserted by unit_number too: a renamed ward updates its name, a
+    # ward that moved stakes updates its stake_id, and a person who changed wards gets their unit_id +
+    # unit_name refreshed on member upsert. (#2)
     stake_id = db.upsert_stake(conn, ctx.unit_number, ctx.unit_name)
     unit_id_by_number: dict[int, str] = {}
     unit_id_by_name: dict[str, str] = {}
+    current_unit_numbers: list[int] = []
     for u in ctx.child_units:
         if u.unit_number:
             uid = db.upsert_unit(conn, stake_id, u.unit_number, u.name, u.type)
             unit_id_by_number[u.unit_number] = uid
+            current_unit_numbers.append(u.unit_number)
             if u.name:
                 unit_id_by_name[u.name] = uid
+    # Restructuring: drop units that are no longer children of this stake. Gated on a non-empty
+    # current list so a failed user_context can never wipe the stake's units (#2).
+    if current_unit_numbers:
+        removed = db.prune_units(conn, stake_id, current_unit_numbers)
+        if removed:
+            logger.info("pruned %d departed unit(s) from stake %s (%s)",
+                        removed, ctx.unit_name, ctx.unit_number)
     written = db.upsert_members(conn, stake_id, members, unit_id_by_number, unit_id_by_name)
     # stake-level KPIs for the viewer's KPIs tab (never fail the data sync over them)
     try:

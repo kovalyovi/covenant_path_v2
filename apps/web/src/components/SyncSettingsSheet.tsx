@@ -8,7 +8,7 @@ import { fmtDateTime } from '../logic/dates';
 import { Modal } from './Modal';
 import { Button } from './ui';
 import { Icon } from './Icon';
-import { SyncSettingsSkeleton } from './Skeletons';
+import { SyncSettingsSkeleton, SubsectionSkeleton } from './Skeletons';
 import { useToast } from './Toast';
 
 interface Props {
@@ -59,6 +59,8 @@ export function SyncSettingsSheet({ open, onClose, initial, onLoaded, onRevoke, 
       ) : (
         <div style={{ paddingBottom: 16 }}>
           <Row label="Stake" value={status.stakeName ?? '—'} />
+          {/* Stable LCR stake ID — stakes get renamed, so the ID reliably identifies the stake (#9). */}
+          {status.unitNumber != null && <Row label="Stake ID" value={String(status.unitNumber)} />}
           <Row label="Last synced" value={status.lastSyncedAt ? fmtDateTime(status.lastSyncedAt) : 'Never'} />
           <Row label="Members" value={String(status.memberCount)} />
           <hr className="divider" />
@@ -66,7 +68,11 @@ export function SyncSettingsSheet({ open, onClose, initial, onLoaded, onRevoke, 
             <div className="row" style={{ alignItems: 'flex-start', gap: 12 }}>
               <Icon name="warning" size={20} color="var(--warning)" />
               <div>
-                <strong>No sync credential</strong>
+                <strong>
+                  {status.unitNumber != null
+                    ? `No sync credential for stake ${status.unitNumber}`
+                    : 'No sync credential'}
+                </strong>
                 <p className="small muted">Sign in with your Church account to enable daily updates.</p>
               </div>
             </div>
@@ -161,7 +167,8 @@ function ScheduleSection() {
     }
   }
 
-  if (!loaded || !eligible) return null;
+  if (!loaded) return <SubsectionSkeleton />; // #16: skeleton while loading, not a blank pop-in
+  if (!eligible) return null;
   const label = (h: number) => {
     const ampm = h < 12 ? 'AM' : 'PM';
     const h12 = h % 12 === 0 ? 12 : h % 12;
@@ -212,6 +219,7 @@ function ScheduleSection() {
 function GoogleDriveSection() {
   const toast = useToast();
   const [s, setS] = useState<Record<string, unknown> | null>(null);
+  const [loaded, setLoaded] = useState(false); // #16: tell "loading" apart from "loaded, not eligible"
   const [busy, setBusy] = useState(false);
 
   const load = async () => {
@@ -219,6 +227,8 @@ function GoogleDriveSection() {
       setS(await broker.googleDriveStatus());
     } catch {
       /* leave hidden on error */
+    } finally {
+      setLoaded(true);
     }
   };
 
@@ -226,6 +236,7 @@ function GoogleDriveSection() {
     void load();
   }, []);
 
+  if (!loaded) return <SubsectionSkeleton />; // #16: skeleton while the status loads, not a pop-in
   if (s == null || s['eligible'] !== true) return null;
 
   const header = (

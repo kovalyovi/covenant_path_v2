@@ -23,7 +23,7 @@ class _Body extends StatelessWidget {
           // list (#shimmer, N8). List-style tabs (On Date, Needs, Spreadsheet) use the row skeleton.
           return switch (tab) {
             1 => const GoldenHourSkeleton(),
-            3 || 5 => const KpiSkeleton(),
+            3 => const KpiSkeleton(),
             _ => const MemberListSkeleton(),
           };
         }
@@ -40,8 +40,7 @@ class _Body extends StatelessWidget {
           1 => _GoldenHourView(rows: rows, tier: tier, onOpen: onOpen),
           2 => _NeedsView(rows: rows, tier: tier, onOpen: onOpen),
           3 => _KpiView(rows: rows, tier: tier, onOpen: onOpen),
-          4 => _SpreadsheetView(rows: rows, onOpen: onOpen),
-          _ => _BaptismsByMonthView(rows: rows, tier: tier, onOpen: onOpen),
+          _ => _SpreadsheetView(rows: rows, onOpen: onOpen), // 4 = Table
         };
         return RefreshIndicator(onRefresh: onRefresh, child: view);
       },
@@ -249,6 +248,10 @@ class _SyncSettingsSheet extends StatelessWidget {
                 const Text('Could not load sync settings — close and try again.')
               else ...[
                 _Row(label: 'Stake', value: status.stakeName ?? '—'),
+                // Stable LCR stake ID — shown because stakes get renamed, so the ID is the reliable
+                // way to tell which stake this is / which one is missing a credential (#9).
+                if (status.unitNumber != null)
+                  _Row(label: 'Stake ID', value: '${status.unitNumber}'),
                 _Row(
                     label: 'Last synced',
                     value: status.lastSyncedAt != null
@@ -257,11 +260,14 @@ class _SyncSettingsSheet extends StatelessWidget {
                 _Row(label: 'Members', value: '${status.memberCount}'),
                 const Divider(height: 24),
                 if (cred == null || cred.isNone) ...[
-                  const ListTile(
+                  ListTile(
                       contentPadding: EdgeInsets.zero,
-                      leading: Icon(Icons.warning_amber_outlined, color: Colors.orange),
-                      title: Text('No sync credential'),
-                      subtitle: Text('Sign in with your Church account to enable daily updates.')),
+                      leading: const Icon(Icons.warning_amber_outlined, color: Colors.orange),
+                      title: Text(status.unitNumber != null
+                          ? 'No sync credential for stake ${status.unitNumber}'
+                          : 'No sync credential'),
+                      subtitle: const Text(
+                          'Sign in with your Church account to enable daily updates.')),
                 ] else ...[
                   _Row(
                       label: 'Status',
@@ -312,6 +318,17 @@ class _SyncSettingsSheet extends StatelessWidget {
     if (dt == null) return iso;
     return DateFormat('MMM d, y · h:mm a').format(dt.toLocal());
   }
+}
+
+/// #16: a small content-shaped placeholder for the schedule / Drive sub-sections while their own
+/// broker calls resolve — so they fade in as a skeleton instead of abruptly "injecting" once loaded.
+class _SyncSubsectionSkeleton extends StatelessWidget {
+  const _SyncSubsectionSkeleton();
+  @override
+  Widget build(BuildContext context) => const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [Divider(height: 24), CardSkeleton(lines: 2)],
+      );
 }
 
 /// #schedule: the provider sets WHEN their stake's daily sync runs (ET hour) and can pause it.
@@ -375,7 +392,10 @@ class _ScheduleSectionState extends State<_ScheduleSection> {
 
   @override
   Widget build(BuildContext context) {
-    if (!_loaded || !_eligible) return const SizedBox.shrink();
+    // #16: show a skeleton while loading instead of nothing, then resolve to the controls (or hide
+    // if the user isn't an eligible provider). No more abrupt pop-in.
+    if (!_loaded) return const _SyncSubsectionSkeleton();
+    if (!_eligible) return const SizedBox.shrink();
     final c = Theme.of(context).colorScheme;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const Divider(height: 24),
@@ -425,6 +445,7 @@ class _GoogleDriveSection extends StatefulWidget {
 
 class _GoogleDriveSectionState extends State<_GoogleDriveSection> {
   Map<String, dynamic>? _status;
+  bool _loaded = false; // #16: distinguish "still loading" from "loaded, not eligible"
   bool _busy = false;
 
   @override
@@ -437,7 +458,9 @@ class _GoogleDriveSectionState extends State<_GoogleDriveSection> {
     try {
       final s = await BrokerClient().googleDriveStatus();
       if (mounted) setState(() => _status = s);
-    } catch (_) {/* leave hidden on error */}
+    } catch (_) {/* leave hidden on error */} finally {
+      if (mounted) setState(() => _loaded = true);
+    }
   }
 
   void _snack(String m) {
@@ -474,6 +497,8 @@ class _GoogleDriveSectionState extends State<_GoogleDriveSection> {
 
   @override
   Widget build(BuildContext context) {
+    // #16: skeleton while the status loads, then resolve (or hide for non-providers) — no pop-in.
+    if (!_loaded) return const _SyncSubsectionSkeleton();
     final s = _status;
     // Only the stake's sync provider can own a Drive sheet — others never see this section.
     if (s == null || s['eligible'] != true) return const SizedBox.shrink();

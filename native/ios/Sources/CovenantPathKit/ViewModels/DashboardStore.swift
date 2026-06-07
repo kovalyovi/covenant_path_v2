@@ -65,7 +65,9 @@ public final class DashboardStore {
             try await loadStakes()
             try await reloadMembers()
             state = .loaded
-            if members.isEmpty { await loadEnrollStatus() }
+            // #11: prefetch enrollment status in the background (not awaited) so opening Sync settings
+            // is instant; it's also needed for the empty state.
+            Task { await self.loadEnrollStatus() }
         } catch {
             state = .failed(error.localizedDescription)
         }

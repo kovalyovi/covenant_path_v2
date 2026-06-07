@@ -17,7 +17,7 @@ import { Avatar, CountBadge, Segmented, SectionCard } from './ui';
 import { GoldenHourChips } from './GoldenHourChips';
 import { Modal } from './Modal';
 import type { Tier } from '../hooks/useTier';
-import { colsFor } from '../hooks/useTier';
+import { colsFor, useTier } from '../hooks/useTier';
 
 // ---- Page scaffold ----------------------------------------------------------------------------
 
@@ -296,6 +296,8 @@ interface MemberRowProps {
 /** One member row (avatar + name + date/responsibility + optional GH chips). Mirrors `_MemberRow`. */
 export function MemberRow({ m, chips = false, showUnit = false, showResp = false, dateField = 'baptism_date' }: MemberRowProps) {
   const navigate = useNavigate();
+  const tier = useTier();
+  const isMobile = tier === 'mobile';
   const name = String(m['name'] ?? '—');
   const date = parseMemberDate(m[dateField]);
   const age = ageOf(m);
@@ -307,10 +309,13 @@ export function MemberRow({ m, chips = false, showUnit = false, showResp = false
     <button type="button" className="member-row" onClick={() => id && navigate(`/person/${encodeURIComponent(id)}`)}>
       <Avatar name={name} photoUrl={m['photo_url'] as string | undefined} size={44} />
       <span className="member-row__main">
+        {/* #12: on a phone the name takes the whole first row and age drops below it (not a cramped
+            second column); inline on wider screens. */}
         <span className="row" style={{ gap: 6 }}>
           <span className="member-row__name">{name}</span>
-          {age && <span className="muted tiny">· {age}</span>}
+          {!isMobile && age && <span className="muted tiny">· {age}</span>}
         </span>
+        {isMobile && age && <span className="muted tiny">{age}</span>}
         {date && (
           <span className="row small" style={{ gap: 4, marginTop: 2 }}>
             <Icon name={isBaptism ? 'water_drop' : 'event'} size={13} color={isBaptism ? '#29b6f6' : 'var(--on-surface-variant)'} />

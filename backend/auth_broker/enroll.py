@@ -97,11 +97,16 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool) -
     active = _stored_credential_summary(ctx.unit_number)
     can_improve = bool(authorized and active is not None
                        and onboarding.should_take_over(active, access))
+    # can_enroll: this authorized leader could set up sync for a stake that has NO usable credential
+    # yet (none stored, or the only one is revoked → _stored_credential_summary returns None). The
+    # client uses this to OFFER enrollment AFTER login (consent moved off the login form, #8) — never
+    # shown when the stake already has a sufficient credential.
+    can_enroll = bool(authorized and active is None)
 
     base = {"stake": ctx.unit_name, "unit_number": ctx.unit_number,
             "authorized": authorized, "access_rank": rank,
             "complete": coverage["complete"], "missing": coverage["missing"],
-            "can_improve": can_improve, "stored": False}
+            "can_improve": can_improve, "can_enroll": can_enroll, "stored": False}
 
     if not authorized:
         logger.info("login has no covenant-path access (rank=%s, unit=%s); not enrolling",

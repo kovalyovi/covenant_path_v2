@@ -346,18 +346,24 @@ class _MemberRow extends StatelessWidget {
     final isBaptism = dateField == 'baptism_date';
     final resp = (chips || showResp) ? responsibleParty(m) : null; // ownership applies to baptized converts
     final sub = Theme.of(context).textTheme.bodySmall;
+    // #12: on a phone, the name gets the whole first row and the age drops to the line below (in the
+    // subtitle) instead of riding as a cramped "second column" — sharper, more readable. On wider
+    // screens the name + age stay inline.
+    final isMobile = MediaQuery.sizeOf(context).width < 600;
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
       onTap: () => onOpen(m),
       leading: PhotoAvatar(name: name, photoUrl: m['photo_url']?.toString(), size: 44),
-      title: Row(children: [
-        Flexible(child: Text(name, style: const TextStyle(fontWeight: FontWeight.w600))),
-        if (age != null) ...[
-          const SizedBox(width: 6),
-          Text('· $age', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
-        ],
-      ]),
+      title: (isMobile || age == null)
+          ? Text(name, style: const TextStyle(fontWeight: FontWeight.w600))
+          : Row(children: [
+              Flexible(child: Text(name, style: const TextStyle(fontWeight: FontWeight.w600))),
+              const SizedBox(width: 6),
+              Text('· $age', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+            ]),
       subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (isMobile && age != null)
+          Text(age, style: TextStyle(color: Colors.grey.shade600, fontSize: 12.5)),
         if (date != null)
           Row(children: [
             Icon(isBaptism ? Icons.water_drop : Icons.event,

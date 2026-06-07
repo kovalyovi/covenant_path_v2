@@ -41,6 +41,9 @@ export interface BrokerResult {
   stored?: boolean;
   /** Higher-access transfer offer: the stake already has an insufficient credential this session improves. */
   canImprove?: boolean;
+  /** #8: the stake has NO usable credential yet and this authorized leader could set one up — drives
+   *  the POST-login "Authorize daily sync?" offer (consent moved off the login form). */
+  canEnroll?: boolean;
   stake?: string | null;
   missing?: string[];
 }
@@ -60,11 +63,21 @@ export interface CredentialInfo {
 export interface EnrollmentStatus {
   stakeName?: string | null;
   stakeId?: string | null;
+  /** LCR stake unit number — the stable ID shown to users (stakes get renamed). */
+  unitNumber?: number | null;
   lastSyncedAt?: string | null;
   memberCount: number;
   hasData: boolean;
   noRole: boolean;
   credential: CredentialInfo;
+}
+
+/** "Name · ID 503991" — ID is the stable LCR unit number, preferred since stakes get renamed (#9). */
+export function stakeLabel(s: EnrollmentStatus): string {
+  const parts: string[] = [];
+  if (s.stakeName) parts.push(s.stakeName);
+  if (s.unitNumber != null) parts.push(`ID ${s.unitNumber}`);
+  return parts.length === 0 ? '—' : parts.join('  ·  ');
 }
 
 function credFromJson(j: Record<string, unknown>): CredentialInfo {
@@ -81,6 +94,7 @@ function enrollmentFromJson(j: Record<string, unknown>): EnrollmentStatus {
   return {
     stakeName: (j['stake_name'] as string) ?? null,
     stakeId: (j['stake_id'] as string) ?? null,
+    unitNumber: (j['unit_number'] as number) ?? null,
     lastSyncedAt: (j['last_synced_at'] as string) ?? null,
     memberCount: Number(j['member_count'] ?? 0) || 0,
     hasData: j['has_data'] === true,
@@ -182,6 +196,7 @@ export class BrokerClient {
           : null,
       stored: enroll?.['stored'] === true,
       canImprove: enroll?.['can_improve'] === true,
+      canEnroll: enroll?.['can_enroll'] === true,
       stake: (enroll?.['stake'] as string) ?? null,
       missing: ((enroll?.['missing'] as unknown[]) ?? []).map((m) => String(m)),
     };

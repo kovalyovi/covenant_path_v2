@@ -34,6 +34,19 @@ public final class SessionStore {
     public var factors: [BrokerFactor] = []
     public var factorSent: BrokerFactor?
 
+    /// #8: post-login "set up / improve daily sync" offer, shown as an alert when the stake has no
+    /// sufficient credential (consent is no longer a checkbox on the login form). Set after a
+    /// successful sign-in; the View confirms (re-auth WITH consent) or declines (just sign in).
+    public struct EnrollOffer: Identifiable, Equatable {
+        public let id = UUID()
+        public let stake: String
+        public let improving: Bool
+    }
+    public var enrollOffer: EnrollOffer?
+    private var pendingResult: BrokerResult?
+    private var lastUsername = ""
+    private var lastPassword = ""
+
     // Email-code flow state.
     public var emailCodeSent = false
     public var useRelay = false   // route email-code through the broker (blocked networks)
@@ -118,6 +131,8 @@ public final class SessionStore {
 
     public func churchSignIn(username: String, password: String, authorizeSync: Bool = false) async {
         enrollConsent = authorizeSync
+        lastUsername = username.trimmed   // stashed so a post-login enroll offer can re-auth (#8)
+        lastPassword = password
         await run {
             let r = try await self.broker.password(username.trimmed, password, enroll: authorizeSync)
             if r.mfaRequired {
@@ -127,9 +142,37 @@ public final class SessionStore {
                 if r.factors.count == 1 { await self.selectFactor(r.factors[0]) }
                 return
             }
-            if r.authorized == false { throw BrokerError(SessionStore.noAccessMessage) }
-            try await self.consume(r)
+            try await self.finishChurch(r)
         }
+    }
+
+    /// After a successful Church login: block a no-access calling (N2); else, if the stake has no
+    /// sufficient credential and this leader could set one up / improve a weaker one, raise the
+    /// post-login offer (#8) instead of consuming. Otherwise adopt the session.
+    private func finishChurch(_ r: BrokerResult) async throws {
+        if r.authorized == false { throw BrokerError(SessionStore.noAccessMessage) }
+        if !enrollConsent && (r.canEnroll || r.canImprove) {
+            pendingResult = r
+            enrollOffer = EnrollOffer(stake: r.stake ?? "Your stake", improving: r.canImprove)
+            return
+        }
+        try await consume(r)
+    }
+
+    /// The leader accepted the post-login sync offer → re-authenticate WITH consent so the broker
+    /// stores the credential (reuses the stashed username/password; handles MFA again if needed).
+    public func confirmEnroll() async {
+        enrollOffer = nil
+        pendingResult = nil
+        await churchSignIn(username: lastUsername, password: lastPassword, authorizeSync: true)
+    }
+
+    /// The leader declined → just adopt the view-only session from the original sign-in.
+    public func declineEnroll() async {
+        enrollOffer = nil
+        guard let r = pendingResult else { return }
+        pendingResult = nil
+        await run { try await self.consume(r) }
     }
 
     public func selectFactor(_ f: BrokerFactor) async {
@@ -144,8 +187,7 @@ public final class SessionStore {
         guard let loginID else { return }
         await run {
             let r = try await self.broker.verifyMfa(loginID: loginID, code: code.trimmed, enroll: self.enrollConsent)
-            if r.authorized == false { throw BrokerError(SessionStore.noAccessMessage) }
-            try await self.consume(r)
+            try await self.finishChurch(r)
         }
     }
 

@@ -52,9 +52,15 @@ data class LoginUiState(
     val emailCodeSent: Boolean = false,
     val useRelay: Boolean = false,
 
-    // Explicit, default-OFF authorization — signing in alone never captures the leader's session.
+    // #8: consent is no longer a checkbox on the login form; this is the internal "this auth pass
+    // should enroll" flag, set just before we re-authenticate with consent after the post-login offer.
     val authorizeSync: Boolean = false,
+    // #8: post-login offer to set up / improve daily sync (shown as a dialog) when the stake has no
+    // sufficient credential. null = no offer pending.
+    val enrollOffer: EnrollOffer? = null,
 ) {
+    data class EnrollOffer(val stake: String, val improving: Boolean)
+
     val brokerAvailable: Boolean get() = AppConfig.brokerAvailable
     val passkeyAvailable: Boolean get() = AppConfig.brokerAvailable
 }
@@ -132,7 +138,9 @@ class AuthViewModel(
         repo.verifyBrokerOtp(email, otp)
     }
 
-    fun setAuthorizeSync(v: Boolean) = _login.update { it.copy(authorizeSync = v) }
+    /** #8: holds the original (view-only) result while the post-login enroll offer is shown, so a
+     *  "Not now" can still adopt that session. */
+    private var pendingResult: BrokerResult? = null
 
     // ---- Church account ----
     fun churchSignIn() = run {
@@ -142,8 +150,38 @@ class AuthViewModel(
             if (r.factors.size == 1) selectFactorNow(r.factors.first())
             return@run
         }
+        finishChurch(r)
+    }
+
+    /** After a successful Church login: block a no-access calling (N2); else, if the stake has no
+     *  sufficient credential and this leader could set one up / improve a weaker one, raise the
+     *  post-login offer (#8) instead of consuming. Otherwise adopt the session. */
+    private suspend fun finishChurch(r: BrokerResult) {
         if (r.authorized == false) throw BrokerException(NO_ACCESS_MSG)
+        if (!_login.value.authorizeSync && (r.canEnroll || r.canImprove)) {
+            pendingResult = r
+            _login.update {
+                it.copy(enrollOffer = LoginUiState.EnrollOffer(r.stake ?: "Your stake", r.canImprove))
+            }
+            return
+        }
         consume(r)
+    }
+
+    /** Accepted the post-login sync offer → re-authenticate WITH consent so the broker stores the
+     *  credential (reuses the username/password still in state; handles MFA again if needed). */
+    fun confirmEnroll() {
+        pendingResult = null
+        _login.update { it.copy(enrollOffer = null, authorizeSync = true) }
+        churchSignIn()
+    }
+
+    /** Declined → adopt the original view-only session. */
+    fun declineEnroll() {
+        val r = pendingResult
+        pendingResult = null
+        _login.update { it.copy(enrollOffer = null) }
+        if (r != null) run { consume(r) }
     }
 
     fun selectFactor(f: BrokerFactor) = run { selectFactorNow(f) }
@@ -154,8 +192,7 @@ class AuthViewModel(
 
     fun verifyMfa() = run {
         val r = broker.verifyMfa(_login.value.loginId!!, _login.value.mfaCode.trim(), enroll = _login.value.authorizeSync)
-        if (r.authorized == false) throw BrokerException(NO_ACCESS_MSG)
-        consume(r)
+        finishChurch(r)
     }
 
     // ---- Email code ----

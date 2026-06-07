@@ -107,6 +107,25 @@ def upsert_unit(conn, stake_id: str, unit_number: int, name: str, unit_type: str
         return cur.fetchone()[0]
 
 
+def prune_units(conn, stake_id: str, keep_unit_numbers: list[int]) -> int:
+    """Delete this stake's units whose unit_number is no longer present — i.e. wards/branches that
+    left the stake in a restructuring (#2). Safe by schema: members.unit_id -> NULL (FK on delete
+    set null, so those members stay, just unscoped to a unit) and any ward_leader roles for the
+    removed unit cascade away. Returns rows deleted.
+
+    GATED: the caller MUST pass the CURRENT (non-empty) unit-number list. An empty list means we
+    couldn't read the stake's units this run, and pruning then would wipe every unit — so we no-op.
+    Mirrors the stake_ok/ward_ok gating in roles.provision_roles."""
+    if not keep_unit_numbers:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute("delete from units where stake_id=%s and unit_number <> all(%s)",
+                    (stake_id, list(keep_unit_numbers)))
+        removed = cur.rowcount
+    conn.commit()
+    return removed
+
+
 def upsert_members(conn, stake_id: str, members: list[dict],
                    unit_id_by_number: dict[int, str],
                    unit_id_by_name: dict[str, str] | None = None) -> int:

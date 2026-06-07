@@ -66,8 +66,6 @@ class _KpiViewState extends State<_KpiView> {
         [for (final m in ms) _Ev(m, parseMemberDate(m[dateField]) ?? DateTime.now(), 0)];
 
     final cards = <Widget>[
-      // "Baptisms by month" now lives in its own dedicated tab (the last one) — see
-      // _BaptismsByMonthView in baptisms_by_month_view.dart.
       _MetricChartCard(
         title: 'Investigators at Sacrament',
         icon: Icons.groups,
@@ -168,7 +166,18 @@ class _KpiViewState extends State<_KpiView> {
           ),
         ],
       ]),
-      child: _Columns(cols: _cols(widget.tier).clamp(1, 2), children: cards),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        _Columns(cols: _cols(widget.tier).clamp(1, 2), children: cards),
+        const SizedBox(height: 12),
+        // #1: the baptisms-by-month chart, folded in from its old dedicated "By Month" tab. It spans
+        // the full width at the bottom of the page (capped for readability) and respects the unit filter.
+        Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 640),
+            child: _BaptismsCard(baptized: baptized, allUnits: allUnits, onOpen: onOpen),
+          ),
+        ),
+      ]),
     );
   }
 }

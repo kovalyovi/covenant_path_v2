@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -111,6 +112,16 @@ fun CardSkeleton(lines: Int = 3, modifier: Modifier = Modifier) {
             ShimmerLine(if (i == 0) 0.7f else 0.9f - i * 0.08f)
             Spacer(Modifier.height(10.dp))
         }
+    }
+}
+
+/** #16: small placeholder for the sync-settings schedule / Drive sub-sections while their broker
+ *  calls resolve — so they fade in as a skeleton instead of abruptly appearing once loaded. */
+@Composable
+fun SyncSubsectionSkeleton() {
+    Column(Modifier.fillMaxWidth()) {
+        HorizontalDivider(Modifier.padding(vertical = 16.dp))
+        CardSkeleton(lines = 2)
     }
 }
 

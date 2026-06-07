@@ -6,6 +6,9 @@ import SwiftUI
 /// Hour chips beneath; unit shown as right-side metadata. Tapping opens detail (via NavigationLink
 /// provided by the caller).
 public struct MemberRow: View {
+    // #12: on a phone (compact width) the name takes the whole first row and the age drops to the
+    // line below; inline next to the name on regular (iPad) width.
+    @Environment(\.horizontalSizeClass) private var sizeClass
     let member: Member
     var showChips: Bool = false
     var showUnit: Bool = false
@@ -31,9 +34,12 @@ public struct MemberRow: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
                     Text(member.displayName).fontWeight(.semibold)
-                    if let age = Milestones.ageLabel(member) {
+                    if sizeClass != .compact, let age = Milestones.ageLabel(member) {
                         Text("· \(age)").font(.subheadline).foregroundStyle(.secondary)
                     }
+                }
+                if sizeClass == .compact, let age = Milestones.ageLabel(member) {
+                    Text(age).font(.caption).foregroundStyle(.secondary)
                 }
                 if let date {
                     Label {

@@ -51,6 +51,17 @@ export function SyncSettingsSkeleton({ rows = 5 }: { rows?: number }) {
   );
 }
 
+/** #16: small placeholder for the sync-settings schedule / Drive sub-sections while they load, so
+ *  they fade in as a skeleton instead of abruptly appearing once their broker call resolves. */
+export function SubsectionSkeleton() {
+  return (
+    <div aria-hidden="true">
+      <hr className="divider" />
+      <CardSkeleton lines={2} />
+    </div>
+  );
+}
+
 /** Generic skeleton of a few text lines for detail/secondary panels (comments, etc.). */
 export function CardSkeleton({ lines = 3 }: { lines?: number }) {
   return (

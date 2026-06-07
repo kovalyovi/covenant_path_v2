@@ -569,11 +569,26 @@ class _EnrolledStakesCard extends StatelessWidget {
       credColor = AppColors.info;
     }
 
+    final unitNumber = '${s['unit_number'] ?? ''}';
+    final jobs7d = (s['jobs_7d'] as num?)?.toInt() ?? 0;
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Expanded(child: Text(name, style: const TextStyle(fontWeight: FontWeight.w600))),
+          Expanded(
+            child: Row(crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic, children: [
+              Flexible(child: Text(name, style: const TextStyle(fontWeight: FontWeight.w600))),
+              // Stable LCR stake ID — stakes get renamed, so the ID is how you identify them (#9).
+              if (unitNumber.isNotEmpty && unitNumber != 'null') ...[
+                const SizedBox(width: 8),
+                Text('ID $unitNumber',
+                    style: TextStyle(
+                        fontFamily: 'monospace', fontSize: 12, color: Colors.grey.shade600)),
+              ],
+            ]),
+          ),
           if (running)
             const Padding(
               padding: EdgeInsets.only(right: 8),
@@ -599,6 +614,11 @@ class _EnrolledStakesCard extends StatelessWidget {
           _tag(credLabel, credColor),
           Text('$members members', style: Theme.of(context).textTheme.bodySmall),
           Text('· synced ${_ago(s['last_synced_at'])}', style: Theme.of(context).textTheme.bodySmall),
+          // How many sync jobs actually ran for this stake in the last 7 days (#9) — a quick read on
+          // whether its schedule is firing. Amber when zero (nothing ran all week).
+          Text('· $jobs7d job${jobs7d == 1 ? '' : 's'}/7d',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: jobs7d == 0 ? Colors.orange.shade800 : null)),
           if (cred?['principal_name'] != null)
             Text('· by ${cred!['principal_name']}', style: Theme.of(context).textTheme.bodySmall),
         ]),

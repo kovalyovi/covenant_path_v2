@@ -80,6 +80,18 @@ public struct CardSkeleton: View {
     }
 }
 
+/// #16: small placeholder for the sync-settings schedule / Drive sub-sections while their broker
+/// calls resolve — so they fade in as a skeleton instead of abruptly appearing once loaded.
+public struct SyncSubsectionSkeleton: View {
+    public init() {}
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider().padding(.vertical, 8)
+            CardSkeleton(lines: 2)
+        }
+    }
+}
+
 // MARK: - N8 content-shaped tab skeletons
 
 /// A rounded card shaped like `SectionCard` (same background + corner radius + padding) so the

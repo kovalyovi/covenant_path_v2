@@ -24,7 +24,6 @@ part 'views/golden_hour_view.dart';
 part 'views/needs_view.dart';
 part 'views/kpis_view.dart';
 part 'views/table_view.dart';
-part 'views/baptisms_by_month_view.dart';
 part 'views/dashboard_common.dart';
 
 /// RLS-scoped dashboard. Four tabs mirroring the reference iOS app (+ our spreadsheet):
@@ -56,7 +55,7 @@ const _tabs = [
   (icon: Icons.checklist, label: 'Needs', color: Color(0xFFD84315)),            // deep orange
   (icon: Icons.insights, label: 'KPIs', color: Color(0xFF2E7D32)),             // green
   (icon: Icons.grid_on, label: 'Table', color: Color(0xFF5E35B1)),            // deep purple
-  (icon: Icons.water_drop_outlined, label: 'By Month', color: Color(0xFF00838F)), // baptisms-by-month, cyan
+  // "By Month" is no longer its own tab — the baptisms-by-month chart now lives at the bottom of KPIs (#1).
 ];
 
 /// App-bar title that doubles as a stake switcher when the viewer can see more than one stake
@@ -151,7 +150,10 @@ class _DashboardPageState extends State<DashboardPage> {
   Future<List<Map<String, dynamic>>> _bootstrap() async {
     await _loadStakes();
     final rows = await _load();
-    if (rows.isEmpty && mounted) _loadEnrollStatus();
+    // #11: prefetch enrollment status in the background once the first page is ready — NOT awaited,
+    // so it never delays first paint — and cache it. Opening Sync settings is then instant instead of
+    // waiting on the (possibly cold) broker. The empty-state already needs it too.
+    if (mounted) _loadEnrollStatus();
     return rows;
   }
 

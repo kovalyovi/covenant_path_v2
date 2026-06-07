@@ -242,6 +242,8 @@ struct AdminView: View {
         let cred = st["credential"] as? [String: Any]
         let name = st["name"] as? String ?? "—"
         let stakeID = "\(st["stake_id"] ?? "")"
+        let unitNumber = (st["unit_number"] as? NSNumber)?.intValue
+        let jobs7d = (st["jobs_7d"] as? NSNumber)?.intValue ?? 0
         let members = (st["member_count"] as? NSNumber)?.intValue ?? 0
         let running = (st["sync_state"] as? String) == "running"
         let credState = cred?["state"] as? String
@@ -250,6 +252,10 @@ struct AdminView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(name).fontWeight(.semibold)
+                // Stable LCR stake ID — stakes get renamed, so the ID is how you identify them (#9).
+                if let unit = unitNumber {
+                    Text("ID \(unit)").font(.caption).monospaced().foregroundStyle(.secondary)
+                }
                 Spacer()
                 if running { ProgressView().controlSize(.mini) }
                 if !running, credState == "active" {
@@ -265,6 +271,9 @@ struct AdminView: View {
                 StatusTag(credLabel, color: credColor)
                 Text("\(members) members").font(.caption).foregroundStyle(.secondary)
                 Text("· synced \(Freshness.ago(st["last_synced_at"] as? String))").font(.caption).foregroundStyle(.secondary)
+                // Sync jobs that ran for this stake in the last 7 days (#9). Amber when none ran.
+                Text("· \(jobs7d) job\(jobs7d == 1 ? "" : "s")/7d")
+                    .font(.caption).foregroundStyle(jobs7d == 0 ? .orange : .secondary)
                 if let p = cred?["principal_name"] as? String {
                     Text("· by \(p)").font(.caption).foregroundStyle(.secondary)
                 }

@@ -16,8 +16,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -105,6 +105,32 @@ fun LoginScreen(vm: AuthViewModel) {
             }
         }
     }
+
+    // #8: post-login offer to set up / improve daily sync (consent moved off the login form).
+    s.enrollOffer?.let { offer ->
+        AlertDialog(
+            onDismissRequest = vm::declineEnroll,
+            title = { Text(if (offer.improving) "Improve your stake's sync?" else "Set up daily sync?") },
+            text = {
+                Text(
+                    if (offer.improving)
+                        "${offer.stake} is currently synced by a leader whose access can't pull everything. " +
+                            "Authorize your Church session to take over the daily sync? It's stored encrypted " +
+                            "(never your password) and revocable anytime in Settings."
+                    else
+                        "${offer.stake} isn't set up for daily sync yet. Authorize your Church session so your " +
+                            "stake's data refreshes automatically each day? It's stored encrypted (never your " +
+                            "password) and revocable anytime in Settings.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = vm::confirmEnroll) {
+                    Text(if (offer.improving) "Authorize sync" else "Set up sync")
+                }
+            },
+            dismissButton = { TextButton(onClick = vm::declineEnroll) { Text("Not now") } },
+        )
+    }
 }
 
 @Composable
@@ -150,18 +176,9 @@ private fun ChurchFields(vm: AuthViewModel, s: org.membercovenantpath.viewer.vie
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(Modifier.size(10.dp))
-            // Explicit, default-OFF authorization — signing in alone never captures the session.
-            Row(verticalAlignment = Alignment.Top) {
-                Checkbox(checked = s.authorizeSync, onCheckedChange = { vm.setAuthorizeSync(it) }, enabled = !s.busy)
-                Spacer(Modifier.size(6.dp))
-                Text(
-                    "Authorize daily sync for my stake. Stores this Church session (encrypted — never your password) so your stake's data refreshes daily. Optional — leave it off to just view. Revoke anytime in Settings.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 12.dp),
-                )
-            }
-            Spacer(Modifier.size(10.dp))
+            Spacer(Modifier.size(16.dp))
+            // No "authorize daily sync" checkbox here (#8): signing in only views. If the stake isn't
+            // synced yet, we offer to set it up in a dialog AFTER a successful sign-in.
             Button(onClick = vm::churchSignIn, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) { spinnerOr(s.busy, "Sign in") }
         }
     }
