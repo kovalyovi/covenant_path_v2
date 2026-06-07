@@ -15,7 +15,7 @@ import { avgCompletion } from '../../logic/milestones';
 import {
   metricData, attendedDates, firstLessonDate, lessonsWithMember,
   membersWithMemberLessons, unitCompletion, baptismsByMonth,
-  type Period, type Ev, type Series, type BWindow,
+  type Period, type Ev, type Series, type BWindow, type DateRange,
 } from '../../logic/kpis';
 import { Icon, type IconName } from '../../components/Icon';
 import { SectionCard, Segmented, RangePill, Progress } from '../../components/ui';
@@ -39,6 +39,7 @@ function KpisBody() {
   const [period, setPeriod] = useState<Period>('month');
   const [unit, setUnit] = useState<string | null>(null);
   const [compare, setCompare] = useState(false);
+  const [customRange, setCustomRange] = useState<DateRange | null>(null); // #7
   const [drill, setDrill] = useState<Drill | null>(null);
 
   const units = [...new Set(d.members.map((m) => String(m['unit_name'] ?? '')).filter(Boolean))].sort();
@@ -46,16 +47,36 @@ function KpisBody() {
   const baptized = rows.filter((m) => !isInvestigator(m));
   const investigators = rows.filter(isInvestigator);
   const allUnits = new Set(rows.map((m) => String(m['unit_name'] ?? '—')));
+  // #6/#7: YTD and custom show period TOTALS (this period vs the same span last year).
+  const showTotals = period === 'ytd' || period === 'custom';
 
-  const friendsAtSac = metricData(investigators, attendedDates, period);
-  const newAtSac = metricData(baptized, attendedDates, period);
-  const newFriends = metricData(investigators, firstLessonDate, period);
+  const cr = customRange ?? undefined;
+  const friendsAtSac = metricData(investigators, attendedDates, period, cr);
+  const newAtSac = metricData(baptized, attendedDates, period, cr);
+  const newFriends = metricData(investigators, firstLessonDate, period, cr);
   const lessons = lessonsWithMember(rows);
   const completion = avgCompletion(baptized);
 
+  // #7: custom date-range helpers (two native date inputs).
+  const toISO = (dt: Date) => dt.toISOString().slice(0, 10);
+  const activateCustom = () => {
+    if (!customRange) setCustomRange({ start: new Date(new Date().getFullYear(), 0, 1), end: new Date() });
+    setPeriod('custom');
+  };
+  const onCustomStart = (s: string) => {
+    const dt = new Date(`${s}T00:00:00`);
+    if (!Number.isNaN(dt.getTime())) setCustomRange((r) => ({ start: dt, end: r?.end ?? new Date() }));
+  };
+  const onCustomEnd = (s: string) => {
+    const dt = new Date(`${s}T00:00:00`);
+    if (!Number.isNaN(dt.getTime())) {
+      setCustomRange((r) => ({ start: r?.start ?? new Date(new Date().getFullYear(), 0, 1), end: dt }));
+    }
+  };
+
   const compareLabels: [string, string] =
     period === 'month' ? ['Last month', 'This month']
-      : period === 'year' || period === 'ytd' ? ['Last year', 'This year']
+      : period === 'year' || period === 'ytd' || period === 'custom' ? ['Last year', 'This year']
       : ['Prev. month', 'This month'];
 
   function periodRangeLabel(): string | null {
@@ -71,6 +92,10 @@ function KpisBody() {
     if (period === 'year') {
       const from = new Date(now.getFullYear(), now.getMonth() - 11, 1);
       return `${fmtMonYear(from)} – ${fmtMonYear(now)}`;
+    }
+    if (period === 'custom' && customRange) {
+      const f = (dt: Date) => `${fmtMonShort(dt)} ${dt.getDate()}, ${dt.getFullYear()}`;
+      return `${f(customRange.start)} – ${f(customRange.end)}`;
     }
     return null;
   }
@@ -92,7 +117,7 @@ function KpisBody() {
       allUnits={allUnits}
       compareLabels={compareLabels}
       showCompare={compare}
-      ytdTotals={period === 'ytd'}
+      ytdTotals={showTotals}
       suffix="people being taught who attended sacrament"
       onDrill={setDrill}
     />,
@@ -106,7 +131,7 @@ function KpisBody() {
       allUnits={allUnits}
       compareLabels={compareLabels}
       showCompare={compare}
-      ytdTotals={period === 'ytd'}
+      ytdTotals={showTotals}
       suffix="baptized members who attended sacrament"
       onDrill={setDrill}
     />,
@@ -120,7 +145,7 @@ function KpisBody() {
       allUnits={allUnits}
       compareLabels={compareLabels}
       showCompare={compare}
-      ytdTotals={period === 'ytd'}
+      ytdTotals={showTotals}
       suffix="people who started lessons in the period"
       onDrill={setDrill}
     />,
@@ -183,7 +208,7 @@ function KpisBody() {
                 </select>
               )}
             </div>
-            <div style={{ display: 'flex', justifyContent: 'center' }}>
+            <div style={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
               <Segmented<Period>
                 ariaLabel="Period"
                 value={period}
@@ -195,7 +220,41 @@ function KpisBody() {
                   { value: 'all', label: 'All' },
                 ]}
               />
+              {/* #7: custom date range — toggles two native date inputs below. */}
+              <button
+                type="button"
+                className="chip"
+                aria-pressed={period === 'custom'}
+                onClick={activateCustom}
+                style={period === 'custom' ? { background: 'var(--secondary-container)', color: 'var(--on-secondary-container)', borderColor: 'transparent' } : undefined}
+              >
+                <Icon name="event" size={16} color={period === 'custom' ? 'var(--primary)' : undefined} />
+                Custom
+              </button>
             </div>
+            {period === 'custom' && customRange && (
+              <div className="row" style={{ justifyContent: 'center', gap: 8, alignItems: 'center' }}>
+                <input
+                  type="date"
+                  className="input"
+                  style={{ width: 'auto' }}
+                  aria-label="Custom range start"
+                  max={toISO(customRange.end)}
+                  value={toISO(customRange.start)}
+                  onChange={(e) => onCustomStart(e.target.value)}
+                />
+                <span className="muted">–</span>
+                <input
+                  type="date"
+                  className="input"
+                  style={{ width: 'auto' }}
+                  aria-label="Custom range end"
+                  min={toISO(customRange.start)}
+                  value={toISO(customRange.end)}
+                  onChange={(e) => onCustomEnd(e.target.value)}
+                />
+              </div>
+            )}
             {rangeLabel && (
               <div style={{ display: 'flex', justifyContent: 'center' }}>
                 <RangePill text={rangeLabel} />

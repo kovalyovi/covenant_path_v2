@@ -26,18 +26,23 @@ import androidx.compose.material.icons.filled.EventAvailable
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Leaderboard
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -84,6 +89,10 @@ fun KpisScreen(members: List<Member>, onOpen: (Member) -> Unit, today: LocalDate
     var unit by remember { mutableStateOf<String?>(null) }
     var compare by remember { mutableStateOf(false) }
     var drill by remember { mutableStateOf<Drill?>(null) }
+    // #7: custom date range (used when period == CUSTOM). Defaults to Jan 1 → today.
+    var customStart by remember { mutableStateOf(LocalDate.of(today.year, 1, 1)) }
+    var customEnd by remember { mutableStateOf(today) }
+    val customRange = if (period == KpiPeriod.CUSTOM) customStart to customEnd else null
 
     val units = remember(members) {
         members.mapNotNull { it.unitName?.takeIf { u -> u.isNotEmpty() } }.distinct().sorted()
@@ -93,9 +102,9 @@ fun KpisScreen(members: List<Member>, onOpen: (Member) -> Unit, today: LocalDate
     val investigators = rows.filter { it.isInvestigator }
     val allUnits = rows.map { it.unitName ?: "—" }.toSet()
 
-    val friendsAtSac = Kpis.metricData(investigators, { Kpis.attendedDates(it) }, period, today)
-    val newAtSac = Kpis.metricData(baptized, { Kpis.attendedDates(it) }, period, today)
-    val newFriends = Kpis.metricData(investigators, { Kpis.firstLessonDate(it) }, period, today)
+    val friendsAtSac = Kpis.metricData(investigators, { Kpis.attendedDates(it) }, period, today, customRange)
+    val newAtSac = Kpis.metricData(baptized, { Kpis.attendedDates(it) }, period, today, customRange)
+    val newFriends = Kpis.metricData(investigators, { Kpis.firstLessonDate(it) }, period, today, customRange)
     val lessonsWithMember = Kpis.lessonsWithMember(rows)
     val completion = Milestones.avgCompletion(baptized, today)
     val (priorLabel, latestLabel) = Kpis.compareLabels(period)
@@ -111,7 +120,11 @@ fun KpisScreen(members: List<Member>, onOpen: (Member) -> Unit, today: LocalDate
             }
             Spacer(Modifier.size(10.dp))
             PeriodSelector(period) { period = it }
-            Kpis.periodRangeLabel(period, today)?.let {
+            if (period == KpiPeriod.CUSTOM) {
+                Spacer(Modifier.size(8.dp))
+                CustomRangeRow(customStart, customEnd, today, onStart = { customStart = it }, onEnd = { customEnd = it })
+            }
+            Kpis.periodRangeLabel(period, today, customRange)?.let {
                 Spacer(Modifier.size(6.dp))
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { RangePill(it) }
             }
@@ -133,7 +146,7 @@ fun KpisScreen(members: List<Member>, onOpen: (Member) -> Unit, today: LocalDate
             MetricChartCard("Investigators at Sacrament", Icons.Filled.Groups, Color(0xFFEF6C00),
                 friendsAtSac, allUnits, priorLabel, latestLabel, compare,
                 "people being taught who attended sacrament",
-                ytdTotals = period == KpiPeriod.YTD,
+                ytdTotals = period == KpiPeriod.YTD || period == KpiPeriod.CUSTOM,
                 onBucket = { i, lbl -> drill = Drill.Events("Investigators at Sacrament", friendsAtSac.events.filter { it.bucket == i }, lbl) },
                 onByUnit = { drill = Drill.Events("Investigators at Sacrament", friendsAtSac.events, null) })
         }
@@ -141,7 +154,7 @@ fun KpisScreen(members: List<Member>, onOpen: (Member) -> Unit, today: LocalDate
             MetricChartCard("New Members at Sacrament", Icons.Filled.Favorite, Color(0xFFB5532A),
                 newAtSac, allUnits, priorLabel, latestLabel, compare,
                 "baptized members who attended sacrament",
-                ytdTotals = period == KpiPeriod.YTD,
+                ytdTotals = period == KpiPeriod.YTD || period == KpiPeriod.CUSTOM,
                 onBucket = { i, lbl -> drill = Drill.Events("New Members at Sacrament", newAtSac.events.filter { it.bucket == i }, lbl) },
                 onByUnit = { drill = Drill.Events("New Members at Sacrament", newAtSac.events, null) })
         }
@@ -149,7 +162,7 @@ fun KpisScreen(members: List<Member>, onOpen: (Member) -> Unit, today: LocalDate
             MetricChartCard("New Friends Being Taught", Icons.AutoMirrored.Filled.LibraryBooks, Color(0xFF00897B),
                 newFriends, allUnits, priorLabel, latestLabel, compare,
                 "people who started lessons in the period",
-                ytdTotals = period == KpiPeriod.YTD,
+                ytdTotals = period == KpiPeriod.YTD || period == KpiPeriod.CUSTOM,
                 onBucket = { i, lbl -> drill = Drill.Events("New Friends Being Taught", newFriends.events.filter { it.bucket == i }, lbl) },
                 onByUnit = { drill = Drill.Events("New Friends Being Taught", newFriends.events, null) })
         }
@@ -188,12 +201,56 @@ fun KpisScreen(members: List<Member>, onOpen: (Member) -> Unit, today: LocalDate
 
 @Composable
 private fun PeriodSelector(period: KpiPeriod, onChange: (KpiPeriod) -> Unit) {
-    val opts = listOf(KpiPeriod.MONTH to "Month", KpiPeriod.YTD to "YTD", KpiPeriod.YEAR to "Year", KpiPeriod.ALL to "All")
+    val opts = listOf(KpiPeriod.MONTH to "Month", KpiPeriod.YTD to "YTD", KpiPeriod.YEAR to "Year", KpiPeriod.ALL to "All", KpiPeriod.CUSTOM to "Custom")
     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
         opts.forEachIndexed { i, (p, lbl) ->
             SegmentedButton(selected = period == p, onClick = { onChange(p) }, shape = SegmentedButtonDefaults.itemShape(i, opts.size)) { Text(lbl) }
         }
     }
+}
+
+/** #7: the two date buttons shown when the Custom period is selected; each opens a date picker. */
+@Composable
+private fun CustomRangeRow(
+    start: LocalDate,
+    end: LocalDate,
+    today: LocalDate,
+    onStart: (LocalDate) -> Unit,
+    onEnd: (LocalDate) -> Unit,
+) {
+    val fmt = remember { java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy") }
+    var showStart by remember { mutableStateOf(false) }
+    var showEnd by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedButton(onClick = { showStart = true }) { Text(fmt.format(start)) }
+        Text(" – ", Modifier.padding(horizontal = 6.dp))
+        OutlinedButton(onClick = { showEnd = true }) { Text(fmt.format(end)) }
+    }
+    if (showStart) DateDialog(start, onPick = { onStart(if (it.isAfter(end)) end else it) }) { showStart = false }
+    if (showEnd) DateDialog(end, onPick = { onEnd(if (it.isAfter(today)) today else if (it.isBefore(start)) start else it) }) { showEnd = false }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DateDialog(initial: LocalDate, onPick: (LocalDate) -> Unit, onDismiss: () -> Unit) {
+    val state = rememberDatePickerState(
+        initialSelectedDateMillis = initial.atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli())
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = {
+                state.selectedDateMillis?.let {
+                    onPick(java.time.Instant.ofEpochMilli(it).atZone(java.time.ZoneOffset.UTC).toLocalDate())
+                }
+                onDismiss()
+            }) { Text("OK") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    ) { DatePicker(state = state) }
 }
 
 @Composable

@@ -1,6 +1,6 @@
 part of '../dashboard_page.dart';
 
-enum _Period { month, ytd, year, all }
+enum _Period { month, ytd, year, all, custom }
 
 /// KPIs computed from this stake's own covenant-path data (not LCR membership stats):
 ///   • New Members at Sacrament — baptized members attending, bucketed by the selected period
@@ -21,11 +21,17 @@ class _KpiViewState extends State<_KpiView> {
   _Period _period = _Period.month;
   String? _unit; // null = whole stake; else drill into one unit
   bool _compare = false; // overlay the previous equal period
+  DateTimeRange? _customRange; // #7: the user-picked range when _period == custom
+
+  /// #6/#7: YTD and custom show period TOTALS (this period vs the same span last year); the others
+  /// show the last two buckets month-over-month.
+  bool get _showTotals => _period == _Period.ytd || _period == _Period.custom;
 
   (String, String) get _compareLabels => switch (_period) {
         _Period.month => ('Last month', 'This month'),
         _Period.ytd => ('Last year', 'This year'), // YTD totals: this year vs same period last year
         _Period.year => ('Last year', 'This year'),
+        _Period.custom => ('Last year', 'This year'), // same range, one year earlier
         _Period.all => ('Prev. month', 'This month'),
       };
 
@@ -43,8 +49,30 @@ class _KpiViewState extends State<_KpiView> {
       case _Period.ytd:
         final from = DateTime(now.year, 1, 1); // Jan 1 → today
         return '${DateFormat('MMM d').format(from)} – ${DateFormat('MMM d, y').format(now)}';
+      case _Period.custom:
+        final r = _customRange;
+        if (r == null) return null;
+        return '${DateFormat('MMM d, y').format(r.start)} – ${DateFormat('MMM d, y').format(r.end)}';
       case _Period.all:
         return null;
+    }
+  }
+
+  /// #7: open a date-range picker; on pick, switch to the custom period scoped to that range.
+  Future<void> _pickCustomRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 6),
+      lastDate: now,
+      initialDateRange:
+          _customRange ?? DateTimeRange(start: DateTime(now.year, 1, 1), end: now),
+    );
+    if (picked != null) {
+      setState(() {
+        _customRange = picked;
+        _period = _Period.custom;
+      });
     }
   }
 
@@ -60,9 +88,9 @@ class _KpiViewState extends State<_KpiView> {
     final allUnits = rows.map((m) => '${m['unit_name'] ?? '—'}').toSet();
     final onOpen = widget.onOpen;
     // unique people per period (a member attending several Sundays in a month counts once)
-    final friendsAtSac = _metricData(investigators, datesOf: _attendedDates, period: _period);
-    final newAtSac = _metricData(baptized, datesOf: _attendedDates, period: _period);
-    final newFriends = _metricData(investigators, datesOf: _firstLessonDate, period: _period);
+    final friendsAtSac = _metricData(investigators, datesOf: _attendedDates, period: _period, customRange: _customRange);
+    final newAtSac = _metricData(baptized, datesOf: _attendedDates, period: _period, customRange: _customRange);
+    final newFriends = _metricData(investigators, datesOf: _firstLessonDate, period: _period, customRange: _customRange);
     final lessonsWithMember = _lessonsWithMember(rows);
     final completion = _avgCompletion(baptized);
     // overview drills: list the people behind a number (one entry each, dated for the chrono view)
@@ -80,7 +108,7 @@ class _KpiViewState extends State<_KpiView> {
         onOpen: onOpen,
         compare: _compareLabels,
         showCompare: _compare,
-        ytdTotals: _period == _Period.ytd,
+        ytdTotals: _showTotals,
         suffix: 'people being taught who attended sacrament',
       ),
       _MetricChartCard(
@@ -93,7 +121,7 @@ class _KpiViewState extends State<_KpiView> {
         onOpen: onOpen,
         compare: _compareLabels,
         showCompare: _compare,
-        ytdTotals: _period == _Period.ytd,
+        ytdTotals: _showTotals,
         suffix: 'baptized members who attended sacrament',
       ),
       _MetricChartCard(
@@ -106,7 +134,7 @@ class _KpiViewState extends State<_KpiView> {
         onOpen: onOpen,
         compare: _compareLabels,
         showCompare: _compare,
-        ytdTotals: _period == _Period.ytd,
+        ytdTotals: _showTotals,
         suffix: 'people who started lessons in the period',
       ),
       _StatGridCard(items: [
@@ -145,16 +173,36 @@ class _KpiViewState extends State<_KpiView> {
         ]),
         const SizedBox(height: 10),
         Center(
-          child: SegmentedButton<_Period>(
-            showSelectedIcon: false,
-            segments: const [
-              ButtonSegment(value: _Period.month, label: Text('Month')),
-              ButtonSegment(value: _Period.ytd, label: Text('YTD')),
-              ButtonSegment(value: _Period.year, label: Text('Year')),
-              ButtonSegment(value: _Period.all, label: Text('All')),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            alignment: WrapAlignment.center,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SegmentedButton<_Period>(
+                showSelectedIcon: false,
+                emptySelectionAllowed: true, // none highlighted while a Custom range is active
+                segments: const [
+                  ButtonSegment(value: _Period.month, label: Text('Month')),
+                  ButtonSegment(value: _Period.ytd, label: Text('YTD')),
+                  ButtonSegment(value: _Period.year, label: Text('Year')),
+                  ButtonSegment(value: _Period.all, label: Text('All')),
+                ],
+                selected: _period == _Period.custom ? const <_Period>{} : {_period},
+                onSelectionChanged: (s) {
+                  if (s.isNotEmpty) setState(() => _period = s.first);
+                },
+              ),
+              // #7: custom date range — opens a range picker; tapping again re-picks.
+              FilterChip(
+                avatar: Icon(Icons.date_range,
+                    size: 18,
+                    color: _period == _Period.custom ? Theme.of(context).colorScheme.primary : null),
+                label: const Text('Custom'),
+                selected: _period == _Period.custom,
+                onSelected: (_) => _pickCustomRange(),
+              ),
             ],
-            selected: {_period},
-            onSelectionChanged: (s) => setState(() => _period = s.first),
           ),
         ),
         if (_periodRangeLabel() != null) ...[

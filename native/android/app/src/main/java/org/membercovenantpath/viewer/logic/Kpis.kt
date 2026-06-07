@@ -18,7 +18,7 @@ import java.util.Locale
  *   All   = first data → now, by MONTH (≤3 yrs) or by YEAR (longer). Empty buckets render as zeros.
  * The prev overlay is the immediately-preceding equal span.
  */
-enum class KpiPeriod { MONTH, YTD, YEAR, ALL }
+enum class KpiPeriod { MONTH, YTD, YEAR, ALL, CUSTOM }
 
 /** A chart series: current window (labels+values) overlaid against the preceding equal window. */
 data class KpiSeries(
@@ -64,7 +64,7 @@ object Kpis {
             val w = weekStart(dt)
             w.year * 10000 + w.monthValue * 100 + w.dayOfMonth
         }
-        KpiPeriod.YTD, KpiPeriod.YEAR -> dt.year * 100 + dt.monthValue
+        KpiPeriod.YTD, KpiPeriod.YEAR, KpiPeriod.CUSTOM -> dt.year * 100 + dt.monthValue
         KpiPeriod.ALL -> if (allByYear) dt.year else dt.year * 100 + dt.monthValue
     }
 
@@ -72,7 +72,12 @@ object Kpis {
      * Ordered (key,label) buckets of the window ending [today], shifted back [shift] windows
      * (shift=1 → the preceding equal span). ALL is data-driven (handled in [metricData]) → empty here.
      */
-    private fun windowBuckets(p: KpiPeriod, today: LocalDate, shift: Int): List<Pair<Int, String>> = when (p) {
+    private fun windowBuckets(
+        p: KpiPeriod,
+        today: LocalDate,
+        shift: Int,
+        custom: Pair<LocalDate, LocalDate>? = null,
+    ): List<Pair<Int, String>> = when (p) {
         KpiPeriod.MONTH -> {
             val end = weekStart(today).minusDays((shift * 5 * 7).toLong())
             (4 downTo 0).map { i ->
@@ -94,6 +99,23 @@ object Kpis {
                 (y * 100 + m) to MON.format(LocalDate.of(y, m, 1))
             }
         }
+        KpiPeriod.CUSTOM -> {
+            // #7: monthly buckets from start..end, shifted back `shift` YEARS so the compare overlay
+            // is the same calendar range one year earlier (year-over-year).
+            if (custom == null) emptyList()
+            else {
+                val out = ArrayList<Pair<Int, String>>()
+                var y = custom.first.year - shift
+                var mo = custom.first.monthValue
+                val endY = custom.second.year - shift
+                val endMo = custom.second.monthValue
+                while (y < endY || (y == endY && mo <= endMo)) {
+                    out.add((y * 100 + mo) to MON.format(LocalDate.of(y, mo, 1)))
+                    if (++mo > 12) { mo = 1; y++ }
+                }
+                out
+            }
+        }
         KpiPeriod.ALL -> emptyList()
     }
 
@@ -106,6 +128,7 @@ object Kpis {
         datesOf: (Member) -> List<LocalDate>,
         period: KpiPeriod,
         today: LocalDate = LocalDate.now(),
+        customRange: Pair<LocalDate, LocalDate>? = null,
     ): KpiMetric {
         // Collect (member,date) up front so ALL can choose its granularity from the span.
         val pairs = ArrayList<Pair<Member, LocalDate>>()
@@ -149,8 +172,8 @@ object Kpis {
             cur = list
             prev = emptyList()
         } else {
-            cur = windowBuckets(period, today, 0)
-            prev = windowBuckets(period, today, 1)
+            cur = windowBuckets(period, today, 0, customRange)
+            prev = windowBuckets(period, today, 1, customRange)
         }
 
         val idxOf = HashMap<Int, Int>()
@@ -235,7 +258,11 @@ object Kpis {
     }
 
     /** The x-axis date range a Month/Year period spans (null for ALL). Mirrors `_periodRangeLabel`. */
-    fun periodRangeLabel(period: KpiPeriod, today: LocalDate = LocalDate.now()): String? = when (period) {
+    fun periodRangeLabel(
+        period: KpiPeriod,
+        today: LocalDate = LocalDate.now(),
+        custom: Pair<LocalDate, LocalDate>? = null,
+    ): String? = when (period) {
         KpiPeriod.MONTH -> {
             val from = today.minusDays(35)
             "${MD_LONG.format(from)} – ${MD_Y.format(today)}"
@@ -248,6 +275,7 @@ object Kpis {
             val from = LocalDate.of(today.year, 1, 1) // Jan 1 → today
             "${MD_LONG.format(from)} – ${MD_Y.format(today)}"
         }
+        KpiPeriod.CUSTOM -> custom?.let { "${MD_Y.format(it.first)} – ${MD_Y.format(it.second)}" }
         KpiPeriod.ALL -> null
     }
 
@@ -256,6 +284,7 @@ object Kpis {
         KpiPeriod.MONTH -> "Last month" to "This month"
         KpiPeriod.YTD -> "Last year" to "This year" // YTD totals: this year vs same period last year
         KpiPeriod.YEAR -> "Last year" to "This year"
+        KpiPeriod.CUSTOM -> "Last year" to "This year" // same range, one year earlier
         KpiPeriod.ALL -> "Prev. month" to "This month"
     }
 

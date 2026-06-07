@@ -101,7 +101,13 @@ export function baptismsByMonth(baptized: Iterable<Member>, window: BWindow): Ba
 
 // ---- Metric line series (week/month buckets vs. previous window) -------------------------------
 
-export type Period = 'month' | 'ytd' | 'year' | 'all';
+export type Period = 'month' | 'ytd' | 'year' | 'all' | 'custom';
+
+/** #7: an inclusive custom date range for the 'custom' period. */
+export interface DateRange {
+  start: Date;
+  end: Date;
+}
 
 export interface Series {
   labels: string[];
@@ -122,13 +128,14 @@ function bucketKey(dt: Date, p: Period, allByYear: boolean): number {
     }
     case 'ytd':
     case 'year':
+    case 'custom':
       return dt.getFullYear() * 100 + dt.getMonth() + 1;
     case 'all':
       return allByYear ? dt.getFullYear() : dt.getFullYear() * 100 + dt.getMonth() + 1;
   }
 }
 
-function windowBuckets(p: Period, today: Date, shift: number): Array<[number, string]> {
+function windowBuckets(p: Period, today: Date, shift: number, custom?: DateRange): Array<[number, string]> {
   switch (p) {
     case 'month': {
       const end = weekStart(today);
@@ -157,6 +164,22 @@ function windowBuckets(p: Period, today: Date, shift: number): Array<[number, st
       for (let mo = 1; mo <= today.getMonth() + 1; mo++) out.push([y * 100 + mo, fmtMonShort(new Date(y, mo - 1))]);
       return out;
     }
+    case 'custom': {
+      // #7: monthly buckets from start..end, shifted back `shift` YEARS so the compare overlay is the
+      // same calendar range one year earlier (year-over-year).
+      if (!custom) return [];
+      const out: Array<[number, string]> = [];
+      let y = custom.start.getFullYear() - shift;
+      let mo = custom.start.getMonth() + 1;
+      const endY = custom.end.getFullYear() - shift;
+      const endMo = custom.end.getMonth() + 1;
+      while (y < endY || (y === endY && mo <= endMo)) {
+        const d = new Date(y, mo - 1);
+        out.push([y * 100 + mo, y === today.getFullYear() ? fmtMonShort(d) : `${fmtMonShort(d)} '${String(y).slice(2)}`]);
+        if (++mo > 12) { mo = 1; y++; }
+      }
+      return out;
+    }
     case 'all':
       return [];
   }
@@ -170,6 +193,7 @@ export function metricData(
   rows: Iterable<Member>,
   datesOf: (m: Member) => Date[],
   period: Period,
+  customRange?: DateRange,
 ): MetricData {
   const today = new Date();
   const pairs: Array<[Member, Date]> = [];
@@ -214,8 +238,8 @@ export function metricData(
     }
     prev = [];
   } else {
-    cur = windowBuckets(period, today, 0);
-    prev = windowBuckets(period, today, 1);
+    cur = windowBuckets(period, today, 0, customRange);
+    prev = windowBuckets(period, today, 1, customRange);
   }
 
   const idxOf = new Map<number, number>();

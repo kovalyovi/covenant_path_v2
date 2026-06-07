@@ -13,6 +13,10 @@ struct KPIsView: View {
     @State private var period: KpiPeriod = .month
     @State private var unit: String?          // nil = whole stake
     @State private var compare = false
+    // #7: custom date range (used when period == .custom). Defaults to Jan 1 → today.
+    @State private var customStart: Date = Calendar.current.date(
+        from: DateComponents(year: Calendar.current.component(.year, from: Date()), month: 1, day: 1)) ?? Date()
+    @State private var customEnd: Date = Date()
     @State private var drill: DrillPayload?
     @State private var ghBreakdown = false
     @State private var lessonsDrill = false
@@ -33,9 +37,10 @@ struct KPIsView: View {
             VStack(alignment: .leading, spacing: 12) {
                 header
 
-                let friendsAtSac = Kpis.metricData(investigators, datesOf: Kpis.attendedDates, period: period)
-                let newAtSac = Kpis.metricData(baptized, datesOf: Kpis.attendedDates, period: period)
-                let newFriends = Kpis.metricData(investigators, datesOf: Kpis.firstLessonDate, period: period)
+                let cr: (start: Date, end: Date)? = period == .custom ? (customStart, customEnd) : nil
+                let friendsAtSac = Kpis.metricData(investigators, datesOf: Kpis.attendedDates, period: period, customRange: cr)
+                let newAtSac = Kpis.metricData(baptized, datesOf: Kpis.attendedDates, period: period, customRange: cr)
+                let newFriends = Kpis.metricData(investigators, datesOf: Kpis.firstLessonDate, period: period, customRange: cr)
 
                 MetricChartCard(title: "Investigators at Sacrament", symbol: "person.3",
                                 hex: 0xEF6C00, data: friendsAtSac, period: period, compare: compare,
@@ -99,6 +104,18 @@ struct KPIsView: View {
             }
             .pickerStyle(.segmented)
 
+            // #7: custom date range — two date pickers shown when Custom is selected.
+            if period == .custom {
+                HStack(spacing: 8) {
+                    DatePicker("From", selection: $customStart, in: ...Date(), displayedComponents: .date)
+                        .labelsHidden()
+                    Text("–").foregroundStyle(.secondary)
+                    DatePicker("To", selection: $customEnd, in: customStart...Date(), displayedComponents: .date)
+                        .labelsHidden()
+                }
+                .frame(maxWidth: .infinity)
+            }
+
             if let range = periodRangeLabel {
                 RangePill(range).frame(maxWidth: .infinity)
             }
@@ -126,6 +143,8 @@ struct KPIsView: View {
         case .ytd:
             let from = Calendar.current.date(from: DateComponents(year: Calendar.current.component(.year, from: now), month: 1, day: 1)) ?? now
             return "\(from.formatted(.dateTime.month(.abbreviated).day())) – \(now.formatted(.dateTime.month(.abbreviated).day().year()))"
+        case .custom:
+            return "\(customStart.formatted(.dateTime.month(.abbreviated).day().year())) – \(customEnd.formatted(.dateTime.month(.abbreviated).day().year()))"
         case .all:
             return nil
         }
@@ -328,9 +347,10 @@ struct MetricChartCard: View {
     private var values: [Double] { data.series.current }
     // #6: for YTD the big-stat pair is YTD TOTALS (this year vs the same Jan–today span last year);
     // otherwise the last two buckets (month-over-month).
-    private var last: Double? { period == .ytd ? values.reduce(0, +) : values.last }
+    private var showTotals: Bool { period == .ytd || period == .custom }
+    private var last: Double? { showTotals ? values.reduce(0, +) : values.last }
     private var prior: Double? {
-        period == .ytd ? data.series.prev.reduce(0, +) : (values.count >= 2 ? values[values.count - 2] : nil)
+        showTotals ? data.series.prev.reduce(0, +) : (values.count >= 2 ? values[values.count - 2] : nil)
     }
 
     var body: some View {

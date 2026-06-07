@@ -399,6 +399,7 @@ int _bucketKey(DateTime dt, _Period p, {bool allByYear = false}) {
       return w.year * 10000 + w.month * 100 + w.day; // per ISO week
     case _Period.ytd:
     case _Period.year:
+    case _Period.custom:
       return dt.year * 100 + dt.month; // per month
     case _Period.all:
       return allByYear ? dt.year : dt.year * 100 + dt.month; // per year (long spans) or per month
@@ -408,7 +409,7 @@ int _bucketKey(DateTime dt, _Period p, {bool allByYear = false}) {
 /// The ordered (key, label) buckets of the window ending [today], shifted back [shift] windows
 /// (shift=1 → the immediately-preceding equal span, for the compare overlay). _Period.all is data-
 /// driven and handled in _metricData, so it returns empty here.
-List<(int, String)> _windowBuckets(_Period p, DateTime today, int shift) {
+List<(int, String)> _windowBuckets(_Period p, DateTime today, int shift, {DateTimeRange? custom}) {
   switch (p) {
     case _Period.month:
       final end = _weekStart(today).subtract(Duration(days: shift * 5 * 7));
@@ -434,6 +435,22 @@ List<(int, String)> _windowBuckets(_Period p, DateTime today, int shift) {
       return [
         for (var m = 1; m <= today.month; m++) (y * 100 + m, DateFormat('MMM').format(DateTime(y, m)))
       ];
+    case _Period.custom:
+      // Custom range (#7): monthly buckets from start..end, shifted back `shift` YEARS so the
+      // compare overlay is the same calendar range one year earlier (year-over-year).
+      if (custom == null) return const [];
+      final out = <(int, String)>[];
+      var y = custom.start.year - shift, mo = custom.start.month;
+      final endY = custom.end.year - shift, endMo = custom.end.month;
+      while (y < endY || (y == endY && mo <= endMo)) {
+        out.add((y * 100 + mo,
+            DateFormat(y == today.year ? 'MMM' : "MMM ''yy").format(DateTime(y, mo))));
+        if (++mo > 12) {
+          mo = 1;
+          y++;
+        }
+      }
+      return out;
     case _Period.all:
       return const [];
   }
@@ -451,7 +468,8 @@ class _Ev {
 /// Series for the chart (unique people per bucket, recent window vs the preceding one) PLUS the
 /// underlying events so a tap can show *who* (with their unit), by unit or chronologically.
 ({_Series series, List<_Ev> events}) _metricData(Iterable<Map<String, dynamic>> rows,
-    {required Iterable<DateTime> Function(Map<String, dynamic>) datesOf, required _Period period}) {
+    {required Iterable<DateTime> Function(Map<String, dynamic>) datesOf, required _Period period,
+    DateTimeRange? customRange}) {
   final today = DateTime.now();
   // Collect (member, date) pairs up front so 'All' can choose its bucket granularity from the span.
   final pairs = <(Map<String, dynamic>, DateTime)>[];
@@ -502,8 +520,8 @@ class _Ev {
     }
     prev = const [];
   } else {
-    cur = _windowBuckets(period, today, 0);
-    prev = _windowBuckets(period, today, 1);
+    cur = _windowBuckets(period, today, 0, custom: customRange);
+    prev = _windowBuckets(period, today, 1, custom: customRange);
   }
 
   final idxOf = {for (var i = 0; i < cur.length; i++) cur[i].$1: i};

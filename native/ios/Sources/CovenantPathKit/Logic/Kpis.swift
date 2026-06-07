@@ -10,7 +10,7 @@ import Foundation
 ///   - `.all`   — first data → now, grouped by MONTH (≤36 months span) or by YEAR (longer)
 /// Buckets with no events render as zeros. The `prev` overlay is the immediately-preceding equal span.
 public enum KpiPeriod: String, CaseIterable, Identifiable, Sendable {
-    case month, ytd, year, all
+    case month, ytd, year, all, custom
     public var id: String { rawValue }
 
     public var label: String {
@@ -19,6 +19,7 @@ public enum KpiPeriod: String, CaseIterable, Identifiable, Sendable {
         case .ytd: return "YTD"
         case .year: return "Year"
         case .all: return "All"
+        case .custom: return "Custom"
         }
     }
 
@@ -28,6 +29,7 @@ public enum KpiPeriod: String, CaseIterable, Identifiable, Sendable {
         case .month: return ("Last month", "This month")
         case .ytd: return ("Last year", "This year") // YTD totals: this year vs same period last year
         case .year: return ("Last year", "This year")
+        case .custom: return ("Last year", "This year") // same range, one year earlier
         case .all: return ("Prev. month", "This month")
         }
     }
@@ -118,7 +120,7 @@ public enum Kpis {
         case .month:
             let w = ymd(weekStart(dt))
             return w.y * 10000 + w.m * 100 + w.d
-        case .ytd, .year:
+        case .ytd, .year, .custom:
             let c = ymd(dt)
             return c.y * 100 + c.m
         case .all:
@@ -131,7 +133,8 @@ public enum Kpis {
 
     /// Ordered (key, label) buckets of the window ending `today`, shifted back `shift` windows.
     /// `.all` is data-driven (handled in `metricData`) so returns empty here.
-    static func windowBuckets(_ p: KpiPeriod, today: Date, shift: Int) -> [(key: Int, label: String)] {
+    static func windowBuckets(_ p: KpiPeriod, today: Date, shift: Int,
+                              custom: (start: Date, end: Date)? = nil) -> [(key: Int, label: String)] {
         switch p {
         case .month:
             let end = cal.date(byAdding: .day, value: -(shift * 5 * 7), to: weekStart(today)) ?? today
@@ -161,6 +164,21 @@ public enum Kpis {
                 out.append((y * 100 + m, monthAbbrev(monthDate(year: y, month: m))))
             }
             return out
+        case .custom:
+            // #7: monthly buckets from start..end, shifted back `shift` YEARS so the compare overlay
+            // is the same calendar range one year earlier (year-over-year).
+            guard let custom else { return [] }
+            let s = ymd(custom.start), e = ymd(custom.end)
+            var out: [(Int, String)] = []
+            var y = s.y - shift
+            var mo = s.m
+            let endY = e.y - shift, endMo = e.m
+            while y < endY || (y == endY && mo <= endMo) {
+                out.append((y * 100 + mo, monthAbbrev(monthDate(year: y, month: mo))))
+                mo += 1
+                if mo > 12 { mo = 1; y += 1 }
+            }
+            return out
         case .all:
             return []
         }
@@ -174,6 +192,7 @@ public enum Kpis {
         _ rows: [Member],
         datesOf: (Member) -> [Date],
         period: KpiPeriod,
+        customRange: (start: Date, end: Date)? = nil,
         now: Date = Date()
     ) -> (series: KpiSeries, events: [KpiEvent]) {
         let today = now
@@ -221,8 +240,8 @@ public enum Kpis {
             }
             prev = []
         } else {
-            cur = windowBuckets(period, today: today, shift: 0)
-            prev = windowBuckets(period, today: today, shift: 1)
+            cur = windowBuckets(period, today: today, shift: 0, custom: customRange)
+            prev = windowBuckets(period, today: today, shift: 1, custom: customRange)
         }
 
         var idxOf: [Int: Int] = [:]
