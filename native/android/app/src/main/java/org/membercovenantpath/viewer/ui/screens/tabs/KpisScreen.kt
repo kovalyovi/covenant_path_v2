@@ -133,6 +133,7 @@ fun KpisScreen(members: List<Member>, onOpen: (Member) -> Unit, today: LocalDate
             MetricChartCard("Investigators at Sacrament", Icons.Filled.Groups, Color(0xFFEF6C00),
                 friendsAtSac, allUnits, priorLabel, latestLabel, compare,
                 "people being taught who attended sacrament",
+                ytdTotals = period == KpiPeriod.YTD,
                 onBucket = { i, lbl -> drill = Drill.Events("Investigators at Sacrament", friendsAtSac.events.filter { it.bucket == i }, lbl) },
                 onByUnit = { drill = Drill.Events("Investigators at Sacrament", friendsAtSac.events, null) })
         }
@@ -140,6 +141,7 @@ fun KpisScreen(members: List<Member>, onOpen: (Member) -> Unit, today: LocalDate
             MetricChartCard("New Members at Sacrament", Icons.Filled.Favorite, Color(0xFFB5532A),
                 newAtSac, allUnits, priorLabel, latestLabel, compare,
                 "baptized members who attended sacrament",
+                ytdTotals = period == KpiPeriod.YTD,
                 onBucket = { i, lbl -> drill = Drill.Events("New Members at Sacrament", newAtSac.events.filter { it.bucket == i }, lbl) },
                 onByUnit = { drill = Drill.Events("New Members at Sacrament", newAtSac.events, null) })
         }
@@ -147,6 +149,7 @@ fun KpisScreen(members: List<Member>, onOpen: (Member) -> Unit, today: LocalDate
             MetricChartCard("New Friends Being Taught", Icons.AutoMirrored.Filled.LibraryBooks, Color(0xFF00897B),
                 newFriends, allUnits, priorLabel, latestLabel, compare,
                 "people who started lessons in the period",
+                ytdTotals = period == KpiPeriod.YTD,
                 onBucket = { i, lbl -> drill = Drill.Events("New Friends Being Taught", newFriends.events.filter { it.bucket == i }, lbl) },
                 onByUnit = { drill = Drill.Events("New Friends Being Taught", newFriends.events, null) })
         }
@@ -185,7 +188,7 @@ fun KpisScreen(members: List<Member>, onOpen: (Member) -> Unit, today: LocalDate
 
 @Composable
 private fun PeriodSelector(period: KpiPeriod, onChange: (KpiPeriod) -> Unit) {
-    val opts = listOf(KpiPeriod.MONTH to "Month", KpiPeriod.YEAR to "Year", KpiPeriod.ALL to "All")
+    val opts = listOf(KpiPeriod.MONTH to "Month", KpiPeriod.YTD to "YTD", KpiPeriod.YEAR to "Year", KpiPeriod.ALL to "All")
     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
         opts.forEachIndexed { i, (p, lbl) ->
             SegmentedButton(selected = period == p, onClick = { onChange(p) }, shape = SegmentedButtonDefaults.itemShape(i, opts.size)) { Text(lbl) }
@@ -284,12 +287,22 @@ private fun MetricChartCard(
     latestLabel: String,
     compare: Boolean,
     suffix: String,
+    ytdTotals: Boolean = false,
     onBucket: (Int, String?) -> Unit,
     onByUnit: () -> Unit,
 ) {
     val values = metric.series.current
-    val last = values.lastOrNull()
-    val prior = if (values.size >= 2) values[values.size - 2] else null
+    // #6: for YTD the big-stat pair is YTD TOTALS (this year vs the same Jan–today span last year);
+    // otherwise the last two buckets (month-over-month).
+    val last: Double?
+    val prior: Double?
+    if (ytdTotals) {
+        last = values.sum()
+        prior = metric.series.prev.sum()
+    } else {
+        last = values.lastOrNull()
+        prior = if (values.size >= 2) values[values.size - 2] else null
+    }
     val delta = if (last != null && prior != null) last - prior else null
 
     SectionCard(

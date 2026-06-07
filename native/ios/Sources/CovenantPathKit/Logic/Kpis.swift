@@ -10,12 +10,13 @@ import Foundation
 ///   - `.all`   — first data → now, grouped by MONTH (≤36 months span) or by YEAR (longer)
 /// Buckets with no events render as zeros. The `prev` overlay is the immediately-preceding equal span.
 public enum KpiPeriod: String, CaseIterable, Identifiable, Sendable {
-    case month, year, all
+    case month, ytd, year, all
     public var id: String { rawValue }
 
     public var label: String {
         switch self {
         case .month: return "Month"
+        case .ytd: return "YTD"
         case .year: return "Year"
         case .all: return "All"
         }
@@ -25,6 +26,7 @@ public enum KpiPeriod: String, CaseIterable, Identifiable, Sendable {
     public var compareLabels: (prev: String, latest: String) {
         switch self {
         case .month: return ("Last month", "This month")
+        case .ytd: return ("Last year", "This year") // YTD totals: this year vs same period last year
         case .year: return ("Last year", "This year")
         case .all: return ("Prev. month", "This month")
         }
@@ -116,7 +118,7 @@ public enum Kpis {
         case .month:
             let w = ymd(weekStart(dt))
             return w.y * 10000 + w.m * 100 + w.d
-        case .year:
+        case .ytd, .year:
             let c = ymd(dt)
             return c.y * 100 + c.m
         case .all:
@@ -147,6 +149,16 @@ public enum Kpis {
                 let m = monthDate(year: t.y, month: t.m - shift * 12 - i)
                 let c = ymd(m)
                 out.append((c.y * 100 + c.m, monthAbbrev(m)))
+            }
+            return out
+        case .ytd:
+            // Calendar year-to-date: Jan..current month of (this year − shift). shift=1 → last year's
+            // same Jan..now span, position-aligned, so "Compare to previous" is year-over-year.
+            let t = ymd(today)
+            let y = t.y - shift
+            var out: [(Int, String)] = []
+            for m in 1...t.m {
+                out.append((y * 100 + m, monthAbbrev(monthDate(year: y, month: m))))
             }
             return out
         case .all:

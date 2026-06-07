@@ -54,12 +54,18 @@ function KpisBody() {
   const completion = avgCompletion(baptized);
 
   const compareLabels: [string, string] =
-    period === 'month' ? ['Last month', 'This month'] : period === 'year' ? ['Last year', 'This year'] : ['Prev. month', 'This month'];
+    period === 'month' ? ['Last month', 'This month']
+      : period === 'year' || period === 'ytd' ? ['Last year', 'This year']
+      : ['Prev. month', 'This month'];
 
   function periodRangeLabel(): string | null {
     const now = new Date();
     if (period === 'month') {
       const from = new Date(now.getTime() - 35 * 86_400_000);
+      return `${fmtMonShort(from)} ${from.getDate()} – ${fmtMonShort(now)} ${now.getDate()}, ${now.getFullYear()}`;
+    }
+    if (period === 'ytd') {
+      const from = new Date(now.getFullYear(), 0, 1); // Jan 1 → today
       return `${fmtMonShort(from)} ${from.getDate()} – ${fmtMonShort(now)} ${now.getDate()}, ${now.getFullYear()}`;
     }
     if (period === 'year') {
@@ -86,6 +92,7 @@ function KpisBody() {
       allUnits={allUnits}
       compareLabels={compareLabels}
       showCompare={compare}
+      ytdTotals={period === 'ytd'}
       suffix="people being taught who attended sacrament"
       onDrill={setDrill}
     />,
@@ -99,6 +106,7 @@ function KpisBody() {
       allUnits={allUnits}
       compareLabels={compareLabels}
       showCompare={compare}
+      ytdTotals={period === 'ytd'}
       suffix="baptized members who attended sacrament"
       onDrill={setDrill}
     />,
@@ -112,6 +120,7 @@ function KpisBody() {
       allUnits={allUnits}
       compareLabels={compareLabels}
       showCompare={compare}
+      ytdTotals={period === 'ytd'}
       suffix="people who started lessons in the period"
       onDrill={setDrill}
     />,
@@ -181,6 +190,7 @@ function KpisBody() {
                 onChange={setPeriod}
                 options={[
                   { value: 'month', label: 'Month' },
+                  { value: 'ytd', label: 'YTD' },
                   { value: 'year', label: 'Year' },
                   { value: 'all', label: 'All' },
                 ]}
@@ -315,6 +325,7 @@ function MetricCard({
   showCompare,
   suffix,
   onDrill,
+  ytdTotals = false,
 }: {
   title: string;
   icon: IconName;
@@ -326,12 +337,25 @@ function MetricCard({
   showCompare: boolean;
   suffix: string;
   onDrill: (d: Drill) => void;
+  ytdTotals?: boolean;
 }) {
   const [hovered, setHovered] = useState<number | null>(null);
   const values = series.current;
-  const last = values.length > 0 ? values[values.length - 1] : null;
-  const prior = values.length >= 2 ? values[values.length - 2] : null;
-  const delta = last != null && prior != null ? last - prior : null;
+  // #6: for YTD the big-stat pair is YTD TOTALS (this year vs the same Jan–today span last year);
+  // otherwise it's the last two buckets (month-over-month).
+  let last: number | null;
+  let prior: number | null;
+  let delta: number | null;
+  if (ytdTotals) {
+    const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+    last = sum(values);
+    prior = sum(series.prev);
+    delta = last - prior;
+  } else {
+    last = values.length > 0 ? values[values.length - 1] : null;
+    prior = values.length >= 2 ? values[values.length - 2] : null;
+    delta = last != null && prior != null ? last - prior : null;
+  }
 
   return (
     <SectionCard

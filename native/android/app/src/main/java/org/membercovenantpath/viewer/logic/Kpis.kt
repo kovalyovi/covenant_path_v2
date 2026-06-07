@@ -18,7 +18,7 @@ import java.util.Locale
  *   All   = first data → now, by MONTH (≤3 yrs) or by YEAR (longer). Empty buckets render as zeros.
  * The prev overlay is the immediately-preceding equal span.
  */
-enum class KpiPeriod { MONTH, YEAR, ALL }
+enum class KpiPeriod { MONTH, YTD, YEAR, ALL }
 
 /** A chart series: current window (labels+values) overlaid against the preceding equal window. */
 data class KpiSeries(
@@ -64,7 +64,7 @@ object Kpis {
             val w = weekStart(dt)
             w.year * 10000 + w.monthValue * 100 + w.dayOfMonth
         }
-        KpiPeriod.YEAR -> dt.year * 100 + dt.monthValue
+        KpiPeriod.YTD, KpiPeriod.YEAR -> dt.year * 100 + dt.monthValue
         KpiPeriod.ALL -> if (allByYear) dt.year else dt.year * 100 + dt.monthValue
     }
 
@@ -84,6 +84,14 @@ object Kpis {
             (11 downTo 0).map { i ->
                 val m = LocalDate.of(today.year, 1, 1).plusMonths((today.monthValue - 1 - shift * 12 - i).toLong())
                 (m.year * 100 + m.monthValue) to MON.format(m)
+            }
+        }
+        KpiPeriod.YTD -> {
+            // Calendar year-to-date: Jan..current month of (this year − shift). shift=1 → last year's
+            // same Jan..now span, position-aligned, so "Compare to previous" is year-over-year.
+            val y = today.year - shift
+            (1..today.monthValue).map { m ->
+                (y * 100 + m) to MON.format(LocalDate.of(y, m, 1))
             }
         }
         KpiPeriod.ALL -> emptyList()
@@ -236,12 +244,17 @@ object Kpis {
             val from = LocalDate.of(today.year, 1, 1).plusMonths((today.monthValue - 1 - 11).toLong())
             "${M_Y.format(from)} – ${M_Y.format(today)}"
         }
+        KpiPeriod.YTD -> {
+            val from = LocalDate.of(today.year, 1, 1) // Jan 1 → today
+            "${MD_LONG.format(from)} – ${MD_Y.format(today)}"
+        }
         KpiPeriod.ALL -> null
     }
 
     /** (prior label, latest label) for the two big stats. Mirrors `_compareLabels`. */
     fun compareLabels(period: KpiPeriod): Pair<String, String> = when (period) {
         KpiPeriod.MONTH -> "Last month" to "This month"
+        KpiPeriod.YTD -> "Last year" to "This year" // YTD totals: this year vs same period last year
         KpiPeriod.YEAR -> "Last year" to "This year"
         KpiPeriod.ALL -> "Prev. month" to "This month"
     }

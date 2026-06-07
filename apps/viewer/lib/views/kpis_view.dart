@@ -1,6 +1,6 @@
 part of '../dashboard_page.dart';
 
-enum _Period { month, year, all }
+enum _Period { month, ytd, year, all }
 
 /// KPIs computed from this stake's own covenant-path data (not LCR membership stats):
 ///   • New Members at Sacrament — baptized members attending, bucketed by the selected period
@@ -24,6 +24,7 @@ class _KpiViewState extends State<_KpiView> {
 
   (String, String) get _compareLabels => switch (_period) {
         _Period.month => ('Last month', 'This month'),
+        _Period.ytd => ('Last year', 'This year'), // YTD totals: this year vs same period last year
         _Period.year => ('Last year', 'This year'),
         _Period.all => ('Prev. month', 'This month'),
       };
@@ -39,6 +40,9 @@ class _KpiViewState extends State<_KpiView> {
       case _Period.year:
         final from = DateTime(now.year, now.month - 11, 1); // 12 months of buckets
         return '${DateFormat('MMM y').format(from)} – ${DateFormat('MMM y').format(now)}';
+      case _Period.ytd:
+        final from = DateTime(now.year, 1, 1); // Jan 1 → today
+        return '${DateFormat('MMM d').format(from)} – ${DateFormat('MMM d, y').format(now)}';
       case _Period.all:
         return null;
     }
@@ -76,6 +80,7 @@ class _KpiViewState extends State<_KpiView> {
         onOpen: onOpen,
         compare: _compareLabels,
         showCompare: _compare,
+        ytdTotals: _period == _Period.ytd,
         suffix: 'people being taught who attended sacrament',
       ),
       _MetricChartCard(
@@ -88,6 +93,7 @@ class _KpiViewState extends State<_KpiView> {
         onOpen: onOpen,
         compare: _compareLabels,
         showCompare: _compare,
+        ytdTotals: _period == _Period.ytd,
         suffix: 'baptized members who attended sacrament',
       ),
       _MetricChartCard(
@@ -100,6 +106,7 @@ class _KpiViewState extends State<_KpiView> {
         onOpen: onOpen,
         compare: _compareLabels,
         showCompare: _compare,
+        ytdTotals: _period == _Period.ytd,
         suffix: 'people who started lessons in the period',
       ),
       _StatGridCard(items: [
@@ -142,6 +149,7 @@ class _KpiViewState extends State<_KpiView> {
             showSelectedIcon: false,
             segments: const [
               ButtonSegment(value: _Period.month, label: Text('Month')),
+              ButtonSegment(value: _Period.ytd, label: Text('YTD')),
               ButtonSegment(value: _Period.year, label: Text('Year')),
               ButtonSegment(value: _Period.all, label: Text('All')),
             ],
@@ -285,7 +293,8 @@ class _BaptismsCardState extends State<_BaptismsCard> {
 class _MetricChartCard extends StatefulWidget {
   const _MetricChartCard({required this.title, required this.icon, required this.color,
       required this.series, required this.compare, required this.suffix,
-      required this.events, required this.allUnits, required this.onOpen, this.showCompare = false});
+      required this.events, required this.allUnits, required this.onOpen, this.showCompare = false,
+      this.ytdTotals = false});
   final String title;
   final IconData icon;
   final Color color;
@@ -296,6 +305,9 @@ class _MetricChartCard extends StatefulWidget {
   final Set<String> allUnits;
   final void Function(Map<String, dynamic>) onOpen;
   final bool showCompare;
+  /// #6: for the YTD period, the big-stat pair shows YTD TOTALS (this year vs the same Jan–today
+  /// span last year) instead of the last two buckets — so "YTD numbers + comparison" reads directly.
+  final bool ytdTotals;
 
   @override
   State<_MetricChartCard> createState() => _MetricChartCardState();
@@ -308,9 +320,20 @@ class _MetricChartCardState extends State<_MetricChartCard> {
   Widget build(BuildContext context) {
     final series = widget.series;
     final values = series.current;
-    final last = values.isNotEmpty ? values.last : null;
-    final prior = values.length >= 2 ? values[values.length - 2] : null;
-    final delta = (last != null && prior != null) ? (last - prior) : null;
+    final double? last;
+    final double? prior;
+    final double? delta;
+    if (widget.ytdTotals) {
+      // #6: this year's YTD total vs the same Jan–today span last year (year-over-year).
+      double sum(List<double> xs) => xs.fold(0.0, (a, b) => a + b);
+      last = sum(values);
+      prior = sum(series.prev);
+      delta = last - prior;
+    } else {
+      last = values.isNotEmpty ? values.last : null;
+      prior = values.length >= 2 ? values[values.length - 2] : null;
+      delta = (last != null && prior != null) ? (last - prior) : null;
+    }
     return SectionCard(
       title: widget.title,
       leadingIcon: widget.icon,

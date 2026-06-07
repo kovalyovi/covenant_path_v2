@@ -397,6 +397,7 @@ int _bucketKey(DateTime dt, _Period p, {bool allByYear = false}) {
     case _Period.month:
       final w = _weekStart(dt);
       return w.year * 10000 + w.month * 100 + w.day; // per ISO week
+    case _Period.ytd:
     case _Period.year:
       return dt.year * 100 + dt.month; // per month
     case _Period.all:
@@ -425,6 +426,13 @@ List<(int, String)> _windowBuckets(_Period p, DateTime today, int shift) {
             final m = DateTime(today.year, today.month - shift * 12 - i, 1);
             return (m.year * 100 + m.month, DateFormat('MMM').format(m));
           }()
+      ];
+    case _Period.ytd:
+      // Calendar year-to-date: Jan..current month of (this year − shift). shift=1 → last year's
+      // same Jan..now span, position-aligned, so "Compare to previous" is a year-over-year overlay.
+      final y = today.year - shift;
+      return [
+        for (var m = 1; m <= today.month; m++) (y * 100 + m, DateFormat('MMM').format(DateTime(y, m)))
       ];
     case _Period.all:
       return const [];

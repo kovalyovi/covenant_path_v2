@@ -101,7 +101,7 @@ export function baptismsByMonth(baptized: Iterable<Member>, window: BWindow): Ba
 
 // ---- Metric line series (week/month buckets vs. previous window) -------------------------------
 
-export type Period = 'month' | 'year' | 'all';
+export type Period = 'month' | 'ytd' | 'year' | 'all';
 
 export interface Series {
   labels: string[];
@@ -120,6 +120,7 @@ function bucketKey(dt: Date, p: Period, allByYear: boolean): number {
       const w = weekStart(dt);
       return w.getFullYear() * 10000 + (w.getMonth() + 1) * 100 + w.getDate();
     }
+    case 'ytd':
     case 'year':
       return dt.getFullYear() * 100 + dt.getMonth() + 1;
     case 'all':
@@ -146,6 +147,14 @@ function windowBuckets(p: Period, today: Date, shift: number): Array<[number, st
         const m = new Date(today.getFullYear(), today.getMonth() - shift * 12 - i, 1);
         out.push([m.getFullYear() * 100 + m.getMonth() + 1, fmtMonShort(m)]);
       }
+      return out;
+    }
+    case 'ytd': {
+      // Calendar year-to-date: Jan..current month of (this year − shift). shift=1 → last year's same
+      // Jan..now span, position-aligned, so "Compare to previous" is a year-over-year overlay.
+      const y = today.getFullYear() - shift;
+      const out: Array<[number, string]> = [];
+      for (let mo = 1; mo <= today.getMonth() + 1; mo++) out.push([y * 100 + mo, fmtMonShort(new Date(y, mo - 1))]);
       return out;
     }
     case 'all':

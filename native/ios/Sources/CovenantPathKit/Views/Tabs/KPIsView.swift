@@ -123,6 +123,9 @@ struct KPIsView: View {
         case .year:
             let from = Calendar.current.date(byAdding: .month, value: -11, to: now) ?? now
             return "\(from.formatted(.dateTime.month(.abbreviated).year())) – \(now.formatted(.dateTime.month(.abbreviated).year()))"
+        case .ytd:
+            let from = Calendar.current.date(from: DateComponents(year: Calendar.current.component(.year, from: now), month: 1, day: 1)) ?? now
+            return "\(from.formatted(.dateTime.month(.abbreviated).day())) – \(now.formatted(.dateTime.month(.abbreviated).day().year()))"
         case .all:
             return nil
         }
@@ -323,8 +326,12 @@ struct MetricChartCard: View {
 
     private var color: Color { Color(hex: hex) }
     private var values: [Double] { data.series.current }
-    private var last: Double? { values.last }
-    private var prior: Double? { values.count >= 2 ? values[values.count - 2] : nil }
+    // #6: for YTD the big-stat pair is YTD TOTALS (this year vs the same Jan–today span last year);
+    // otherwise the last two buckets (month-over-month).
+    private var last: Double? { period == .ytd ? values.reduce(0, +) : values.last }
+    private var prior: Double? {
+        period == .ytd ? data.series.prev.reduce(0, +) : (values.count >= 2 ? values[values.count - 2] : nil)
+    }
 
     var body: some View {
         SectionCard(title: title, systemImage: symbol, iconColor: color,
