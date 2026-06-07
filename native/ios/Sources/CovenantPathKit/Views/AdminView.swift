@@ -203,16 +203,7 @@ struct AdminView: View {
                     }
                     let endpoints = (req["endpoints"] as? [[String: Any]]) ?? []
                     if !endpoints.isEmpty {
-                        Text("Endpoint performance").font(.subheadline.bold())
-                        ForEach(Array(endpoints.enumerated()), id: \.offset) { _, ep in
-                            HStack {
-                                Text("\(ep["endpoint"] as? String ?? "")")
-                                    .font(.system(.caption, design: .monospaced)).lineLimit(1)
-                                Spacer()
-                                Text("\(ep["calls"].map { "\($0)" } ?? "0") calls · \(ep["avg_ms"].map { "\($0)" } ?? "?")ms")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
+                        EndpointPerfView(endpoints: endpoints)
                     }
                 }
             } else {
@@ -416,6 +407,70 @@ struct AdminView: View {
     }
     private func statTile(_ label: String, _ v: Any?) -> some View {
         VStack { Text(v.map { "\($0)" } ?? "—").font(.title2.bold()); Text(label).font(.caption) }
+    }
+}
+
+/// #13–15: endpoint metrics grouped by route (defensive client-side normalization so even OLD
+/// diagnostics rows collapse), failing endpoints first, with a "Failing only / All" toggle.
+private struct EndpointPerfView: View {
+    let endpoints: [[String: Any]]
+    @State private var failingOnly = true
+
+    private struct Row: Identifiable {
+        let id = UUID(); let endpoint: String; let calls: Int; let errors: Int; let avgMs: Int
+    }
+
+    private static func norm(_ ep: String) -> String {
+        ep.split(separator: "/", omittingEmptySubsequences: false).map { seg -> String in
+            let s = String(seg)
+            if s == "{id}" { return "{id}" }
+            if !s.isEmpty, s.allSatisfy({ $0.isNumber }) { return "{id}" }
+            let hex = s.hasPrefix("{id}") ? String(s.dropFirst(4)) : s
+            if hex.count >= 8, hex.allSatisfy({ $0.isHexDigit }) { return "{id}" }
+            return s
+        }.joined(separator: "/")
+    }
+
+    private var grouped: [Row] {
+        var by: [String: (calls: Int, errors: Int, ms: Int)] = [:]
+        for ep in endpoints {
+            let key = Self.norm(ep["endpoint"] as? String ?? "")
+            let calls = (ep["calls"] as? NSNumber)?.intValue ?? 0
+            let avg = (ep["avg_ms"] as? NSNumber)?.intValue ?? 0
+            var g = by[key] ?? (0, 0, 0)
+            g.calls += calls
+            g.errors += (ep["errors"] as? NSNumber)?.intValue ?? 0
+            g.ms += avg * calls
+            by[key] = g
+        }
+        return by.map { Row(endpoint: $0.key, calls: $0.value.calls, errors: $0.value.errors,
+                            avgMs: $0.value.calls > 0 ? $0.value.ms / $0.value.calls : 0) }
+            .sorted { ($0.errors, $0.calls) > ($1.errors, $1.calls) }
+    }
+
+    var body: some View {
+        let g = grouped
+        let failing = g.filter { $0.errors > 0 }
+        let shown = (failingOnly && !failing.isEmpty) ? failing : g
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Endpoint performance").font(.subheadline.bold())
+                Spacer()
+                if !failing.isEmpty {
+                    Button(failingOnly ? "Show all \(g.count)" : "Failing only (\(failing.count))") {
+                        failingOnly.toggle()
+                    }.font(.caption)
+                }
+            }
+            ForEach(shown) { ep in
+                HStack {
+                    Text(ep.endpoint).font(.system(.caption, design: .monospaced)).lineLimit(1)
+                    Spacer()
+                    Text("\(ep.calls) calls · \(ep.avgMs)ms\(ep.errors != 0 ? " · \(ep.errors) err" : "")")
+                        .font(.caption).foregroundStyle(ep.errors != 0 ? Color.red : Color.secondary)
+                }
+            }
+        }
     }
 }
 #endif

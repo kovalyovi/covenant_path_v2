@@ -503,22 +503,7 @@ class _DiagnosticsCard extends StatelessWidget {
 
         if (endpoints.isNotEmpty) ...[
           const SizedBox(height: 14),
-          Text('Endpoint performance', style: Theme.of(context).textTheme.labelLarge),
-          const SizedBox(height: 6),
-          for (final ep in endpoints)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 2),
-              child: Row(children: [
-                Expanded(child: Text('${ep['endpoint']}',
-                    style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-                    overflow: TextOverflow.ellipsis)),
-                Text('${ep['calls']} calls · ${ep['avg_ms']}ms avg'
-                    '${(ep['errors'] ?? 0) != 0 ? ' · ${ep['errors']} err' : ''}',
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: (ep['errors'] ?? 0) != 0 ? Colors.red.shade700 : null)),
-              ]),
-            ),
+          _EndpointPerf(endpoints: endpoints),
         ],
       ]),
     );
@@ -796,6 +781,103 @@ class _AdminsCard extends StatelessWidget {
   }
 }
 
+// ---- endpoint troubleshoot (#13–15) ----------------------------------------
+
+/// Collapse an endpoint to its route pattern so calls aggregate — defensive on the CLIENT so even
+/// OLD diagnostics rows (captured before the metrics-normalizer fix) group cleanly: a path segment
+/// that is `{id}`, an `{id}`-prefixed hex tail, a long hex id, or all-digits becomes `{id}`.
+String _normEndpoint(String ep) => ep
+    .split('/')
+    .map((s) => (s == '{id}' ||
+            RegExp(r'^\d+$').hasMatch(s) ||
+            RegExp(r'^(\{id\})?[0-9a-fA-F]{8,}$').hasMatch(s))
+        ? '{id}'
+        : s)
+    .join('/');
+
+/// Group raw per-endpoint metrics by route pattern (summing calls/errors, weighting avg latency by
+/// calls), sorted FAILING-first then by call volume — the readable view behind #15.
+List<Map<String, dynamic>> _groupEndpoints(List endpoints) {
+  final by = <String, Map<String, num>>{};
+  for (final raw in endpoints) {
+    final ep = (raw as Map);
+    final key = _normEndpoint('${ep['endpoint'] ?? ''}');
+    final calls = (ep['calls'] as num?) ?? 0;
+    final avg = (ep['avg_ms'] as num?) ?? 0;
+    final g = by.putIfAbsent(key, () => {'calls': 0, 'errors': 0, 'ms': 0, 'max': 0});
+    g['calls'] = g['calls']! + calls;
+    g['errors'] = g['errors']! + ((ep['errors'] as num?) ?? 0);
+    g['ms'] = g['ms']! + avg * calls;
+    final mx = (ep['max_ms'] as num?) ?? avg;
+    if (mx > g['max']!) g['max'] = mx;
+  }
+  final out = [
+    for (final e in by.entries)
+      {
+        'endpoint': e.key,
+        'calls': e.value['calls'],
+        'errors': e.value['errors'],
+        'avg_ms': e.value['calls']! > 0 ? (e.value['ms']! / e.value['calls']!).round() : 0,
+        'max_ms': e.value['max'],
+      }
+  ];
+  out.sort((a, b) {
+    final ec = (b['errors'] as num).compareTo(a['errors'] as num);
+    return ec != 0 ? ec : (b['calls'] as num).compareTo(a['calls'] as num);
+  });
+  return out;
+}
+
+/// Endpoint-performance list: grouped by route, failing endpoints first, with a "Failing only / All"
+/// toggle so a noisy run collapses to just what's broken (#13–15). Failing rows render in red.
+class _EndpointPerf extends StatefulWidget {
+  const _EndpointPerf({required this.endpoints});
+  final List endpoints;
+  @override
+  State<_EndpointPerf> createState() => _EndpointPerfState();
+}
+
+class _EndpointPerfState extends State<_EndpointPerf> {
+  bool _failingOnly = true;
+
+  @override
+  Widget build(BuildContext context) {
+    final grouped = _groupEndpoints(widget.endpoints);
+    final failing = grouped.where((e) => (e['errors'] as num) > 0).toList();
+    final hasFailing = failing.isNotEmpty;
+    final show = (_failingOnly && hasFailing) ? failing : grouped;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        Expanded(
+            child: Text('Endpoint performance', style: Theme.of(context).textTheme.labelLarge)),
+        if (hasFailing)
+          TextButton(
+            onPressed: () => setState(() => _failingOnly = !_failingOnly),
+            style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+            child: Text(_failingOnly ? 'Show all ${grouped.length}' : 'Failing only (${failing.length})'),
+          ),
+      ]),
+      const SizedBox(height: 2),
+      for (final ep in show)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2),
+          child: Row(children: [
+            Expanded(
+                child: Text('${ep['endpoint']}',
+                    style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                    overflow: TextOverflow.ellipsis)),
+            Text(
+                '${ep['calls']} calls · ${ep['avg_ms']}ms avg'
+                '${(ep['errors'] as num) != 0 ? ' · ${ep['errors']} err' : ''}',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: (ep['errors'] as num) != 0 ? Colors.red.shade700 : null)),
+          ]),
+        ),
+    ]);
+  }
+}
+
 // ---- helpers ---------------------------------------------------------------
 
 Widget _kv(BuildContext context, String k, String v) => Padding(
@@ -824,8 +906,8 @@ String _claudeDump(Map<String, dynamic> run, Map req, Map stats, Map coverage, L
     });
   }
   if (endpoints.isNotEmpty) {
-    b.writeln('endpoints:');
-    for (final ep in endpoints) {
+    b.writeln('endpoints (grouped by route, failing first):');
+    for (final ep in _groupEndpoints(endpoints)) {
       b.writeln('  ${ep['endpoint']}: ${ep['calls']} calls, ${ep['avg_ms']}ms avg, '
           '${ep['errors'] ?? 0} err');
     }

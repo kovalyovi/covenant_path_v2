@@ -387,7 +387,45 @@ function LinksCard({ summary }: { summary: Json }) {
   );
 }
 
+// #13–15: collapse an endpoint to its route pattern so calls aggregate — defensive on the CLIENT so
+// even OLD diagnostics rows (captured before the metrics-normalizer fix) group cleanly.
+function normEndpoint(ep: string): string {
+  return ep
+    .split('/')
+    .map((s) => (s === '{id}' || /^\d+$/.test(s) || /^(\{id\})?[0-9a-fA-F]{8,}$/.test(s) ? '{id}' : s))
+    .join('/');
+}
+
+interface EpRow { endpoint: string; calls: number; errors: number; avg_ms: number; max_ms: number }
+
+/** Group raw per-endpoint metrics by route (sum calls/errors, weight avg latency by calls), sorted
+ *  failing-first then by volume — the readable view behind #15. */
+function groupEndpoints(endpoints: Json[]): EpRow[] {
+  const by = new Map<string, { calls: number; errors: number; ms: number; max: number }>();
+  for (const raw of endpoints) {
+    const key = normEndpoint(String(raw['endpoint'] ?? ''));
+    const calls = Number(raw['calls'] ?? 0);
+    const avg = Number(raw['avg_ms'] ?? 0);
+    const g = by.get(key) ?? { calls: 0, errors: 0, ms: 0, max: 0 };
+    g.calls += calls;
+    g.errors += Number(raw['errors'] ?? 0);
+    g.ms += avg * calls;
+    g.max = Math.max(g.max, Number(raw['max_ms'] ?? avg));
+    by.set(key, g);
+  }
+  return [...by.entries()]
+    .map(([endpoint, g]) => ({
+      endpoint,
+      calls: g.calls,
+      errors: g.errors,
+      avg_ms: g.calls > 0 ? Math.round(g.ms / g.calls) : 0,
+      max_ms: g.max,
+    }))
+    .sort((a, b) => b.errors - a.errors || b.calls - a.calls);
+}
+
 function DiagnosticsCard({ diag, onCopy, toast }: { diag: Json; onCopy: (t: string) => void; toast: ReturnType<typeof useToast> }) {
+  const [failingOnly, setFailingOnly] = useState(true); // #15: failing endpoints first / show all
   const runs = ((diag['runs'] as Json[]) ?? []);
   const run = runs.find((r) => r['kind'] === 'sync');
   if (!run) return <Card title="Diagnostics">No sync diagnostics yet.</Card>;
@@ -396,6 +434,9 @@ function DiagnosticsCard({ diag, onCopy, toast }: { diag: Json; onCopy: (t: stri
   const stats = (p['run_stats'] as Json) ?? {};
   const coverage = (p['field_coverage'] as Json) ?? {};
   const endpoints = ((req['endpoints'] as Json[]) ?? []);
+  const groupedEndpoints = groupEndpoints(endpoints);
+  const failingEndpoints = groupedEndpoints.filter((e) => e.errors > 0);
+  const shownEndpoints = failingOnly && failingEndpoints.length ? failingEndpoints : groupedEndpoints;
   const failed = ((stats['failed_units'] as unknown[]) ?? []);
   const successPct = Number(req['success_pct'] ?? 100);
 
@@ -412,9 +453,9 @@ function DiagnosticsCard({ diag, onCopy, toast }: { diag: Json; onCopy: (t: stri
         lines.push(`  ${k}: ${c['filled'] ?? 0}/${c['blocked'] ?? 0}/${c['pending'] ?? 0}`);
       }
     }
-    if (endpoints.length) {
-      lines.push('endpoints:');
-      for (const ep of endpoints) lines.push(`  ${ep['endpoint']}: ${ep['calls']} calls, ${ep['avg_ms']}ms avg, ${ep['errors'] ?? 0} err`);
+    if (groupedEndpoints.length) {
+      lines.push('endpoints (grouped by route, failing first):');
+      for (const ep of groupedEndpoints) lines.push(`  ${ep.endpoint}: ${ep.calls} calls, ${ep.avg_ms}ms avg, ${ep.errors} err`);
     }
     return lines.join('\n');
   }
@@ -448,15 +489,21 @@ function DiagnosticsCard({ diag, onCopy, toast }: { diag: Json; onCopy: (t: stri
           ))}
         </>
       )}
-      {endpoints.length > 0 && (
+      {groupedEndpoints.length > 0 && (
         <>
-          <p className="small" style={{ marginTop: 14, fontWeight: 600 }}>Endpoint performance</p>
-          {endpoints.map((ep, i) => (
+          <div className="row" style={{ marginTop: 14, alignItems: 'center' }}>
+            <p className="small" style={{ fontWeight: 600, flex: 1, margin: 0 }}>Endpoint performance</p>
+            {failingEndpoints.length > 0 && (
+              <button type="button" className="btn btn--text" onClick={() => setFailingOnly((f) => !f)}>
+                {failingOnly ? `Show all ${groupedEndpoints.length}` : `Failing only (${failingEndpoints.length})`}
+              </button>
+            )}
+          </div>
+          {shownEndpoints.map((ep, i) => (
             <div key={i} className="row" style={{ padding: '2px 0' }}>
-              <code style={{ flex: 1, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis' }}>{String(ep['endpoint'])}</code>
-              <span className="small" style={{ color: Number(ep['errors'] ?? 0) !== 0 ? statusColors.danger : undefined }}>
-                {String(ep['calls'])} calls · {String(ep['avg_ms'])}ms avg
-                {Number(ep['errors'] ?? 0) !== 0 ? ` · ${ep['errors']} err` : ''}
+              <code style={{ flex: 1, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis' }}>{ep.endpoint}</code>
+              <span className="small" style={{ color: ep.errors !== 0 ? statusColors.danger : undefined }}>
+                {ep.calls} calls · {ep.avg_ms}ms avg{ep.errors !== 0 ? ` · ${ep.errors} err` : ''}
               </span>
             </div>
           ))}

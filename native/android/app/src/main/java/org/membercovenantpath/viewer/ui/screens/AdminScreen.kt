@@ -54,7 +54,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.serialization.json.JsonObject
@@ -258,6 +260,7 @@ private fun LinksCard(summary: JsonObject) {
 private fun DiagnosticsCard(diag: JsonObject) {
     val runs = diag.arr("runs")
     val latestSync = runs?.firstOrNull { (it as? JsonObject)?.str("kind") == "sync" } as? JsonObject
+    var failingOnly by remember { mutableStateOf(true) } // #15: failing endpoints first / show all
     SectionCard("Diagnostics") {
         if (latestSync == null) {
             Text("No sync diagnostics yet.")
@@ -279,8 +282,67 @@ private fun DiagnosticsCard(diag: JsonObject) {
                 StatusPill("Units ${stats.int("units")} ok", failed == 0, offText = "$failed failed")
                 StatusPill("${req.int("total_errors")} request errors", req.int("total_errors") == 0)
             }
+            // #13–15: endpoint performance, grouped by route (defensive client-side normalization so
+            // even old rows collapse), failing first, with a Failing-only/All toggle.
+            val endpoints = req.arr("endpoints")?.mapNotNull { it as? JsonObject } ?: emptyList()
+            if (endpoints.isNotEmpty()) {
+                val grouped = groupEndpoints(endpoints)
+                val failing = grouped.filter { it.errors > 0 }
+                val shown = if (failingOnly && failing.isNotEmpty()) failing else grouped
+                Spacer(Modifier.size(12.dp))
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Endpoint performance", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                    if (failing.isNotEmpty()) {
+                        TextButton(onClick = { failingOnly = !failingOnly }) {
+                            Text(if (failingOnly) "Show all ${grouped.size}" else "Failing only (${failing.size})")
+                        }
+                    }
+                }
+                shown.forEach { ep ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(ep.endpoint, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "${ep.calls} calls · ${ep.avgMs}ms avg" + if (ep.errors != 0) " · ${ep.errors} err" else "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (ep.errors != 0) Color(0xFFE53935) else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
         }
     }
+}
+
+private data class EpRow(val endpoint: String, val calls: Int, val errors: Int, val avgMs: Int)
+
+/** #13–15: collapse an endpoint to its route pattern (defensive on the client so even old rows
+ *  group), then aggregate by route (sum calls/errors, weight avg latency by calls), failing-first. */
+private fun normEndpoint(ep: String): String =
+    ep.split("/").joinToString("/") { s ->
+        when {
+            s == "{id}" -> "{id}"
+            s.isNotEmpty() && s.all { it.isDigit() } -> "{id}"
+            else -> {
+                val hex = if (s.startsWith("{id}")) s.drop(4) else s
+                if (hex.length >= 8 && hex.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }) "{id}" else s
+            }
+        }
+    }
+
+private fun groupEndpoints(endpoints: List<JsonObject>): List<EpRow> {
+    val by = HashMap<String, IntArray>() // [calls, errors, msWeighted]
+    for (ep in endpoints) {
+        val key = normEndpoint(ep.str("endpoint") ?: "")
+        val calls = ep.int("calls")
+        val g = by.getOrPut(key) { IntArray(3) }
+        g[0] += calls
+        g[1] += ep.int("errors")
+        g[2] += ep.int("avg_ms") * calls
+    }
+    return by.map { (k, g) -> EpRow(k, g[0], g[1], if (g[0] > 0) g[2] / g[0] else 0) }
+        .sortedWith(compareByDescending<EpRow> { it.errors }.thenByDescending { it.calls })
 }
 
 @Composable
