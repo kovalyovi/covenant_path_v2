@@ -350,8 +350,47 @@ def _mint_and_sync(args, st: dict) -> None:
             if not okta_login.try_refresh_session(session, cred.get("refresh_token")):
                 raise
     okta_login.write_storage_state(session, okta_login.DEFAULT_STORAGE_STATE)
+    # #10: periodically re-verify the authorizing leader's calling STILL grants covenant-path access —
+    # this runs every sync, so a released/reassigned leader's stored credential is caught and revoked
+    # (the app then shows "sync paused — re-enroll" and stops trusting a now-ineligible session).
+    _revoke_if_ineligible(st)
     res = _sync_one(args)
     print(f"[+] {st['name']} ({st['unit_number']}): {res['members']} members synced")
+
+
+def _revoke_if_ineligible(st: dict) -> None:
+    """#10: confirm the stored credential's calling can still see covenant-path data; revoke it if not.
+
+    CONSERVATIVE: only revoke when we successfully READ the runner's callings AND none of them grant
+    access (and it's not a stake-stewardship always-allowed calling). If we can't read the callings
+    (transient/auth hiccup), we do NOT revoke — a false revoke would needlessly strand a good stake.
+    Raises after revoking so the run skips syncing with the ineligible session."""
+    from lcr_client import LcrClient
+    from lcr_client.access import covenant_path_access
+    from backend import credentials, db, onboarding
+    from backend.roles import _calling_always_allowed
+    try:
+        access = covenant_path_access(LcrClient())  # reads the storage_state just written for this stake
+        positions = access.get("runner_positions") or []
+        if not positions:
+            return  # couldn't determine callings → never revoke on an inconclusive read
+        authorized = (bool(access.get("can_pull_all")) or onboarding.access_rank(access) > 0
+                      or any(_calling_always_allowed(p.get("name")) for p in positions))
+        if authorized:
+            return
+    except Exception as exc:  # noqa: BLE001 — an eligibility-check error must not revoke or stop the run
+        logger.warning("eligibility re-check skipped for %s (%s): %s",
+                       st.get("name"), st.get("unit_number"), exc)
+        return
+    # Definitive: callings were read and none grant access → revoke + stop.
+    conn = db.connect()
+    try:
+        credentials.revoke(conn, st["stake_id"], reason="authorizing calling no longer grants covenant-path access")
+    finally:
+        conn.close()
+    logger.warning("revoked credential for stake %s (%s): authorizing calling lost covenant-path access",
+                   st.get("name"), st.get("unit_number"))
+    raise RuntimeError("authorizing leader no longer has covenant-path access; credential revoked")
 
 
 def _stake_schedules(conn) -> dict[str, dict]:

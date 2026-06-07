@@ -9,6 +9,7 @@ misconfigured. Run: python -m backend.test_broker  (or: pytest backend/test_brok
 from __future__ import annotations
 
 import os
+import time
 
 from fastapi.testclient import TestClient
 
@@ -103,6 +104,38 @@ def test_mfa_expiry() -> None:
     check("select_factor on unknown login_id -> AuthError", raised)
 
 
+def test_mfa_factor_parsing() -> None:
+    # _factors extracts selectable 2nd factors (id + label + method) and drops the password option.
+    rem = {"value": [{"name": "authenticator", "options": [
+        {"label": "Password", "value": {"form": {"value": [
+            {"name": "id", "value": "pwd"}, {"name": "methodType", "value": "password"}]}}},
+        {"label": "Email", "value": {"form": {"value": [
+            {"name": "id", "value": "em1"}, {"name": "methodType", "value": "email"}]}}},
+    ]}]}
+    factors = okta_flow._factors(rem)
+    check("MFA factor parse drops password + keeps email",
+          factors == [{"id": "em1", "label": "Email", "method": "email"}])
+
+
+def test_mfa_single_factor_select_noop() -> None:
+    # MFA shape B: already at the code challenge with no factor list — select_factor is a no-op
+    # ("code_sent") instead of raising, so the app's auto-send step proceeds to the code entry.
+    lid = "test-single-factor"
+    okta_flow._PENDING[lid] = {
+        "session": None, "verifier": "",
+        "payload": {"stateHandle": "sh", "remediation": {"value": [
+            {"name": "challenge-authenticator", "href": "https://x/idx/challenge", "value": []}]}},
+        "ts": time.time(),
+    }
+    try:
+        res = okta_flow.select_factor(lid, "pending")
+        check("single-factor select_factor returns code_sent", res.get("status") == "code_sent")
+    except Exception:  # noqa: BLE001
+        check("single-factor select_factor returns code_sent", False)
+    finally:
+        okta_flow._PENDING.pop(lid, None)
+
+
 def test_admin_requires_auth() -> None:
     # No bearer token -> 403 before any network call (verify_admin short-circuits).
     r = client.get("/admin/summary")
@@ -156,6 +189,8 @@ def main() -> int:
     test_mint_misconfig()
     test_mint_empty_email()
     test_mfa_expiry()
+    test_mfa_factor_parsing()
+    test_mfa_single_factor_select_noop()
     test_admin_requires_auth()
     test_admin_actions_graceful_without_github()
     test_dispatch_allowlist()

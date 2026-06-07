@@ -102,7 +102,7 @@ def _drive_to_password(session: requests.Session, identifier: str, password: str
     logger.info("[auth %s] introspect", login_id)
     payload = _idx_post(session, INTROSPECT_URL, {"interactionHandle": r.json()["interaction_handle"]})
 
-    identified = selected = False
+    identified = selected = answered_password = False
     for _ in range(8):
         if "successWithInteractionCode" in payload:
             return payload, verifier
@@ -115,10 +115,14 @@ def _drive_to_password(session: requests.Session, identifier: str, password: str
             payload = _follow(session, rems["identify"], {"identifier": identifier, "rememberMe": False})
             identified = True
             continue
-        if "challenge-authenticator" in rems:
+        # Answer the PASSWORD challenge exactly ONCE. A second `challenge-authenticator` after this is
+        # an MFA factor (e.g. an emailed/authenticator code) — we must NOT resubmit the password into
+        # it (that fails the login). Stop here and let the resumable MFA steps (select/verify) finish.
+        if not answered_password and "challenge-authenticator" in rems:
             logger.info("[auth %s] answer password", login_id)
             payload = _follow(session, rems["challenge-authenticator"],
                               {"credentials": {"passcode": password}}, redact=True)
+            answered_password = True
             continue
         if not selected and "select-authenticator-authenticate" in rems:
             aid = _password_authenticator_id(rems["select-authenticator-authenticate"])
@@ -185,13 +189,22 @@ def start_login(username: str, password: str) -> dict:
         return {"status": "success", "identity": ident, "cookies": serialize_cookies(session)}
 
     rems = _remediations(payload)
-    if "select-authenticator-authenticate" in rems:
+    # MFA shape A: Okta offers a list of 2nd-factor authenticators to choose from.
+    if "select-authenticator-authenticate" in rems and _factors(rems["select-authenticator-authenticate"]):
         factors = _factors(rems["select-authenticator-authenticate"])
-        if factors:
-            _PENDING[login_id] = {"session": session, "payload": payload,
-                                  "verifier": verifier, "ts": time.time()}
-            logger.info("[auth %s] MFA required; factors=%s", login_id, [f["label"] for f in factors])
-            return {"status": "mfa_required", "login_id": login_id, "factors": factors}
+        _PENDING[login_id] = {"session": session, "payload": payload,
+                              "verifier": verifier, "ts": time.time()}
+        logger.info("[auth %s] MFA required; factors=%s", login_id, [f["label"] for f in factors])
+        return {"status": "mfa_required", "login_id": login_id, "factors": factors}
+    # MFA shape B: single-factor — Okta went straight to the code challenge (often after auto-sending
+    # an email/SMS code). Surface a generic factor so the app shows the code field; select_factor is a
+    # no-op (the code is already pending) and verify_mfa submits it. (Previously this raised "stuck".)
+    if "challenge-authenticator" in rems:
+        _PENDING[login_id] = {"session": session, "payload": payload,
+                              "verifier": verifier, "ts": time.time()}
+        logger.info("[auth %s] MFA required; single-factor code challenge", login_id)
+        return {"status": "mfa_required", "login_id": login_id,
+                "factors": [{"id": "pending", "label": "your verification method", "method": "otp"}]}
     # unexpected (e.g. wrong password surfaces as messages)
     msg = _idx_messages(payload)
     dump_debug("broker_login_stuck", login_id=login_id, remediations=sorted(rems), messages=msg)
@@ -207,6 +220,10 @@ def select_factor(login_id: str, factor_id: str) -> dict:
     rems = _remediations(payload)
     sel = rems.get("select-authenticator-authenticate")
     if not sel:
+        # Single-factor MFA already at the code challenge (code sent at password time) — nothing to
+        # select, so the app's auto-send step is a no-op and we go straight to entering the code.
+        if "challenge-authenticator" in rems:
+            return {"status": "code_sent"}
         raise AuthError("no factor selection available")
     sel["_stateHandle"] = payload.get("stateHandle")
     logger.info("[auth %s] select MFA factor", login_id)
