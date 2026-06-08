@@ -87,5 +87,26 @@ def verify_email_login(email: str, code: str) -> dict:
     if not access or not refresh:
         raise RelayError("verification succeeded but no session was returned")
     logger.info("relay: minted a session for a user")
+    _audit_relay_login(email)
     return {"access_token": access, "refresh_token": refresh,
             "expires_in": data.get("expires_in"), "token_type": data.get("token_type", "bearer")}
+
+
+def _audit_relay_login(email: str) -> None:
+    """Record a relay (email-OTP) sign-in in login_audit — who signed in and the scope they resolve
+    to (role_scope) — so power-user/email logins are observable too, not just Church logins.
+    Best-effort: never affect the login that just succeeded."""
+    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    svc = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not (url and svc):
+        return
+    try:
+        from backend.auth_broker.enroll import _role_scope
+        requests.post(
+            f"{url}/rest/v1/login_audit",
+            headers={"apikey": svc, "Authorization": f"Bearer {svc}",
+                     "Content-Type": "application/json", "Prefer": "return=minimal"},
+            json={"email": email, "authorized": "allowed", "outcome": "allowed",
+                  "role_scope": _role_scope(email), "request_id": "email-relay"}, timeout=10)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("relay login audit skipped: %s", exc)

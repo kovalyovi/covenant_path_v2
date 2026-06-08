@@ -8,7 +8,9 @@ name: Keep auth broker warm
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # every 10 minutes (best-effort)
+    - cron: "*/5 * * * *"    # every 5 minutes — free on a public repo; keeps the broker warm with
+                             # margin vs Render's ~15-min sleep (best-effort cron can skip a fire),
+                             # so a leader's first login isn't a ~60s cold start (#6 login speed).
   workflow_dispatch:
 
 permissions:

@@ -63,7 +63,7 @@
 
 | Gap | Risk | Suggested fix |
 |---|---|---|
-| **Email-OTP / passkey logins aren't audited** | Power-user logins invisible in `login_audit` | Write a `login_audit` row from `email_relay.py` / passkey paths (outcome only — no calling) |
+| **Direct email-OTP / passkey logins partly audited** | Relay (broker) email logins now write `login_audit`; the *direct* browser→Supabase email-OTP + passkey paths aren't broker-visible | A Supabase Auth hook would capture every auth event; the relay path is covered |
 | **Admin & power-user actions not in an audit table** | `invite_admin` / `invite_power_user` / `revoke_*` only `logger.info` | Route them into `access_audit` with `source='power_user'/'manual'` (table already has the column) |
 | **No alerting on sync failure** | A stake silently stops syncing; logged but nobody's paged | Add a digest/notify when a stake's `last_synced_at` goes stale or `failed_units` is non-empty |
 | **Per-query data access not logged** | Can't replay *exactly* which rows a user fetched | Intentional — RLS guarantees scope; row-level read logging would be heavy/noisy. Rely on `role_scope` instead |
