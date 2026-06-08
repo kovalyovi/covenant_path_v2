@@ -61,6 +61,26 @@ def _stored_credential_summary(unit_number: int) -> dict | None:
         return None
 
 
+def _role_scope(email) -> str:
+    """What this sign-in will ACTUALLY see — their user_roles scope, the way RLS resolves it (by
+    email). Flags the two failure modes: 'none' = logged in but sees an empty app (under-visibility,
+    e.g. a leader whose role row never got their email); an unexpected stake = over-visibility."""
+    if not (email and SUPABASE_URL and SERVICE_KEY):
+        return "unknown"
+    try:
+        from collections import Counter
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/user_roles",
+                         headers={"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}"},
+                         params={"email": f"eq.{email.lower()}", "select": "role"}, timeout=15)
+        rows = r.json() if r.status_code == 200 else []
+        if not rows:
+            return "none"
+        c = Counter(row.get("role") for row in rows)
+        return ", ".join(f"{k}×{v}" for k, v in sorted(c.items()))
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
 def _audit_login(email, name, ctx, access, authorized, rank, outcome, error=None,
                  request_id=None) -> None:
     """Best-effort login-audit row (who / stake / callings / access / outcome) for admin debugging
@@ -81,6 +101,7 @@ def _audit_login(email, name, ctx, access, authorized, rank, outcome, error=None
                   "callings": [p.get("name") for p in (access.get("runner_positions") or [])],
                   "authorized": auth_str, "access_rank": rank,
                   "can_pull_all": bool(access.get("can_pull_all")),
+                  "role_scope": _role_scope(email),
                   "outcome": outcome, "error": error, "request_id": request_id},
             timeout=15)
     except Exception as exc:  # noqa: BLE001

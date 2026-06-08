@@ -119,6 +119,33 @@ def _email_by_uuid(client) -> dict[str, str]:
     return out
 
 
+def _audit_access(conn, stake_id, stake_unit, granted, revoked) -> None:
+    """Persist who GAINED / LOST member-data access this run → access_audit (admin-only, migration
+    0034) + a PII-safe Axiom count event. This is the over/under-visibility trail: an unexpected
+    grant or a wrongly-revoked leader becomes queryable. Best-effort — never fail provisioning over
+    the audit."""
+    if not granted and not revoked:
+        return
+    try:
+        from backend import observability as obs
+        ins = ("insert into access_audit (stake_id, stake_unit, action, role, unit_id, person_uuid,"
+               " name, email, calling, source) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,'provision')")
+        with conn.cursor() as cur:
+            for row in granted:   # fresh value: (stake_id, unit_id, role, person_uuid, name, calling, email)
+                cur.execute(ins, (stake_id, stake_unit, "granted", row[2], row[1], row[3],
+                                  row[4], row[6], row[5]))
+            for r in revoked:     # delete RETURNING: (role, unit_id, person_uuid, calling_name, email)
+                cur.execute(ins, (stake_id, stake_unit, "revoked", r[0], r[1], r[2],
+                                  None, r[4], r[3]))
+        conn.commit()
+        obs.event("access.change", stake=stake_unit, count=len(granted) + len(revoked),
+                  status="ok", granted=len(granted), revoked=len(revoked))
+        logger.info("access audit: +%d granted / -%d revoked (stake %s)",
+                    len(granted), len(revoked), stake_unit)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("access audit skipped (non-fatal): %s", exc)
+
+
 def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]) -> dict:
     """Rebuild user_roles for one stake from its leadership directory. Returns counts."""
     matrix = fetch_access_matrix(client.session)
@@ -189,6 +216,11 @@ def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]
     logger.info("ward-leader positions found across units: %d", ward_n_found)
 
     with conn.cursor() as cur:
+        # Snapshot existing calling-derived roles BEFORE the upsert so we can audit who NEWLY gains
+        # member-data access this run (the over/under-visibility trail).
+        cur.execute("select role, unit_id::text, lcr_person_uuid from user_roles "
+                    "where stake_id=%s and lcr_person_uuid is not null", (stake_id,))
+        existing_keys = {(r[0], r[1], r[2]) for r in cur.fetchall()}
         for row in fresh.values():
             # auth_id = LCR person uuid (login via Church identity is auto-scoped); email
             # lets a Supabase-Auth login (magic-link/Google) match a role by verified email.
@@ -203,14 +235,22 @@ def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]
         # Revoke released leaders (calling-derived rows only — email/manual grants have a NULL
         # lcr_person_uuid and are preserved). Crucially, only revoke a role TYPE if we actually
         # got its directory this run, so an empty/failed stake or ward fetch can't wipe access.
+        # RETURNING captures WHO lost access (for the audit).
         keep = [r[3] for r in fresh.values()]
         cur.execute("""delete from user_roles where stake_id=%s
                        and lcr_person_uuid is not null
                        and lcr_person_uuid <> all(%s)
-                       and ((role = 'stake_leader' and %s) or (role = 'ward_leader' and %s))""",
+                       and ((role = 'stake_leader' and %s) or (role = 'ward_leader' and %s))
+                       returning role, unit_id::text, lcr_person_uuid, calling_name, email""",
                     (stake_id, keep or [""], stake_ok, ward_ok))
-        removed = cur.rowcount
+        revoked_rows = cur.fetchall()
+        removed = len(revoked_rows)
     conn.commit()
+    # Access-visibility audit: who GAINED / LOST member-data access this run. Granted = roles present
+    # now that weren't before this run (compare on (role, unit_id-as-text, person_uuid)).
+    granted = [r for k, r in fresh.items()
+               if (k[0], (str(k[1]) if k[1] is not None else None), k[2]) not in existing_keys]
+    _audit_access(conn, stake_id, ctx.unit_number, granted, revoked_rows)
     stake_n = sum(1 for r in fresh.values() if r[2] == "stake_leader")
     ward_n = len(fresh) - stake_n
     logger.info("provisioned roles for stake %s: %d stake_leader, %d ward_leader, %d revoked",

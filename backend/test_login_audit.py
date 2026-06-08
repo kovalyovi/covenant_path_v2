@@ -46,6 +46,24 @@ def run() -> int:
         checks.append(("non-admin sees none (PII-safe)", visible_as("stranger@example.org"), 0))
         checks.append(("unknown email sees none", visible_as(None), 0))
 
+        # access_audit (migration 0034): same admin-only RLS; and login_audit gained role_scope.
+        cur.execute("insert into access_audit (stake_unit, action, role, email, calling, source) "
+                    "values (321, 'granted', 'stake_leader', 'aud-grant@example.com', "
+                    "'Stake President', 'provision')")
+
+        def access_seen_by(email):
+            as_user(email)
+            cur.execute("select count(*) from access_audit where email = 'aud-grant@example.com'")
+            n = cur.fetchone()[0]
+            cur.execute("reset role")
+            return n
+
+        checks.append(("admin reads access_audit", access_seen_by("owner@example.com"), 1))
+        checks.append(("non-admin access_audit none", access_seen_by("stranger@example.org"), 0))
+        cur.execute("update login_audit set role_scope = 'none' where email = 'audit-test@example.com'")
+        cur.execute("select role_scope from login_audit where email = 'audit-test@example.com'")
+        checks.append(("login_audit.role_scope present", cur.fetchone()[0], "none"))
+
         ok = True
         for name, got, want in checks:
             good = got == want
