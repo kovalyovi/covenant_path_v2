@@ -166,6 +166,30 @@ def upsert_members(conn, stake_id: str, members: list[dict],
     return len(rows)
 
 
+def reconcile_members(conn, stake_id: str, present_uuids: list[str],
+                      keep_unit_ids: list[str], include_orphans: bool) -> int:
+    """Hard-delete people who left: members no longer in LCR for a unit that scraped CLEANLY this
+    run (moved out, record removed, deceased). A member absent from this run's report whose unit is
+    in `keep_unit_ids` — the units confirmed scraped OK — is deleted; with `include_orphans`, members
+    orphaned to unit_id NULL (their ward was removed by prune_units) are deleted too.
+
+    Members of units that FAILED to scrape this run are NOT in keep_unit_ids, so they're preserved —
+    a transient LCR failure can never wipe a roster. GATED: both lists must be non-empty or it
+    no-ops (an empty report / all-units-failed run never deletes), mirroring prune_units. Returns
+    rows deleted."""
+    if not present_uuids or not keep_unit_ids:
+        return 0
+    unit_clause = "unit_id::text = any(%s)"
+    if include_orphans:
+        unit_clause = f"({unit_clause} or unit_id is null)"
+    sql = f"delete from members where stake_id = %s and person_uuid <> all(%s) and {unit_clause}"
+    with conn.cursor() as cur:
+        cur.execute(sql, (stake_id, list(present_uuids), [str(u) for u in keep_unit_ids]))
+        removed = cur.rowcount
+    conn.commit()
+    return removed
+
+
 def touch_stake_synced(conn, stake_id: str) -> None:
     with conn.cursor() as cur:
         cur.execute("update stakes set last_synced_at = now() where id = %s", (stake_id,))

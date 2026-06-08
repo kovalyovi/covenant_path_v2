@@ -66,7 +66,8 @@ def kpi_subtree(dash: dict) -> dict:
     }
 
 
-def sync_stake(client: LcrClient, members: list[dict], conn) -> dict:
+def sync_stake(client: LcrClient, members: list[dict], conn,
+               failed_unit_numbers=None, only_unit=None) -> dict:
     ctx = client.user_context()
     # Stake identity is keyed by unit_number (stable), so a stake RENAME just updates stakes.name —
     # never a duplicate. Units are upserted by unit_number too: a renamed ward updates its name, a
@@ -91,6 +92,24 @@ def sync_stake(client: LcrClient, members: list[dict], conn) -> dict:
             logger.info("pruned %d departed unit(s) from stake %s (%s)",
                         removed, ctx.unit_name, ctx.unit_number)
     written = db.upsert_members(conn, stake_id, members, unit_id_by_number, unit_id_by_name)
+    # Reconcile departed people (hard-delete): anyone no longer in LCR for a unit that scraped
+    # cleanly this run has left the stake (moved out / record removed / deceased) → remove them.
+    # Units that FAILED to scrape are excluded so a transient LCR failure never wipes a roster.
+    failed = {int(n) for n in (failed_unit_numbers or ())}
+    if only_unit is not None:
+        # OPS single-unit refetch: the report covers ONLY this ward — reconcile just it, and leave
+        # stake-wide orphans alone (a targeted refetch must never touch other wards' members).
+        keep_numbers = {int(only_unit)} - failed
+        include_orphans = False
+    else:
+        keep_numbers = set(unit_id_by_number) - failed
+        include_orphans = True
+    keep_unit_ids = [unit_id_by_number[n] for n in keep_numbers if n in unit_id_by_number]
+    present_uuids = [m.get("person_uuid") for m in members if m.get("person_uuid")]
+    removed_people = db.reconcile_members(conn, stake_id, present_uuids, keep_unit_ids, include_orphans)
+    if removed_people:
+        logger.info("reconciled %d departed member(s) from stake %s (%s)",
+                    removed_people, ctx.unit_name, ctx.unit_number)
     # stake-level KPIs for the viewer's KPIs tab (never fail the data sync over them)
     try:
         db.update_stake_kpis(conn, stake_id, kpi_subtree(client.dashboard_data()))
@@ -119,7 +138,8 @@ def sync_stake(client: LcrClient, members: list[dict], conn) -> dict:
     db.touch_stake_synced(conn, stake_id)
     db.set_sync_state(conn, stake_id, "done")
     return {"stake": ctx.unit_name, "stake_unit": ctx.unit_number, "stake_id": stake_id,
-            "units": len(unit_id_by_number), "members_written": written, "roles": roles}
+            "units": len(unit_id_by_number), "members_written": written,
+            "members_removed": removed_people, "roles": roles}
 
 
 def main() -> int:
