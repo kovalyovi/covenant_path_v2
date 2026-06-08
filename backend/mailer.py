@@ -257,7 +257,7 @@ def _reminder_html(outstanding: list[dict], completed: int) -> str:
 # NOTE: the reminder engine is still in development. For now it emails ONLY the owner so we can
 # review the weekly digest before it ever reaches ward/stake leaders — set REMINDER_ALL=1 (env)
 # to fan out to every leader once we're happy with the content/cadence.
-_REMINDER_OWNER = os.environ.get("REMINDER_OWNER", "owner@example.com").lower()
+_REMINDER_OWNER = os.environ.get("REMINDER_OWNER", "").lower()
 _REMINDERS_OWNER_ONLY = os.environ.get("REMINDER_ALL") != "1"
 
 

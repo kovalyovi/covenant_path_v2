@@ -6,6 +6,7 @@ Apply the SQL migrations to the Supabase Postgres database.
 Idempotent (uses IF NOT EXISTS / drop-and-create policies). Needs SUPABASE_DB_URL.
 """
 
+import os
 import sys
 
 from backend import db
@@ -14,6 +15,12 @@ from backend import db
 def main() -> int:
     conn = db.connect()
     try:
+        # Bootstrap the first admin from OWNER_EMAIL without hardcoding it in SQL (migration 0008
+        # reads this GUC). No-ops when unset.
+        owner = os.getenv("OWNER_EMAIL", "").strip()
+        if owner:
+            with conn.cursor() as cur:
+                cur.execute("select set_config('app.owner_email', %s, false)", (owner,))
         applied = db.apply_migrations(conn)
         # quick sanity: list created tables
         with conn.cursor() as cur:

@@ -45,6 +45,10 @@ begin
 end; $$;
 grant execute on function revoke_admin(text) to authenticated;
 
--- Seed the first admin so invite_admin has a bootstrap caller. Idempotent.
-insert into app_admins (email, invited_by_email) values ('owner@example.com', 'system')
+-- Seed the first admin so invite_admin has a bootstrap caller. Idempotent. The email is read from
+-- the `app.owner_email` GUC (injected by backend.apply from OWNER_EMAIL) — no email is hardcoded,
+-- and it no-ops when unset, so a fresh install names its own owner.
+insert into app_admins (email, invited_by_email)
+select lower(btrim(current_setting('app.owner_email', true))), 'system'
+where nullif(btrim(current_setting('app.owner_email', true)), '') is not null
 on conflict (email) do nothing;

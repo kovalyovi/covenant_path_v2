@@ -50,8 +50,11 @@ def run() -> int:
 
     checks = []
     try:
-        # The migration seeds owner@example.com as the first admin.
+        # Seed a throwaway first admin for this test (the migration no longer hardcodes one);
+        # rolled back with everything else.
         admin = "owner@example.com"
+        cur.execute("insert into app_admins(email,invited_by_email) values (%s,'test') "
+                    "on conflict (email) do nothing", (admin,))
         checks.append(("seeded admin is_admin", is_admin(admin), True))
         checks.append(("stranger is not admin", is_admin("stranger@example.org"), False))
 
@@ -69,7 +72,7 @@ def run() -> int:
         checks.append(("recursive invite", err is None and is_admin("third@example.org"), True))
 
         # You cannot revoke yourself (guarantees >=1 admin remains).
-        err = rpc(admin, "select revoke_admin(%s)" % "'owner@example.com'")
+        err = rpc(admin, "select revoke_admin(%s)", admin)
         checks.append(("cannot revoke self", err is not None and "yourself" in err, True))
 
         # Revoke works for others.
