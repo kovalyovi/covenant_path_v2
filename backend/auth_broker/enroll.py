@@ -87,8 +87,15 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool) -
     # with no such calling is told at login they can't use the app (authorized:False blocks the client
     # pre-session). We deliberately err toward allowing (only block on a clear "no access").
     positions = access.get("runner_positions") or []
-    authorized = (bool(access.get("can_pull_all")) or rank > 0
+    has_access = (bool(access.get("can_pull_all")) or rank > 0
                   or any(_calling_always_allowed(p.get("name")) for p in positions))
+    # Err toward allowing — N2 is a UX nicety; RLS is the real data gate, so a leader we let through
+    # with no roles just sees an EMPTY app, never anyone else's data. Only block on a CLEAR no-access:
+    # we positively read the runner's callings and none grant access. An EMPTY positions probe (LCR
+    # user-context hiccup / unexpected shape) is NOT a clear no-access → return None so the client lets
+    # them through, instead of false-blocking a legitimate leader (e.g. a stake president whose
+    # positions didn't resolve). This was hard-blocking real stake presidents.
+    authorized = True if has_access else (False if positions else None)
 
     # Higher-access transfer offer: when the stake ALREADY has a credential that's insufficient
     # (incomplete or lower access) and THIS session would strictly improve it, tell the client so it
@@ -108,9 +115,11 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool) -
             "complete": coverage["complete"], "missing": coverage["missing"],
             "can_improve": can_improve, "can_enroll": can_enroll, "stored": False}
 
-    if not authorized:
-        logger.info("login has no covenant-path access (rank=%s, unit=%s); not enrolling",
-                    rank, ctx.unit_number)
+    if authorized is not True:
+        reason = ("clearly lacks covenant-path access" if authorized is False
+                  else "access UNDETERMINED (no positions read) — allowing through")
+        logger.info("login %s (rank=%s unit=%s callings=%s); not enrolling",
+                    reason, rank, ctx.unit_number, [p.get("name") for p in positions])
         return base
     if not store:
         logger.info("authorized login for %s (%s) without sync consent — not storing credential",
