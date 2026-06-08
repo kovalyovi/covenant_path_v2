@@ -119,6 +119,18 @@ def _email_by_uuid(client) -> dict[str, str]:
     return out
 
 
+def _load_overrides(conn) -> list:
+    """Admin-added calling→access overrides (#3c, table calling_access_overrides). Returns
+    [(match_lower, grants_access)]. Best-effort: a missing table / read error → no overrides."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("select lower(calling_match), grants_access from calling_access_overrides")
+            return cur.fetchall()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("calling overrides unavailable: %s", exc)
+        return []
+
+
 def _audit_access(conn, stake_id, stake_unit, granted, revoked) -> None:
     """Persist who GAINED / LOST member-data access this run → access_audit (admin-only, migration
     0034) + a PII-safe Axiom count event. This is the over/under-visibility trail: an unexpected
@@ -153,12 +165,19 @@ def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]
     for _feature in _ACCESS_FEATURES:
         allowed |= set(matrix.feature_roles(_feature))
     email_by_uuid = _email_by_uuid(client)
+    overrides = _load_overrides(conn)  # admin-added calling→access mappings (#3c)
 
     def _can_see(p: dict) -> bool:
-        """A calling can view member data if its role is in the matrix union OR it's a stake-level
-        stewardship calling on the always-allowed list (and it has a real person)."""
-        return bool(p.get("person_uuid")) and (
-            p["role_id"] in allowed or _calling_always_allowed(p.get("calling")))
+        """A calling can view member data if its role is in the matrix union, it's a stake-level
+        stewardship calling on the always-allowed list, OR an admin added a matching access override
+        (#3c) — and it has a real person."""
+        if not p.get("person_uuid"):
+            return False
+        calling = p.get("calling") or ""
+        if p["role_id"] in allowed or _calling_always_allowed(calling):
+            return True
+        cl = calling.lower()
+        return any(grants and m in cl for m, grants in overrides)
 
     fresh = {}  # provision-key -> row, dedup
     ctx = client.user_context()
