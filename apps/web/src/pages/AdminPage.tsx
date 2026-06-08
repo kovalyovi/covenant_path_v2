@@ -171,6 +171,21 @@ export function AdminPage() {
               <AdminsCard admins={(s['admins'] as Json[]) ?? []} busy={busy} onInvite={inviteAdmin} onRevoke={revokeAdmin} />
             )}
           </Panel>
+          <Panel
+            key={`logins-${nonce}`}
+            title="Recent logins"
+            load={async () => {
+              const { data } = await supabase
+                .from('login_audit')
+                .select('at, email, name, stake_name, callings, role_scope, authorized, outcome')
+                .order('at', { ascending: false })
+                .limit(50);
+              return { logins: (data ?? []) as Json[] };
+            }}
+            errorHint="login_audit is admin-only (RLS) — rows appear once the broker records logins after its next deploy."
+          >
+            {(s) => <LoginAuditCard logins={(s['logins'] as Json[]) ?? []} />}
+          </Panel>
         </div>
         {busy && (
           <div className="scrim" style={{ background: 'rgba(0,0,0,0.2)' }}>
@@ -269,6 +284,41 @@ function Card({ title, trailing, children }: { title: string; trailing?: ReactNo
         {children}
       </div>
     </div>
+  );
+}
+
+// Recent Church-login evaluations (admin-only). The tool for debugging "this leader can't log in":
+// who tried, their stake + callings, the outcome, and what scope they actually RESOLVE to (role_scope
+// = 'none' means they signed in but see an empty app — the under-visibility signal).
+function LoginAuditCard({ logins }: { logins: Json[] }) {
+  if (!logins.length)
+    return (
+      <Card title="Recent logins">
+        <p className="small muted">No login attempts recorded yet.</p>
+      </Card>
+    );
+  const color = (o: string) => (o === 'allowed' || o === 'enrolled' ? statusColors.successFg : statusColors.warning);
+  return (
+    <Card title="Recent logins">
+      {logins.map((r, i) => {
+        const outcome = String(r['outcome'] ?? r['authorized'] ?? '');
+        const callings = (Array.isArray(r['callings']) ? (r['callings'] as unknown[]) : []).join(', ');
+        const scope = String(r['role_scope'] ?? '');
+        const at = String(r['at'] ?? '');
+        return (
+          <div key={i} style={{ padding: '6px 0', borderBottom: '1px solid rgba(128,128,128,0.2)' }}>
+            <div className="row">
+              <strong style={{ flex: 1 }}>{String(r['email'] ?? '(unknown email)')}</strong>
+              <span style={{ color: color(outcome), fontWeight: 600 }}>{outcome || '—'}</span>
+            </div>
+            {r['stake_name'] ? <div className="small muted">{String(r['stake_name'])}</div> : null}
+            {callings ? <div className="small muted">Callings: {callings}</div> : null}
+            {scope ? <div className="small muted">Sees: {scope}</div> : null}
+            <div className="small muted">{at.slice(0, 16).replace('T', ' ')}</div>
+          </div>
+        );
+      })}
+    </Card>
   );
 }
 
