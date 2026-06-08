@@ -61,6 +61,32 @@ def _stored_credential_summary(unit_number: int) -> dict | None:
         return None
 
 
+def _audit_login(email, name, ctx, access, authorized, rank, outcome, error=None,
+                 request_id=None) -> None:
+    """Best-effort login-audit row (who / stake / callings / access / outcome) for admin debugging
+    via the login_audit table (migration 0033, admin-only RLS). NEVER raises — observability must
+    never affect the login that just happened."""
+    if not (SUPABASE_URL and SERVICE_KEY):
+        return
+    try:
+        auth_str = ("allowed" if authorized is True
+                    else "blocked" if authorized is False else "undetermined")
+        requests.post(
+            f"{SUPABASE_URL}/rest/v1/login_audit",
+            headers={"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}",
+                     "Content-Type": "application/json", "Prefer": "return=minimal"},
+            json={"email": ((email or "").lower() or None), "name": name,
+                  "stake_unit": getattr(ctx, "unit_number", None),
+                  "stake_name": getattr(ctx, "unit_name", None),
+                  "callings": [p.get("name") for p in (access.get("runner_positions") or [])],
+                  "authorized": auth_str, "access_rank": rank,
+                  "can_pull_all": bool(access.get("can_pull_all")),
+                  "outcome": outcome, "error": error, "request_id": request_id},
+            timeout=15)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("login audit write skipped (non-fatal): %s", exc)
+
+
 def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool) -> dict:
     """The single login-time entry point. ALWAYS evaluates the captured session's covenant-path
     access — so the no-access gate (N2) and the higher-access "you can improve the sync" offer work
@@ -115,15 +141,21 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool) -
             "complete": coverage["complete"], "missing": coverage["missing"],
             "can_improve": can_improve, "can_enroll": can_enroll, "stored": False}
 
+    def _audit(outcome: str, error: str | None = None) -> None:
+        _audit_login(identity.get("email"), identity.get("name"), ctx, access, authorized, rank,
+                     outcome, error)
+
     if authorized is not True:
         reason = ("clearly lacks covenant-path access" if authorized is False
                   else "access UNDETERMINED (no positions read) — allowing through")
         logger.info("login %s (rank=%s unit=%s callings=%s); not enrolling",
                     reason, rank, ctx.unit_number, [p.get("name") for p in positions])
+        _audit("blocked" if authorized is False else "undetermined")
         return base
     if not store:
         logger.info("authorized login for %s (%s) without sync consent — not storing credential",
                     ctx.unit_name, ctx.unit_number)
+        _audit("allowed")
         return base
 
     # Explicit consent → store the credential. The RPC keeps "most-elevated-wins-if-incomplete".
@@ -154,6 +186,7 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool) -
     base["stored"] = True
     base["initial_sync"] = initial_sync
     _notify_enrolled(identity, ctx, coverage, initial_sync)
+    _audit("enrolled")
     return base
 
 
