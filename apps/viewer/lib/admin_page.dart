@@ -39,6 +39,7 @@ class _AdminPageState extends State<AdminPage> {
   late Future<Map<String, dynamic>> _stakesF;
   late Future<List<Map<String, dynamic>>> _adminsF;
   late Future<List<Map<String, dynamic>>> _loginsF;
+  late Future<List<Map<String, dynamic>>> _overridesF;
 
   @override
   void initState() {
@@ -63,6 +64,12 @@ class _AdminPageState extends State<AdminPage> {
         .order('at', ascending: false)
         .limit(50)
         .then((r) => (r as List).cast<Map<String, dynamic>>());
+    // #3c: admin-editable calling→access overrides (admin-only via RLS).
+    _overridesF = supabase
+        .from('calling_access_overrides')
+        .select('id, calling_match, grants_access, note')
+        .order('calling_match')
+        .then((r) => (r as List).cast<Map<String, dynamic>>());
   }
 
   Future<void> _refresh() async {
@@ -74,7 +81,57 @@ class _AdminPageState extends State<AdminPage> {
       _stakesF.catchError((_) => <String, dynamic>{}),
       _adminsF.catchError((_) => <Map<String, dynamic>>[]),
       _loginsF.catchError((_) => <Map<String, dynamic>>[]),
+      _overridesF.catchError((_) => <Map<String, dynamic>>[]),
     ]);
+  }
+
+  // #3c "map it + add new": grant a calling member-data access without a deploy (applied next sync).
+  Future<void> _addOverride() async {
+    final matchCtrl = TextEditingController();
+    final noteCtrl = TextEditingController();
+    bool grants = true;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('Add a calling override'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+                controller: matchCtrl,
+                decoration: const InputDecoration(
+                    labelText: 'Calling contains…', hintText: 'e.g. Ward Mission Leader')),
+            const SizedBox(height: 8),
+            Row(children: [
+              Switch(value: grants, onChanged: (v) => setLocal(() => grants = v)),
+              const Expanded(child: Text('Grants member-data access')),
+            ]),
+            TextField(controller: noteCtrl, decoration: const InputDecoration(labelText: 'Note (optional)')),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return;
+    final match = matchCtrl.text.trim();
+    if (match.isEmpty) return;
+    await _guard(() async {
+      final note = noteCtrl.text.trim();
+      await supabase.rpc('add_calling_override',
+          params: {'p_match': match, 'p_grants': grants, 'p_note': note.isEmpty ? null : note});
+      _snack('Saved override "$match".');
+      await _refresh();
+    });
+  }
+
+  Future<void> _removeOverride(int id, String match) async {
+    await _guard(() async {
+      await supabase.rpc('remove_calling_override', params: {'p_id': id});
+      _snack('Removed "$match".');
+      await _refresh();
+    });
   }
 
   Future<void> _revokeStake(String stakeId, String name) async {
@@ -257,6 +314,13 @@ class _AdminPageState extends State<AdminPage> {
                     _LoginAuditCard(rows: rows),
                     errorHint: 'login_audit is admin-only (RLS) — rows appear once the broker '
                         'records logins after its next deploy.'),
+                // #3c: admin-editable calling→access overrides.
+                _section<List<Map<String, dynamic>>>(_overridesF, 'Calling access overrides', (rows) =>
+                    _CallingOverridesCard(
+                        rows: rows,
+                        onAdd: _busy ? null : _addOverride,
+                        onRemove: _busy ? null : _removeOverride),
+                    errorHint: 'Admin-only (RLS). Grant a calling access without a deploy — applied next sync.'),
                 const SizedBox(height: 24),
               ],
             ),
@@ -943,6 +1007,62 @@ class _LoginAuditCard extends StatelessWidget {
           const Divider(height: 14),
         ],
       ),
+    );
+  }
+}
+
+/// #3c: admin-editable calling→access overrides — grant a calling member-data access without a
+/// deploy. The list + an Add button; provisioning unions these in on the next sync.
+class _CallingOverridesCard extends StatelessWidget {
+  const _CallingOverridesCard({required this.rows, this.onAdd, this.onRemove});
+  final List<Map<String, dynamic>> rows;
+  final VoidCallback? onAdd;
+  final void Function(int id, String match)? onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      title: 'Calling access overrides',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+                onPressed: onAdd, icon: const Icon(Icons.add), label: const Text('Add')),
+          ),
+          if (rows.isEmpty)
+            const Text('None. Add one to grant a calling member-data access without a code change.')
+          else
+            for (final o in rows) _row(context, o),
+        ],
+      ),
+    );
+  }
+
+  Widget _row(BuildContext context, Map<String, dynamic> o) {
+    final grants = o['grants_access'] != false;
+    final note = (o['note'] ?? '').toString();
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(children: [
+        Icon(grants ? Icons.vpn_key : Icons.link_off,
+            size: 20, color: grants ? Colors.green : Colors.grey),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(o['calling_match']?.toString() ?? ''),
+            Text('${grants ? 'grants access' : 'denies access'}${note.isNotEmpty ? ' · $note' : ''}',
+                style: Theme.of(context).textTheme.bodySmall),
+          ]),
+        ),
+        IconButton(
+          icon: const Icon(Icons.delete_outline, size: 20),
+          onPressed: onRemove == null
+              ? null
+              : () => onRemove!((o['id'] as num).toInt(), o['calling_match']?.toString() ?? ''),
+        ),
+      ]),
     );
   }
 }

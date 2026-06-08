@@ -113,6 +113,24 @@ export function AdminPage() {
     });
   }
 
+  function addOverride(match: string, grants: boolean, note: string) {
+    void guard(async () => {
+      const { error } = await supabase.rpc('add_calling_override', { p_match: match, p_grants: grants, p_note: note || null });
+      if (error) throw error;
+      toast.show({ message: `Saved override "${match}".` });
+      refresh();
+    });
+  }
+
+  function removeOverride(id: number, match: string) {
+    void guard(async () => {
+      const { error } = await supabase.rpc('remove_calling_override', { p_id: id });
+      if (error) throw error;
+      toast.show({ message: `Removed "${match}".` });
+      refresh();
+    });
+  }
+
   return (
     <div className="app-shell">
       <header className="appbar">
@@ -185,6 +203,26 @@ export function AdminPage() {
             errorHint="login_audit is admin-only (RLS) — rows appear once the broker records logins after its next deploy."
           >
             {(s) => <LoginAuditCard logins={(s['logins'] as Json[]) ?? []} />}
+          </Panel>
+          <Panel
+            key={`overrides-${nonce}`}
+            title="Calling access overrides"
+            load={async () => {
+              const { data } = await supabase
+                .from('calling_access_overrides')
+                .select('id, calling_match, grants_access, note, created_by')
+                .order('calling_match');
+              return { overrides: (data ?? []) as Json[] };
+            }}
+          >
+            {(s) => (
+              <CallingOverridesCard
+                overrides={(s['overrides'] as Json[]) ?? []}
+                busy={busy}
+                onAdd={addOverride}
+                onRemove={removeOverride}
+              />
+            )}
           </Panel>
         </div>
         {busy && (
@@ -738,6 +776,103 @@ function ChangelogCard({ actions }: { actions: Json }) {
           {c['html_url'] != null && <Icon name="open_in_new" size={14} />}
         </button>
       ))}
+    </Card>
+  );
+}
+
+// #3c "map it + add new": admins grant member-data access to a calling the LCR matrix / always-allowed
+// list doesn't cover, without a deploy. Applied on the next sync (provision_roles unions these in).
+function CallingOverridesCard({
+  overrides,
+  busy,
+  onAdd,
+  onRemove,
+}: {
+  overrides: Json[];
+  busy: boolean;
+  onAdd: (match: string, grants: boolean, note: string) => void;
+  onRemove: (id: number, match: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [match, setMatch] = useState('');
+  const [grants, setGrants] = useState(true);
+  const [note, setNote] = useState('');
+  const submit = () => {
+    const m = match.trim();
+    if (!m) return;
+    onAdd(m, grants, note.trim());
+    setOpen(false);
+    setMatch('');
+    setNote('');
+    setGrants(true);
+  };
+  return (
+    <Card
+      title="Calling access overrides"
+      trailing={
+        <Button disabled={busy} onClick={() => setOpen(true)}>
+          Add
+        </Button>
+      }
+    >
+      {overrides.length === 0 ? (
+        <p className="small muted">
+          None. Add one to grant a calling member-data access without a code change (applied next sync).
+        </p>
+      ) : (
+        overrides.map((o, i) => (
+          <div key={i} className="list-tile" style={{ padding: '8px 0' }}>
+            <Icon name={o['grants_access'] === false ? 'link_off' : 'key'} size={20} />
+            <span className="list-tile__main">
+              <span>{String(o['calling_match'])}</span>
+              <span className="small muted" style={{ display: 'block' }}>
+                {o['grants_access'] === false ? 'denies access' : 'grants access'}
+                {o['note'] ? ` · ${String(o['note'])}` : ''}
+              </span>
+            </span>
+            <IconButton
+              icon="error"
+              label="Remove"
+              size={20}
+              onClick={() => onRemove(Number(o['id']), String(o['calling_match']))}
+            />
+          </div>
+        ))
+      )}
+      <Modal
+        open={open}
+        onClose={() => setOpen(false)}
+        title="Add a calling override"
+        hideClose
+        actions={
+          <>
+            <Button onClick={() => setOpen(false)}>Cancel</Button>
+            <Button disabled={!match.trim()} onClick={submit}>
+              Save
+            </Button>
+          </>
+        }
+      >
+        <div className="stack" style={{ gap: 10 }}>
+          <input
+            className="input"
+            placeholder="Calling contains… (e.g. Ward Mission Leader)"
+            value={match}
+            onChange={(e) => setMatch(e.target.value)}
+          />
+          <label className="row" style={{ gap: 8, alignItems: 'center' }}>
+            <input type="checkbox" checked={grants} onChange={(e) => setGrants(e.target.checked)} />
+            <span>Grants member-data access</span>
+          </label>
+          <input
+            className="input"
+            placeholder="Note (optional)"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+          />
+          <p className="small muted">Case-insensitive substring match of the calling name.</p>
+        </div>
+      </Modal>
     </Card>
   );
 }
