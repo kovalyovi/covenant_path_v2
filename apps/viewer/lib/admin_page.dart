@@ -38,6 +38,7 @@ class _AdminPageState extends State<AdminPage> {
   late Future<Map<String, dynamic>> _actionsF;
   late Future<Map<String, dynamic>> _stakesF;
   late Future<List<Map<String, dynamic>>> _adminsF;
+  late Future<List<Map<String, dynamic>>> _loginsF;
 
   @override
   void initState() {
@@ -55,6 +56,13 @@ class _AdminPageState extends State<AdminPage> {
         .from('app_admins')
         .select('email, invited_by_email')
         .then((r) => (r as List).cast<Map<String, dynamic>>());
+    // Login audit (admin-only via RLS, migration 0033): who tried, their callings + access + outcome.
+    _loginsF = supabase
+        .from('login_audit')
+        .select('at, email, name, stake_name, callings, authorized, outcome')
+        .order('at', ascending: false)
+        .limit(50)
+        .then((r) => (r as List).cast<Map<String, dynamic>>());
   }
 
   Future<void> _refresh() async {
@@ -65,6 +73,7 @@ class _AdminPageState extends State<AdminPage> {
       _actionsF.catchError((_) => <String, dynamic>{}),
       _stakesF.catchError((_) => <String, dynamic>{}),
       _adminsF.catchError((_) => <Map<String, dynamic>>[]),
+      _loginsF.catchError((_) => <Map<String, dynamic>>[]),
     ]);
   }
 
@@ -243,6 +252,11 @@ class _AdminPageState extends State<AdminPage> {
                 _section<List<Map<String, dynamic>>>(_adminsF, 'Admins', (a) =>
                     _AdminsCard(d: _AdminData(const {}, const {}, const {}, a),
                         onInvite: _busy ? null : _inviteAdmin, onRevoke: _revokeAdmin)),
+                // Login audit: debug "leader X can't log in" — who tried, callings, access, outcome.
+                _section<List<Map<String, dynamic>>>(_loginsF, 'Recent logins', (rows) =>
+                    _LoginAuditCard(rows: rows),
+                    errorHint: 'login_audit is admin-only (RLS) — rows appear once the broker '
+                        'records logins after its next deploy.'),
                 const SizedBox(height: 24),
               ],
             ),
@@ -879,6 +893,59 @@ class _EndpointPerfState extends State<_EndpointPerf> {
 }
 
 // ---- helpers ---------------------------------------------------------------
+
+/// Recent Church-login evaluations (admin-only). Shows who tried, the stake + callings they
+/// presented, and the outcome — the tool for debugging "this leader can't log in".
+class _LoginAuditCard extends StatelessWidget {
+  const _LoginAuditCard({required this.rows});
+  final List<Map<String, dynamic>> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    if (rows.isEmpty) {
+      return const AppCard(
+          title: 'Recent logins', child: Text('No login attempts recorded yet.'));
+    }
+    return AppCard(
+      title: 'Recent logins',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [for (final r in rows) _row(context, r)],
+      ),
+    );
+  }
+
+  Widget _row(BuildContext context, Map<String, dynamic> r) {
+    final outcome = (r['outcome'] ?? r['authorized'] ?? '').toString();
+    final color = outcome == 'blocked'
+        ? Colors.red
+        : (outcome == 'undetermined' ? Colors.orange : Colors.green);
+    final callings = ((r['callings'] as List?) ?? const []).join(', ');
+    final at = (r['at'] ?? '').toString();
+    final when = at.length >= 16 ? at.substring(0, 16).replaceAll('T', ' ') : at;
+    final small = Theme.of(context).textTheme.bodySmall;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Expanded(
+              child: Text(r['email']?.toString() ?? '(unknown email)',
+                  style: const TextStyle(fontWeight: FontWeight.w600)),
+            ),
+            StatusTag(outcome.isEmpty ? '—' : outcome, color: color),
+          ]),
+          if ((r['stake_name'] ?? '').toString().isNotEmpty)
+            Text(r['stake_name'].toString(), style: small),
+          if (callings.isNotEmpty) Text('Callings: $callings', style: small),
+          Text(when, style: small?.copyWith(color: Colors.grey)),
+          const Divider(height: 14),
+        ],
+      ),
+    );
+  }
+}
 
 Widget _kv(BuildContext context, String k, String v) => Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
