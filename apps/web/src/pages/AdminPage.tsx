@@ -89,6 +89,30 @@ export function AdminPage() {
     );
   }
 
+  function wipeStakeData(stakeId: string, name: string) {
+    ask(`Wipe ${name}'s data?`,
+      `Deletes ALL of this stake's member records — but KEEPS the stake, its leaders' access, and the sync credential. The data re-populates on the next sync. Use this to clear out bad or partial data.`,
+      'Wipe data', () =>
+      guard(async () => {
+        await admin.wipeStakeData(stakeId);
+        toast.show({ message: `Wiped member data for ${name}.` });
+        refresh();
+      }),
+    );
+  }
+
+  function removeStake(stakeId: string, name: string) {
+    ask(`Permanently remove ${name}?`,
+      `DELETES EVERYTHING for this stake — the sync credential, ALL member data, every leader's access role, and the stake itself, as if it never onboarded. This CANNOT be undone.`,
+      'Remove everything', () =>
+      guard(async () => {
+        await admin.removeStake(stakeId);
+        toast.show({ message: `Removed ${name} completely.` });
+        refresh();
+      }),
+    );
+  }
+
   async function inviteAdmin(emailVal: string) {
     await guard(async () => {
       const res = await admin.invite(emailVal);
@@ -161,6 +185,8 @@ export function AdminPage() {
                 busy={busy}
                 onRevoke={revokeStake}
                 onSync={syncStake}
+                onWipe={wipeStakeData}
+                onRemove={removeStake}
               />
             )}
           </Panel>
@@ -638,11 +664,15 @@ function EnrolledStakesCard({
   busy,
   onRevoke,
   onSync,
+  onWipe,
+  onRemove,
 }: {
   stakes: Json[];
   busy: boolean;
   onRevoke: (id: string, name: string) => void;
   onSync: (unit: string, name: string) => void;
+  onWipe: (id: string, name: string) => void;
+  onRemove: (id: string, name: string) => void;
 }) {
   if (stakes.length === 0) return <Card title="Enrolled stakes">No stakes yet.</Card>;
   return (
@@ -663,6 +693,9 @@ function EnrolledStakesCard({
         } else if (cred['state'] === 'revoked') {
           credLabel = 'Revoked';
           credColor = statusColors.warning;
+        } else if (cred['state'] === 'stale') {
+          credLabel = 'Stale · needs re-auth';
+          credColor = '#e53935';
         } else if (cred['complete'] === true) {
           credLabel = 'Active · full coverage';
           credColor = statusColors.success;
@@ -670,6 +703,8 @@ function EnrolledStakesCard({
           credLabel = 'Active · partial';
           credColor = statusColors.info;
         }
+        const credState = cred ? String(cred['state'] ?? '') : 'none';
+        const lastError = cred?.['last_error'] != null ? String(cred['last_error']) : '';
         const missing = (cred?.['missing'] as unknown[]) ?? [];
         return (
           <div key={i} style={{ padding: '6px 0' }}>
@@ -683,12 +718,14 @@ function EnrolledStakesCard({
               )}
               {(!unitNumber || unitNumber === 'null') && <span style={{ flex: 1 }} />}
               {running && <span className="spinner" aria-hidden="true" style={{ width: 14, height: 14 }} />}
-              {!running && cred && cred['state'] === 'active' && (
-                <IconButton icon="sync" label="Sync this stake now" size={18} disabled={busy} onClick={() => onSync(String(s['unit_number'] ?? ''), name)} />
+              {!running && credState !== 'revoked' && credState !== 'none' && (
+                <IconButton icon="sync" label="Sync this stake now" size={18} disabled={busy} onClick={() => onSync(unitNumber, name)} />
               )}
-              {cred && cred['state'] === 'active' && (
-                <IconButton icon="link_off" label="Revoke sync (support)" size={18} disabled={busy} onClick={() => onRevoke(stakeId, name)} />
+              {(credState === 'active' || credState === 'stale') && (
+                <IconButton icon="link_off" label="Revoke sync credential" size={18} disabled={busy} onClick={() => onRevoke(stakeId, name)} />
               )}
+              <IconButton icon="delete" label="Wipe member data (keeps the stake)" size={18} disabled={busy} onClick={() => onWipe(stakeId, name)} />
+              <IconButton icon="delete_forever" label="Remove stake completely" size={18} disabled={busy} onClick={() => onRemove(stakeId, name)} />
             </div>
             <div className="wrap" style={{ gap: 8, alignItems: 'center' }}>
               <span className="chip" style={{ borderColor: credColor, color: credColor, background: `${credColor}1f`, fontSize: 12 }}>
@@ -702,6 +739,11 @@ function EnrolledStakesCard({
               </span>
               {cred?.['principal_name'] != null && <span className="small muted">· by {String(cred['principal_name'])}</span>}
             </div>
+            {credState === 'stale' && (
+              <p className="tiny" style={{ marginTop: 2, color: '#e53935' }}>
+                Last sync failed{lastError ? `: ${lastError.slice(0, 120)}` : ''} — a leader must re-authorize (or take over).
+              </p>
+            )}
             {cred && cred['complete'] !== true && missing.length > 0 && (
               <p className="tiny" style={{ marginTop: 2, color: statusColors.warning }}>
                 Missing: {missing.join(', ')}

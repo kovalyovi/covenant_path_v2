@@ -58,6 +58,9 @@ export class AdminClient {
   diagnostics = () => this.get('/admin/diagnostics');
   enrolledStakes = () => this.get('/admin/enrolled-stakes');
   revokeStake = (stakeId: string) => this.postReq(`/admin/stakes/${stakeId}/revoke`);
+  syncStake = (stakeId: string) => this.postReq(`/admin/stakes/${stakeId}/sync`);
+  wipeStakeData = (stakeId: string) => this.postReq(`/admin/stakes/${stakeId}/wipe-data`);
+  removeStake = (stakeId: string) => this.postReq(`/admin/stakes/${stakeId}/remove`);
   run = (workflow: string, inputs?: Record<string, unknown>) =>
     this.postReq('/admin/actions/run', inputs ? { workflow, inputs } : { workflow });
   rerun = (runId: number) => this.postReq(`/admin/actions/${runId}/rerun`);
