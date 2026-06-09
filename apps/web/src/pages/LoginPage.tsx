@@ -65,12 +65,15 @@ export function LoginPage() {
 
   // Hard cap on any sign-in step + staged progress so a slow broker is VISIBLE, not a silent hang
   // (the ">1 minute, is it broken?" report). The fetch may still resolve server-side; the UI recovers.
-  const LOGIN_TIMEOUT_MS = 75_000;
+  // Must exceed broker.ts's 95s per-attempt window for the login-completing calls (a first-time
+  // enroll legitimately runs a 30-60s access evaluation server-side).
+  const LOGIN_TIMEOUT_MS = 110_000;
   const STAGES: Array<[number, string]> = [
     [6_000, 'Contacting the Church sign-in service…'],
     [15_000, 'Verifying your Church session…'],
-    [30_000, 'Still working — the sign-in service may be waking up. Hang tight…'],
-    [50_000, 'Almost there — this is taking longer than usual…'],
+    [30_000, 'Checking what your calling can access — first sign-in takes a little longer…'],
+    [55_000, 'Still working — almost there…'],
+    [85_000, 'Hang tight — finishing up…'],
   ];
 
   async function run(action: () => Promise<void>) {

@@ -142,6 +142,11 @@ export class BrokerClient {
   private async postJson(path: string, body: unknown): Promise<Record<string, unknown>> {
     if (!this.available) throw new BrokerError('Church login is not configured (BROKER_URL).');
     const _t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    // Login-completing calls run the broker's access evaluation server-side, which on a FIRST enroll
+    // (no usable credential yet) legitimately takes 30-60s — a 30s abort made the client give up
+    // while the broker succeeded, so the enroll offer never appeared and the retry re-ran the whole
+    // Okta login (the father's three 'allowed', zero 'enrolled' loop). Give those calls 95s.
+    const attemptTimeout = /\/auth\/(password|mfa\/verify|session)$/.test(path) ? 95_000 : 30_000;
     let _retries = 0;
     let resp: Response | null = null;
     let lastErr: unknown;
@@ -150,7 +155,7 @@ export class BrokerClient {
         resp = await fetchWithTimeout(
           `${brokerUrl}${path}`,
           { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
-          30_000,
+          attemptTimeout,
         );
         break; // got an HTTP response (success or error) — stop retrying
       } catch (e) {
