@@ -545,6 +545,18 @@ function DiagnosticsCard({ diag, onCopy, toast }: { diag: Json; onCopy: (t: stri
       lines.push('endpoints (grouped by route, failing first):');
       for (const ep of groupedEndpoints) lines.push(`  ${ep.endpoint}: ${ep.calls} calls, ${ep.avg_ms}ms avg, ${ep.errors} err`);
     }
+    const stale = (p['field_staleness'] as Json) ?? {};
+    if (Object.keys(stale).length) {
+      lines.push('field staleness (fresh / warn>3d / error>7d / never-fetched):');
+      for (const [k, v] of Object.entries(stale)) {
+        const c = v as Json;
+        lines.push(`  ${k}: ${c['fresh'] ?? 0} / ${c['warn'] ?? 0} / ${c['error'] ?? 0} / ${c['never'] ?? 0}`);
+      }
+    }
+    const neutralized = (stats['neutralized_stale'] as unknown[]) ?? [];
+    if (neutralized.length) lines.push(`STALE-ACTION (neutralized, last-good preserved): ${neutralized.join(', ')}`);
+    // Full payload so nothing is lost when pasting to Claude.
+    lines.push('', '--- full diagnostics payload (JSON) ---', JSON.stringify(p, null, 2));
     return lines.join('\n');
   }
 

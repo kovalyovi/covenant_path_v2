@@ -112,6 +112,7 @@ def _sync_one(args) -> dict:
                 db.insert_diagnostics(conn, result["supabase"]["stake_id"], "sync", {
                     "run_stats": access.get("_run_stats"),
                     "field_coverage": _field_coverage(dicts),
+                    "field_staleness": db.field_staleness_summary(conn, result["supabase"]["stake_id"]),
                     "requests": metrics.snapshot(),
                     "members": len(dicts),
                 })

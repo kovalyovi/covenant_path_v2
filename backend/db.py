@@ -262,3 +262,30 @@ def insert_diagnostics(conn, stake_id: str | None, kind: str, payload: dict) -> 
         cur.execute("insert into sync_diagnostics (stake_id, kind, payload) values (%s,%s,%s)",
                     (stake_id, kind, psycopg2.extras.Json(payload)))
     conn.commit()
+
+
+def field_staleness_summary(conn, stake_id: str) -> dict:
+    """Per-field freshness rollup for diagnostics (#robust-logging): how many members' last-fetched is
+    fresh / warn (>3d) / error (>7d) / never, from members.field_meta — so "what isn't being fetched"
+    is visible at a glance."""
+    now = datetime.now(timezone.utc)
+    out: dict = {}
+    with conn.cursor() as cur:
+        cur.execute("select field_meta from members where stake_id=%s", (stake_id,))
+        for (fm,) in cur.fetchall():
+            for field, meta in (fm or {}).items():
+                s = out.setdefault(field, {"fresh": 0, "warn": 0, "error": 0, "never": 0})
+                f = (meta or {}).get("f")
+                try:
+                    age = (now - datetime.fromisoformat(f)).days if f else None
+                except Exception:  # noqa: BLE001
+                    age = None
+                if age is None:
+                    s["never"] += 1
+                elif age > 7:
+                    s["error"] += 1
+                elif age > 3:
+                    s["warn"] += 1
+                else:
+                    s["fresh"] += 1
+    return out
