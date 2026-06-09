@@ -586,6 +586,9 @@ def build_stake_report(
         stats["cache"] = cache.stats
     logger.info("report complete: %s", stats)
     access["_run_stats"] = stats
+    # Defensive: don't let a uniformly-stale field (stale action id) clobber good data — sentinel it
+    # so the upsert preserves last-good and freshness shows staleness.
+    stats["neutralized_stale"] = _neutralize_uniform_stale(results, with_profile)
     return results
 
 
@@ -604,6 +607,30 @@ def _field_coverage(dicts: list[dict]) -> dict[str, dict[str, int]]:
                 c["filled"] += 1
         cov[fld] = c
     return cov
+
+
+def _neutralize_uniform_stale(rows: list[CovenantPathMember], with_profile: bool) -> list[str]:
+    """Defensive (#data-correctness): when a profile field is UNIFORMLY the negative value across a
+    whole stake, that's the signature of a stale/failed action id — NOT real data. Converting it to
+    the SENTINEL makes the upsert PRESERVE the last-good value and the per-field freshness show
+    staleness, instead of clobbering good data with a wrong 'No'. Returns the neutralized fields."""
+    n = len(rows)
+    if not with_profile or n < 20:
+        return []
+    neutralized: list[str] = []
+    # temple_recommend: zero Active/Expired across >=20 members ⇒ stale recommend action (converts
+    # carry limited-use recommends; a whole stake with none is implausible). Don't touch an
+    # already-all-sentinel field (that's access-blocked, reported elsewhere).
+    recs = [m.temple_recommend for m in rows]
+    if not all(v in (BLOCKED, NEEDS_PROFILE) for v in recs) and not any(v in ("Active", "Expired") for v in recs):
+        for m in rows:
+            if m.temple_recommend not in (BLOCKED, NEEDS_PROFILE):
+                m.temple_recommend = NEEDS_PROFILE
+        neutralized.append("temple_recommend")
+    if neutralized:
+        logger.warning("neutralized uniformly-stale field(s) -> sentinel (preserve last-good, show "
+                       "stale): %s", neutralized)
+    return neutralized
 
 
 def _sanity_warnings(rows: list[CovenantPathMember], with_profile: bool) -> list[str]:
