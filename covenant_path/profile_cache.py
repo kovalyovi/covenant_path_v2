@@ -30,8 +30,10 @@ DEFAULT_PATH = Path(__file__).resolve().parent.parent / "tools" / "output" / "pr
 # misses and refetched instead of served with gaps. v2 = added sex + priesthood-office + received
 # ministering (2026-05-30). v3 = added _minister_names (the inbound-minister NAMES for the detail
 # view); v2 entries were served as fresh without names, so minister names never populated — bump
-# forces a one-time refetch that captures them (2026-05-31).
-SCHEMA_VERSION = 3
+# forces a one-time refetch that captures them (2026-05-31). v4 = the recommend/ministering
+# action-ids were refreshed (2026-06-09) after LCR rotated them — cached values had been fetched with
+# the STALE ids (temple_recommend stuck on "No"), so bump forces a one-time refetch with the working ids.
+SCHEMA_VERSION = 4
 
 
 class ProfileCache:

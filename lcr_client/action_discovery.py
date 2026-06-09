@@ -26,6 +26,7 @@ from lcr_client.member_profile import _find, flight_objects
 logger = get_logger()
 BASE = "https://lcr.churchofjesuschrist.org"
 STATE = Path(__file__).resolve().parent.parent / "tools" / "output" / "storage_state.json"
+PROFILE_CACHE = Path(__file__).resolve().parent.parent / "tools" / "output" / "profile_cache.json"
 
 # target -> predicate over a flight response's parsed rows
 DETECTORS = {
@@ -108,6 +109,15 @@ def heal(session, uuid: str) -> dict:
     ids.update(found)
     action_config.save(ids, meta={"healed_with": uuid, "resolved": sorted(found),
                                   "method": "playwright"})
+    # Action ids changed → the profile cache holds values fetched with the OLD ids; drop it so the
+    # next run re-fetches with the new ids. Otherwise cached stale data masks the heal — the
+    # "temple_recommend stayed 'No' after a re-sync because 67 cache hits served old data" trap.
+    if found:
+        try:
+            PROFILE_CACHE.unlink(missing_ok=True)
+            logger.info("cleared profile cache after action-id heal (%s)", sorted(found))
+        except Exception:  # noqa: BLE001
+            pass
     try:
         session.reload()
     except Exception:
