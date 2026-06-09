@@ -254,7 +254,8 @@ def enrollment_status(email: str, auth_id: str) -> dict:
 
     # 4. Get credential state
     cred_r = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=headers,
-                          params={"select": "principal_name,principal_email,revoked,coverage,access_rank,updated_at",
+                          params={"select": "principal_name,principal_email,revoked,coverage,access_rank,"
+                                            "updated_at,last_failed_at,last_error",
                                   "stake_id": f"eq.{stake_id}", "limit": "1"}, timeout=_TIMEOUT)
     creds = cred_r.json() if cred_r.status_code == 200 else []
     cred = creds[0] if creds else None
@@ -264,13 +265,19 @@ def enrollment_status(email: str, auth_id: str) -> dict:
         cred_info = {"state": "none"}
     else:
         coverage = cred.get("coverage") or {}
+        # active / stale (last delegated sync failed — session needs re-auth) / revoked. The app shows a
+        # "re-authorize" banner to the provider and a "sync failed — take over?" banner to other leaders.
+        state = ("revoked" if cred.get("revoked")
+                 else "stale" if cred.get("last_failed_at") else "active")
         cred_info = {
-            "state": "revoked" if cred.get("revoked") else "active",
+            "state": state,
             "complete": bool(coverage.get("complete")),
             "principal_name": cred.get("principal_name"),
             # Match on the stored email (principal_name is just a display name).
             "is_provider": (cred.get("principal_email") or "").lower() == email.lower(),
             "enrolled_at": cred.get("updated_at"),
+            "last_failed_at": cred.get("last_failed_at"),
+            "last_error": cred.get("last_error"),
         }
     return {
         "stake_name": stake.get("name"),
