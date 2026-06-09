@@ -16,12 +16,13 @@ from pathlib import Path
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "tools" / "output" / "action_ids.json"
 
 DEFAULTS = {
-    # Refreshed 2026-05-30 from a live HAR — LCR had rotated all three (the stale ministering id
-    # returned nothing → ministering fields were empty). The `record` action self-heals; recommend
-    # and ministering don't, so keep these current (or capture a fresh HAR when LCR redeploys).
-    "record": "60d9cea64347f48c3278846ad33af661aa96c7c675",
-    "recommend": "6048eedaf1d276c5281af3bc5f2ea364440869390a",
-    "ministering": "601fc08b32296e765da7c82db3b0a04d680e34af8b",
+    # Refreshed 2026-06-09 via live action-discovery (all three had rotated → temple_recommend was
+    # "No" for everyone and ministering used the old shape). action_discovery now self-heals these
+    # (scrolls the profile so the recommend/ministering panels fire + matches the current shapes),
+    # but DEFAULTS are the CI seed, so keep them current here when LCR redeploys.
+    "record": "60222763f6b2a0789a1082f23e8b873eee7fffce76",
+    "recommend": "605d8832fe1e750fa97f025e0343e9b20c32c10f29",
+    "ministering": "60b620883e890b14734d5eb38c5ad29c9df43d9328",
     # /mlt/orgs leadership-directory action (args ["eng"]) — names every calling +
     # who holds it; used to enrich the role-name catalog (lcr_client/leadership.py) and as the
     # fallback for stake-leader provisioning. Build-specific; rotates on LCR redeploys.
