@@ -523,18 +523,26 @@ def run_one_stake(args, unit: int) -> int:
             # stake's failure isn't masked by syncing the operator's own stake instead).
             if os.getenv("LCR_LOGIN"):
                 try:
-                    from lcr_client import okta_login
+                    from lcr_client import LcrClient, okta_login
                     logger.info("attempting self-baseline (LCR_LOGIN) recovery for stake %s", unit)
                     okta_login.login()
-                    args._allow_master = True
-                    recovered = (_sync_one(args).get("supabase") or {}).get("stake_unit")
-                    if recovered == unit:
-                        logger.info("stake %s recovered via the self baseline", unit)
-                        return 0
-                    logger.warning("self baseline synced %s, not %s — delegated credential is stale",
-                                   recovered, unit)
+                    # The self baseline can ONLY sync the operator's OWN stake, so first check (one
+                    # cheap user-context request) whether the requested stake is the operator's —
+                    # otherwise skip the full scrape entirely instead of wasting ~8 min scraping the
+                    # wrong stake before noticing (the stake-2155451 case in the logs).
+                    op_unit = LcrClient().user_context().unit_number
+                    if op_unit == unit:
+                        args._allow_master = True
+                        recovered = (_sync_one(args).get("supabase") or {}).get("stake_unit")
+                        if recovered == unit:
+                            logger.info("stake %s recovered via the self baseline", unit)
+                            return 0
+                    else:
+                        logger.warning("self-baseline can't recover stake %s (operator account is %s) — "
+                                       "delegated credential is stale; re-authorization needed", unit, op_unit)
                 except Exception as exc2:  # noqa: BLE001
                     logger.error("self-baseline recovery also failed: %s", exc2)
+            _alert_sync_failure(unit, str(exc))
             print(f"[!] stake {unit} failed (re-authorize may be needed): {exc}")
             return 1
         finally:
@@ -547,6 +555,54 @@ def run_one_stake(args, unit: int) -> int:
     if self_unit != unit:
         logger.warning("self stake is %s, not the requested %s", self_unit, unit)
     return 0
+
+
+def _alert_sync_failure(unit, reason: str) -> None:
+    """Sync-failure alert: make a failed/stale stake VISIBLE (app + admin console + Axiom) so it gets
+    re-authorized instead of silently going stale. Sets the stake's sync_state='error', records a
+    diagnostic, emits an Axiom event, and best-effort emails the owner. Fully guarded — alerting must
+    never change the run's exit status."""
+    if not unit:
+        return
+    try:
+        from backend import db, observability as obs
+        stake_name = str(unit)
+        conn = db.connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("update stakes set sync_state='error' where unit_number=%s "
+                            "returning id, name", (unit,))
+                row = cur.fetchone()
+            conn.commit()
+            if row:
+                stake_name = row[1] or stake_name
+                db.insert_diagnostics(conn, row[0], "sync_error", {"unit": unit, "reason": reason[:400]})
+        finally:
+            conn.close()
+        obs.event("sync.stake.failed", level="error", stake=int(unit), status="error", message=reason[:200])
+        obs.flush()
+        logger.error("SYNC ALERT: stake %s (%s) failed — %s", unit, stake_name, reason[:160])
+        _email_owner_failure(stake_name, unit, reason)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("sync-failure alert skipped (non-fatal): %s", exc)
+
+
+def _email_owner_failure(stake_name: str, unit, reason: str) -> None:
+    """Best-effort owner email about a failed stake sync. No-op if email isn't configured on the
+    runner (set OWNER_EMAIL/REMINDER_OWNER + SMTP/RESEND on the sync job to enable)."""
+    to = os.environ.get("OWNER_EMAIL") or os.environ.get("REMINDER_OWNER")
+    if not to:
+        return
+    try:
+        from backend.auth_broker import admin
+        html = (f"<p>Daily sync <b>failed</b> for <b>{stake_name}</b> (unit {unit}).</p>"
+                f"<p>Most likely the stake's delegated Church session expired — a leader must sign in "
+                f"again with sync enabled to re-authorize it. Logged reason:</p>"
+                f"<pre style='white-space:pre-wrap'>{reason[:500]}</pre>")
+        admin._send_email(to, f"Covenant Path — sync failed for {stake_name}", html)
+        logger.info("sync-failure email sent to owner")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("sync-failure email skipped: %s", exc)
 
 
 def run_delegated(args, skip_unit: int | None = None) -> int:
@@ -573,6 +629,7 @@ def run_delegated(args, skip_unit: int | None = None) -> int:
         except Exception as exc:  # noqa: BLE001
             failures += 1
             logger.error("stake %s (%s) sync failed: %s", st.get("name"), st.get("unit_number"), exc)
+            _alert_sync_failure(st.get("unit_number"), str(exc))
             print(f"[!] {st.get('name')} failed (re-authorize may be needed): {exc}")
     return 1 if failures else 0
 
