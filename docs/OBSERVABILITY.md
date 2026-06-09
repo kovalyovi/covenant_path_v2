@@ -56,6 +56,11 @@
 - ✅ **`login_audit.role_scope`** — what each sign-in *actually resolves to* (under/over visibility).
 - ✅ **`access_audit`** — per-person grant/revoke trail from `provision_roles` (was: only counts).
 - ✅ Both audit tables are **admin-only (RLS)** and **tested** (`test_login_audit.py`).
+- ✅ **Direct (non-broker) logins now audited too** — migration `0037` adds a bulletproof `auth.users`
+  trigger (`on_auth_login`: swallows ALL errors so it can never block/slow a login; dedups vs the
+  broker's 2-min window) that writes a `login_audit` row for the browser→Supabase **email-OTP /
+  passkey / Google** paths, marked `request_id='supabase-auth'`. **Now every login — broker or
+  direct — lands in `login_audit` with its `role_scope`.** (Trigger verified live 2026-06-09.)
 
 ---
 
@@ -63,11 +68,10 @@
 
 | Gap | Risk | Suggested fix |
 |---|---|---|
-| **Direct email-OTP / passkey logins partly audited** | Relay (broker) email logins now write `login_audit`; the *direct* browser→Supabase email-OTP + passkey paths aren't broker-visible | A Supabase Auth hook would capture every auth event; the relay path is covered |
 | **Admin & power-user actions not in an audit table** | `invite_admin` / `invite_power_user` / `revoke_*` only `logger.info` | Route them into `access_audit` with `source='power_user'/'manual'` (table already has the column) |
 | **No alerting on sync failure** | A stake silently stops syncing; logged but nobody's paged | Add a digest/notify when a stake's `last_synced_at` goes stale or `failed_units` is non-empty |
 | **Per-query data access not logged** | Can't replay *exactly* which rows a user fetched | Intentional — RLS guarantees scope; row-level read logging would be heavy/noisy. Rely on `role_scope` instead |
-| **Native/React admin "Recent logins" view** | Audit visible only in Flutter console today | Port the panel to `apps/web` + native admin screens |
+| **Native/React admin "Recent logins" view** | The audit panel was built in the **now-deprecated Flutter** console; the maintained surfaces (React `apps/web` + native) don't surface it yet — admins must query Supabase directly | Port the panel to `apps/web` + native admin screens (more pressing now Flutter is frozen) |
 | **Axiom retention is 30 days (free tier)** | Long-term trend loss | The Supabase audit tables are the durable record; Axiom is for live ops |
 
 ---
