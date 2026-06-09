@@ -354,13 +354,22 @@ def _apply_profile(member: CovenantPathMember, prof: dict) -> None:
     # these when the member record exposes them; absent -> keep the value _assemble derived).
     if prof.get("calling") in ("Yes", "No"):
         member.calling = prof["calling"]
-    if prof.get("ministering_brothers_sisters") in ("Yes", "No"):
-        member.ministering_brothers_sisters = prof["ministering_brothers_sisters"]
+    # The profile's ministering action carries OUTBOUND assignments, not INBOUND ministers, so its
+    # has-ministers is "No" even when the details endpoint DID return ministers. NEVER let it
+    # DOWNGRADE a details-derived "Yes" → "No" (the bug that left the flag "No" for all 85 members
+    # while 42 had minister names). Only an explicit "Yes" upgrades.
+    if prof.get("ministering_brothers_sisters") == "Yes":
+        member.ministering_brothers_sisters = "Yes"
     # Surface minister NAMES in the detail view when LCR's details endpoint came back empty (it
     # often does) — the ministering action carries them.
     names = prof.get("_minister_names")
     if names and not (member.details or {}).get("ministeringBrothers"):
         member.details = {**(member.details or {}), "ministeringBrothers": names}
+    # The minister NAMES (from details OR the profile action) are the authoritative signal for "has
+    # ministers" — keep the displayed flag consistent with what we actually have to show.
+    det = member.details or {}
+    if det.get("ministeringBrothers") or det.get("ministeringSisters"):
+        member.ministering_brothers_sisters = "Yes"
 
 
 # Fields that come from the member profile and must be marked access-blocked (not blanked) when
