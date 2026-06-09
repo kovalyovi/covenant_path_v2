@@ -44,10 +44,25 @@ class LcrClient:
     # --- members / orgs ----------------------------------------------------
 
     def member_list(self, unit_number: int) -> list[Member]:
-        data = self.session.get_json(
-            f"{LCR}/api/umlu/report/member-list", {"unitNumber": unit_number}
-        )
-        return [Member.from_api(m) for m in data]
+        # member-list currently 404s for EVERY unit (LCR moved/removed the route, probe-confirmed).
+        # The circuit breaker latches that permanent failure on the first 404 so the remaining units
+        # short-circuit instantly instead of each re-issuing the same doomed request (the 8 calls /
+        # 8 errors in the diagnostics). It only enriches sex/birth — which the profile fetch also
+        # supplies — so an empty result degrades gracefully. Transient 5xx do NOT open the breaker.
+        from lcr_client import http_util
+
+        key = "member-list"
+        if http_util.breaker.is_open(key):
+            return []
+
+        def _fetch():
+            return self.session.get_json(
+                f"{LCR}/api/umlu/report/member-list", {"unitNumber": unit_number}
+            )
+
+        data = http_util.retry_call(_fetch, attempts=2, base_delay=1.0, max_total=20.0,
+                                    label=f"member_list {unit_number}", breaker_key=key)
+        return [Member.from_api(m) for m in (data or [])]
 
     def unit_orgs(self, unit_number: int) -> list[UnitOrg]:
         data = self.session.get_json(

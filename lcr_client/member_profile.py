@@ -148,7 +148,19 @@ def extract_fields(record: dict) -> dict:
 
 
 def call_action(session, person_uuid: str, action_id: str, args: list) -> list:
-    """POST a member-profile server action and return the parsed flight rows."""
+    """POST a member-profile server action and return the parsed flight rows.
+
+    The profile server actions are the SOURCE of the four parity fields (baptism_date,
+    temple_recommend, patriarchal_blessing, ministering_assignment). LCR's /mlt app is in the same
+    slow/flaky 500 family as the one-work endpoints, so a transient overload on this POST used to
+    fail the member's whole profile fetch → those four fields fell to BLOCKED (the 54/69 parity in
+    the diagnostics). We now (a) RECORD the POST in metrics (it was invisible in the endpoint report
+    because it bypassed get_json) and (b) RETRY transient 5xx/timeouts with backoff so a flaky 500
+    doesn't strand the member. A deterministic 404 (action route gone) is NOT retried."""
+    import time as _t
+
+    from lcr_client import http_util, metrics
+
     url = PROFILE_URL.format(uuid=person_uuid)
     headers = {
         "Accept": "text/x-component",
@@ -158,11 +170,29 @@ def call_action(session, person_uuid: str, action_id: str, args: list) -> list:
         "Origin": "https://lcr.churchofjesuschrist.org",
         "Referer": url,
     }
-    resp = session.session.post(
-        url, headers=headers, data=json.dumps(args, separators=(",", ":")),
-        timeout=60, allow_redirects=False,
+    body = json.dumps(args, separators=(",", ":"))
+
+    def _post():
+        t0 = _t.perf_counter()
+        try:
+            resp = session.session.post(
+                url, headers=headers, data=body, timeout=60, allow_redirects=False,
+            )
+        except Exception as exc:  # noqa: BLE001 — record timeouts/conn errors too
+            metrics.record(url, 0, (_t.perf_counter() - t0) * 1000, error=type(exc).__name__)
+            raise
+        metrics.record(url, resp.status_code, (_t.perf_counter() - t0) * 1000)
+        # A 5xx (or a redirect to the login host) means a degraded/expired server response — surface
+        # it as an error so retry_call can back off and retry the transient ones. raise_for_status
+        # raises requests.HTTPError carrying resp.status_code, which http_util classifies.
+        resp.raise_for_status()
+        return flight_objects(resp.text)
+
+    rows = http_util.retry_call(
+        _post, attempts=3, base_delay=1.0, max_total=45.0,
+        label=f"profile_action {action_id[:8]}",
     )
-    return flight_objects(resp.text)
+    return rows or []
 
 
 def fetch_member_profile(session, person_uuid: str) -> dict:

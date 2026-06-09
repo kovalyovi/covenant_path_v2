@@ -160,6 +160,139 @@ def test_calling_union_and_neutralize():
     return "calling union + names + neutralize ok"
 
 
+def test_http_util_transient_classification():
+    """The retry/breaker classifier: 5xx/429/timeouts/conn-resets are RETRYABLE; a 404 (route gone)
+    and other 4xx are PERMANENT; a bare non-HTTP error defaults to retryable (flaky parsers)."""
+    import requests
+
+    from lcr_client import http_util
+
+    def http_err(status):
+        e = requests.HTTPError(f"{status}")
+        e.response = type("R", (), {"status_code": status})()
+        return e
+
+    # transient
+    assert http_util.is_transient(requests.Timeout("slow")) is True
+    assert http_util.is_transient(requests.ConnectionError("reset")) is True
+    for s in (500, 502, 503, 504, 429, 408):
+        assert http_util.is_transient(http_err(s)) is True, s
+    assert http_util.is_transient(RuntimeError("flaky parser on a 500 body")) is True
+    # permanent
+    for s in (404, 403, 400, 410):
+        assert http_util.is_permanent(http_err(s)) is True, s
+    return "transient(5xx/429/timeout) vs permanent(4xx) classification ok"
+
+
+def test_http_util_retry_and_breaker():
+    """retry_call retries TRANSIENT failures then succeeds; does NOT retry a PERMANENT one and OPENs
+    the breaker for it; an already-open breaker short-circuits to None without calling fn. Sleep is
+    stubbed so the test is instant + offline."""
+    import requests
+
+    from lcr_client import http_util
+    http_util.time.sleep = lambda *_a, **_k: None  # no real backoff waits
+    http_util.breaker.reset()
+
+    # 1. Two transient 500s then success on the 3rd attempt -> recovered value.
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            e = requests.HTTPError("500")
+            e.response = type("R", (), {"status_code": 500})()
+            raise e
+        return "RECOVERED"
+
+    got = http_util.retry_call(flaky, attempts=5, base_delay=0.0, label="flaky")
+    assert got == "RECOVERED" and calls["n"] == 3, (got, calls)
+
+    # 2. Permanent 404 -> not retried (1 call), returns None, breaker latched for its key.
+    perm_calls = {"n": 0}
+
+    def dead():
+        perm_calls["n"] += 1
+        e = requests.HTTPError("404")
+        e.response = type("R", (), {"status_code": 404})()
+        raise e
+
+    got2 = http_util.retry_call(dead, attempts=5, base_delay=0.0, label="dead", breaker_key="member-list")
+    assert got2 is None and perm_calls["n"] == 1, perm_calls
+    assert http_util.breaker.is_open("member-list") is True
+
+    # 3. Breaker open -> fn is NOT called again (short-circuit), returns None.
+    skip_calls = {"n": 0}
+
+    def should_skip():
+        skip_calls["n"] += 1
+        return "SHOULD-NOT-RUN"
+
+    got3 = http_util.retry_call(should_skip, attempts=3, breaker_key="member-list")
+    assert got3 is None and skip_calls["n"] == 0, skip_calls
+
+    # 4. Exhaust transient retries -> None (no crash).
+    def always_500():
+        e = requests.HTTPError("503")
+        e.response = type("R", (), {"status_code": 503})()
+        raise e
+
+    assert http_util.retry_call(always_500, attempts=3, base_delay=0.0, label="always") is None
+    http_util.breaker.reset()
+    return "retry recovers transient; permanent latches breaker; open breaker short-circuits ok"
+
+
+def test_profile_action_retries_transient_500():
+    """member_profile.call_action recovers a TRANSIENT 500 on the profile POST (the source of the 4
+    parity fields) and records the call in metrics — proving the 54/69 parity gap (15 members whose
+    profile POST flaked) is now recovered rather than left BLOCKED. Fully offline: a fake session
+    whose .post 500s once then returns a flight row."""
+    import requests
+
+    from lcr_client import http_util, member_profile, metrics
+    http_util.time.sleep = lambda *_a, **_k: None
+    http_util.breaker.reset()
+    metrics.reset()
+
+    flight = '1:{"uuid":"u-1","ordinances":[{"type":"BAPTISM","dateDisplay":"6 Feb 2026"}]}\n'
+
+    class _Resp:
+        def __init__(self, status, text):
+            self.status_code = status
+            self.text = text
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                e = requests.HTTPError(str(self.status_code))
+                e.response = self
+                raise e
+
+    class _Inner:
+        def __init__(self):
+            self.n = 0
+
+        def post(self, *a, **k):
+            self.n += 1
+            if self.n == 1:
+                return _Resp(500, "")           # transient flake
+            return _Resp(200, flight)           # then good
+
+    class _Session:
+        def __init__(self):
+            self.session = _Inner()
+
+    sess = _Session()
+    rows = member_profile.call_action(sess, "u-1", "deadbeef-action", ["u-1", "eng"])
+    rec = member_profile._find(rows, "uuid", "ordinances")
+    assert rec is not None and rec["uuid"] == "u-1", rows
+    assert sess.session.n == 2, f"expected one retry then success, got {sess.session.n} posts"
+    snap = metrics.snapshot()
+    assert snap["total_calls"] == 2, snap  # both the 500 and the 200 were recorded (was invisible before)
+    metrics.reset()
+    http_util.breaker.reset()
+    return "profile POST retries a transient 500 and is now metered (parity recovered)"
+
+
 def test_okta_building_blocks():
     from lcr_client import okta_login
     s = okta_login.session_from_cookies([{"name": "a", "value": "b", "domain": "x.churchofjesuschrist.org"}])
@@ -392,6 +525,8 @@ def main() -> int:
     print("== OFFLINE tests ==")
     offline = [test_token_store_roundtrip, test_token_store_key_mismatch,
                test_report_degradation_helpers, test_calling_union_and_neutralize,
+               test_http_util_transient_classification, test_http_util_retry_and_breaker,
+               test_profile_action_retries_transient_500,
                test_okta_building_blocks, test_access_humanize,
                test_name_cache_roundtrip, test_clean_missing_filters_unnamed,
                test_leadership_harvest, test_profile_cache, test_sheets_preserve_failed_units,

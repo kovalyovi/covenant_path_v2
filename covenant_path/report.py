@@ -24,7 +24,6 @@ from typing import Any
 
 from lcr_client import LcrClient
 from lcr_client.access import covenant_path_access
-from lcr_client.auth import AuthExpiredError
 from lcr_client.logging_setup import dump_debug, get_logger
 from lcr_client.member_profile import profile_fields
 # Shared, pure eligibility helpers (same rules the app + mailer use) — to gate priesthood display
@@ -200,45 +199,31 @@ def _details_with_retry(client: LcrClient, person_id: str, cmis_id: Any, attempt
     """Fetch one-work/details (the rich subtree: friends NAMES, sacrament, lessons, ministering).
     This endpoint is in the same slow/flaky 500 family as progress-record, and friend NAMES come
     ONLY from here (the progress-record `friends` array carries no name key). It's called once per
-    person (128+/run), so it gets a measured retry — a few attempts with exponential backoff +
-    jitter — rather than progress-record's heavier budget, to stay inside the per-stake job timeout.
-    With only 2 attempts + a flat 1s sleep nearly every per-person fetch failed (details_missing ≈
-    members) → friend names empty for almost everyone. NOTE: when LCR's details endpoint is fully
-    down (observed 500 for ALL people 2026-05-31) no retry can conjure data — this only recovers the
-    transient/overloaded 500s. Returns None after all attempts (caller counts details_missing)."""
-    import random
-    for i in range(attempts):
-        try:
-            return client.progress_details(person_id, cmis_id)
-        except AuthExpiredError:
-            raise
-        except Exception:  # noqa: BLE001  (LCR occasionally 500s; back off and retry)
-            if i == attempts - 1:
-                return None
-            time.sleep(1.0 * (2 ** i) + random.uniform(0, 0.75))
-    return None
+    person (128+/run), so it gets a measured TRANSIENT-only retry (exp backoff + jitter via the
+    shared http_util) — rather than progress-record's heavier budget — to stay inside the per-stake
+    job timeout. A permanent 404 (route gone) is NOT retried; a transient 500 (the diagnostics'
+    11/79 details errors) IS. NOTE: when LCR's details endpoint is fully down for ALL people no
+    retry can conjure data — this only recovers transient/overloaded 500s. Returns None after all
+    attempts (caller counts details_missing; the member is still assembled from the progress record,
+    never crashing)."""
+    from lcr_client import http_util
+    return http_util.retry_call(
+        lambda: client.progress_details(person_id, cmis_id),
+        attempts=attempts, base_delay=1.0, max_total=30.0,
+        label=f"progress_details {str(person_id)[:8]}",
+    )
 
 
 def _retry(fn, attempts: int = 3, delay: float = 2.0, label: str = ""):
-    """Retry a call on transient failures (LCR occasionally 500s). Returns None if all fail.
+    """Retry a call on TRANSIENT failures (LCR occasionally 500s). Returns None if all fail.
 
-    AuthExpiredError propagates (it's already handled with one relogin in LcrSession);
-    everything else (e.g. a 500) is retried so one flaky unit doesn't fail the whole run.
-    """
-    import random
-    for i in range(attempts):
-        try:
-            return fn()
-        except AuthExpiredError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            if i == attempts - 1:
-                logger.warning("giving up on %s after %d attempts: %s", label, attempts, exc)
-                return None
-            # exponential backoff + jitter — LCR 500s are often transient overload, so
-            # spacing retries out (rather than hammering) recovers more of them.
-            time.sleep(delay * (2 ** i) + random.uniform(0, delay))
-    return None
+    Delegates to the shared http_util.retry_call so the transient-vs-permanent classification is
+    uniform across endpoints: AuthExpiredError propagates (handled with one relogin in LcrSession);
+    a flaky 5xx/timeout is retried with exp backoff + jitter (so one flaky unit doesn't fail the
+    whole run); a deterministic 404 (route gone) is NOT retried (no point hammering a dead route)."""
+    from lcr_client import http_util
+    return http_util.retry_call(fn, attempts=attempts, base_delay=delay,
+                                max_total=max(60.0, delay * attempts * 4), label=label)
 
 
 def _build_member_maps(client: LcrClient, unit_number: int) -> dict[str, dict]:
@@ -448,6 +433,10 @@ def build_stake_report(
     if verbose:
         _print_access_preflight(access, with_profile)
     can_profiles = _feature_allowed(access, "menu.view.member.profiles")
+    # Fresh circuit-breaker per stake: a dead endpoint (member-list 404) latched while syncing one
+    # stake must not silently skip the next stake's calls in the same long-running process.
+    from lcr_client import http_util
+    http_util.breaker.reset()
 
     ctx = client.user_context()
     units = [u for u in ctx.child_units if u.unit_number and u.type in ("WARD", "BRANCH")]

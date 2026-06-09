@@ -108,7 +108,15 @@ class LcrSession:
         params = {"lang": self.lang, **(params or {})}
 
         def _do():
-            resp = self.session.post(url, params=params, json=json_body, timeout=60)
+            import time as _t
+            from lcr_client import metrics
+            t0 = _t.perf_counter()
+            try:
+                resp = self.session.post(url, params=params, json=json_body, timeout=60)
+            except Exception as exc:  # noqa: BLE001 — record timeouts/conn errors too
+                metrics.record(url, 0, (_t.perf_counter() - t0) * 1000, error=type(exc).__name__)
+                raise
+            metrics.record(url, resp.status_code, (_t.perf_counter() - t0) * 1000)
             self._check_auth(resp)
             resp.raise_for_status()
             return resp.json()

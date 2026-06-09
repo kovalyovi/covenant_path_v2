@@ -106,21 +106,21 @@ class FakeLcrClient:
 
     def org_callings(self, unit_number):
         self._tick(f"org_callings:{unit_number}")
-        v = self._org_callings.get(unit_number, {"unitOrgs": []})
+        v = _resolve(self._org_callings.get(unit_number, {"unitOrgs": []}))
         if isinstance(v, Exception):
             raise v
         return v
 
     def member_list(self, unit_number):
         self._tick(f"member_list:{unit_number}")
-        v = self._member_lists.get(unit_number, [])
+        v = _resolve(self._member_lists.get(unit_number, []))
         if isinstance(v, Exception):
             raise v
         return [_MemberRaw(m) for m in v]
 
     def progress_record(self, unit_number):
         self._tick(f"progress_record:{unit_number}")
-        v = self._progress.get(unit_number)
+        v = _resolve(self._progress.get(unit_number))
         if isinstance(v, Exception):
             raise v
 
@@ -132,12 +132,40 @@ class FakeLcrClient:
 
     def progress_details(self, person_id, cmis_id):
         self._tick(f"progress_details:{person_id}")
-        v = self._details.get(person_id)
+        v = _resolve(self._details.get(person_id))
         if isinstance(v, Exception):
             raise v
         if v is None:
             raise RuntimeError("no details configured")
         return v
+
+
+def _http_error(status: int) -> Exception:
+    """A requests.HTTPError carrying an HTTP status (so http_util classifies it transient/permanent)."""
+    import requests
+    e = requests.HTTPError(str(status))
+    e.response = type("R", (), {"status_code": status})()
+    return e
+
+
+class _Flaky:
+    """A response that raises (or returns) a SEQUENCE across successive calls — e.g. [500, 500, ok]
+    to simulate an intermittent endpoint that recovers on retry. Exhausting the sequence repeats the
+    last element (so a steady-state value persists)."""
+
+    def __init__(self, sequence):
+        self._seq = list(sequence)
+        self._i = 0
+
+    def next(self):
+        v = self._seq[min(self._i, len(self._seq) - 1)]
+        self._i += 1
+        return v
+
+
+def _resolve(v):
+    """Unwrap a _Flaky into its next per-call value; pass anything else through unchanged."""
+    return v.next() if isinstance(v, _Flaky) else v
 
 
 def _position(person_uuid, name, role_id, calling, unit_name="Ward"):
@@ -783,6 +811,306 @@ def scenario_report_degraded_fetch_end_to_end():
 
 
 # ============================================================================
+# STRESS — production LCR failure modes (the 2026-06-09 diagnostics): intermittent 500s, total
+# endpoint outage, slow/timeout, malformed JSON, a unit that fully fails. The bar: NEVER crash;
+# NEVER lose real members on a degraded run; mark fields pending/blocked correctly; RETRY transients.
+# These drive the REAL build_stake_report + db.upsert_members/reconcile against a fully-mocked LCR.
+# ============================================================================
+
+def _stub_report_network():
+    """Make build_stake_report autonomous: fake the access matrix (no network) and neutralize the
+    real retry-backoff sleeps in BOTH report.py and http_util so the failing paths run instantly."""
+    from lcr_client import http_util
+    report.covenant_path_access = lambda client: {
+        "runner_positions": [{"name": "Stake President"}], "can_pull_all": True,
+        "features": [{"feature": "menu.view.member.profiles", "allowed": True}], "missing": [],
+    }
+    report.time.sleep = lambda *_a, **_k: None
+    http_util.time.sleep = lambda *_a, **_k: None
+    http_util.breaker.reset()
+
+
+def _profile_payload(uuid: str, *, baptism="6 Feb 2026"):
+    """A member-profile server-action response (the React-flight rows member_profile parses), so the
+    REAL profile_fields runs end-to-end. Carries the four parity fields' source data."""
+    return {
+        "record": f'1:{{"uuid":"{uuid}","ordinances":[{{"type":"BAPTISM","dateDisplay":"{baptism}"}}],'
+                  '"hasPatriarchalBlessing":true,"currentPriesthoodOfficeType":"ELDER","sex":"M",'
+                  '"birth":{"dateDisplay":"1 Jan 1990"}}\n',
+        "recommend": '1:{"hasNewRecommendInProcess":false,"recommend":{"status":"ACTIVE"}}\n',
+        "ministering": '1:{"ministeringBrothersAssignments":[{"assignments":[{"name":"X"}]}]}\n',
+        "callings": '1:{"individualCallings":[{"positionName":"RS Service Committee Member"}]}\n',
+    }
+
+
+class _ProfileSession:
+    """A fake LcrSession.session whose .post returns the right flight payload per Next-Action id,
+    optionally failing the FIRST k POSTs with a transient/permanent HTTP error to simulate flakiness.
+    Routes by matching the action id to one of the four profile actions via action_config."""
+
+    def __init__(self, payloads_by_uuid, *, fail_first=0, fail_status=500):
+        from lcr_client import action_config
+        self._payloads = payloads_by_uuid
+        self._fail_first = fail_first
+        self._fail_status = fail_status
+        self._cfg = action_config.load()
+        self._n = 0
+
+    def post(self, url, headers=None, data=None, timeout=None, allow_redirects=None, **k):
+        self._n += 1
+        if self._n <= self._fail_first:
+            return _PostResp(self._fail_status, "")
+        uuid = url.split("?", 1)[0].rsplit("/", 1)[-1]
+        action = (headers or {}).get("Next-Action")
+        kind = next((k2 for k2, v in self._cfg.items() if v == action), "record")
+        text = self._payloads.get(uuid, {}).get(kind, "")
+        return _PostResp(200, text)
+
+
+class _PostResp:
+    def __init__(self, status, text):
+        self.status_code = status
+        self.text = text
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise _http_error(self.status_code)
+
+
+def _client_session_wrap(fake_client, profile_session):
+    """Attach a .session.session = profile_session to the FakeLcrClient so profile_fields(client.session,...)
+    posts through our fake. profile_fields takes `client.session` and uses `.session.post`."""
+    class _Outer:
+        pass
+    outer = _Outer()
+    outer.session = profile_session
+    fake_client.session = outer
+    return fake_client
+
+
+def scenario_stress_intermittent_500_then_recover():
+    """STRESS: the details endpoint 500s on the first TWO attempts per member then succeeds (the
+    flaky 'overloaded 500' family). The transient-retry must RECOVER it — the member ends up with the
+    details subtree, no crash. Proves details/{id}'s ~14% transient errors are retried, not dropped."""
+    _stub_report_network()
+    client = FakeLcrClient(
+        stake_unit=990001, stake_name="Flaky Stake", child_units=[(881001, "Ward A", "WARD")],
+        org_callings={881001: _orgs([])},
+        member_lists={881001: []},
+        progress={881001: {"newMemberList": [{"id": "x-1", "personUuid": "x-1", "name": "Xan",
+                                              "cmisId": 1}]}},
+        # details: 500, 500, then the real subtree -> retry_call recovers on the 3rd attempt.
+        details={"x-1": _Flaky([_http_error(500), _http_error(500),
+                                {"name": "Xan", "friends": [{"name": "Pal"}]}])},
+    )
+    rows = report.build_stake_report(client, with_profile=False, verbose=False, delay=0)
+    got_details = bool(rows and (rows[0].details or {}).get("friends"))
+    return [
+        ("intermittent 500 recovered (no crash)", len(rows), 1),
+        ("details subtree present after retry", got_details, True),
+        ("details endpoint retried 3x (2 fails + success)", client.calls.get("progress_details:x-1"), 3),
+    ]
+
+
+def scenario_stress_total_outage_degrades_no_crash():
+    """STRESS: EVERY data endpoint is down — progress-record 500s all retries (unit fails), details
+    500s, org-callings 500s, member-list 404s. The run must NOT crash and must return ZERO rows with
+    the unit recorded as failed (so reconcile is gated off). This is the 'whole unit fully fails' +
+    'total endpoint outage' case together."""
+    _stub_report_network()
+    client = FakeLcrClient(
+        stake_unit=990002, stake_name="Outage Stake", child_units=[(881002, "Ward B", "WARD")],
+        org_callings={881002: _http_error(500)},
+        member_lists={881002: _http_error(404)},     # dead route
+        progress={881002: _http_error(503)},          # fails every retry -> unit failed
+        details={},
+    )
+    crashed = False
+    try:
+        rows = report.build_stake_report(client, with_profile=True, verbose=False, delay=0, cache=None)
+    except Exception:  # noqa: BLE001
+        crashed = True
+        rows = []
+    return [
+        ("total outage does NOT crash", crashed, False),
+        ("no rows produced (the only unit fully failed)", len(rows), 0),
+        ("progress-record was retried before giving up (transient 503)",
+         client.calls.get("progress_record:881002", 0) >= 2, True),
+    ]
+
+
+def scenario_stress_unit_fails_never_deletes_members():
+    """STRESS (data-safety, the 2026-06-09 root concern): two independent safety layers when LCR is
+    flaky, both replayed against the REAL db.{count_reconcile_candidates,reconcile_members}:
+
+      Layer 1 (keep-set exclusion): a unit whose progress-record fully FAILED is excluded from the
+        keep-set, so its members are NEVER reconcile candidates — a failed unit can't wipe its roster.
+      Layer 2 (degraded-run defer): even among the CLEANLY-scraped units, if any unit failed this run
+        AND a burst (>3) would be deleted, the deletions are DEFERRED — LCR's 500s can thin a 200
+        roster, and a burst of 'departures' mid-outage is far likelier degraded data than real moves.
+    This mirrors backend/sync.sync_stake's guard exactly."""
+    _patch_execute_values()
+    d = FakeDB()
+    sid = d.add_stake(990003, "Safety Stake")
+    ua = d.add_unit(sid, 881003, "Ward A")  # cleanly scraped this run
+    ub = d.add_unit(sid, 881004, "Ward B")  # FAILED this run
+    d.add_member(sid, ua, "keep-1", name="Keep")
+    for i in range(5):                       # 5 in the FAILED unit B
+        d.add_member(sid, ub, f"b-{i}", name=f"B{i}")
+    for i in range(4):                       # 4 in the CLEAN unit A that came back absent (a burst)
+        d.add_member(sid, ua, f"a-gone-{i}", name=f"AGone{i}")
+
+    all_units = {881003: ua, 881004: ub}
+    failed = {881004}
+    keep_unit_ids = [all_units[n] for n in (set(all_units) - failed)]  # only Ward A is "kept"
+    present_uuids = ["keep-1"]  # Ward B failed (no uuids); Ward A's 4 absentees look departed
+
+    # Layer 1: Ward B members are not even candidates (their unit isn't in the keep-set).
+    candidates = db.count_reconcile_candidates(d, sid, present_uuids, keep_unit_ids, include_orphans=True)
+
+    # Layer 2: a unit failed AND candidates>3 → DEFER (don't delete) — exactly sync_stake's guard.
+    deferred = bool(failed) and candidates > 3
+    removed = 0
+    if not deferred and candidates:
+        removed = db.reconcile_members(d, sid, present_uuids, keep_unit_ids, include_orphans=True)
+
+    b_survivors = sum(1 for m in d.members if m["person_uuid"].startswith("b-"))
+    a_gone_survivors = sum(1 for m in d.members if m["person_uuid"].startswith("a-gone-"))
+    return [
+        ("present member kept", d.member("keep-1") is not None, True),
+        ("only the clean-unit burst counts as candidates (failed unit excluded)", candidates, 4),
+        ("degraded run DEFERS the burst (no delete)", deferred, True),
+        ("FAILED unit's 5 members ALL preserved (keep-set exclusion)", b_survivors, 5),
+        ("clean-unit burst ALSO preserved during the degraded run (defer)", a_gone_survivors, 4),
+        ("0 members removed during degraded run", removed, 0),
+    ]
+
+
+def scenario_stress_small_churn_still_flows_when_clean():
+    """STRESS (counterpart): a CLEAN run (no failed units) with a SMALL real departure (≤3) is NOT
+    deferred — the member genuinely gone is reconciled away. Proves the guard defers only the
+    degraded-burst case, never freezing normal churn. (sync_stake guard: failed empty → delete.)"""
+    _patch_execute_values()
+    d = FakeDB()
+    sid = d.add_stake(990013, "Clean Churn Stake")
+    ua = d.add_unit(sid, 881013, "Ward A")
+    d.add_member(sid, ua, "stay-1", name="Stay")
+    d.add_member(sid, ua, "left-1", name="Left")  # one real departure
+
+    keep_unit_ids = [ua]
+    present_uuids = ["stay-1"]
+    failed: set = set()  # clean run
+    candidates = db.count_reconcile_candidates(d, sid, present_uuids, keep_unit_ids, include_orphans=True)
+    deferred = bool(failed) and candidates > 3
+    removed = db.reconcile_members(d, sid, present_uuids, keep_unit_ids, include_orphans=True) if not deferred else 0
+    return [
+        ("one real departure detected", candidates, 1),
+        ("clean run is NOT deferred", deferred, False),
+        ("the departed member is reconciled away", d.member("left-1") is None, True),
+        ("the present member is kept", d.member("stay-1") is not None, True),
+        ("reported 1 removed", removed, 1),
+    ]
+
+
+def scenario_stress_malformed_json_no_crash():
+    """STRESS: a member-profile POST returns MALFORMED flight rows (garbage that won't JSON-parse).
+    member_profile.flight_objects must skip un-parseable rows and profile_fields must raise a clean
+    RuntimeError (no record) — which the report catches and marks the member's fields BLOCKED, never
+    crashing the run. (member_profile.flight_objects + report's profile try/except.)"""
+    from lcr_client import http_util, member_profile
+    http_util.breaker.reset()
+    http_util.time.sleep = lambda *_a, **_k: None
+    # Neutralize the once-per-process action-id auto-discovery — it's a NETWORK call (re-login +
+    # crawl) that has no place in an offline test; here we only assert the malformed-response path
+    # degrades to a clean RuntimeError, which is what the report catches and marks BLOCKED.
+    member_profile._heal_once = lambda *_a, **_k: None
+
+    # flight_objects tolerates garbage lines (returns []), so _find finds no record.
+    objs = member_profile.flight_objects("0:not json at all\n1:{broken\n2:[1,2,\n")
+    parsed_clean = objs == []
+
+    # A session whose .post always returns malformed text -> fetch_member_profile raises cleanly.
+    class _BadInner:
+        def post(self, *a, **k):
+            return _PostResp(200, "garbage\n1:{nope\n")
+
+    class _BadSession:
+        def __init__(self):
+            self.session = _BadInner()
+
+    raised_clean = False
+    try:
+        member_profile.fetch_member_profile(_BadSession(), "u-bad")
+    except RuntimeError:
+        raised_clean = True
+    except Exception:  # noqa: BLE001 — any OTHER exception type would be an ungraceful crash
+        raised_clean = False
+    http_util.breaker.reset()
+    return [
+        ("malformed flight rows skipped (no crash)", parsed_clean, True),
+        ("no-record profile raises a clean RuntimeError (caught -> BLOCKED)", raised_clean, True),
+    ]
+
+
+def scenario_stress_profile_flake_recovers_parity():
+    """STRESS (the 54/69 parity root cause): the member-profile POST 500s on the FIRST attempt then
+    succeeds — exactly the transient flake that used to leave a member's four parity fields BLOCKED.
+    The retry inside call_action must RECOVER them so the member comes back FILLED. Runs the REAL
+    profile_fields end-to-end through a fake POST session."""
+    _stub_report_network()
+    from lcr_client import http_util
+    http_util.time.sleep = lambda *_a, **_k: None
+
+    client = FakeLcrClient(
+        stake_unit=990004, stake_name="Parity Stake", child_units=[(881005, "Ward P", "WARD")],
+        org_callings={881005: _orgs([])},
+        member_lists={881005: []},
+        progress={881005: {"newMemberList": [{"id": "p-1", "personUuid": "p-1", "name": "Pat",
+                                              "cmisId": 9}]}},
+        details={"p-1": {"name": "Pat"}},
+    )
+    # Profile POST: fail the FIRST post (one parity-field action) with a 500, then succeed thereafter.
+    psession = _ProfileSession({"p-1": _profile_payload("p-1")}, fail_first=1, fail_status=500)
+    _client_session_wrap(client, psession)
+
+    rows = report.build_stake_report(client, with_profile=True, verbose=False, delay=0, cache=None)
+    m = rows[0] if rows else None
+    filled = m and m.baptism_date not in (report.NEEDS_PROFILE, report.BLOCKED, None, "")
+    return [
+        ("member assembled", len(rows), 1),
+        ("baptism_date FILLED despite a transient profile 500", filled, True),
+        ("temple_recommend filled (Active)", m.temple_recommend if m else None, "Active"),
+        ("ministering_assignment filled (Yes)", m.ministering_assignment if m else None, "Yes"),
+        ("patriarchal_blessing filled (Yes)", m.patriarchal_blessing if m else None, "Yes"),
+    ]
+
+
+def scenario_stress_dead_endpoint_breaker_one_hit():
+    """STRESS (dead endpoint, don't hammer): the breaker latches a PERMANENT 404 so a dead route is
+    hit AT MOST ONCE even across many calls — distinguishing 'permanently dead' (member-list) from
+    'flaky' (retried). Directly exercises the real http_util breaker the client uses for member-list."""
+    from lcr_client import http_util
+    http_util.time.sleep = lambda *_a, **_k: None
+    http_util.breaker.reset()
+    hits = {"n": 0}
+
+    def dead():
+        hits["n"] += 1
+        raise _http_error(404)
+
+    r1 = http_util.retry_call(dead, attempts=4, base_delay=0, breaker_key="ml", label="ml")
+    r2 = http_util.retry_call(dead, attempts=4, base_delay=0, breaker_key="ml", label="ml")
+    r3 = http_util.retry_call(dead, attempts=4, base_delay=0, breaker_key="ml", label="ml")
+    open_state = http_util.breaker.is_open("ml")
+    http_util.breaker.reset()
+    return [
+        ("dead route hit exactly once across 3 calls", hits["n"], 1),
+        ("all dead-route calls return None (graceful)", (r1, r2, r3), (None, None, None)),
+        ("breaker latched open for the dead route", open_state, True),
+    ]
+
+
+# ============================================================================
 # AXIS 2+5b — credential staleness / expiry / takeover (most-elevated-wins)
 # ============================================================================
 
@@ -1042,6 +1370,14 @@ SCENARIOS = [
     scenario_report_profile_union_never_downgrades,
     scenario_report_neutralize_uniform_stale,
     scenario_report_degraded_fetch_end_to_end,
+    # STRESS — production LCR failure modes (the 2026-06-09 diagnostics)
+    scenario_stress_intermittent_500_then_recover,
+    scenario_stress_total_outage_degrades_no_crash,
+    scenario_stress_unit_fails_never_deletes_members,
+    scenario_stress_small_churn_still_flows_when_clean,
+    scenario_stress_malformed_json_no_crash,
+    scenario_stress_profile_flake_recovers_parity,
+    scenario_stress_dead_endpoint_breaker_one_hit,
     # AXIS 2+5b — credential staleness / expiry / takeover
     scenario_credential_staleness_alert_edge,
     scenario_credential_save_roundtrip_encrypted,
@@ -1056,12 +1392,15 @@ SCENARIOS = [
 def run() -> int:
     # Save the module globals the scenarios monkeypatch so a leaked patch can't poison a later
     # in-process import (e.g. pytest collecting test_field_meta after this module).
+    from lcr_client import http_util, member_profile
     _saved = {
         "report.covenant_path_access": report.covenant_path_access,
         "report.time.sleep": report.time.sleep,
         "db._now_iso": db._now_iso,
         "db.execute_values": db.psycopg2.extras.execute_values,
         "roles.fetch_access_matrix": roles.fetch_access_matrix,
+        "http_util.time.sleep": http_util.time.sleep,
+        "member_profile._heal_once": member_profile._heal_once,
     }
     total = 0
     passed = 0
@@ -1092,6 +1431,9 @@ def run() -> int:
         db._now_iso = _saved["db._now_iso"]
         db.psycopg2.extras.execute_values = _saved["db.execute_values"]
         roles.fetch_access_matrix = _saved["roles.fetch_access_matrix"]
+        http_util.time.sleep = _saved["http_util.time.sleep"]
+        member_profile._heal_once = _saved["member_profile._heal_once"]
+        http_util.breaker.reset()
 
     print(f"\n== {passed}/{total} checks passed across {len(SCENARIOS)} scenarios ==")
     if failed_scenarios:

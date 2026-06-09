@@ -96,6 +96,11 @@ class FakeCursor:
                             for r in self._db.members if r["stake_id"] == stake_id]
             return
 
+        # ---- db.count_reconcile_candidates (the degraded-run deferral guard) ----
+        if n.startswith("select count(*) from members where stake_id =") and "person_uuid <> all" in n:
+            self._count_reconcile(n, params)
+            return
+
         # ---- db.reconcile_members ----------------------------------------
         if n.startswith("delete from members where stake_id =") and "person_uuid <> all" in n:
             self._reconcile_members(n, params)
@@ -191,26 +196,37 @@ class FakeCursor:
         self._db.access_audit.append(row)
         self.rowcount = 1
 
-    def _reconcile_members(self, n, params):
-        # sql: delete from members where stake_id=%s and person_uuid <> all(%s) and <unit_clause>
+    def _candidates(self, n, params):
+        """Shared predicate for count + delete: which members WOULD be reconciled away."""
         stake_id, present, keep_unit_ids = params
         present_set = set(present or [])
         keep_set = {str(u) for u in (keep_unit_ids or [])}
         include_orphans = "unit_id is null" in n
-        removed, survivors = [], []
+        out = []
         for r in self._db.members:
             if r["stake_id"] != stake_id or r["person_uuid"] in present_set:
-                survivors.append(r)
                 continue
             uid = r["unit_id"]
             unit_match = (str(uid) in keep_set) if uid is not None else False
             if include_orphans and uid is None:
                 unit_match = True
             if unit_match:
-                removed.append(r)
-            else:
-                survivors.append(r)
-        self._db.members = survivors
+                out.append(r)
+        return out
+
+    def _count_reconcile(self, n, params):
+        # db.count_reconcile_candidates gates on non-empty lists too (returns 0 otherwise).
+        _stake_id, present, keep_unit_ids = params
+        if not present or not keep_unit_ids:
+            self._result = [(0,)]
+            return
+        self._result = [(len(self._candidates(n, params)),)]
+
+    def _reconcile_members(self, n, params):
+        # sql: delete from members where stake_id=%s and person_uuid <> all(%s) and <unit_clause>
+        doomed = {id(r) for r in self._candidates(n, params)}
+        removed = [r for r in self._db.members if id(r) in doomed]
+        self._db.members = [r for r in self._db.members if id(r) not in doomed]
         self.rowcount = len(removed)
 
     def _prune_units(self, params):
