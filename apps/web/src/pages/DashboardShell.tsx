@@ -20,6 +20,7 @@ import {
   SyncingBanner, StaleBanner, LastUpdatedChip,
 } from '../components/dashboard';
 import { SyncSettingsSheet } from '../components/SyncSettingsSheet';
+import { ReauthDialog } from '../components/ReauthDialog';
 import { ReportSheet } from '../components/ReportSheet';
 import { useToast } from '../components/Toast';
 import { Modal } from '../components/Modal';
@@ -170,7 +171,8 @@ export function DashboardShell() {
           state={credState as string}
           isProvider={d.enrollStatus?.credential.isProvider === true}
           lastError={d.enrollStatus?.credential.lastError ?? null}
-          onReenroll={() => void signOut()}
+          // In-app re-auth modal — never bounce a signed-in user back to the login screen.
+          onReenroll={broker.available ? d.openReauth : () => void signOut()}
           onSyncNow={broker.available ? syncNow : undefined}
         />
       )}
@@ -225,6 +227,7 @@ export function DashboardShell() {
         onRevoke={() => setConfirmRevoke(true)}
         onSyncNow={syncNow}
       />
+      <ReauthDialog open={d.reauthOpen} onClose={d.closeReauth} />
       {report && <ReportSheet open onClose={() => setReport(null)} report={report} onEmail={emailReport} />}
       {reportLoading && (
         <div className="scrim">

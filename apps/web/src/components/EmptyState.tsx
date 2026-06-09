@@ -1,15 +1,18 @@
 // The "no members visible" empty state — React port of `_EmptyState` (dashboard_shell.dart). The
 // message + action depend on the broker enrollment status (no role / revoked / first sync running).
 
-import { signOut } from '../hooks/useAuth';
 import { broker, type EnrollmentStatus } from '../lib/broker';
+import { useDashboard } from '../hooks/useDashboard';
 import { Icon } from './Icon';
 import { Button } from './ui';
 
 export function EmptyState({ enrollStatus }: { enrollStatus: EnrollmentStatus | null }) {
+  const d = useDashboard();
   const cred = enrollStatus?.credential;
   const hasNoRole = enrollStatus?.noRole === true;
   const churchLoginAvailable = broker.available;
+  // In-app re-auth modal (never bounce a signed-in user back to the login screen).
+  const authorize = () => d.openReauth();
 
   let title: string;
   let body: string;
@@ -22,10 +25,10 @@ export function EmptyState({ enrollStatus }: { enrollStatus: EnrollmentStatus | 
     if (churchLoginAvailable) {
       title = 'Set up stake sync';
       body =
-        "Your stake hasn't set up Covenant Path yet. Sign in with your Church account to start daily data updates — signing in keeps your stake synced automatically.";
+        "Your stake hasn't set up Covenant Path yet. Authorize with your Church account to start daily data updates — it keeps your stake synced automatically.";
       action = (
-        <Button variant="filled" icon="logout" onClick={() => void signOut()}>
-          Sign in to enable sync
+        <Button variant="filled" icon="key" onClick={authorize}>
+          Authorize stake sync
         </Button>
       );
     } else {
@@ -35,21 +38,21 @@ export function EmptyState({ enrollStatus }: { enrollStatus: EnrollmentStatus | 
     }
   } else if (cred?.state === 'revoked') {
     title = 'Sync paused';
-    body = 'The daily sync credential for your stake has been revoked. Re-enroll to resume data updates.';
+    body = 'The daily sync credential for your stake has been revoked. Re-authorize to resume data updates.';
     if (churchLoginAvailable) {
       action = (
-        <Button variant="outlined" icon="refresh" onClick={() => void signOut()}>
-          Re-enroll
+        <Button variant="outlined" icon="refresh" onClick={authorize}>
+          Re-authorize
         </Button>
       );
     }
   } else if (cred?.state === 'stale') {
     title = 'Sync needs re-authorization';
     body =
-      "This stake's daily sync stopped — the Church session that keeps it updated expired. Sign in again with your Church account to re-authorize and resume updates.";
+      "This stake's daily sync stopped — the Church session that keeps it updated expired. Re-authorize with your Church account to resume updates.";
     if (churchLoginAvailable) {
       action = (
-        <Button variant="filled" icon="refresh" onClick={() => void signOut()}>
+        <Button variant="filled" icon="refresh" onClick={authorize}>
           Re-authorize
         </Button>
       );

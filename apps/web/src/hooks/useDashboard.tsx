@@ -45,6 +45,11 @@ interface DashboardState {
   reloadStakes: () => Promise<void>;
   reloadEnrollStatus: () => Promise<void>;
   setEnrollStatus: (s: EnrollmentStatus | null) => void;
+  /** In-app Church re-authorization dialog (stale/revoked credential, or first-time setup) — keeps
+   *  the user signed in instead of bouncing them to the login screen. */
+  reauthOpen: boolean;
+  openReauth: () => void;
+  closeReauth: () => void;
 }
 
 const Ctx = createContext<DashboardState | null>(null);
@@ -256,16 +261,21 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     window.setTimeout(() => void reloadStakes(), 8000);
   }, [reloadStakes]);
 
+  const [reauthOpen, setReauthOpen] = useState(false);
+  const openReauth = useCallback(() => setReauthOpen(true), []);
+  const closeReauth = useCallback(() => setReauthOpen(false), []);
+
   const value = useMemo<DashboardState>(
     () => ({
       loading, error, members, stakes, currentStakeId, stakeName, lastSynced, syncing,
       syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,
       reloadStakes, reloadEnrollStatus, setEnrollStatus,
+      reauthOpen, openReauth, closeReauth,
     }),
     [
       loading, error, members, stakes, currentStakeId, stakeName, lastSynced, syncing,
       syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,
-      reloadStakes, reloadEnrollStatus,
+      reloadStakes, reloadEnrollStatus, reauthOpen, openReauth, closeReauth,
     ],
   );
 
