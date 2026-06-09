@@ -9,7 +9,7 @@ import type { Member } from '../../lib/member';
 import { isInvestigator } from '../../lib/member';
 import { parseMemberDate } from '../../logic/dates';
 import {
-  milestones, responsibleOrg, ORG_BUCKETS, type OrgBucket, type Milestone,
+  needsCategories, responsibleOrg, ORG_BUCKETS, type OrgBucket, type Milestone,
 } from '../../logic/milestones';
 import { assignUnitColors } from '../../logic/kpis';
 import { hexA } from '../../theme/tokens';
@@ -34,6 +34,7 @@ function NeedsBody() {
   const [selected, setSelected] = useState<number | null>(null);
   const [ascending, setAscending] = useState(true);
   const [orgs, setOrgs] = useState<Set<OrgBucket>>(new Set(ORG_BUCKETS));
+  const [ward, setWard] = useState<string | null>(null); // null = Stake (all wards)
 
   function toggleOrg(b: OrgBucket) {
     setOrgs((cur) => {
@@ -60,19 +61,23 @@ function NeedsBody() {
   }
 
   const all = d.members.filter((m) => !isInvestigator(m));
+  const wards = [...new Set(all.map((m) => String(m['unit_name'] ?? '')).filter(Boolean))].sort();
   const allOrgs = orgs.size === ORG_BUCKETS.length;
-  const baptized = allOrgs ? all : all.filter((m) => orgs.has(responsibleOrg(m) as OrgBucket));
-  const missingByMs = milestones.map((ms) =>
+  const orgScoped = allOrgs ? all : all.filter((m) => orgs.has(responsibleOrg(m) as OrgBucket));
+  // Ward dropdown (default Stake = all wards) filters on top of the org filter.
+  const baptized = ward == null ? orgScoped : orgScoped.filter((m) => String(m['unit_name'] ?? '') === ward);
+  const missingByMs = needsCategories.map((ms) =>
     baptized.filter((m) => ms.eligible(m) && !ms.complete(m)).sort(cmp),
   );
   const total = missingByMs.reduce((acc, l) => acc + l.length, 0);
   const note = orgNoteFor(orgs);
 
-  const orgFilter = (
+  const filters = (
     <div className="stack" style={{ gap: 6 }}>
       <div style={{ height: 10 }} />
       <OrgFilterBar selected={orgs} onToggle={toggleOrg} onClear={() => setOrgs(new Set(ORG_BUCKETS))} />
       {!allOrgs && note && <SubtleNote text={note} />}
+      <WardSelect wards={wards} ward={ward} onChange={setWard} />
     </div>
   );
 
@@ -83,7 +88,7 @@ function NeedsBody() {
         header={
           <div className="stack" style={{ gap: 0 }}>
             <BigHeader text="Needs Action" subtitle="Eligible members still missing each integration step" />
-            {orgFilter}
+            {filters}
           </div>
         }
       >
@@ -96,7 +101,7 @@ function NeedsBody() {
 
   const firstNonEmpty = missingByMs.findIndex((l) => l.length > 0);
   const sel = selected ?? (firstNonEmpty < 0 ? 0 : firstNonEmpty);
-  const ms = milestones[sel];
+  const ms = needsCategories[sel];
   const missing = missingByMs[sel];
   const unitColors = assignUnitColors(d.members);
 
@@ -106,10 +111,10 @@ function NeedsBody() {
       header={
         <div className="stack" style={{ gap: 0 }}>
           <BigHeader text="Needs Action" subtitle="Eligible members still missing each integration step" />
-          {orgFilter}
+          {filters}
           <div style={{ height: 12 }} />
           <div className="wrap" style={{ flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: 4 }}>
-            {milestones.map((m, i) => (
+            {needsCategories.map((m, i) => (
               <CategoryChip key={m.abbr} ms={m} count={missingByMs[i].length} selected={i === sel} onClick={() => setSelected(i)} />
             ))}
           </div>
@@ -223,5 +228,32 @@ function CategoryChip({
         </span>
       )}
     </button>
+  );
+}
+
+/** Ward picker below the org filters — one ward or the whole stake (default). A single-unit leader
+ *  (only one ward in view) has nothing to pick, so it hides itself. */
+function WardSelect({ wards, ward, onChange }: {
+  wards: string[]; ward: string | null; onChange: (w: string | null) => void;
+}) {
+  if (wards.length <= 1) return null;
+  return (
+    <label className="row" style={{ gap: 8, alignItems: 'center', paddingTop: 4 }}>
+      <Icon name="groups" size={16} color="var(--on-surface-variant)" />
+      <select
+        value={ward ?? ''}
+        onChange={(e) => onChange(e.target.value || null)}
+        aria-label="Filter by ward"
+        style={{
+          flex: 1, maxWidth: 340, padding: '7px 10px', borderRadius: 10, font: 'inherit',
+          border: '1px solid var(--outline)', background: 'var(--surface)', color: 'var(--on-surface)',
+        }}
+      >
+        <option value="">Stake — all wards</option>
+        {wards.map((w) => (
+          <option key={w} value={w}>{w}</option>
+        ))}
+      </select>
+    </label>
   );
 }

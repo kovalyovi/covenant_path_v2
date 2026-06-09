@@ -10,8 +10,7 @@ import type { Member } from '../lib/member';
 import { detailsOf, freshness } from '../lib/member';
 import {
   endowmentDisplay, completionOf, callingEligible, ministeringAssignmentEligible,
-  aaronicEligible, melchizedekEligible, priesthoodEligible, templeRecommendEligible,
-  patriarchalEligible, ageOf,
+  priesthoodEligible, templeRecommendEligible, patriarchalEligible, ageOf,
 } from '../logic/milestones';
 import { agoOrNever } from '../logic/dates';
 import { Avatar, IconButton, SectionCard } from '../components/ui';
@@ -85,9 +84,11 @@ export function PersonDetailPage() {
             <GoldenHourChips member={member} highlightNext labeled />
           </SectionCard>
 
-          <RecordCard member={member} />
-
-          {details && <RichBody member={member} d={details} />}
+          {details ? (
+            <RichBody member={member} d={details} />
+          ) : (
+            <StatusSections member={member} />
+          )}
 
           {uuid && <CommentsSection member={member} />}
         </div>
@@ -165,6 +166,7 @@ function RichBody({ member, d }: { member: Member; d: Record<string, unknown> })
   );
   const right = (
     <>
+      <StatusSections member={member} />
       <TempleSection d={d} />
       <PrinciplesSection d={d} />
       <TogglesSection title="Self-Reliance Classes Completed" icon="rule" items={toggles(d['selfReliance'])} />
@@ -508,48 +510,42 @@ function CompletionRing({ pct, size = 30 }: { pct: number; size?: number }) {
   );
 }
 
-/** "Record": every covenant-path status that APPLIES to this member, as key→value with stale clocks —
- *  the comprehensive at-a-glance summary. Eligibility-gated (no priesthood rows for women, no calling
- *  for a child); endowment shows "N/A" for the not-yet-eligible. Works from flat fields, so it renders
- *  even when the rich `details` subtree is absent. */
-function RecordCard({ member }: { member: Member }) {
-  const rows: Array<[string, string, string]> = ([
-    ['Friends', 'friends', disp(member['friends']), true],
-    ['Calling', 'calling', disp(member['calling']), callingEligible(member)],
-    ['Has ministers', 'ministering_brothers_sisters', disp(member['ministering_brothers_sisters']), true],
-    ['Ministering assignment', 'ministering_assignment', disp(member['ministering_assignment']), ministeringAssignmentEligible(member)],
-    ['Aaronic Priesthood', 'aaronic_priesthood', disp(member['aaronic_priesthood']), aaronicEligible(member)],
-    ['Melchizedek Priesthood', 'melchizedek_priesthood', disp(member['melchizedek_priesthood']), melchizedekEligible(member)],
-    ['Temple recommend', 'temple_recommend', disp(member['temple_recommend']), templeRecommendEligible(member)],
-    ['Endowment', 'living_ordinance', disp(endowmentDisplay(member)), true],
-    ['Patriarchal blessing', 'patriarchal_blessing', disp(member['patriarchal_blessing']), patriarchalEligible(member)],
-  ] as Array<[string, string, string, boolean]>)
-    .filter(([, , , show]) => show)
-    .map(([label, key, value]) => [label, key, value]);
+/** Each tracked covenant-path status that lacks its own rich section, shown as its OWN section card
+ *  (like "Attended Sacrament Meeting"): Temple Recommend, Endowment, Patriarchal Blessing. Eligibility-
+ *  gated (endowment shows "N/A" for the not-yet-eligible). Works from flat fields, so it renders with
+ *  or without the rich `details` subtree. */
+function StatusSections({ member }: { member: Member }) {
   return (
-    <SectionCard title="Record" icon="badge">
-      <div>
-        {rows.map(([label, key, value]) => {
-          const fr = freshness(member, key);
-          const stale = fr.state === 'warn' || fr.state === 'error' || fr.state === 'never';
-          return (
-            <div key={key} className="row" style={{ justifyContent: 'space-between', padding: '7px 0', borderBottom: '1px solid var(--outline-variant)' }}>
-              <span className="muted">{label}</span>
-              <span className="row" style={{ gap: 6, alignItems: 'center' }}>
-                {stale && (
-                  <Icon
-                    name="schedule"
-                    size={13}
-                    color={fr.state === 'warn' ? '#f9a825' : '#e53935'}
-                    title={fr.state === 'never' ? 'Not fetched yet' : `Last fetched ${agoOrNever(fr.fetched)}`}
-                  />
-                )}
-                <strong>{value}</strong>
-              </span>
-            </div>
-          );
-        })}
-      </div>
+    <>
+      {templeRecommendEligible(member) && (
+        <StatusSection title="Temple Recommend" icon="premium" member={member} field="temple_recommend"
+          value={disp(member['temple_recommend'])} />
+      )}
+      <StatusSection title="Endowment" icon="premium" member={member} field="living_ordinance"
+        value={disp(endowmentDisplay(member))} />
+      {patriarchalEligible(member) && (
+        <StatusSection title="Patriarchal Blessing" icon="menu_book" member={member} field="patriarchal_blessing"
+          value={disp(member['patriarchal_blessing'])} />
+      )}
+    </>
+  );
+}
+
+function StatusSection({ title, icon, member, field, value }: {
+  title: string; icon: IconName; member: Member; field: string; value: string;
+}) {
+  const good = value === 'Active' || value === 'Yes';
+  const fr = freshness(member, field);
+  const stale = fr.state === 'warn' || fr.state === 'error' || fr.state === 'never';
+  return (
+    <SectionCard title={title} icon={icon}>
+      <span className="row" style={{ gap: 8, alignItems: 'center' }}>
+        <strong style={{ fontSize: '1.05rem', color: good ? '#2e7d32' : undefined }}>{value}</strong>
+        {stale && (
+          <Icon name="schedule" size={13} color={fr.state === 'warn' ? '#f9a825' : '#e53935'}
+            title={fr.state === 'never' ? 'Not fetched yet' : `Last fetched ${agoOrNever(fr.fetched)}`} />
+        )}
+      </span>
     </SectionCard>
   );
 }

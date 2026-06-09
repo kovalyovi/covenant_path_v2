@@ -131,6 +131,29 @@ export const priesthoodEligible = (m: Member): boolean => male(m) && turnsAtLeas
 export const templeRecommendEligible = (m: Member): boolean => turnsAtLeast(m, 12);
 export const patriarchalEligible = (m: Member): boolean => turnsAtLeast(m, 12);
 
+/** Needs-view categories: the 6 Golden Hour milestones PLUS the longer-horizon covenants we also track
+ *  (temple recommend, endowment, patriarchal blessing) — so leaders see everyone eligible-but-missing
+ *  each one. The core `milestones` set stays the integration-only completion basis; this is the
+ *  superset just for the Needs categories. */
+export const needsCategories: Milestone[] = [
+  ...milestones,
+  {
+    label: 'Temple Recommend', abbr: 'TR', icon: 'premium', color: '#5E35B1',
+    complete: (m) => m['temple_recommend'] === 'Active',
+    eligible: templeRecommendEligible,
+  },
+  {
+    label: 'Endowment', abbr: 'EN', icon: 'premium', color: '#00695C',
+    complete: (m) => m['living_ordinance'] === 'Yes',
+    eligible: endowmentEligible,
+  },
+  {
+    label: 'Patriarchal Blessing', abbr: 'PB', icon: 'menu_book', color: '#AD1457',
+    complete: (m) => m['patriarchal_blessing'] === 'Yes',
+    eligible: patriarchalEligible,
+  },
+];
+
 /** Display value for endowment (living_ordinance): N/A for INELIGIBLE members — they can't be endowed
  *  yet, so a raw "No" is misleading. Gates client-side so it's correct before the next sync re-scrapes
  *  (the report applies the same gate server-side). A real "Yes" is always kept. */
@@ -203,6 +226,12 @@ export function responsibleParty(m: Member): ResponsibleParty {
 export function ageOf(m: Member): string | null {
   const a = ageNow(m);
   return a == null || a < 0 ? null : `${a} yrs`;
+}
+
+/** Numeric age in years (for the table column's display + numeric sort), or null when unknown. */
+export function ageYears(m: Member): number | null {
+  const a = ageNow(m);
+  return a == null || a < 0 ? null : a;
 }
 
 /** Initials for an avatar fallback. Mirrors `initialsOf`. */

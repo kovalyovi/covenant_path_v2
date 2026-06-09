@@ -9,7 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import { useDashboard } from '../../hooks/useDashboard';
 import type { Member } from '../../lib/member';
 import { isInvestigator } from '../../lib/member';
-import { endowmentDisplay } from '../../logic/milestones';
+import { endowmentDisplay, ageYears } from '../../logic/milestones';
 import { Icon } from '../../components/Icon';
 import { Modal } from '../../components/Modal';
 import { Button } from '../../components/ui';
@@ -28,6 +28,7 @@ interface Col {
 const COLS: Col[] = [
   { header: 'Member', key: 'name', kind: 'text' },
   { header: 'Sex', key: 'sex', kind: 'gender' },
+  { header: 'Age', key: 'age', kind: 'text' },
   { header: 'Unit', key: 'unit_name', kind: 'text' },
   { header: 'Baptism', key: 'baptism_date', kind: 'text' },
   { header: 'Member for', key: 'membership_duration', kind: 'text' },
@@ -46,6 +47,10 @@ const COLS: Col[] = [
 function display(m: Member, key: string): string {
   // Endowment: N/A for ineligible members (not 18+ AND ~1yr) — gates the raw DB "No" client-side.
   if (key === 'living_ordinance') return endowmentDisplay(m);
+  if (key === 'age') {
+    const a = ageYears(m);
+    return a == null ? '' : String(a);
+  }
   if (key === 'friends') {
     const c = m['friends_count'];
     if (c != null && String(c).length > 0) return String(c);
@@ -117,7 +122,9 @@ function TableBody({ members }: { members: Member[] }) {
   if (sortCol != null) {
     const key = COLS[sortCol].key;
     rows = [...rows].sort((a, b) => {
-      const c = display(a, key).toLowerCase().localeCompare(display(b, key).toLowerCase());
+      const c = key === 'age'
+        ? (ageYears(a) ?? -1) - (ageYears(b) ?? -1) // age sorts numerically, not as a string
+        : display(a, key).toLowerCase().localeCompare(display(b, key).toLowerCase());
       return sortAsc ? c : -c;
     });
   }
