@@ -612,6 +612,15 @@ def admin_diagnostics(email: str = Depends(require_admin)) -> dict:
     return {"runs": admin.recent_diagnostics()}
 
 
+@app.get("/admin/endpoint-health")
+def admin_endpoint_health(days: int = 14, email: str = Depends(require_admin)) -> dict:
+    """Cross-run per-endpoint health TREND (calls/errors/latency + error-rate by hour-of-day) from
+    the telemetry every sync/probe already records — the passive read on whether our current request
+    pace is safe, with zero added load on LCR."""
+    days = max(1, min(days, 60))
+    return admin._cached(f"endpoint_health:{days}", 120, lambda: admin.endpoint_health(days))
+
+
 @app.get("/admin/enrolled-stakes")
 def admin_enrolled_stakes(email: str = Depends(require_admin)) -> dict:
     """Cross-stake ops: every stake with credential state, coverage, freshness, member count."""

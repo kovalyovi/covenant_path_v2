@@ -179,6 +179,9 @@ export function AdminPage() {
           <Panel key={`diag-${nonce}`} title="Diagnostics" load={() => admin.diagnostics()}>
             {(s) => <DiagnosticsCard diag={s} onCopy={(t) => navigator.clipboard.writeText(t)} toast={toast} />}
           </Panel>
+          <Panel key={`ephealth-${nonce}`} title="Endpoint health (trend)" load={() => admin.endpointHealth(14)}>
+            {(s) => <EndpointHealthCard data={s} />}
+          </Panel>
           <Panel key={`stakes-${nonce}`} title="Enrolled stakes" load={() => admin.enrolledStakes()}>
             {(s) => (
               <EnrolledStakesCard
@@ -635,6 +638,72 @@ function DiagnosticsCard({ diag, onCopy, toast }: { diag: Json; onCopy: (t: stri
               </span>
             </div>
           ))}
+        </>
+      )}
+    </Card>
+  );
+}
+
+function EndpointHealthCard({ data }: { data: Json }) {
+  const eps = (data['endpoints'] as Json[]) ?? [];
+  const byHour = (data['by_hour'] as Record<string, Json>) ?? {};
+  const runs = Number(data['runs'] ?? 0);
+  const days = Number(data['days'] ?? 14);
+  if (eps.length === 0) {
+    return <Card title="Endpoint health (trend)">No sync/probe telemetry in the last {days} days yet.</Card>;
+  }
+  const hours = Object.keys(byHour).sort((a, b) => Number(a) - Number(b));
+  const verdictColor = (v: string) =>
+    v === 'hot' ? statusColors.danger : v === 'watch' ? statusColors.warning : statusColors.success;
+  const hourColor = (pct: number) =>
+    pct >= 10 ? statusColors.danger : pct >= 2 ? statusColors.warning : statusColors.success;
+  return (
+    <Card title="Endpoint health (trend)" trailing={<span className="small muted">{runs} runs · {days}d</span>}>
+      <p className="small muted" style={{ marginTop: 0 }}>
+        Passive read from telemetry the sync/probe already record — zero added load on LCR. error% is at the
+        sync&apos;s current pace; for the safe ceiling, run the rate finder (tools/rate_finder.py).
+      </p>
+      {eps.map((ep, i) => {
+        const errPct = Number(ep['error_pct'] ?? 0);
+        const verdict = String(ep['verdict'] ?? 'healthy');
+        return (
+          <div key={i} className="row" style={{ padding: '3px 0', alignItems: 'center' }}>
+            <code style={{ flex: 1, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {String(ep['endpoint'])}
+            </code>
+            <span className="small" style={{ marginLeft: 8, color: errPct > 0 ? statusColors.danger : undefined }}>
+              {String(ep['calls'])} calls · {String(ep['avg_ms'])}ms avg{errPct > 0 ? ` · ${errPct}% err` : ''}
+            </span>
+            <span
+              className="chip"
+              style={{ marginLeft: 8, padding: '1px 8px', fontSize: 11, borderColor: verdictColor(verdict), color: verdictColor(verdict) }}
+            >
+              {verdict}
+            </span>
+          </div>
+        );
+      })}
+      {hours.length > 0 && (
+        <>
+          <p className="small" style={{ marginTop: 14, fontWeight: 600 }}>
+            Error rate by hour (UTC) — schedule the heavy sync at a quiet hour
+          </p>
+          <div className="wrap" style={{ gap: 6 }}>
+            {hours.map((h) => {
+              const b = byHour[h];
+              const pct = Number(b['error_pct'] ?? 0);
+              return (
+                <span
+                  key={h}
+                  className="chip"
+                  title={`${String(b['calls'])} calls`}
+                  style={{ padding: '1px 8px', fontSize: 11, borderColor: hourColor(pct) }}
+                >
+                  {h}h · {pct}%
+                </span>
+              );
+            })}
+          </div>
         </>
       )}
     </Card>

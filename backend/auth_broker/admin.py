@@ -190,6 +190,87 @@ def _jobs_last_7d() -> dict:
     return out
 
 
+def endpoint_health(days: int = 14) -> dict:
+    """Cross-run per-endpoint health TREND from the telemetry every sync/probe already records
+    (sync_diagnostics.payload.requests). Answers the passive half of "what request rate is safe?":
+    aggregates calls / errors / latency per endpoint over the window and buckets the error rate by
+    HOUR OF DAY (is LCR healthier at night? → schedule the heavy sync there). Zero added load on LCR
+    — it's pure read-back of what we've already observed during normal operation."""
+    from datetime import datetime, timedelta, timezone
+    since = (datetime.now(timezone.utc) - timedelta(days=max(1, days))).isoformat()
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/sync_diagnostics", headers=_sb_headers(),
+                         params={"select": "run_at,kind,payload",
+                                 "kind": "in.(sync,probe)", "run_at": f"gte.{since}",
+                                 "order": "run_at.desc", "limit": "2000"}, timeout=_TIMEOUT)
+    except requests.RequestException:
+        return {"days": days, "runs": 0, "endpoints": [], "by_hour": {}}
+    rows = r.json() if r.status_code == 200 else []
+
+    agg: dict[str, dict] = {}
+    hour_calls: dict[int, int] = {}
+    hour_err: dict[int, int] = {}
+    runs = 0
+    for row in rows:
+        reqs = ((row.get("payload") or {}).get("requests") or {})
+        eps = reqs.get("endpoints") or []
+        if not eps:
+            continue
+        runs += 1
+        hour = _hour_of(row.get("run_at"))
+        for ep in eps:
+            name = _norm_endpoint(str(ep.get("endpoint") or ""))
+            a = agg.setdefault(name, {"calls": 0, "errors": 0, "ms_sum": 0, "max_ms": 0, "runs": 0})
+            calls, errors = int(ep.get("calls") or 0), int(ep.get("errors") or 0)
+            a["calls"] += calls
+            a["errors"] += errors
+            a["ms_sum"] += int(ep.get("avg_ms") or 0) * calls  # weight avg by call volume
+            a["max_ms"] = max(a["max_ms"], int(ep.get("max_ms") or 0))
+            a["runs"] += 1
+            if hour is not None:
+                hour_calls[hour] = hour_calls.get(hour, 0) + calls
+                hour_err[hour] = hour_err.get(hour, 0) + errors
+
+    endpoints = []
+    for name, a in sorted(agg.items(), key=lambda kv: kv[1]["errors"], reverse=True):
+        err_pct = round(100 * a["errors"] / a["calls"], 1) if a["calls"] else 0.0
+        endpoints.append({
+            "endpoint": name, "calls": a["calls"], "errors": a["errors"], "error_pct": err_pct,
+            "avg_ms": round(a["ms_sum"] / a["calls"]) if a["calls"] else 0, "max_ms": a["max_ms"],
+            "runs_seen": a["runs"],
+            # verdict at the sync's CURRENT pace — the passive read on whether we're already too hot.
+            "verdict": ("healthy" if err_pct < 2 else "watch" if err_pct < 10 else "hot"),
+        })
+    by_hour = {str(h): {"calls": hour_calls[h], "errors": hour_err.get(h, 0),
+                        "error_pct": round(100 * hour_err.get(h, 0) / hour_calls[h], 1)}
+               for h in sorted(hour_calls) if hour_calls[h]}
+    return {"days": days, "runs": runs, "endpoints": endpoints, "by_hour": by_hour}
+
+
+def _hour_of(run_at: str | None) -> int | None:
+    if not run_at:
+        return None
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(run_at.replace("Z", "+00:00")).hour
+    except (ValueError, TypeError):
+        return None
+
+
+# Same route-pattern collapse the ops client uses (#13-15): defend against OLD rows captured before
+# the metrics normalizer, so per-endpoint trends group cleanly across the whole window.
+_ID_SEG = re.compile(r"^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,}|\d+)$", re.I)
+
+
+def _norm_endpoint(ep: str) -> str:
+    try:
+        from urllib.parse import urlparse
+        path = urlparse(ep).path or ep
+    except (ValueError, TypeError):
+        path = ep
+    return "/".join("{id}" if seg and _ID_SEG.match(seg) else seg for seg in path.split("/"))
+
+
 def _reauths_30d() -> dict:
     """stake_unit -> number of credential (re)authorizations in the last 30 days (login_audit
     outcome='enrolled'). Cadence visibility: how often each stake actually needs a fresh re-auth."""

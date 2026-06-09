@@ -160,6 +160,44 @@ def test_enrolled_stakes_object_embed() -> None:
             setattr(admin, k, v)
 
 
+def test_endpoint_health_trend() -> None:
+    """The passive cross-run endpoint trend: aggregate sync_diagnostics across runs into per-endpoint
+    calls/errors/error_pct + by-hour error rate, with route-pattern grouping and a verdict."""
+    saved_get = admin.requests.get
+    saved_cfg = (admin.SUPABASE_URL, admin.SERVICE_KEY)
+    try:
+        admin.SUPABASE_URL = admin.SUPABASE_URL or "https://test.supabase.co"
+        admin.SERVICE_KEY = admin.SERVICE_KEY or "test-key"
+        # Two runs, different hours; details/{id} ids differ per row → must group to one route.
+        rows = [
+            {"run_at": "2026-06-09T02:00:00+00:00", "kind": "sync", "payload": {"requests": {"endpoints": [
+                {"endpoint": "/api/report/one-work/details/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", "calls": 50, "errors": 0, "avg_ms": 800, "max_ms": 1200},
+                {"endpoint": "/api/report/one-work/progress-record", "calls": 10, "errors": 5, "avg_ms": 21000, "max_ms": 40000},
+            ]}}},
+            {"run_at": "2026-06-09T14:00:00+00:00", "kind": "probe", "payload": {"requests": {"endpoints": [
+                {"endpoint": "/api/report/one-work/details/f6e5d4c3b2a1098765432100aabbccdd", "calls": 50, "errors": 14, "avg_ms": 900, "max_ms": 1500},
+                {"endpoint": "/api/report/one-work/progress-record", "calls": 10, "errors": 1, "avg_ms": 9000, "max_ms": 22000},
+            ]}}},
+        ]
+        admin.requests.get = lambda *a, **k: _FakeResp(rows)
+        h = admin.endpoint_health(days=14)
+        eps = {e["endpoint"]: e for e in h["endpoints"]}
+        check("endpoint-health: runs counted", h["runs"] == 2)
+        check("endpoint-health: details/{id} grouped across differing ids",
+              "/api/report/one-work/details/{id}" in eps)
+        det = eps.get("/api/report/one-work/details/{id}", {})
+        check("endpoint-health: details calls summed (50+50)", det.get("calls") == 100)
+        check("endpoint-health: details error_pct = 14/100", det.get("error_pct") == 14.0)
+        check("endpoint-health: details verdict 'hot' (>=10%)", det.get("verdict") == "hot")
+        pr = eps.get("/api/report/one-work/progress-record", {})
+        check("endpoint-health: progress-record errors summed (5+1)", pr.get("errors") == 6)
+        check("endpoint-health: by-hour buckets present (02 worse than 14 for progress)",
+              "2" in h["by_hour"] and "14" in h["by_hour"])
+    finally:
+        admin.requests.get = saved_get
+        admin.SUPABASE_URL, admin.SERVICE_KEY = saved_cfg
+
+
 def test_mint_misconfig() -> None:
     saved = {k: os.environ.pop(k, None) for k in ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY")}
     try:
@@ -483,6 +521,7 @@ def main() -> int:
     test_cors()
     test_credential_embed_shape()
     test_enrolled_stakes_object_embed()
+    test_endpoint_health_trend()
     test_mint_misconfig()
     test_mint_empty_email()
     test_mfa_expiry()

@@ -357,6 +357,12 @@ export class BrokerClient {
     return this.authed('GET', '/report');
   }
 
+  /** Passive per-endpoint health TREND across recent sync/probe runs (calls/errors/latency + error
+   *  rate by hour-of-day) — the zero-added-load read on whether the current request pace is safe. */
+  endpointHealth(days = 14): Promise<Record<string, unknown>> {
+    return this.authed('GET', `/admin/endpoint-health?days=${days}`);
+  }
+
   emailReport(toEmail?: string): Promise<Record<string, unknown>> {
     return this.authed('POST', '/report/email', toEmail ? { to_email: toEmail } : {});
   }

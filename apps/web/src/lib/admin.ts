@@ -56,6 +56,7 @@ export class AdminClient {
   summary = () => this.get('/admin/summary');
   actions = (runs = 15, commits = 10) => this.get(`/admin/actions?runs=${runs}&commits=${commits}`);
   diagnostics = () => this.get('/admin/diagnostics');
+  endpointHealth = (days = 14) => this.get(`/admin/endpoint-health?days=${days}`);
   enrolledStakes = () => this.get('/admin/enrolled-stakes');
   revokeStake = (stakeId: string) => this.postReq(`/admin/stakes/${stakeId}/revoke`);
   syncStake = (stakeId: string) => this.postReq(`/admin/stakes/${stakeId}/sync`);
