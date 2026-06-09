@@ -124,13 +124,34 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool) -
     stored[, initial_sync]}."""
     if not (SUPABASE_URL and SERVICE_KEY):
         raise RuntimeError("supabase not configured (SUPABASE_URL / SERVICE_ROLE_KEY)")
+    import time as _time
     from lcr_client.access import covenant_path_access
     from backend import credentials, onboarding
     from backend.roles import _calling_always_allowed
 
+    t0 = _time.monotonic()
     client = _client_from_cookies(cookies)
     ctx = client.user_context()
+    logger.info("login eval: user_context %.1fs (unit=%s)", _time.monotonic() - t0, ctx.unit_number)
+
+    # FAST PATH (the ">1 minute to sign in" fix): the full covenant_path_access scrape below hits
+    # dozens of LCR endpoints and routinely took 30-60s+ on every Church login. It only EARNS that
+    # cost when its output is used: enrolling (store=True, need coverage/rank) or when the stake has
+    # no USABLE credential (need the authorized gate + the can_enroll/can_improve offers). A routine
+    # sign-in to an already-synced stake skips it: RLS is the real data gate (a no-role member just
+    # sees an empty app), and _revoke_if_ineligible re-verifies callings on every daily sync anyway.
+    active_fast = _stored_credential_summary(ctx.unit_number)
+    if not store and active_fast is not None:
+        logger.info("login eval: FAST path (usable credential on file) %.1fs total", _time.monotonic() - t0)
+        _audit_login(identity.get("email"), identity.get("name"), ctx, {}, True, None,
+                     "allowed", None)
+        return {"stake": ctx.unit_name, "unit_number": ctx.unit_number,
+                "authorized": True, "access_rank": None, "complete": None, "missing": [],
+                "can_improve": False, "can_enroll": False, "stored": False, "fast": True}
+
+    t1 = _time.monotonic()
     access = covenant_path_access(client)  # best-effort name enrichment is internally guarded
+    logger.info("login eval: access scrape %.1fs", _time.monotonic() - t1)
     coverage = onboarding.coverage_of(access)
     rank = onboarding.access_rank(access)
 
