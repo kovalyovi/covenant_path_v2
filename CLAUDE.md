@@ -1,10 +1,14 @@
 # Covenant Path Platform — Rules & Architecture (read first)
 
 This file is the source of truth for **how to make changes consistently** across the
-backend and all client views (web / iOS / macOS / Android). Read it before editing.
+backend and all client views (**React web + native iOS + native Android**). Read it before editing.
 Companion docs: `PROGRESS.md` (status), `docs/DECISIONS.md` (ADR log — the *why*),
 `docs/DELEGATED_ACCESS.md`, `docs/CUSTOM_API_KEYS.md`, `docs/DEPLOYMENT.md` (broker +
-viewer hosting), `backend/auth_broker/README.md`, `apps/viewer/ARCHITECTURE.md`.
+viewer hosting), `backend/auth_broker/README.md`, `apps/web/README.md`, `native/PARITY.md`.
+
+> **Flutter is DEPRECATED (2026-06-08).** The old one-codebase Flutter app moved to
+> `_deprecated/viewer` and is **frozen — do not update it**. The web app is now **React (`apps/web`)**
+> and the native apps are **Swift (`native/ios`) + Kotlin (`native/android`)**.
 
 ## The shape of the system
 
@@ -16,7 +20,7 @@ LCR (church data)
        sheets_sync/     Google Sheet mirror
        backend/         migrations, db, sync, roles, credentials, mailer
                                    │  reads (RLS-scoped by login)
-  Flutter app (apps/viewer) ──────┘   ONE codebase → web + iOS + macOS + Android
+  Clients ─────────────────────────┘   React web (apps/web) · native iOS (native/ios) · native Android (native/android)
 ```
 
 - **Clients never touch LCR.** They read **Supabase**, scoped by the signed-in user.
@@ -37,9 +41,11 @@ LCR (church data)
    rows. Any new client query is automatically scoped. Don't add app-side access checks.
 4. **Test before commit.** Backend: `python tools/test_suite.py` (+ `--live`),
    `python -m backend.test_rls`, `python -m backend.test_power_users`,
-   `python -m backend.test_admins`, `python -m backend.test_broker` (CORS + broker +
-   admin API units). Flutter: `D:/dev/flutter/bin/flutter analyze` (must be "No issues
-   found"); `flutter test`; `flutter build web`.
+   `python -m backend.test_admins`, `python -m backend.test_broker`,
+   `python -m backend.test_login_audit`, `python -m backend.test_reconcile`,
+   `python -m backend.test_calling_overrides`. **Web (React, `apps/web`):** `npm run typecheck`
+   (clean) · `npm run test` · `npm run build`. **Native:** verified in CI
+   (`build-native-ios.yml` / `build-native-android.yml`) — the agent can't build native locally.
 5. **Migrations are additive + numbered** (`backend/migrations/000N_*.sql`), idempotent
    (`if not exists` / `drop policy ... ; create`). Apply with `python -m backend.apply`.
 6. **`cd /d <path>` is a cmd.exe idiom that SILENTLY FAILS in the bash tool** — use plain
@@ -66,19 +72,25 @@ LCR (church data)
 > `apps/viewer/lib/dashboard_page.dart` (`_columns`), and — if it's an integration
 > milestone — `golden_hour.dart` + `mailer._DIGEST_MILESTONES`.
 
-## Making a change uniformly across views
+## Making a change uniformly across views (THREE surfaces — keep in lockstep)
 
-The viewer is **one Flutter codebase** → editing `lib/` changes web + iOS + macOS +
-Android at once. To keep that true:
-- Put reusable UI in **shared widgets**: `golden_hour.dart` (`GoldenHourChips`,
-  `InitialsAvatar`, `milestones`, and the Golden-Hour org buckets `OrgBucket` / `orgInfo` /
-  `responsibleOrg`) and `widgets/shimmer.dart` (content-shaped loading skeletons —
-  `Shimmer`, `SkeletonBox`/`SkeletonLine`, `MemberListSkeleton`, `SyncSettingsSkeleton`,
-  `CardSkeleton` — use these instead of a bare spinner for content areas). New views compose
-  these — don't re-implement chips/rows/skeletons.
-- Don't write platform-specific code in `lib/` unless guarded; the app must stay
-  CORS-free (reads Supabase only) so the web build keeps working.
-- After any `lib/` change: `flutter analyze` then `flutter build web` (both must pass).
+There are **three maintained client codebases** that must be updated **together** for any
+user-facing feature or bug-fix (when applicable to that platform). Flutter (`_deprecated/viewer`)
+is **frozen — never update it**.
+
+| Surface | Where | Verify before commit |
+|---|---|---|
+| **Web** | React — `apps/web` (live on Cloudflare) | `npm run typecheck` · `npm run test` · `npm run build` |
+| **iOS** | native Swift — `native/ios` | `build-native-ios.yml` (CI) |
+| **Android** | native Kotlin — `native/android` | `build-native-android.yml` (CI) |
+
+- Shared logic lives **in parallel** in each: React `apps/web/src/logic/` (`milestones.ts`,
+  `kpis.ts`), Swift `native/ios/Sources/CovenantPathKit/Logic/`, Kotlin
+  `native/android/.../logic/` — all with mirrored unit tests. Change a metric/milestone → update
+  all three.
+- Clients stay **CORS-free** (read Supabase only); RLS is the access gate.
+- The agent can build/verify **web** locally but **not native** — make the matching native edits and
+  **flag them for CI/AVD verification** (see `native/PARITY.md`).
 
 ## Auth & identity (how a login becomes a scope)
 
