@@ -125,6 +125,11 @@
 .page__inner--wide {
   max-width: none;
 }
+/* …but CENTER the table when it's narrower than the window (vs left-aligned). When it's wider, the
+   wrap's overflow-x scroll takes over and the auto margins collapse. */
+.page__inner--wide .data-table {
+  margin-inline: auto;
+}
 .maxw {
   max-width: 1000px;
   margin: 0 auto;
