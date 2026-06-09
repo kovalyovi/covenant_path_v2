@@ -190,6 +190,25 @@ def _jobs_last_7d() -> dict:
     return out
 
 
+def _reauths_30d() -> dict:
+    """stake_unit -> number of credential (re)authorizations in the last 30 days (login_audit
+    outcome='enrolled'). Cadence visibility: how often each stake actually needs a fresh re-auth."""
+    from datetime import datetime, timedelta, timezone
+    since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/login_audit", headers=_sb_headers(),
+                         params={"select": "stake_unit", "outcome": "eq.enrolled",
+                                 "at": f"gte.{since}", "limit": "5000"}, timeout=_TIMEOUT)
+    except requests.RequestException:
+        return {}
+    out: dict[int, int] = {}
+    for row in (r.json() if r.status_code == 200 else []):
+        su = row.get("stake_unit")
+        if su is not None:
+            out[su] = out.get(su, 0) + 1
+    return out
+
+
 def _member_counts() -> dict:
     """stake_id -> member count in ONE query. Replaces the per-stake count loop in enrolled_stakes()
     that made it N+1 round-trips (a slow/hung count there dropped the whole ops request → the admin's
@@ -450,13 +469,14 @@ def _enrolled_stakes() -> list[dict]:
         headers=_sb_headers(),
         params={"select": "id,name,unit_number,last_synced_at,sync_state,onboarded_at,"
                           "stake_credentials(principal_name,principal_email,revoked,coverage,access_rank,"
-                          "updated_at,last_failed_at,last_error,last_succeeded_at)",
+                          "updated_at,last_failed_at,last_error,last_succeeded_at,has_refresh_token)",
                 "order": "name.asc"},
         timeout=_TIMEOUT)
     if r.status_code != 200:
         raise AdminError(f"could not list stakes ({r.status_code}): {r.text[:160]}")
     jobs = _jobs_last_7d()      # stake_id -> sync runs in the last 7 days (#9)
     counts = _member_counts()  # stake_id -> member count in ONE query (was N+1 → could hang the request)
+    reauths = _reauths_30d()   # stake_unit -> re-authorizations in 30d (cadence visibility)
     out = []
     for s in r.json():
         creds = s.get("stake_credentials") or []
@@ -484,6 +504,9 @@ def _enrolled_stakes() -> list[dict]:
                 "last_failed_at": cred.get("last_failed_at"),
                 "last_error": cred.get("last_error"),
                 "last_succeeded_at": cred.get("last_succeeded_at"),
+                # cadence: self-renewing (refresh token captured) + re-auths in the last 30 days
+                "self_renewing": cred.get("has_refresh_token"),
+                "reauths_30d": reauths.get(s.get("unit_number"), 0),
             },
         })
     return out

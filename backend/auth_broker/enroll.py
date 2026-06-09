@@ -224,6 +224,10 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool) -
             "p_coverage": coverage,
             "p_access_rank": rank,
             "p_expires_at": None,
+            # cadence visibility: a credential WITH a refresh token self-renews (re-auth rare);
+            # without one it dies with its Okta session (~days). The blob is encrypted, so record
+            # the boolean at enroll time.
+            "p_has_refresh_token": bool(identity.get("refresh_token")),
         },
         timeout=60)
     if r.status_code >= 300:

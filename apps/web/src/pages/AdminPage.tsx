@@ -749,6 +749,19 @@ function EnrolledStakesCard({
               </span>
               {cred?.['principal_name'] != null && <span className="small muted">· by {String(cred['principal_name'])}</span>}
             </div>
+            {cred && (
+              /* Authorization cadence: when it was last authorized, whether it can self-renew
+                 (refresh token captured at enroll), and how often re-auth has actually happened. */
+              <div className="tiny muted" style={{ marginTop: 2 }}>
+                authorized {agoOrNever(cred['updated_at'])}
+                {cred['self_renewing'] === true
+                  ? ' · self-renewing'
+                  : cred['self_renewing'] === false
+                    ? ' · manual re-auth needed when session expires'
+                    : ''}
+                {' · '}{Number(cred['reauths_30d'] ?? 0)} re-auth{Number(cred['reauths_30d'] ?? 0) === 1 ? '' : 's'}/30d
+              </div>
+            )}
             {credState === 'stale' && (
               <p className="tiny" style={{ marginTop: 2, color: '#e53935' }}>
                 Last sync failed{lastError ? `: ${lastError.slice(0, 120)}` : ''} — a leader must re-authorize (or take over).
