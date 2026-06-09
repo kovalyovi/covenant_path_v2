@@ -113,8 +113,142 @@ def test_mfa_factor_parsing() -> None:
             {"name": "id", "value": "em1"}, {"name": "methodType", "value": "email"}]}}},
     ]}]}
     factors = okta_flow._factors(rem)
+    # Public projection (what the client receives) drops the password and keeps the email.
     check("MFA factor parse drops password + keeps email",
-          factors == [{"id": "em1", "label": "Email", "method": "email"}])
+          okta_flow._public_factors(factors) == [{"id": "em1", "label": "Email", "method": "email"}])
+    # The internal entry also carries the full authenticator object for the select POST.
+    check("MFA factor carries full _auth object",
+          factors[0]["_auth"] == {"id": "em1", "methodType": "email"})
+
+
+def test_mfa_factor_full_authenticator_object() -> None:
+    # A PHONE factor lists id + methodType + enrollmentId, and methodType may be a nested choice
+    # (sms vs voice). The full authenticator object must include enrollmentId (or Okta never sends the
+    # SMS) and resolve the nested choice to the first option. This is the Mission-KPIs parity fix.
+    rem = {"value": [{"name": "authenticator", "options": [
+        {"label": "Phone", "value": {"form": {"value": [
+            {"name": "id", "value": "ph1"},
+            {"name": "enrollmentId", "value": "enr9"},
+            {"name": "methodType", "options": [
+                {"label": "SMS", "value": "sms"}, {"label": "Voice", "value": "voice"}]},
+        ]}}},
+    ]}]}
+    factors = okta_flow._factors(rem)
+    check("phone factor authenticator object includes id+enrollmentId+methodType",
+          factors[0]["_auth"] == {"id": "ph1", "enrollmentId": "enr9", "methodType": "sms"})
+    check("phone factor public method comes from resolved nested choice",
+          okta_flow._public_factors(factors) == [{"id": "ph1", "label": "Phone", "method": "sms"}])
+
+
+def test_mfa_factor_types_from_authenticators() -> None:
+    # When the IDX payload carries authenticators.value[] (id -> key), _factors uses the TYPE to drop
+    # the password (even if the label is localized/odd) and tags each factor with its Okta key.
+    payload = {
+        "authenticators": {"value": [
+            {"id": "pwd", "key": "okta_password"},
+            {"id": "otp1", "key": "google_otp"},
+        ]},
+        "remediation": {"value": [{"name": "select-authenticator-authenticate", "value": [
+            {"name": "authenticator", "options": [
+                {"label": "Contraseña", "value": {"form": {"value": [{"name": "id", "value": "pwd"}]}}},
+                {"label": "Google Authenticator",
+                 "value": {"form": {"value": [{"name": "id", "value": "otp1"},
+                                              {"name": "methodType", "value": "otp"}]}}},
+            ]},
+        ]}]},
+    }
+    types = okta_flow._authenticator_types(payload)
+    sel = okta_flow._remediations(payload)["select-authenticator-authenticate"]
+    factors = okta_flow._factors(sel, types)
+    check("factor types map id->key", types == {"pwd": "okta_password", "otp1": "google_otp"})
+    check("type-based password drop keeps only the TOTP factor",
+          [f["type"] for f in factors] == ["google_otp"])
+
+
+def test_select_factor_sends_full_object() -> None:
+    # select_factor must POST the stored full authenticator object (id+methodType+enrollmentId), not
+    # just {id}. We stub _follow to capture the body and assert the enrollmentId/methodType are sent.
+    lid = "test-full-select"
+    captured: dict = {}
+
+    def fake_follow(_session, _rem, body, **_kw):
+        captured.update(body)
+        # Return a state with a challenge so select_factor treats it as a successful send.
+        return {"stateHandle": "sh2", "remediation": {"value": [
+            {"name": "challenge-authenticator", "href": "https://x/idx/challenge", "value": []}]}}
+
+    factor = {"id": "ph1", "label": "Phone", "method": "sms", "type": "phone_number",
+              "_auth": {"id": "ph1", "enrollmentId": "enr9", "methodType": "sms"}}
+    okta_flow._PENDING[lid] = {
+        "session": None, "verifier": "", "factors": [factor],
+        "payload": {"stateHandle": "sh", "remediation": {"value": [
+            {"name": "select-authenticator-authenticate", "href": "https://x/idx/challenge",
+             "value": []}]}},
+        "ts": time.time(),
+    }
+    saved = okta_flow._follow
+    okta_flow._follow = fake_follow
+    try:
+        res = okta_flow.select_factor(lid, "ph1")
+        check("select_factor returns code_sent", res.get("status") == "code_sent")
+        check("select_factor POSTs full authenticator object (enrollmentId+methodType)",
+              captured.get("authenticator") == {"id": "ph1", "enrollmentId": "enr9", "methodType": "sms"})
+    finally:
+        okta_flow._follow = saved
+        okta_flow._PENDING.pop(lid, None)
+
+
+def test_select_factor_no_challenge_raises() -> None:
+    # If Okta returns neither a challenge nor success after select (e.g. an unsupported/failed factor),
+    # select_factor surfaces the IDX message instead of silently proceeding to a dead code screen.
+    lid = "test-no-challenge"
+
+    def fake_follow(_session, _rem, _body, **_kw):
+        return {"stateHandle": "sh2", "remediation": {"value": []},
+                "messages": {"value": [{"message": "We can't verify with that method."}]}}
+
+    factor = {"id": "wk1", "label": "Security Key", "method": None, "type": "webauthn",
+              "_auth": {"id": "wk1"}}
+    okta_flow._PENDING[lid] = {
+        "session": None, "verifier": "", "factors": [factor],
+        "payload": {"stateHandle": "sh", "remediation": {"value": [
+            {"name": "select-authenticator-authenticate", "href": "https://x/idx/challenge",
+             "value": []}]}},
+        "ts": time.time(),
+    }
+    saved = okta_flow._follow
+    okta_flow._follow = fake_follow
+    try:
+        okta_flow.select_factor(lid, "wk1")
+        check("select_factor with no challenge -> AuthError", False)
+    except okta_flow.AuthError as e:
+        check("select_factor with no challenge -> AuthError", "verify with that method" in str(e))
+    finally:
+        okta_flow._follow = saved
+        okta_flow._PENDING.pop(lid, None)
+
+
+def test_idx_summary_pii_safe() -> None:
+    # _idx_summary must describe SHAPE only — never names/emails/phones/codes/tokens from the payload.
+    payload = {
+        "stateHandle": "02.id.secrethandle",
+        "user": {"value": {"identifier": "member@example.com", "profile": {"firstName": "Jane"}}},
+        "authenticators": {"value": [{"id": "ph1", "key": "phone_number"},
+                                     {"id": "em1", "key": "okta_email"}]},
+        "remediation": {"value": [{"name": "select-authenticator-authenticate"},
+                                  {"name": "challenge-authenticator"}]},
+        "messages": {"value": [{"message": "Enter the code sent to (•••) •••-1234"}]},
+    }
+    s = okta_flow._idx_summary(payload)
+    blob = repr(s)
+    check("idx_summary lists remediation names",
+          s["remediations"] == ["challenge-authenticator", "select-authenticator-authenticate"])
+    check("idx_summary lists factor types", sorted(s["factor_types"]) == ["okta_email", "phone_number"])
+    check("idx_summary flags messages present", s["has_messages"] is True)
+    check("idx_summary leaks no email", "member@example.com" not in blob and "example.com" not in blob)
+    check("idx_summary leaks no name", "Jane" not in blob)
+    check("idx_summary leaks no stateHandle", "secrethandle" not in blob)
+    check("idx_summary leaks no message text", "1234" not in blob)
 
 
 def test_mfa_single_factor_select_noop() -> None:
@@ -190,6 +324,11 @@ def main() -> int:
     test_mint_empty_email()
     test_mfa_expiry()
     test_mfa_factor_parsing()
+    test_mfa_factor_full_authenticator_object()
+    test_mfa_factor_types_from_authenticators()
+    test_select_factor_sends_full_object()
+    test_select_factor_no_challenge_raises()
+    test_idx_summary_pii_safe()
     test_mfa_single_factor_select_noop()
     test_admin_requires_auth()
     test_admin_actions_graceful_without_github()

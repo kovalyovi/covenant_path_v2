@@ -54,9 +54,25 @@ Env required:
 
 Point the Flutter app at it with `--dart-define=BROKER_URL=https://broker.membercovenantpath.org`.
 
+## MFA factor handling (okta_flow)
+- `start_login` enumerates every selectable 2nd factor from the IDX `select-authenticator-authenticate`
+  remediation and tags each with its Okta **type/key** (`okta_email`, `google_otp`, `phone_number`,
+  `okta_verify`, `webauthn`, …) from `authenticators.value[]`. The client still receives the simple
+  `{id,label,method}` shape; the full authenticator form object stays server-side.
+- **`select_factor` POSTs the *complete* authenticator object** (`id` + `methodType` + `enrollmentId`
+  + resolved nested choices), not just `{id}`. A **phone (SMS/voice)** factor needs `enrollmentId`/
+  `methodType` or Okta accepts the `/challenge` call but **never sends the code** — which strands the
+  member on the verification screen with nothing arriving. (Parity with the validated Mission-KPIs
+  flow — `prototype/phase1_okta_probe.py::option_authenticator_object`.)
+- If a selected factor yields neither a challenge nor success (unsupported factor, failed send),
+  `select_factor` surfaces the IDX message instead of silently advancing to a dead code screen.
+
 ## Security / logging
 - Password transits the broker over HTTPS and is **never stored or logged** (IDX answer is
   `redact=True`). MFA codes + session OTPs are likewise never logged.
-- Every request logs a short id + each IDX step for troubleshooting; failures `dump_debug`
-  a redacted record under `tools/output/debug/`.
+- Every request logs a short id + each IDX step. Each step also logs a **PII-safe shape summary**
+  (`_idx_summary`: remediation names, top-level keys, success flag, factor **types**, whether Okta
+  attached messages) — never codes, passwords, tokens, names, emails, phone numbers, or the raw
+  payload. So the offered factors, the selected factor, and what Okta returned at every IDX step are
+  all reconstructable from logs. Failures `dump_debug` a redacted record under `tools/output/debug/`.
 - The headless `lcr_client.okta_login.login()` used by the daily sync is untouched.
