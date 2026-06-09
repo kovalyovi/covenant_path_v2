@@ -30,9 +30,15 @@ STATE = Path(__file__).resolve().parent.parent / "tools" / "output" / "storage_s
 # target -> predicate over a flight response's parsed rows
 DETECTORS = {
     "record": lambda objs: bool(_find(objs, "uuid", "ordinances")),
-    "recommend": lambda objs: bool(_find(objs, "hasNewRecommendInProcess")),
-    "ministering": lambda objs: bool(_find(objs, "ministeringBrothersAssignments")
-                                     or _find(objs, "ministeringSistersAssignments")),
+    "recommend": lambda objs: bool(_find(objs, "hasNewRecommendInProcess")
+                                   or _find(objs, "recommend", "status")),
+    # The ministering action's response shape changed — it now returns inbound `ministeringBrothers`
+    # (not only `*Assignments`). Match either, but exclude the record response (which also carries
+    # ministering) so the record action isn't misclassified.
+    "ministering": lambda objs: bool(
+        (_find(objs, "ministeringBrothersAssignments") or _find(objs, "ministeringSistersAssignments")
+         or _find(objs, "ministeringBrothers") or _find(objs, "ministeringSisters"))
+        and not _find(objs, "uuid", "ordinances")),
 }
 
 
@@ -73,6 +79,16 @@ def discover(uuid: str) -> dict:
                   wait_until="domcontentloaded", timeout=60000)
         try:
             page.wait_for_load_state("networkidle", timeout=25000)
+        except Exception:
+            pass
+        # The recommend / ministering panels POST their action only when their section RENDERS — a
+        # passive load misses them (the reason discovery kept failing on those two). Scroll through to
+        # lazy-render every section, settling between, so their POSTs fire and get captured.
+        try:
+            for _ in range(8):
+                page.mouse.wheel(0, 1400)
+                page.wait_for_timeout(700)
+            page.wait_for_load_state("networkidle", timeout=10000)
         except Exception:
             pass
         page.wait_for_timeout(2500)
