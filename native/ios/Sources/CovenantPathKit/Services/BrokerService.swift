@@ -43,13 +43,17 @@ public struct BrokerResult: Sendable {
     public let canEnroll: Bool
     public let stake: String?
     public let missing: [String]
+    /// True when an enroll=true login actually stored/refreshed the sync credential (drives the
+    /// re-auth success toast, mirrors web `BrokerResult.stored`).
+    public let stored: Bool
     public init(email: String? = nil, otp: String? = nil, loginID: String? = nil,
                 factors: [BrokerFactor] = [], name: String? = nil, authorized: Bool? = nil,
                 canImprove: Bool = false, canEnroll: Bool = false, stake: String? = nil,
-                missing: [String] = []) {
+                missing: [String] = [], stored: Bool = false) {
         self.email = email; self.otp = otp; self.loginID = loginID
         self.factors = factors; self.name = name; self.authorized = authorized
         self.canImprove = canImprove; self.canEnroll = canEnroll; self.stake = stake; self.missing = missing
+        self.stored = stored
     }
     public var mfaRequired: Bool { loginID != nil && otp == nil }
 }
@@ -225,7 +229,8 @@ public final class BrokerService: @unchecked Sendable {
                             canImprove: (enroll?["can_improve"] as? Bool) ?? false,
                             canEnroll: (enroll?["can_enroll"] as? Bool) ?? false,
                             stake: enroll?["stake"] as? String,
-                            missing: (enroll?["missing"] as? [Any])?.compactMap { $0 as? String } ?? [])
+                            missing: (enroll?["missing"] as? [Any])?.compactMap { $0 as? String } ?? [],
+                            stored: (enroll?["stored"] as? Bool) == true)
     }
 
     // MARK: - Church account login (port of password/selectFactor/verifyMfa)

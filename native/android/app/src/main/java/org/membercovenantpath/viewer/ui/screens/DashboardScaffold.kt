@@ -58,6 +58,7 @@ import org.membercovenantpath.viewer.ui.components.FreshnessChip
 import org.membercovenantpath.viewer.ui.components.GoldenHourSkeleton
 import org.membercovenantpath.viewer.ui.components.KpiSkeleton
 import org.membercovenantpath.viewer.ui.components.MemberListSkeleton
+import org.membercovenantpath.viewer.ui.components.ReauthDialog
 import org.membercovenantpath.viewer.ui.components.StaleCredentialBanner
 import org.membercovenantpath.viewer.ui.components.SyncingBanner
 import org.membercovenantpath.viewer.ui.screens.tabs.BaptismsScreen
@@ -120,6 +121,13 @@ fun DashboardScaffold(
     var report by remember { mutableStateOf<JsonObject?>(null) }
     var reportBuilding by remember { mutableStateOf(false) }
     var revokeConfirm by remember { mutableStateOf(false) }
+    var showReauth by remember { mutableStateOf(false) }
+
+    // In-app re-auth modal (port of web `openReauth`) — never bounce a signed-in user back to the
+    // login screen. Falls back to sign-out only when the broker isn't configured.
+    fun openReauth() {
+        if (AppConfig.brokerAvailable) showReauth = true else onSignOut()
+    }
 
     fun openSync() {
         if (!AppConfig.brokerAvailable) { toast("Sync settings require Church account login."); return }
@@ -200,7 +208,7 @@ fun DashboardScaffold(
                     state = state.enrollStatus?.credential?.state ?: "revoked",
                     isProvider = state.enrollStatus?.credential?.isProvider == true,
                     lastError = state.enrollStatus?.credential?.lastError,
-                    onReenroll = onSignOut,
+                    onReenroll = { openReauth() },
                 )
             }
 
@@ -218,7 +226,7 @@ fun DashboardScaffold(
                     LoadState.Ready -> {
                         val members = state.members
                         if (members.isEmpty() && tab != DashboardTab.Kpis) {
-                            EnrollmentEmptyState(state.enrollStatus, brokerAvailable = AppConfig.brokerAvailable, onSignOut = onSignOut)
+                            EnrollmentEmptyState(state.enrollStatus, brokerAvailable = AppConfig.brokerAvailable, onAuthorize = { openReauth() })
                         } else {
                             when (tab) {
                                 DashboardTab.Baptisms -> BaptismsScreen(members, state.missionariesByUnit, onOpenMember)
@@ -259,6 +267,16 @@ fun DashboardScaffold(
     }
     report?.let { rep ->
         ReportSheet(report = rep, onEmail = { actionsVm.emailReport { _, msg -> toast(msg) } }, onDismiss = { report = null })
+    }
+    if (showReauth) {
+        ReauthDialog(
+            onDismiss = { showReauth = false },
+            onSuccess = { msg ->
+                showReauth = false
+                toast(msg)
+                dashVm.reloadEnrollStatus()
+            },
+        )
     }
 }
 

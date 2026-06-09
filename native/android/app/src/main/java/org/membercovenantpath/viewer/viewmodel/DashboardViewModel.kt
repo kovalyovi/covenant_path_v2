@@ -87,7 +87,7 @@ class DashboardViewModel(
                 _state.update { it.copy(members = members, load = LoadState.Ready) }
                 // #11: prefetch enrollment status in the background (own coroutine) so opening Sync
                 // settings is instant; it's also needed for the empty state.
-                loadEnrollStatus()
+                reloadEnrollStatus()
             }.onFailure { e ->
                 _state.update { it.copy(load = LoadState.Error(e.message ?: "Could not load data.")) }
             }
@@ -143,7 +143,9 @@ class DashboardViewModel(
         super.onCleared()
     }
 
-    private fun loadEnrollStatus() {
+    /** (Re-)fetch enrollment status — also called after an in-app re-authorization so the
+     *  stale/revoked banner + empty state clear without a sign-out (mirrors web `reloadEnrollStatus`). */
+    fun reloadEnrollStatus() {
         if (!broker.available) return
         viewModelScope.launch {
             runCatching { broker.enrollmentStatus() }

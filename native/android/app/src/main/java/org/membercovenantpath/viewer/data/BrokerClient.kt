@@ -35,6 +35,9 @@ data class BrokerResult(
     // #8: the stake has NO usable credential yet and this authorized leader could set one up.
     val canEnroll: Boolean = false,
     val stake: String? = null,
+    // True when an enroll=true login actually stored/refreshed the sync credential (drives the
+    // re-auth success toast, mirrors web BrokerResult.stored).
+    val stored: Boolean = false,
 ) {
     val mfaRequired: Boolean get() = loginId != null && otp == null
 }
@@ -168,6 +171,7 @@ class BrokerClient(private val auth: AuthRepository = AuthRepository()) {
             canImprove = data.obj("enroll")?.boolOrNull("can_improve") == true,
             canEnroll = data.obj("enroll")?.boolOrNull("can_enroll") == true,
             stake = data.obj("enroll")?.str("stake"),
+            stored = data.obj("enroll")?.boolOrNull("stored") == true,
         )
     }
 

@@ -62,6 +62,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.serialization.json.JsonObject
 import org.membercovenantpath.viewer.data.arr
 import org.membercovenantpath.viewer.data.bool
+import org.membercovenantpath.viewer.data.boolOrNull
 import org.membercovenantpath.viewer.data.int
 import org.membercovenantpath.viewer.data.obj
 import org.membercovenantpath.viewer.data.str
@@ -443,6 +444,24 @@ private fun EnrolledStakesCard(
                         color = if (jobs7d == 0) Color(0xFFEF6C00) else MaterialTheme.colorScheme.onSurfaceVariant)
                     cred?.str("principal_name")?.let { Text("· by $it", style = MaterialTheme.typography.bodySmall) }
                 }
+                if (cred != null) {
+                    // Authorization cadence (mirrors web): when it was last authorized, whether it can
+                    // self-renew (refresh token captured at enroll), and how often re-auth actually happened.
+                    val selfRenewing = cred.boolOrNull("self_renewing")
+                    val reauths = cred.int("reauths_30d")
+                    Text(
+                        "authorized ${agoOrNever(cred.str("updated_at"))}" +
+                            when (selfRenewing) {
+                                true -> " · self-renewing"
+                                false -> " · manual re-auth needed when session expires"
+                                null -> ""
+                            } +
+                            " · $reauths re-auth${if (reauths == 1) "" else "s"}/30d",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
                 if (credState == "stale") {
                     Text(
                         "Last sync failed${if (lastError.isEmpty()) "" else ": ${lastError.take(120)}"} — a leader must re-authorize (or take over).",
@@ -460,6 +479,10 @@ private fun EnrolledStakesCard(
             onConfirm = c.action, onDismiss = { confirm = null })
     }
 }
+
+/** Admin-style "ago" with "never" for a missing timestamp (mirrors web `agoOrNever`). */
+private fun agoOrNever(iso: String?): String =
+    if (iso.isNullOrEmpty()) "never" else Freshness.ago(iso)
 
 private fun credBadge(cred: JsonObject?): Pair<String, Color> = when {
     cred == null -> "No credential" to Color(0xFF9E9E9E)

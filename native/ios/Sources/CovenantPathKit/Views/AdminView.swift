@@ -324,6 +324,12 @@ struct AdminView: View {
                     Text("· by \(p)").font(.caption).foregroundStyle(.secondary)
                 }
             }
+            if let cred {
+                // Authorization cadence (mirrors web): when it was last authorized, whether it can
+                // self-renew (refresh token captured at enroll), and how often re-auth actually happened.
+                Text(cadenceLine(cred))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if credState == "stale" {
                 Text("Last sync failed\(lastError.isEmpty ? "" : ": \(lastError.prefix(120))") — a leader must re-authorize (or take over).")
                     .font(.caption).foregroundStyle(AppColors.danger)
@@ -333,6 +339,25 @@ struct AdminView: View {
                     .font(.caption).foregroundStyle(.orange)
             }
         }
+    }
+
+    /// Admin-style "ago" with "never" for a missing timestamp (mirrors web `agoOrNever`).
+    private func agoOrNever(_ iso: Any?) -> String {
+        guard let s = iso as? String, !s.isEmpty else { return "never" }
+        return Freshness.ago(s)
+    }
+
+    /// "authorized <ago> · self-renewing | manual re-auth needed when session expires · N re-auths/30d"
+    /// from enrolled-stakes `self_renewing` + `reauths_30d` (mirrors the web cadence line).
+    private func cadenceLine(_ cred: [String: Any]) -> String {
+        let selfRenewing = cred["self_renewing"] as? Bool
+        let reauths = (cred["reauths_30d"] as? NSNumber)?.intValue ?? 0
+        var line = "authorized \(agoOrNever(cred["updated_at"]))"
+        if let selfRenewing {
+            line += selfRenewing ? " · self-renewing" : " · manual re-auth needed when session expires"
+        }
+        line += " · \(reauths) re-auth\(reauths == 1 ? "" : "s")/30d"
+        return line
     }
 
     private func credTag(_ cred: [String: Any]?) -> (String, Color) {

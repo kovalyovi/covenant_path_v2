@@ -22,7 +22,7 @@ struct DashboardView: View {
     }
 
     enum ActiveSheet: Identifiable {
-        case syncSettings, report, invite, admin, settings
+        case syncSettings, report, invite, admin, settings, reauth
         var id: Int { hashValue }
     }
 
@@ -56,7 +56,7 @@ struct DashboardView: View {
                     StaleBanner(state: store.enrollStatus?.credential.state ?? "revoked",
                                 isProvider: store.enrollStatus?.credential.isProvider == true,
                                 lastError: store.enrollStatus?.credential.lastError) {
-                        Task { await session.signOut() }
+                        openReauth()
                     }
                 }
                 pageBody(t)
@@ -101,7 +101,7 @@ struct DashboardView: View {
         case .loaded:
             if store.members.isEmpty && t != .kpis {
                 EmptyStateView(enrollStatus: store.enrollStatus, brokerAvailable: store.brokerAvailable) {
-                    Task { await session.signOut() }
+                    openReauth()
                 }
             } else {
                 loadedPage(t)
@@ -212,10 +212,22 @@ struct DashboardView: View {
         case .settings:
             SettingsView(onSignOut: { Task { await session.signOut() } },
                          stakeID: store.currentStake?.id, sheetsEnabled: store.currentStake?.sheetsEnabled ?? false)
+        case .reauth:
+            ReauthSheet(store: store, onToast: showToast)
         }
     }
 
     // MARK: - actions
+
+    /// In-app re-auth modal (port of web `openReauth`) — never bounce a signed-in user back to the
+    /// login screen. Falls back to sign-out only when the broker isn't configured.
+    private func openReauth() {
+        if store.brokerAvailable {
+            sheet = .reauth
+        } else {
+            Task { await session.signOut() }
+        }
+    }
 
     private func triggerSyncNow() {
         Task {
@@ -325,11 +337,12 @@ struct StaleBanner: View {
     }
 }
 
-/// Enrollment-aware empty state (port of `_EmptyState`).
+/// Enrollment-aware empty state (port of web `EmptyState`). Every authorize/re-authorize action
+/// opens the in-app re-auth modal — never bounces the signed-in user back to the login screen.
 struct EmptyStateView: View {
     let enrollStatus: EnrollmentStatus?
     let brokerAvailable: Bool
-    let onSignOut: () -> Void
+    let onAuthorize: () -> Void
 
     var body: some View {
         let copy = resolve()
@@ -338,13 +351,13 @@ struct EmptyStateView: View {
         } description: {
             Text(copy.body)
         } actions: {
-            if copy.showSignIn {
-                Button(copy.actionLabel, action: onSignOut).buttonStyle(.borderedProminent)
+            if copy.showAction {
+                Button(copy.actionLabel, action: onAuthorize).buttonStyle(.borderedProminent)
             }
         }
     }
 
-    private func resolve() -> (title: String, body: String, showSignIn: Bool, actionLabel: String) {
+    private func resolve() -> (title: String, body: String, showAction: Bool, actionLabel: String) {
         let cred = enrollStatus?.credential
         let noRole = enrollStatus?.noRole == true
         if enrollStatus == nil {
@@ -355,8 +368,8 @@ struct EmptyStateView: View {
         if noRole && cred?.isNone == true {
             if brokerAvailable {
                 return ("Set up stake sync",
-                        "Your stake hasn't set up Covenant Path yet. Sign in with your Church account to start daily data updates — signing in keeps your stake synced automatically.",
-                        true, "Sign in to enable sync")
+                        "Your stake hasn't set up Covenant Path yet. Authorize with your Church account to start daily data updates — it keeps your stake synced automatically.",
+                        true, "Authorize stake sync")
             }
             return ("Stake not set up",
                     "Ask your stake leader to enable Covenant Path by signing in with their Church account. Once set up, sign in with your email code for access.",
@@ -364,12 +377,12 @@ struct EmptyStateView: View {
         }
         if cred?.isRevoked == true {
             return ("Sync paused",
-                    "The daily sync credential for your stake has been revoked. Re-enroll to resume data updates.",
-                    brokerAvailable, "Re-enroll")
+                    "The daily sync credential for your stake has been revoked. Re-authorize to resume data updates.",
+                    brokerAvailable, "Re-authorize")
         }
         if cred?.isStale == true {
             return ("Sync needs re-authorization",
-                    "This stake's daily sync stopped — the Church session that keeps it updated expired. Sign in again with your Church account to re-authorize and resume updates.",
+                    "This stake's daily sync stopped — the Church session that keeps it updated expired. Re-authorize with your Church account to resume updates.",
                     brokerAvailable, "Re-authorize")
         }
         if cred?.isActive == true {

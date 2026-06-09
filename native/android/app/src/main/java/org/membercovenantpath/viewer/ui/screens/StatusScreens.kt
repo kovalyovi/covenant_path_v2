@@ -81,16 +81,17 @@ fun EmptyPanel(text: String) {
 }
 
 /**
- * Empty-members state with the right message + action per enrollment status (#11). Mirrors the
- * Flutter `_EmptyState`: no-role/no-credential → "set up sync"; revoked → "sync paused / re-enroll";
+ * Empty-members state with the right message + action per enrollment status (#11). Mirrors the web
+ * `EmptyState`: no-role/no-credential → "Authorize stake sync"; revoked → "sync paused / re-authorize";
  * stale → "needs re-authorization / re-authorize"; active → "setting up your stake…"; otherwise the
- * generic scoped-to-your-calling message.
+ * generic scoped-to-your-calling message. Every action opens the in-app re-auth modal via
+ * [onAuthorize] — never bounces the signed-in user back to the login screen.
  */
 @Composable
 fun EnrollmentEmptyState(
     enrollStatus: org.membercovenantpath.viewer.data.EnrollmentStatus?,
     brokerAvailable: Boolean,
-    onSignOut: () -> Unit,
+    onAuthorize: () -> Unit,
 ) {
     val cred = enrollStatus?.credential
     val hasNoRole = enrollStatus?.noRole == true
@@ -104,8 +105,8 @@ fun EnrollmentEmptyState(
         hasNoRole && cred?.isNone == true -> {
             if (brokerAvailable) {
                 title = "Set up stake sync"
-                body = "Your stake hasn't set up Covenant Path yet. Sign in with your Church account to start daily data updates — signing in keeps your stake synced automatically."
-                actionLabel = "Sign in to enable sync"
+                body = "Your stake hasn't set up Covenant Path yet. Authorize with your Church account to start daily data updates — it keeps your stake synced automatically."
+                actionLabel = "Authorize stake sync"
             } else {
                 title = "Stake not set up"
                 body = "Ask your stake leader to enable Covenant Path by signing in with their Church account. Once set up, sign in with your email code for access."
@@ -113,12 +114,12 @@ fun EnrollmentEmptyState(
         }
         cred?.isRevoked == true -> {
             title = "Sync paused"
-            body = "The daily sync credential for your stake has been revoked. Re-enroll to resume data updates."
-            if (brokerAvailable) actionLabel = "Re-enroll"
+            body = "The daily sync credential for your stake has been revoked. Re-authorize to resume data updates."
+            if (brokerAvailable) actionLabel = "Re-authorize"
         }
         cred?.isStale == true -> {
             title = "Sync needs re-authorization"
-            body = "This stake's daily sync stopped — the Church session that keeps it updated expired. Sign in again with your Church account to re-authorize and resume updates."
+            body = "This stake's daily sync stopped — the Church session that keeps it updated expired. Re-authorize with your Church account to resume updates."
             if (brokerAvailable) actionLabel = "Re-authorize"
         }
         cred?.isActive == true -> {
@@ -144,7 +145,7 @@ fun EnrollmentEmptyState(
                 modifier = Modifier.padding(top = 8.dp),
             )
             if (actionLabel != null) {
-                Button(onClick = onSignOut, modifier = Modifier.padding(top = 20.dp)) { Text(actionLabel) }
+                Button(onClick = onAuthorize, modifier = Modifier.padding(top = 20.dp)) { Text(actionLabel) }
             }
         }
     }
