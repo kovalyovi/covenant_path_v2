@@ -97,19 +97,39 @@ def require_user(authorization: str = Header(default="")) -> str:
         raise HTTPException(status_code=503, detail=str(e))
 
 
+import concurrent.futures as _futures
+
+# Background evaluator for the time-budgeted login eval (threads keep running past the budget so
+# the audit row + staleness offers still land; only the RESPONSE stops waiting).
+_EVAL_POOL = _futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="login-eval")
+# "Login must be under 5 seconds": how long a NON-consent login waits for its access evaluation
+# before answering without it (the dashboard re-derives offers from /auth/enrollment-status).
+_EVAL_BUDGET_S = float(os.environ.get("LOGIN_EVAL_BUDGET_SECONDS", "4"))
+
+
 def _login_eval(res: dict, store: bool, rid: str) -> dict | None:
-    """Evaluate the captured session on EVERY Church login (so the no-access gate and the
-    higher-access "you can improve the sync" offer work), and STORE the credential only when the
-    leader consented (`store`). Signing in no longer captures a credential by default. Always
-    guarded — a failure here must never break the login that just succeeded."""
+    """Evaluate the captured session on a Church login and STORE the credential only when the leader
+    consented (`store`). Consent stays SYNCHRONOUS (the leader just asked for setup — the client shows
+    progress and allows 95s). A plain sign-in waits at most _EVAL_BUDGET_S: the fast path (usable
+    credential on file) answers within it; a full first-eval continues in the BACKGROUND (audit still
+    written) while the user gets their session immediately — the dashboard surfaces any enroll/re-auth
+    offer from /auth/enrollment-status instead. Always guarded — never breaks the login itself."""
     if not res.get("cookies"):
         return None
+    from backend.auth_broker import enroll
+    import time as _t
+    t0 = _t.monotonic()
+    fut = _EVAL_POOL.submit(enroll.evaluate_and_maybe_store, res["cookies"], res["identity"], store)
     try:
-        from backend.auth_broker import enroll
-        out = enroll.evaluate_and_maybe_store(res["cookies"], res["identity"], store)
-        logger.info("[req %s] login eval (authorized=%s stored=%s can_improve=%s)", rid,
-                    out.get("authorized"), out.get("stored"), out.get("can_improve"))
+        out = fut.result(timeout=None if store else _EVAL_BUDGET_S)
+        logger.info("[req %s] login eval %.1fs (authorized=%s stored=%s can_improve=%s can_enroll=%s)",
+                    rid, _t.monotonic() - t0, out.get("authorized"), out.get("stored"),
+                    out.get("can_improve"), out.get("can_enroll"))
         return out
+    except _futures.TimeoutError:
+        logger.info("[req %s] login eval deferred to background after %.1fs budget "
+                    "(dashboard surfaces offers via enrollment-status)", rid, _EVAL_BUDGET_S)
+        return {"deferred": True}
     except Exception as exc:  # noqa: BLE001
         logger.warning("[req %s] login eval failed (login still ok): %s", rid, exc)
         return {"error": str(exc)}
