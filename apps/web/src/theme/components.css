@@ -700,6 +700,17 @@ button.card--tappable:hover {
   flex-direction: column;
   gap: var(--md);
 }
+/* The sign-in-method toggle is a full-width control on the login card (the shared `.segmented` is
+   intrinsic-width for inline use elsewhere). Splitting the buttons evenly removes the empty pill gap
+   that otherwise trails the labels, so both modes read as a balanced, deliberate toggle. */
+.login-card .segmented {
+  display: flex;
+  width: 100%;
+}
+.login-card .segmented__btn {
+  flex: 1;
+  justify-content: center;
+}
 .divider-or {
   display: flex;
   align-items: center;
