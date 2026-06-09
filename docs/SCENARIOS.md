@@ -163,5 +163,24 @@ These were the in-flight features; they shipped (commits `5ae7de8`, `b83a809`, `
       refresh + stale → any authorized leader can take over). The client banner just derives from
       `credential.state === 'stale'` + `is_provider` (broker `enrollment_status`); the empty/banner
       copy is in `EmptyState.tsx` / `dashboard.tsx`.
-- [ ] **(parity)** the stale banner + per-stake ops are on **web**; mirror onto native iOS/Android
-      admin + dashboard when convenient — see `native/PARITY.md`. (Tracked, not blocking.)
+- [x] **(parity)** stale banner + per-stake ops ported to native (commit `72582df`); the re-auth
+      modal + cadence line port is in flight — see `native/PARITY.md`.
+
+## Later additions (2026-06-09 evening) — behavior + where enforced
+
+- **Degraded-run reconcile guard** (`backend/sync.py` + `db.count_reconcile_candidates`): when ANY
+  unit failed the run, >3 would-be member deletions are DEFERRED (a `reconcile_deferred` diagnostic
+  is written) — LCR 500s can thin even the "successful" units' rosters, and 10 same-day "departures"
+  during an outage are degraded data, not moves (live case 2026-06-09). Healthy runs unchanged.
+- **Login-eval time budget** (`app.py _login_eval`): a NON-consent login waits ≤4s for the access
+  eval (fast path answers inline; a full first-eval continues in a background thread, audit still
+  written). Consent (enroll=true) stays synchronous. Client picks up offers from
+  `/auth/enrollment-status`. Result: plain sign-ins complete in seconds.
+- **Okta-stage failure audit** (`app.py _audit_okta_failure`): wrong password / failed MFA now write
+  `login_audit` rows (`okta_failed` / `mfa_failed`) — previously a member stuck AT the login screen
+  left zero server-side trace.
+- **Per-stake dispatch — all three trigger paths**: on-enroll kickoff, admin ops, AND the provider's
+  `/auth/sync-now` each pass `stake=<unit>`; a trigger can never fan out the whole matrix.
+- **Cadence visibility** (migration 0041): `has_refresh_token` recorded at enroll (self-renewing vs
+  manual-re-auth credentials) + `reauths_30d` from `login_audit` enrolled events, shown per stake in
+  the ops console.
