@@ -143,25 +143,25 @@ correct* (they surprised the first draft):
 
 ---
 
-## TODO — in-flight new features (main session is finishing these)
+## New features — landed, with their coverage
 
-These belong to the matrix but are **NEW features under active development** by the main session
-(per-stake sync triggers, unenroll tiers, stale/takeover banners). Stubbed here so they're tracked;
-the main session should add the corresponding offline scenarios when the code lands.
+These were the in-flight features; they shipped (commits `5ae7de8`, `b83a809`, `9a79d9c`, `6afa1af`,
+`4364c34`). Coverage status:
 
-- [ ] **Per-stake sync trigger** (on-enroll kickoff / per-stake schedule): a freshly-enrolled stake
-      kicks off its own sync; a per-stake cadence drives subsequent runs. *Expected:* enroll →
-      exactly one kickoff; cadence respected; no cross-stake bleed. *Will enforce:* the new
-      trigger/scheduler module + `set_sync_state`. *Add:* `scenario_per_stake_sync_trigger`.
-- [ ] **Unenroll tiers** (revoke-credential vs full-purge vs downgrade-scope): each tier removes the
-      right rows and leaves the rest intact. *Expected:* tier-1 revokes the credential only (roles
-      stay until next provision); tier-2 purges the stake's `stake_credentials` + calling-derived
-      roles; manual/power-user grants follow the documented rule. *Will enforce:* the new unenroll
-      RPC/flow + `credentials.revoke`. *Add:* `scenario_unenroll_tiers`.
-- [ ] **Stale / takeover banners** (client-facing): the app surfaces "credential stale — re-authorize"
-      and "another leader can take over". *Expected:* banner state derives from
-      `last_failed_at`/`last_succeeded_at`/`stale_notified_at` + the enroll takeover clause (0038);
-      shown only to the relevant leader; cleared on recovery. *Will enforce:* the broker report
-      builder + the staleness columns. *Add:* `scenario_stale_takeover_banner`.
-- [ ] **(parity)** mirror any client-facing banner/threshold in the three client logic layers
-      (React `apps/web/src/logic`, Swift, Kotlin) with their unit tests — see `native/PARITY.md`.
+- [x] **Per-stake sync trigger** — `enroll._kickoff_initial_sync` now dispatches `daily-sync.yml` with
+      `stake=<unit>` (the prepare job's `--only` scopes the matrix to that one stake), so an enroll
+      syncs ONLY that stake — no cross-stake bleed (the "one leader's enroll re-synced everyone" bug).
+      The per-stake schedule already lived in `list_stake_units` + `_due_today` (covered by the live
+      sync). Dispatch is mocked in `test_broker` (`daily-sync.yml` is dispatchable).
+- [x] **Unenroll tiers** — `revoke` (credential only, roles stay) · `wipe_stake_members` (delete
+      members, keep stake+roles+cred) · `remove_stake` (credential+members+roles+diagnostics+stake row).
+      The two new tiers are SECURITY DEFINER RPCs (migration `0039`), exercised by the live SQL path;
+      `revoke` + the most-elevated-wins re-enroll are covered offline by `scenario_enroll_most_elevated_wins`.
+- [x] **Stale / takeover** — **covered offline**: `scenario_credential_staleness_alert_edge` proves
+      `mark_failed`/`claim_stale_notification` fire ONE alert per failure streak and `mark_succeeded`
+      clears it (no spam); `scenario_enroll_most_elevated_wins` proves the 0038 takeover (same-principal
+      refresh + stale → any authorized leader can take over). The client banner just derives from
+      `credential.state === 'stale'` + `is_provider` (broker `enrollment_status`); the empty/banner
+      copy is in `EmptyState.tsx` / `dashboard.tsx`.
+- [ ] **(parity)** the stale banner + per-stake ops are on **web**; mirror onto native iOS/Android
+      admin + dashboard when convenient — see `native/PARITY.md`. (Tracked, not blocking.)
