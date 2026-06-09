@@ -9,11 +9,19 @@ member-profile **POST server actions** — and that each endpoint tolerates a *v
 request rate. A single global rate is too blunt: it either crawls (pacing for the worst
 endpoint) or it floods the flaky ones.
 
-So this tool runs an **independent adaptive controller per endpoint** and converges each on its
-own GOLD SPOT: the highest sustained throughput (concurrency + inter-request delay) that holds
-the success SLO (default ≥99% success, no 5xx/429/timeout, optional p95 latency cap) across a
-multi-window confirmation — i.e. the safe rate that *satisfies our needs without tripping 500s*.
-Designed to run 24–72h; the output is meant to be read straight into the sync's pacing config.
+So this tool runs an **independent adaptive controller per endpoint** on TWO timescales:
+
+  • seconds↔1/min — it converges each endpoint on the **100%-STABLE RATE**: the highest sustained
+    throughput that holds ZERO errors over N rounds, reported as requests/min AND its reciprocal
+    "1 request per X seconds" (the direct answer to "how often can we call without 500s?"). It also
+    banks a looser GOLD SPOT (max throughput at ≥target success) and the rate where 500s first bite.
+
+  • minutes↔hours — when even the gentlest rate keeps failing, the endpoint is in an OUTAGE. Instead
+    of guessing a cooldown, it opens an EPISODE and single-probes at widening intervals to MEASURE
+    exactly how long the 500-storm lasts (10 min? 10 hours?) and how many requests it took to get
+    out, then resumes gently. Across days this yields the recovery-time distribution per endpoint.
+
+Designed to run 24h–several days; the output is meant to be read straight into the sync's pacing.
 
 It is deliberately CONSERVATIVE and polite (this hits the real Church servers for days):
   • One endpoint is exercised at a time (round-robin) — total server pressure stays modest and
@@ -187,19 +195,41 @@ class GoldSpot:
     p95_ms: float
 
 
-class EndpointController:
-    """AIMD search for one endpoint's safe operating point.
+@dataclass
+class Episode:
+    """A 500-storm/outage: the endpoint is failing even at the gentlest rate. We don't blindly wait a
+    fixed cooldown — we actively single-probe at widening intervals to measure EXACTLY how long it
+    stays down (recovery could be 10 min or 10 hours) and how many requests it took to get out."""
+    onset_iso: str
+    onset_rate_per_min: float   # throughput at the moment it broke
+    requests_before: int        # requests in the round that tripped it
+    probes: int = 0             # recovery single-probes sent during the outage
+    duration_s: float | None = None     # measured outage length (None = still ongoing)
+    recovered_iso: str | None = None
 
-    State = (concurrency, delay_s). Each ROUND issues `window` requests at the current state and is
-    judged against the SLO (success ≥ target, no transient errors, optional p95 cap). `confirm`
-    consecutive clean rounds at a state CREDIT it as a candidate gold spot and push pressure up
-    (less delay, then more concurrency). Any transient error backs pressure off immediately. Sticking
-    at the gentlest state while still erroring trips the kill switch → park for a cooldown.
+
+class EndpointController:
+    """Two-timescale search for one endpoint's behaviour.
+
+    1. SECONDS↔1/min (normal AIMD rounds): each ROUND issues `window` requests at the current
+       (concurrency, delay) and is judged against the SLO. `confirm` clean rounds bank a gold spot
+       (max throughput at the target) and push pressure up; a transient error backs off. Crucially we
+       also track the STABLE rate — the highest throughput sustained with ZERO errors over
+       `stability_confirm` consecutive rounds — which is the "100% stability" answer expressed as
+       requests/min (and its reciprocal, 1 request per N seconds).
+
+    2. MINUTES↔HOURS (recovery probing): when even the gentlest round keeps failing, the endpoint is
+       in an OUTAGE. Instead of a blind cooldown, we open an Episode and single-probe at widening
+       intervals (recovery_min → ×1.5 → recovery_max) so we measure the EXACT recovery time and the
+       request count, then resume gently. This is how we learn "after a 500 storm it recovers in ~X".
     """
 
     def __init__(self, name: str, *, success_target: float, p95_cap_ms: float | None,
                  max_concurrency: int, min_delay: float, max_delay: float,
-                 window: int, confirm: int, cooldown_s: float, kill_after: int):
+                 window: int, confirm: int, cooldown_s: float, kill_after: int,
+                 stability_confirm: int = 5, recovery_min: float = 30.0,
+                 recovery_max: float = 900.0, recovery_confirm: int = 2,
+                 clock=time.monotonic):
         self.name = name
         self.success_target = success_target
         self.p95_cap_ms = p95_cap_ms
@@ -210,25 +240,51 @@ class EndpointController:
         self.confirm = confirm
         self.cooldown_s = cooldown_s
         self.kill_after = kill_after
+        self.stability_confirm = stability_confirm   # zero-error rounds to bank a 100%-stable rate
+        self.recovery_min = recovery_min             # first recovery-probe interval (s)
+        self.recovery_max = recovery_max             # widest recovery-probe interval (s)
+        self.recovery_confirm = recovery_confirm     # consecutive probe successes to declare recovery
+        self.clock = clock                           # injectable for deterministic tests
 
         # current pressure — start gentle
         self.concurrency = 1
         self.delay_s = max(min_delay, 1.5)
 
         self.gold: GoldSpot | None = None
+        self.stable_rate_per_min: float | None = None    # highest ZERO-error sustained throughput
         self.ceiling_per_min: float | None = None        # highest throughput ever attempted clean
         self.first_error_per_min: float | None = None     # throughput where errors first appeared
+        self.total_requests = 0                           # every request this endpoint has issued
         self.healthy_streak = 0
+        self.zero_streak = 0                              # consecutive ZERO-error rounds (stability)
         self.bad_streak = 0
-        self.parked_until = 0.0
+        self.parked_until = 0.0                          # coarse bound; episodes are the real gate
+
+        # outage / recovery state
+        self.episodes: list[Episode] = []
+        self.current_episode: Episode | None = None
+        self._episode_start = 0.0
+        self._recovery_interval = 0.0
+        self._recovery_ok_streak = 0
+        self.next_probe_at = 0.0
+
         self.rounds: list[dict] = []
         # rolling per-hour health (diurnal: is LCR healthier at 2am? schedule the sync there)
         self.by_hour_ok: dict[int, int] = defaultdict(int)
         self.by_hour_total: dict[int, int] = defaultdict(int)
 
     # -- scheduling ----------------------------------------------------------
+    def in_episode(self) -> bool:
+        return self.current_episode is not None
+
     def is_parked(self) -> bool:
-        return time.monotonic() < self.parked_until
+        """True while we should NOT run normal rounds — i.e. during an outage episode (recovery
+        probing takes over) or the coarse cooldown bound."""
+        return self.in_episode() or self.clock() < self.parked_until
+
+    def due_for_recovery_probe(self, now: float | None = None) -> bool:
+        now = self.clock() if now is None else now
+        return self.in_episode() and now >= self.next_probe_at
 
     # -- evaluate one round of samples --------------------------------------
     def observe(self, samples: list[Sample], elapsed_s: float) -> dict:
@@ -246,6 +302,8 @@ class EndpointController:
         # hard.
         non_permanent = n - permanent
         success = ok / non_permanent if non_permanent else 1.0
+        zero_err = transient == 0 and ok == non_permanent  # a TRULY clean round (for 100% stability)
+        self.total_requests += n
         hour = datetime.now().hour
         self.by_hour_total[hour] += n
         self.by_hour_ok[hour] += ok
@@ -263,10 +321,21 @@ class EndpointController:
             "retry_after": max_ra or None,
         }
         self.rounds.append(rnd)
-        self._adapt(slo_ok, transient, per_min, success, p50, p95, max_ra)
+        self._adapt(slo_ok, zero_err, transient, per_min, success, p50, p95, max_ra, n)
         return rnd
 
-    def _adapt(self, slo_ok, transient, per_min, success, p50, p95, max_ra):
+    def _adapt(self, slo_ok, zero_err, transient, per_min, success, p50, p95, max_ra, n):
+        # 100%-stability tracking, independent of the throughput-maximizing gold spot: the highest
+        # rate sustained with ZERO errors over `stability_confirm` rounds is the rate we can trust.
+        if zero_err:
+            self.zero_streak += 1
+            if self.zero_streak >= self.stability_confirm and per_min > (self.stable_rate_per_min or 0):
+                self.stable_rate_per_min = round(per_min, 1)
+                logger.info("[%s] 100%%-stable rate ↑ %.1f/min (1 per %.0fs) over %d clean rounds",
+                            self.name, per_min, 60 / per_min if per_min else 0, self.zero_streak)
+        else:
+            self.zero_streak = 0
+
         if max_ra:
             # Server explicitly asked us to slow down — honor it and treat as a back-off signal.
             logger.warning("[%s] Retry-After=%ss — honoring + backing off", self.name, max_ra)
@@ -296,11 +365,51 @@ class EndpointController:
             self.healthy_streak = 0
             self.bad_streak += 1
             self._backoff(per_min)
-            if self._at_floor() and self.bad_streak >= self.kill_after:
-                self.parked_until = time.monotonic() + self.cooldown_s
+            if self._at_floor() and self.bad_streak >= self.kill_after and not self.in_episode():
+                self._start_episode(per_min, n)
+
+    # -- outage episodes + active recovery probing ---------------------------
+    def _start_episode(self, per_min: float, n: int) -> None:
+        now = self.clock()
+        self._episode_start = now
+        self.current_episode = Episode(onset_iso=_now(), onset_rate_per_min=round(per_min, 1),
+                                       requests_before=n)
+        self._recovery_interval = self.recovery_min
+        self.next_probe_at = now + self.recovery_min
+        self._recovery_ok_streak = 0
+        self.bad_streak = 0
+        self.parked_until = now + self.cooldown_s  # coarse bound; recovery probing is the real gate
+        logger.warning("[%s] OUTAGE — even the gentlest rate fails; probing for recovery every "
+                       "%.0fs (was %.1f/min at onset)", self.name, self.recovery_min, per_min)
+
+    def record_recovery_probe(self, sample: "Sample", now: float | None = None) -> None:
+        """Feed one recovery single-probe. On `recovery_confirm` consecutive successes the outage is
+        declared OVER (duration measured); a failure widens the next probe interval (×1.5, capped)."""
+        now = self.clock() if now is None else now
+        ep = self.current_episode
+        if ep is None:
+            return
+        ep.probes += 1
+        self.total_requests += 1
+        if sample.ok:
+            self._recovery_ok_streak += 1
+            self._recovery_interval = self.recovery_min  # it's coming back — confirm quickly (precision)
+            if self._recovery_ok_streak >= self.recovery_confirm:
+                ep.duration_s = round(now - self._episode_start, 1)
+                ep.recovered_iso = _now()
+                self.episodes.append(ep)
+                logger.warning("[%s] RECOVERED after %.0fs (%d probes); resuming gently",
+                               self.name, ep.duration_s, ep.probes)
+                self.current_episode = None
+                self._recovery_ok_streak = 0
+                self.parked_until = 0.0
+                self.concurrency = 1
+                self.delay_s = max(self.min_delay, min(self.max_delay, 5.0))  # resume conservatively
                 self.bad_streak = 0
-                logger.warning("[%s] still erroring at the floor — PARKING for %.0fs (kill switch)",
-                               self.name, self.cooldown_s)
+        else:
+            self._recovery_ok_streak = 0
+            self._recovery_interval = min(self.recovery_max, self._recovery_interval * 1.5)
+        self.next_probe_at = now + self._recovery_interval
 
     def _at_floor(self) -> bool:
         return self.concurrency == 1 and self.delay_s >= self.max_delay - 1e-6
@@ -332,20 +441,46 @@ class EndpointController:
             self.ceiling_per_min = float(prior["observed_ceiling_per_min"])
         if prior.get("first_error_per_min") is not None:
             self.first_error_per_min = float(prior["first_error_per_min"])
+        if prior.get("stable_rate_per_min") is not None:
+            self.stable_rate_per_min = float(prior["stable_rate_per_min"])
+        for ep in (prior.get("episodes") or []):
+            self.episodes.append(Episode(
+                onset_iso=ep.get("onset_iso", ""), onset_rate_per_min=ep.get("onset_rate_per_min", 0),
+                requests_before=ep.get("requests_before", 0), probes=ep.get("probes", 0),
+                duration_s=ep.get("duration_s"), recovered_iso=ep.get("recovered_iso")))
         for h, rate in (prior.get("success_by_hour") or {}).items():
             # carry forward as a single weighted point so diurnal coverage accumulates across runs
             self.by_hour_total[int(h)] += 100
             self.by_hour_ok[int(h)] += int(round(float(rate) * 100))
 
+    def _recovery_stats(self) -> dict:
+        done = [e.duration_s for e in self.episodes if e.duration_s is not None]
+        return {
+            "outages": len(self.episodes) + (1 if self.in_episode() else 0),
+            "measured": len(done),
+            "median_s": round(statistics.median(done), 1) if done else None,
+            "max_s": round(max(done), 1) if done else None,
+            "min_s": round(min(done), 1) if done else None,
+            "ongoing_since": self.current_episode.onset_iso if self.in_episode() else None,
+        }
+
     def summary(self) -> dict:
         hourly = {str(h): round(self.by_hour_ok[h] / self.by_hour_total[h], 3)
                   for h in sorted(self.by_hour_total) if self.by_hour_total[h]}
+        stable = self.stable_rate_per_min
         return {
+            # THE HEADLINE: the rate that held 100% stability (zero errors), as req/min AND interval.
+            "stable_rate_per_min": stable,
+            "stable_interval_s": round(60 / stable, 1) if stable else None,
             "gold_spot": None if not self.gold else self.gold.__dict__,
             "observed_ceiling_per_min": self.ceiling_per_min,
             "first_error_per_min": self.first_error_per_min,
+            "total_requests": self.total_requests,
+            # recovery: how long 500-storms last once they start (10 min? 10 hours?)
+            "recovery": self._recovery_stats(),
+            "episodes": [e.__dict__ for e in self.episodes[-20:]],
             "current": {"concurrency": self.concurrency, "delay_s": round(self.delay_s, 2)},
-            "parked": self.is_parked(),
+            "in_episode": self.in_episode(),
             "rounds": len(self.rounds),
             "success_by_hour": hourly,
             "recent_rounds": self.rounds[-8:],
@@ -379,7 +514,10 @@ class Harness:
             t.name, success_target=args.success_target, p95_cap_ms=args.p95_cap_ms,
             max_concurrency=args.max_concurrency, min_delay=args.min_delay,
             max_delay=args.max_delay, window=args.window, confirm=args.confirm,
-            cooldown_s=args.cooldown, kill_after=args.kill_after) for t in self.targets}
+            cooldown_s=args.cooldown, kill_after=args.kill_after,
+            stability_confirm=args.stability_confirm, recovery_min=args.recovery_probe_min,
+            recovery_max=args.recovery_probe_max, recovery_confirm=args.recovery_confirm)
+            for t in self.targets}
         if args.resume:
             self._resume(args.resume)
 
@@ -459,28 +597,59 @@ class Harness:
         with self._lock:
             doc = {
                 "updated": _now(),
-                "note": "gold_spot = highest sustained throughput holding the SLO (success>=target, "
-                        "no 5xx/429/timeout, p95<=cap). Use concurrency+delay_s as the sync's "
-                        "per-endpoint pacing. first_error_per_min = where 500s began.",
+                "note": "stable_rate_per_min / stable_interval_s = the rate that held 100%% stability "
+                        "(ZERO errors over N rounds) — the safe pace ('1 request per X seconds'). "
+                        "gold_spot = max throughput at the looser SLO. first_error_per_min = where "
+                        "500s began. recovery = how long 500-storms last once they start (measured by "
+                        "active probing during an outage). episodes = each outage with its duration.",
                 "slo": {"success_target": self.args.success_target,
-                        "p95_cap_ms": self.args.p95_cap_ms},
+                        "p95_cap_ms": self.args.p95_cap_ms,
+                        "stability_confirm": self.args.stability_confirm},
                 "endpoints": {name: c.summary() for name, c in self.ctrls.items()},
             }
             self.rec_path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+
+    def run_recovery_probe(self, target: Target, ctrl: EndpointController) -> None:
+        """Fire ONE request against an endpoint that's in an outage, to detect/measure recovery."""
+        sess = self.client.session.session
+        sample = target.fire(sess, self._ctx(target))
+        with self._lock:
+            self.jsonl.write(json.dumps({"t": _now(), "endpoint": target.name, "probe": True,
+                                         "status": sample.status, "ms": round(sample.ms)}) + "\n")
+        ctrl.record_recovery_probe(sample)
+        if ctrl.in_episode():
+            logger.info("[%s] recovery probe: status=%s (still down) — next in %.0fs",
+                        target.name, sample.status, ctrl._recovery_interval)
+        self.persist()
 
     def loop(self, hours: float) -> None:
         deadline = time.monotonic() + hours * 3600
         i = 0
         try:
             while time.monotonic() < deadline:
-                active = [t for t in self.targets if not self.ctrls[t.name].is_parked()]
-                if not active:
-                    logger.info("all endpoints parked — sleeping 60s")
-                    time.sleep(60)
-                    continue
-                target = active[i % len(active)]
-                i += 1
-                self.run_round(target, self.ctrls[target.name])
+                progressed = False
+                # one pass over all endpoints; act on the first that's actionable (a normal round if
+                # healthy, or a recovery probe if it's in an outage and a probe is due).
+                for k in range(len(self.targets)):
+                    target = self.targets[(i + k) % len(self.targets)]
+                    ctrl = self.ctrls[target.name]
+                    if ctrl.in_episode():
+                        if ctrl.due_for_recovery_probe():
+                            self.run_recovery_probe(target, ctrl)
+                            i = (i + k + 1) % len(self.targets)
+                            progressed = True
+                            break
+                    elif not ctrl.is_parked():
+                        self.run_round(target, ctrl)
+                        i = (i + k + 1) % len(self.targets)
+                        progressed = True
+                        break
+                if not progressed:
+                    # everything is mid-outage and no probe is due yet — sleep until the soonest one.
+                    waits = [self.ctrls[t.name].next_probe_at - time.monotonic()
+                             for t in self.targets if self.ctrls[t.name].in_episode()]
+                    nap = max(2.0, min(30.0, min(waits))) if waits else 15.0
+                    time.sleep(nap)
         except KeyboardInterrupt:
             logger.info("interrupted — writing final recommendation")
         finally:
@@ -488,10 +657,13 @@ class Harness:
             self.jsonl.close()
             logger.info("done. recommendation -> %s", self.rec_path)
             for name, c in self.ctrls.items():
-                g = c.gold
-                logger.info("  %-22s gold=%s ceiling=%.0f/min first_error=%s",
-                            name, f"{g.per_min:.0f}/min c={g.concurrency} d={g.delay_s}s" if g else "none",
-                            c.ceiling_per_min or 0.0, c.first_error_per_min)
+                stable = c.stable_rate_per_min
+                rec = c._recovery_stats()
+                logger.info("  %-22s stable=%s  ceiling=%.0f/min  first_error=%s  outages=%d (median %ss)",
+                            name,
+                            f"{stable:.1f}/min (1 per {60 / stable:.0f}s)" if stable else "none-found",
+                            c.ceiling_per_min or 0.0, c.first_error_per_min,
+                            rec["outages"], rec["median_s"])
 
 
 def main() -> int:
@@ -510,8 +682,16 @@ def main() -> int:
     ap.add_argument("--max-delay", type=float, default=30.0, help="gentlest delay before kill switch")
     ap.add_argument("--window", type=int, default=12, help="requests per measurement round")
     ap.add_argument("--confirm", type=int, default=3, help="clean rounds to confirm a gold spot")
-    ap.add_argument("--cooldown", type=float, default=900.0, help="park duration after kill switch (s)")
-    ap.add_argument("--kill-after", type=int, default=4, help="bad rounds at floor before parking")
+    ap.add_argument("--cooldown", type=float, default=900.0, help="coarse park bound after an outage (s)")
+    ap.add_argument("--kill-after", type=int, default=4, help="bad rounds at floor before declaring an outage")
+    ap.add_argument("--stability-confirm", type=int, default=5,
+                    help="consecutive ZERO-error rounds to bank a 100%%-stable rate")
+    ap.add_argument("--recovery-probe-min", type=float, default=30.0,
+                    help="first recovery-probe interval during an outage (s)")
+    ap.add_argument("--recovery-probe-max", type=float, default=900.0,
+                    help="widest recovery-probe interval (s) — caps how often we poke a long outage")
+    ap.add_argument("--recovery-confirm", type=int, default=2,
+                    help="consecutive probe successes to declare an outage recovered")
     ap.add_argument("--resume", default=None,
                     help="seed gold spots from a prior recommendation.json (path, or 'auto' for the "
                          "latest in the output dir) — for tiled GitHub-Actions runs")
