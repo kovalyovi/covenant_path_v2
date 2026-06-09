@@ -181,7 +181,13 @@ def _drive_to_password(session: requests.Session, identifier: str, password: str
             rr["_stateHandle"] = sh
         if not identified and "identify" in rems:
             logger.info("[auth %s] identify", login_id)
-            payload = _follow(session, rems["identify"], {"identifier": identifier, "rememberMe": False})
+            # rememberMe=True: the OAuth refresh_token exchange is rejected by the Church's Okta
+            # (invalid_client — verified 2026-06-09; this client only issues tokens via the web SSO
+            # flow our headless replay can't complete), so a credential CANNOT self-renew. The one
+            # lever we have on cadence is the session's own lifetime — a persistent ("remember me")
+            # Okta session makes the stored cookies + tier-2 re-SSO last weeks instead of hours, so
+            # manual re-auth is needed far less often.
+            payload = _follow(session, rems["identify"], {"identifier": identifier, "rememberMe": True})
             identified = True
             continue
         # Answer the PASSWORD challenge exactly ONCE. A second `challenge-authenticator` after this is

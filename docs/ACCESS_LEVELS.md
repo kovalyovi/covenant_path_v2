@@ -54,6 +54,24 @@ granted-feature count) **and `coverage`** (complete? what's missing? who to ask)
   usable credential — whenever the level question matters (enroll / takeover / no usable
   credential), the full live probe runs and its result is stored.
 
+## Re-authorization cadence — why, and how often
+
+**Credentials cannot self-renew** (verified 2026-06-09): the OAuth `interaction_code → refresh_token`
+exchange is rejected by the Church's Okta with `invalid_client`, and the IDX flow is bound to the
+`/oauth2/default` server while tokens are issued by a different auth server our headless replay can't
+complete against. So `has_refresh_token` is effectively always false, and renewal relies on:
+
+1. **Stored LCR appSession** (tier 1) — extends each time the daily sync uses it.
+2. **Okta re-SSO** via the stored persistent session cookie (tier 2) — now `rememberMe=true`, so the
+   Okta session lasts **weeks** instead of hours; the daily sync re-SSOs off it.
+
+**Expected cadence:** a healthy, daily-syncing stake needs manual re-auth roughly **every few weeks**
+(whenever the persistent Okta session finally expires), not every few days. A stake whose sync is
+*failing* (LCR outage, released leader) goes stale immediately — surfaced via the stale banner +
+alert. The ops console shows per-stake `authorized <ago> · manual re-auth · N re-auths/30d` so the
+real cadence is observable. (If the Church ever provisions an offline-token client, self-renewal
+drops straight in via the existing 3-tier renewal.)
+
 ## Source of truth map
 
 | Concern | Where |
