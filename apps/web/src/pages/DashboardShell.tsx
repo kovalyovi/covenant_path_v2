@@ -38,7 +38,9 @@ export function DashboardShell() {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
 
-  const staleCred = d.enrollStatus?.credential.state === 'revoked';
+  const credState = d.enrollStatus?.credential.state;
+  // Show the banner for a REVOKED credential or a STALE one (its delegated session died → sync failing).
+  const showStaleBanner = credState === 'revoked' || credState === 'stale';
 
   // ---- Menu actions (mirror _appBarActions + the dashboard handlers) --------------------------
   function openSyncSettings() {
@@ -163,7 +165,15 @@ export function DashboardShell() {
   const banners = (
     <>
       {d.syncing && <SyncingBanner startedAt={d.syncStartedAt} />}
-      {staleCred && <StaleBanner onReenroll={() => void signOut()} />}
+      {showStaleBanner && (
+        <StaleBanner
+          state={credState as string}
+          isProvider={d.enrollStatus?.credential.isProvider === true}
+          lastError={d.enrollStatus?.credential.lastError ?? null}
+          onReenroll={() => void signOut()}
+          onSyncNow={broker.available ? syncNow : undefined}
+        />
+      )}
     </>
   );
 

@@ -53,11 +53,13 @@ export function mfaRequired(r: BrokerResult): boolean {
 }
 
 export interface CredentialInfo {
-  state: 'none' | 'active' | 'revoked' | string;
+  state: 'none' | 'active' | 'stale' | 'revoked' | string;
   complete: boolean;
   principalName?: string | null;
   isProvider: boolean;
   enrolledAt?: string | null;
+  /** When state === 'stale', the last sync error (e.g. "SSO did not complete…"). */
+  lastError?: string | null;
 }
 
 export interface EnrollmentStatus {
@@ -87,6 +89,7 @@ function credFromJson(j: Record<string, unknown>): CredentialInfo {
     principalName: (j['principal_name'] as string) ?? null,
     isProvider: j['is_provider'] === true,
     enrolledAt: (j['enrolled_at'] as string) ?? null,
+    lastError: (j['last_error'] as string) ?? null,
   };
 }
 

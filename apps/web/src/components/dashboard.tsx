@@ -148,15 +148,40 @@ export function SyncingBanner({ startedAt }: { startedAt: string | null }) {
   );
 }
 
-export function StaleBanner({ onReenroll }: { onReenroll: () => void }) {
+export function StaleBanner({
+  state = 'revoked',
+  isProvider = false,
+  lastError = null,
+  onReenroll,
+}: {
+  state?: string;
+  isProvider?: boolean;
+  lastError?: string | null;
+  onReenroll: () => void;
+  onSyncNow?: () => void; // accepted for caller compatibility; a dead credential can't sync until re-auth
+}) {
+  const revoked = state === 'revoked';
+  // Message + action depend on revoked vs stale, and whether YOU are the credential's provider.
+  let message: string;
+  let actionLabel: string;
+  if (revoked) {
+    message = 'Sync paused — credential revoked. Re-enroll to resume daily updates.';
+    actionLabel = 'Re-enroll';
+  } else if (isProvider) {
+    message = 'Sync stopped — your Church session expired, so this stake’s data isn’t updating. Re-authorize to resume.';
+    actionLabel = 'Re-authorize';
+  } else {
+    message = 'This stake’s daily sync has failed. The leader who set it up needs to re-authorize — or you can take it over by signing in with your Church account.';
+    actionLabel = 'Authorize on my account';
+  }
   return (
     <div className="banner banner--stale" role="status">
-      <span className="row">
+      <span className="row" title={lastError ?? undefined}>
         <Icon name="warning" size={18} color="var(--warning)" />
-        Sync paused — credential revoked. Re-enroll to resume daily updates.
+        {message}
       </span>
       <button type="button" className="btn btn--text" onClick={onReenroll}>
-        Re-enroll
+        {actionLabel}
       </button>
     </div>
   );

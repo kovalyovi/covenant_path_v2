@@ -43,6 +43,17 @@ export function EmptyState({ enrollStatus }: { enrollStatus: EnrollmentStatus | 
         </Button>
       );
     }
+  } else if (cred?.state === 'stale') {
+    title = 'Sync needs re-authorization';
+    body =
+      "This stake's daily sync stopped — the Church session that keeps it updated expired. Sign in again with your Church account to re-authorize and resume updates.";
+    if (churchLoginAvailable) {
+      action = (
+        <Button variant="filled" icon="refresh" onClick={() => void signOut()}>
+          Re-authorize
+        </Button>
+      );
+    }
   } else if (cred?.state === 'active') {
     title = 'Setting up your stake…';
     body =
