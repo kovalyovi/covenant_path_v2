@@ -619,12 +619,15 @@ def admin_stake_remove(stake_id: str, email: str = Depends(require_admin)) -> di
 
 
 @app.get("/admin/actions")
-def admin_actions(email: str = Depends(require_admin)) -> dict:
-    """Recent GitHub Actions runs + the commit changelog. Graceful when GITHUB_TOKEN unset."""
+def admin_actions(runs: int = 15, commits: int = 10, email: str = Depends(require_admin)) -> dict:
+    """Recent GitHub Actions runs + the commit changelog. Graceful when GITHUB_TOKEN unset.
+    `runs`/`commits` (≤100) let the ops detail views fetch more than the console front page."""
     if not admin.github_configured():
         return {"configured": False, "runs": [], "commits": []}
     try:
-        return {"configured": True, "runs": admin.list_runs(), "commits": admin.recent_commits()}
+        return {"configured": True,
+                "runs": admin.list_runs(max(1, min(runs, 100))),
+                "commits": admin.recent_commits(max(1, min(commits, 100)))}
     except Exception as e:  # noqa: BLE001 — surface upstream GitHub errors as 503
         logger.error("admin/actions failed: %s", e)
         raise HTTPException(status_code=503, detail=f"github error: {e}")

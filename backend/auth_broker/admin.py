@@ -148,6 +148,29 @@ def recent_diagnostics(limit: int = 60) -> list[dict]:
     return r.json() if r.status_code == 200 else []
 
 
+# --- tiny TTL cache for the heavy read endpoints (feedback #4: ops console took 15s) -------------
+# The console fires 6+ parallel reads (Supabase REST + GitHub API) on every open; a short cache makes
+# reloads instant and halves Render free-tier CPU. Mutations bust it so revoke/wipe/sync reflect
+# immediately. Per-process (the broker is a single instance).
+import time as _time
+
+_CACHE: dict[str, tuple[float, object]] = {}
+
+
+def _cached(key: str, ttl: float, fn):
+    hit = _CACHE.get(key)
+    now = _time.monotonic()
+    if hit and now - hit[0] < ttl:
+        return hit[1]
+    val = fn()
+    _CACHE[key] = (now, val)
+    return val
+
+
+def _cache_clear() -> None:
+    _CACHE.clear()
+
+
 def _jobs_last_7d() -> dict:
     """stake_id -> number of sync runs in the last 7 days (from sync_diagnostics), for the ops
     cross-stake view (#9). One query, tallied client-side (no per-stake round trips)."""
@@ -314,6 +337,7 @@ def revoke_credential(stake_id: str, email: str) -> dict:
 
 
 def _patch_revoke(stake_id: str, headers: dict) -> dict:
+    _cache_clear()  # the enrolled-stakes view must reflect the revoke immediately
     from datetime import datetime, timezone
     r = requests.patch(
         f"{SUPABASE_URL}/rest/v1/stake_credentials",
@@ -417,6 +441,10 @@ def disconnect_gdrive(stake_id: str) -> dict:
 def enrolled_stakes() -> list[dict]:
     """Every stake + its credential state + member count + freshness — the admin cross-stake
     ops view. Includes stakes with no credential (so admins see who still needs to enroll)."""
+    return _cached("enrolled_stakes", 30, _enrolled_stakes)
+
+
+def _enrolled_stakes() -> list[dict]:
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/stakes",
         headers=_sb_headers(),
@@ -484,6 +512,7 @@ def dispatch_stake_sync(stake_id: str, targets: str = "supabase") -> dict:
 def wipe_stake_data(stake_id: str) -> dict:
     """Delete a stake's MEMBER data (keeps the stake shell + roles + credential; re-populates on the
     next sync / re-enroll). 'Revoke + wipe data' tier."""
+    _cache_clear()
     r = _rpc("wipe_stake_members", {"p_stake_id": stake_id})
     if r.status_code >= 300:
         raise AdminError(f"wipe failed ({r.status_code}): {r.text[:160]}")
@@ -509,6 +538,7 @@ def wipe_stake_data_as_provider(stake_id: str, email: str) -> dict:
 def remove_stake(stake_id: str) -> dict:
     """FULL removal (admin only): credential + members + roles + diagnostics + the stake row, as if it
     never onboarded. Irreversible."""
+    _cache_clear()
     r = _rpc("remove_stake", {"p_stake_id": stake_id})
     if r.status_code >= 300:
         raise AdminError(f"remove failed ({r.status_code}): {r.text[:160]}")
@@ -517,6 +547,10 @@ def remove_stake(stake_id: str) -> dict:
 
 def summary() -> dict:
     """Row counts + data freshness from Supabase (service-role REST)."""
+    return _cached("summary", 30, _summary)
+
+
+def _summary() -> dict:
     last = _one("members", {"select": "updated_at", "order": "updated_at.desc", "limit": 1})
     stake = _one("stakes", {"select": "name,last_synced_at",
                             "order": "last_synced_at.desc.nullslast", "limit": 1})
@@ -690,10 +724,12 @@ def _run_dto(w: dict) -> dict:
 
 
 def list_runs(limit: int = 15) -> list[dict]:
-    r = requests.get(f"https://api.github.com/repos/{GITHUB_REPO}/actions/runs",
-                     headers=_gh_headers(), params={"per_page": limit}, timeout=_TIMEOUT)
-    r.raise_for_status()
-    return [_run_dto(w) for w in r.json().get("workflow_runs", [])[:limit]]
+    def _fetch():
+        r = requests.get(f"https://api.github.com/repos/{GITHUB_REPO}/actions/runs",
+                         headers=_gh_headers(), params={"per_page": limit}, timeout=_TIMEOUT)
+        r.raise_for_status()
+        return [_run_dto(w) for w in r.json().get("workflow_runs", [])[:limit]]
+    return _cached(f"runs:{limit}", 30, _fetch)
 
 
 def run_status(run_id: int) -> dict:
@@ -706,6 +742,7 @@ def run_status(run_id: int) -> dict:
 def dispatch(workflow: str, ref: str = "main", inputs: dict | None = None) -> None:
     if workflow not in DISPATCHABLE:
         raise AdminError(f"workflow not dispatchable: {workflow}")
+    _cache_clear()  # a fresh run should appear on the next console read
     body: dict = {"ref": ref}
     if inputs:
         body["inputs"] = inputs
@@ -770,15 +807,17 @@ def create_feedback_issue(title: str, body: str, reporter: str) -> dict:
 
 
 def recent_commits(limit: int = 10) -> list[dict]:
-    r = requests.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits",
-                     headers=_gh_headers(), params={"per_page": limit}, timeout=_TIMEOUT)
-    r.raise_for_status()
-    out = []
-    for c in r.json()[:limit]:
-        commit = c.get("commit", {})
-        out.append({"sha": (c.get("sha") or "")[:7],
-                    "message": (commit.get("message") or "").splitlines()[0],
-                    "author": (commit.get("author") or {}).get("name"),
-                    "date": (commit.get("author") or {}).get("date"),
-                    "html_url": c.get("html_url")})
-    return out
+    def _fetch():
+        r = requests.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits",
+                         headers=_gh_headers(), params={"per_page": limit}, timeout=_TIMEOUT)
+        r.raise_for_status()
+        out = []
+        for c in r.json()[:limit]:
+            commit = c.get("commit", {})
+            out.append({"sha": (c.get("sha") or "")[:7],
+                        "message": (commit.get("message") or "").splitlines()[0],
+                        "author": (commit.get("author") or {}).get("name"),
+                        "date": (commit.get("author") or {}).get("date"),
+                        "html_url": c.get("html_url")})
+        return out
+    return _cached(f"commits:{limit}", 60, _fetch)
