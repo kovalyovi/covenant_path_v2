@@ -724,8 +724,16 @@ function EnrolledStakesCard({
               {(credState === 'active' || credState === 'stale') && (
                 <IconButton icon="link_off" label="Revoke sync credential" size={18} disabled={busy} onClick={() => onRevoke(stakeId, name)} />
               )}
-              <IconButton icon="delete" label="Wipe member data (keeps the stake)" size={18} disabled={busy} onClick={() => onWipe(stakeId, name)} />
-              <IconButton icon="delete_forever" label="Remove stake completely" size={18} disabled={busy} onClick={() => onRemove(stakeId, name)} />
+              <button type="button" disabled={busy} onClick={() => onWipe(stakeId, name)}
+                title="Wipe member data (keeps the stake + roles + credential)"
+                style={{ background: 'none', border: 'none', color: '#e65100', cursor: 'pointer', fontSize: 12, padding: '2px 6px', fontWeight: 600 }}>
+                Wipe
+              </button>
+              <button type="button" disabled={busy} onClick={() => onRemove(stakeId, name)}
+                title="Remove stake completely (irreversible)"
+                style={{ background: 'none', border: 'none', color: '#c62828', cursor: 'pointer', fontSize: 12, padding: '2px 6px', fontWeight: 600 }}>
+                Remove
+              </button>
             </div>
             <div className="wrap" style={{ gap: 8, alignItems: 'center' }}>
               <span className="chip" style={{ borderColor: credColor, color: credColor, background: `${credColor}1f`, fontSize: 12 }}>
