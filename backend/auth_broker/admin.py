@@ -43,6 +43,10 @@ class NotAdmin(Exception):
     """Caller is not an authenticated admin (-> 403)."""
 
 
+class NotFound(Exception):
+    """Requested resource doesn't exist (-> 404)."""
+
+
 # --- auth -------------------------------------------------------------------
 
 def _sb_headers() -> dict:
@@ -484,6 +488,22 @@ def wipe_stake_data(stake_id: str) -> dict:
     if r.status_code >= 300:
         raise AdminError(f"wipe failed ({r.status_code}): {r.text[:160]}")
     return {"status": "wiped", "deleted": (r.json() if r.text else None)}
+
+
+def wipe_stake_data_as_provider(stake_id: str, email: str) -> dict:
+    """Provider self-service tier of wipe_stake_data: the SAME wipe RPC, but gated to the
+    credential's principal (mirrors revoke_credential). NotFound when the stake has no
+    credential on file (-> 404); NotAdmin when the caller isn't the provider (-> 403)."""
+    cred_r = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=_sb_headers(),
+                          params={"select": "principal_email", "stake_id": f"eq.{stake_id}",
+                                  "limit": "1"}, timeout=_TIMEOUT)
+    creds = cred_r.json() if cred_r.status_code == 200 else []
+    cred = creds[0] if creds else None
+    if not cred:
+        raise NotFound("no credential on file for this stake")
+    if (cred.get("principal_email") or "").lower() != email.lower():
+        raise NotAdmin("only the credential provider can wipe stake data")
+    return wipe_stake_data(stake_id)
 
 
 def remove_stake(stake_id: str) -> dict:

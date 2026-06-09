@@ -272,6 +272,12 @@ export class BrokerClient {
     await this.authed('POST', '/auth/revoke', { stake_id: stakeId });
   }
 
+  /** Provider self-service: wipe the stake's MEMBER data (access + the sync credential stay;
+   *  data re-populates on the next sync). Server-side provider gate mirrors /auth/revoke. */
+  wipeData(stakeId: string): Promise<Record<string, unknown>> {
+    return this.authed('POST', '/auth/wipe-data', { stake_id: stakeId });
+  }
+
   /** Provider triggers a sync for their own stake. Returns {coverage_complete, last_synced_at}. */
   syncNow(): Promise<Record<string, unknown>> {
     return this.authed('POST', '/auth/sync-now');

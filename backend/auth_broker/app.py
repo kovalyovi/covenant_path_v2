@@ -192,6 +192,28 @@ def auth_revoke(req: RevokeReq, authorization: str = Header(default="")) -> dict
         raise HTTPException(status_code=503, detail=str(e))
 
 
+@app.post("/auth/wipe-data")
+def auth_wipe_data(req: RevokeReq, authorization: str = Header(default="")) -> dict:
+    """Provider self-service tier of the admin wipe (/admin/stakes/{id}/wipe-data): delete the
+    caller's stake MEMBER data via the same wipe_stake_members RPC — keeps the stake + roles +
+    credential; data re-populates on the next sync. Provider-gated, validated server-side.
+    Body shape matches /auth/revoke ({stake_id})."""
+    try:
+        email = admin.verify_user(authorization)
+    except admin.NotAdmin as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    try:
+        return admin.wipe_stake_data_as_provider(req.stake_id, email)
+    except admin.NotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except admin.NotAdmin as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 @app.post("/auth/sync-now")
 def auth_sync_now(authorization: str = Header(default="")) -> dict:
     """Provider triggers a sync for their own stake (the 'Sync now' control). Returns whether the

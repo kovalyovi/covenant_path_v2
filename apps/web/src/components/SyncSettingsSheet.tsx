@@ -21,8 +21,11 @@ interface Props {
 }
 
 export function SyncSettingsSheet({ open, onClose, initial, onLoaded, onRevoke, onSyncNow }: Props) {
+  const toast = useToast();
   const [status, setStatus] = useState<EnrollmentStatus | null>(initial);
   const [loading, setLoading] = useState(initial == null);
+  const [confirmWipe, setConfirmWipe] = useState(false);
+  const [wiping, setWiping] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -50,7 +53,28 @@ export function SyncSettingsSheet({ open, onClose, initial, onLoaded, onRevoke, 
   const cred = status?.credential;
   const isProvider = cred?.isProvider === true;
 
+  /** Provider self-service wipe: deletes the stake's MEMBER records (access + the sync credential
+   *  stay; data re-populates on the next sync) — the self-serve mirror of the admin "Wipe data". */
+  async function doWipe() {
+    const stakeId = status?.stakeId;
+    setConfirmWipe(false);
+    if (!stakeId) return;
+    setWiping(true);
+    try {
+      await broker.wipeData(stakeId);
+      toast.show({ message: "Stake data wiped — it will re-populate on the next sync." });
+      const s = await broker.enrollmentStatus();
+      setStatus(s);
+      onLoaded(s);
+    } catch (e) {
+      toast.show({ message: `Could not wipe data: ${e instanceof Error ? e.message : e}` });
+    } finally {
+      setWiping(false);
+    }
+  }
+
   return (
+    <>
     <Modal open={open} onClose={onClose} sheet title="Sync settings">
       {loading ? (
         <SyncSettingsSkeleton />
@@ -109,11 +133,44 @@ export function SyncSettingsSheet({ open, onClose, initial, onLoaded, onRevoke, 
               Revoke my sync access
             </Button>
           )}
+          {isProvider && (
+            <Button
+              variant="outlined"
+              icon="error"
+              disabled={wiping}
+              loading={wiping}
+              onClick={() => setConfirmWipe(true)}
+              style={{ marginTop: 8 }}
+            >
+              Wipe stake data
+            </Button>
+          )}
           {isProvider && <ScheduleSection />}
           <GoogleDriveSection />
         </div>
       )}
     </Modal>
+
+    <Modal
+      open={confirmWipe}
+      onClose={() => setConfirmWipe(false)}
+      title="Wipe stake data?"
+      hideClose
+      actions={
+        <>
+          <Button onClick={() => setConfirmWipe(false)}>Cancel</Button>
+          <Button variant="filled" onClick={() => void doWipe()}>
+            Wipe data
+          </Button>
+        </>
+      }
+    >
+      <p>
+        This deletes ALL member records for your stake. Your access and the sync credential stay,
+        and the data re-populates on the next sync.
+      </p>
+    </Modal>
+    </>
   );
 }
 

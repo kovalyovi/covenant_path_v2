@@ -270,6 +270,68 @@ def test_mfa_single_factor_select_noop() -> None:
         okta_flow._PENDING.pop(lid, None)
 
 
+def test_provider_wipe_data() -> None:
+    # /auth/wipe-data: the provider self-service tier of the admin wipe. Same RPC
+    # (wipe_stake_members), but gated to the credential's principal_email — mirrors
+    # revoke_credential. All REST calls are mocked (no network).
+
+    # No bearer token -> 403 before any network call (verify_user short-circuits).
+    r = client.post("/auth/wipe-data", json={"stake_id": "s1"})
+    check("auth/wipe-data without token -> 403", r.status_code == 403)
+
+    class _Resp:
+        def __init__(self, status: int, body):
+            self.status_code = status
+            self._body = body
+            self.text = "" if body is None else str(body)
+
+        def json(self):
+            return self._body
+
+    calls: dict = {}
+    creds: list = [{"principal_email": "provider@test"}]
+
+    def fake_get(url, **_kw):
+        calls["get_url"] = url
+        return _Resp(200, list(creds))
+
+    def fake_post(url, **kw):
+        calls["post_url"] = url
+        calls["post_json"] = kw.get("json")
+        return _Resp(200, 42)  # RPC returns the deleted-row count
+
+    saved_env = (admin.SUPABASE_URL, admin.SERVICE_KEY)
+    saved_fns = (admin.verify_user, admin.requests.get, admin.requests.post)
+    admin.SUPABASE_URL, admin.SERVICE_KEY = "https://x.supabase.co", "svc"
+    admin.verify_user = lambda _auth: "provider@test"
+    admin.requests.get, admin.requests.post = fake_get, fake_post
+    try:
+        hdr = {"Authorization": "Bearer t"}
+        r = client.post("/auth/wipe-data", json={"stake_id": "s1"}, headers=hdr)
+        check("provider wipe -> 200", r.status_code == 200)
+        check("provider wipe returns status:wiped", r.json().get("status") == "wiped")
+        check("wipe gate reads the stake credential",
+              "stake_credentials" in calls.get("get_url", ""))
+        check("wipe calls the wipe_stake_members RPC with the stake id",
+              str(calls.get("post_url", "")).endswith("/rpc/wipe_stake_members")
+              and calls.get("post_json") == {"p_stake_id": "s1"})
+
+        # A signed-in NON-provider must be rejected (403) and never reach the RPC.
+        calls.clear()
+        admin.verify_user = lambda _auth: "someone-else@test"
+        r = client.post("/auth/wipe-data", json={"stake_id": "s1"}, headers=hdr)
+        check("non-provider wipe -> 403", r.status_code == 403)
+        check("non-provider wipe never calls the RPC", "post_url" not in calls)
+
+        # No credential on file for the stake -> 404.
+        creds.clear()
+        r = client.post("/auth/wipe-data", json={"stake_id": "s1"}, headers=hdr)
+        check("wipe with no credential -> 404", r.status_code == 404)
+    finally:
+        admin.SUPABASE_URL, admin.SERVICE_KEY = saved_env
+        admin.verify_user, admin.requests.get, admin.requests.post = saved_fns
+
+
 def test_admin_requires_auth() -> None:
     # No bearer token -> 403 before any network call (verify_admin short-circuits).
     r = client.get("/admin/summary")
@@ -330,6 +392,7 @@ def main() -> int:
     test_select_factor_no_challenge_raises()
     test_idx_summary_pii_safe()
     test_mfa_single_factor_select_noop()
+    test_provider_wipe_data()
     test_admin_requires_auth()
     test_admin_actions_graceful_without_github()
     test_dispatch_allowlist()
