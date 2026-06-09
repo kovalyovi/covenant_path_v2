@@ -318,6 +318,25 @@ class EndpointController:
         else:
             self.delay_s = min(self.max_delay, max(self.delay_s, self.min_delay) * 1.6)
 
+    def seed(self, prior: dict) -> None:
+        """Resume from a previous run's summary (for tiled GitHub-Actions runs that each last <6h):
+        start at the known-good gold spot instead of re-ramping from concurrency=1 every time."""
+        g = (prior or {}).get("gold_spot")
+        if g:
+            self.gold = GoldSpot(int(g["concurrency"]), float(g["delay_s"]), float(g["per_min"]),
+                                 float(g["success"]), float(g["p50_ms"]), float(g["p95_ms"]))
+            # Resume gently: at the gold config, but verify before pushing past it again.
+            self.concurrency = max(1, int(g["concurrency"]))
+            self.delay_s = max(self.min_delay, float(g["delay_s"]))
+        if prior.get("observed_ceiling_per_min") is not None:
+            self.ceiling_per_min = float(prior["observed_ceiling_per_min"])
+        if prior.get("first_error_per_min") is not None:
+            self.first_error_per_min = float(prior["first_error_per_min"])
+        for h, rate in (prior.get("success_by_hour") or {}).items():
+            # carry forward as a single weighted point so diurnal coverage accumulates across runs
+            self.by_hour_total[int(h)] += 100
+            self.by_hour_ok[int(h)] += int(round(float(rate) * 100))
+
     def summary(self) -> dict:
         hourly = {str(h): round(self.by_hour_ok[h] / self.by_hour_total[h], 3)
                   for h in sorted(self.by_hour_total) if self.by_hour_total[h]}
@@ -361,6 +380,30 @@ class Harness:
             max_concurrency=args.max_concurrency, min_delay=args.min_delay,
             max_delay=args.max_delay, window=args.window, confirm=args.confirm,
             cooldown_s=args.cooldown, kill_after=args.kill_after) for t in self.targets}
+        if args.resume:
+            self._resume(args.resume)
+
+    def _resume(self, path_arg: str) -> None:
+        """Seed controllers from a prior recommendation.json so tiled (<6h) runs accumulate. Pass a
+        path, or 'auto' to pick the most recent recommendation_*.json in the output dir."""
+        path = None
+        if path_arg == "auto":
+            prior = sorted(OUT.glob("recommendation_*.json"))
+            path = prior[-1] if prior else None
+        else:
+            cand = Path(path_arg)
+            path = cand if cand.exists() else None
+        if not path:
+            logger.info("resume: no prior recommendation found (starting fresh)")
+            return
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            for name, summ in (doc.get("endpoints") or {}).items():
+                if name in self.ctrls:
+                    self.ctrls[name].seed(summ)
+            logger.info("resumed gold spots from %s", path.name)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("resume failed (%s) — starting fresh", exc)
 
     def _sample_members(self, per_unit: int) -> list[tuple[str, object]]:
         """Harvest real (person_uuid, legacyCmisId) pairs from one progress-record per unit — these
@@ -469,6 +512,9 @@ def main() -> int:
     ap.add_argument("--confirm", type=int, default=3, help="clean rounds to confirm a gold spot")
     ap.add_argument("--cooldown", type=float, default=900.0, help="park duration after kill switch (s)")
     ap.add_argument("--kill-after", type=int, default=4, help="bad rounds at floor before parking")
+    ap.add_argument("--resume", default=None,
+                    help="seed gold spots from a prior recommendation.json (path, or 'auto' for the "
+                         "latest in the output dir) — for tiled GitHub-Actions runs")
     args = ap.parse_args()
 
     OUT.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,94 @@
+name: Rate finder (endpoint gold spots)
+
+# Empirically find each flaky LCR endpoint's SAFE sustained request rate (tools/rate_finder.py).
+#
+# WHY tiled, not one long run: a GitHub job is capped at 6h, so a 24-72h characterization can't be a
+# single job. Instead each firing runs ONE ~5h job; schedule firings across the day so the
+# `success_by_hour` buckets tile the full diurnal cycle, and `--resume auto` lets each run continue
+# from the previous run's gold spots (downloaded artifact) instead of re-ramping from scratch.
+#
+# Start SUPERVISED: trigger manually (workflow_dispatch) for a short run first to confirm CI auth +
+# polite/sane output before enabling the schedule. The schedule below is DISABLED by default
+# (commented) — turn it on only once you're happy with a manual run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "Run duration (hours, ≤5 to stay under the 6h job cap)"
+        default: "1"
+      max_concurrency:
+        description: "Hard cap on parallel requests per endpoint (keep low — it's a shared server)"
+        default: "3"
+      only:
+        description: "Restrict to these endpoints (comma list), or blank for all"
+        default: ""
+      no_post:
+        description: "Exclude the /mlt profile POST actions (true/false)"
+        default: "false"
+  # schedule:
+  #   # Every 6h, offset from the daily sync + probe. Tiles the clock for diurnal coverage; enable
+  #   # ONLY after a supervised manual run looks good. Each run resumes from the last via artifact.
+  #   - cron: "15 1,7,13,19 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rate-finder           # never overlap runs (would double the load on LCR)
+  cancel-in-progress: false
+
+jobs:
+  rate-finder:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330        # 5.5h — safely under GitHub's 6h job cap
+    env:
+      LCR_LOGIN: ${{ secrets.LCR_LOGIN }}
+      LCR_PASSWORD: ${{ secrets.LCR_PASSWORD }}
+      CP_TOKEN_KEY: ${{ secrets.CP_TOKEN_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Resume from the most recent successful run's recommendation, so tiled runs accumulate gold
+      # spots + diurnal coverage instead of re-ramping from concurrency=1 each time. Best-effort.
+      - name: Download previous gold spots (if any)
+        continue-on-error: true
+        run: |
+          mkdir -p tools/output/rate_finder
+          gh run download --name rate-finder-results --dir _prev \
+            -R "$GITHUB_REPOSITORY" 2>/dev/null || echo "no prior results — starting fresh"
+          if ls _prev/recommendation_*.json >/dev/null 2>&1; then
+            cp _prev/recommendation_*.json tools/output/rate_finder/ || true
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Find gold spots
+        run: |
+          NOPOST=""
+          if [ "${{ github.event.inputs.no_post }}" = "true" ]; then NOPOST="--no-post"; fi
+          ONLY=""
+          if [ -n "${{ github.event.inputs.only }}" ]; then ONLY="--only ${{ github.event.inputs.only }}"; fi
+          python tools/rate_finder.py \
+            --hours "${{ github.event.inputs.hours || '1' }}" \
+            --max-concurrency "${{ github.event.inputs.max_concurrency || '3' }}" \
+            --resume auto $NOPOST $ONLY
+
+      # Persist results (runners are ephemeral). The recommendation.json carries each endpoint's gold
+      # spot; aggregate these artifacts across tiled runs to read the safe per-endpoint pacing.
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rate-finder-results
+          path: tools/output/rate_finder/
+          retention-days: 30

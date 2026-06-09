@@ -112,6 +112,24 @@ def test_kill_switch_parks_endpoint() -> None:
     check("parked_until is in the future", c.parked_until > time.monotonic())
 
 
+def test_resume_seeds_gold_spot() -> None:
+    # A tiled GitHub-Actions run resumes from the prior recommendation instead of re-ramping from
+    # concurrency=1: the controller should adopt the saved gold spot + its config + diurnal history.
+    c = _ctrl()
+    c.seed({
+        "gold_spot": {"concurrency": 3, "delay_s": 0.5, "per_min": 240.0,
+                      "success": 1.0, "p50_ms": 120, "p95_ms": 300},
+        "observed_ceiling_per_min": 240.0,
+        "first_error_per_min": 300.0,
+        "success_by_hour": {"2": 1.0, "14": 0.8},
+    })
+    check("resume adopts the prior gold spot", c.gold is not None and c.gold.per_min == 240.0)
+    check("resume starts at the gold config (not c=1)", c.concurrency == 3 and c.delay_s == 0.5)
+    check("resume carries the observed ceiling", c.ceiling_per_min == 240.0)
+    check("resume carries first_error rate", c.first_error_per_min == 300.0)
+    check("resume carries diurnal history", c.by_hour_total.get(2, 0) > 0)
+
+
 def main() -> int:
     print("rate_finder controller tests")
     test_sample_classification()
@@ -120,6 +138,7 @@ def main() -> int:
     test_permanent_404_is_not_load_failure()
     test_p95_cap_enforced()
     test_kill_switch_parks_endpoint()
+    test_resume_seeds_gold_spot()
     print(f"\n{_PASS} passed, {_FAIL} failed")
     return 1 if _FAIL else 0
 
