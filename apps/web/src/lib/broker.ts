@@ -138,6 +138,8 @@ export class BrokerClient {
 
   private async postJson(path: string, body: unknown): Promise<Record<string, unknown>> {
     if (!this.available) throw new BrokerError('Church login is not configured (BROKER_URL).');
+    const _t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    let _retries = 0;
     let resp: Response | null = null;
     let lastErr: unknown;
     for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
@@ -150,6 +152,7 @@ export class BrokerClient {
         break; // got an HTTP response (success or error) — stop retrying
       } catch (e) {
         lastErr = e;
+        _retries = attempt + 1;
         if (attempt < RETRY_DELAYS_MS.length) {
           this.onStatus?.('Waking up the sign-in service… this can take up to a minute on first use.');
           await delay(RETRY_DELAYS_MS[attempt]);
@@ -171,7 +174,27 @@ export class BrokerClient {
     if (resp.status >= 400) {
       throw new BrokerError(String(data['detail'] ?? `Sign-in failed (${resp.status}).`));
     }
+    this.logTiming(path, _t0, _retries);
     return data;
+  }
+
+  /** #6 login profiling: time the login round-trip (incl. cold-start retries) → console + the broker
+   *  /log endpoint (→ Axiom), so the client-EXPERIENCED latency is easy to harvest and compare with
+   *  the broker's server-side `login.complete`. Fire-and-forget; never blocks login. */
+  private logTiming(path: string, t0: number, retries: number): void {
+    if (!/\/auth\/(password|mfa\/verify|email\/verify)/.test(path)) return;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const ms = Math.round(now - t0);
+    console.info(`[login-timing] ${path} ${ms}ms (cold-start retries: ${retries})`);
+    try {
+      void fetch(`${brokerUrl}/log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ level: 'info', event: 'client.login.timing', surface: 'web', context: { path, ms, retries } }),
+      }).catch(() => {});
+    } catch {
+      /* ignore */
+    }
   }
 
   private async post(path: string, body: unknown): Promise<BrokerResult> {

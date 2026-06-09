@@ -170,11 +170,15 @@ def _exchange_code(session: requests.Session, payload: dict, verifier: str, logi
 def start_login(username: str, password: str) -> dict:
     """Begin a Church login. Returns {status: 'success', identity} or
     {status: 'mfa_required', login_id, factors:[{id,label,method}]}."""
+    from backend import observability as obs
     _prune()
     login_id = _new_login_id()
+    cid = obs.new_correlation_id()  # ties this login's phases together in Axiom (#6 login profiling)
     session = new_session()
+    _t0 = time.time()
     try:
-        payload, verifier = _drive_to_password(session, username, password, login_id)
+        with obs.span("login.password", correlation_id=cid, endpoint="okta"):
+            payload, verifier = _drive_to_password(session, username, password, login_id)
     except AuthError:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -182,10 +186,16 @@ def start_login(username: str, password: str) -> dict:
         raise AuthError(f"login failed: {exc}") from exc
 
     if "successWithInteractionCode" in payload:
-        rt = _exchange_code(session, payload, verifier, login_id)
-        ident = _identity(session, login_id)
+        with obs.span("login.token_exchange", correlation_id=cid):
+            rt = _exchange_code(session, payload, verifier, login_id)
+        with obs.span("login.identity", correlation_id=cid, endpoint="lcr"):
+            ident = _identity(session, login_id)
         if rt:
             ident["refresh_token"] = rt
+        _ms = round((time.time() - _t0) * 1000, 1)
+        obs.event("login.complete", correlation_id=cid, status="success", duration_ms=_ms)
+        obs.flush()
+        logger.info("[auth %s] login.complete in %.0fms (no MFA)", login_id, _ms)
         return {"status": "success", "identity": ident, "cookies": serialize_cookies(session)}
 
     rems = _remediations(payload)
@@ -252,8 +262,13 @@ def verify_mfa(login_id: str, code: str) -> dict:
         raise AuthError(f"MFA verification failed: {exc}") from exc
     if "successWithInteractionCode" not in payload:
         raise AuthError(_idx_messages(payload) or "incorrect code")
-    rt = _exchange_code(session, payload, verifier, login_id)
-    ident = _identity(session, login_id)
+    from backend import observability as obs
+    cid = obs.new_correlation_id()
+    with obs.span("login.token_exchange", correlation_id=cid):
+        rt = _exchange_code(session, payload, verifier, login_id)
+    with obs.span("login.identity", correlation_id=cid, endpoint="lcr"):
+        ident = _identity(session, login_id)
+    obs.flush()
     if rt:
         ident["refresh_token"] = rt
     cookies = serialize_cookies(session)
