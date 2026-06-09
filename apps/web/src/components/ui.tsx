@@ -70,19 +70,25 @@ interface SectionCardProps {
   children: ReactNode;
   icon?: IconName;
   iconColor?: string;
+  /** Custom leading element (e.g. a completion ring); replaces the default `icon` glyph when set. */
+  iconNode?: ReactNode;
   trailing?: ReactNode;
   onClick?: () => void;
 }
 
 /** A titled section as a rounded card — the building block for detail + KPI pages. Mirrors SectionCard. */
-export function SectionCard({ title, children, icon, iconColor, trailing, onClick }: SectionCardProps) {
+export function SectionCard({ title, children, icon, iconColor, iconNode, trailing, onClick }: SectionCardProps) {
   const accent = iconColor ?? 'var(--primary)';
   const head = (
     <div className="section-card__head">
-      {icon && (
-        <span className="section-card__icon" style={{ background: hexA(toHex(accent), 0.14), color: accent }}>
-          <Icon name={icon} size={18} />
-        </span>
+      {iconNode ? (
+        iconNode
+      ) : (
+        icon && (
+          <span className="section-card__icon" style={{ background: hexA(toHex(accent), 0.14), color: accent }}>
+            <Icon name={icon} size={18} />
+          </span>
+        )
       )}
       <span className="section-card__title">{title}</span>
       {trailing}

@@ -8,7 +8,11 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useDashboard } from '../hooks/useDashboard';
 import type { Member } from '../lib/member';
 import { detailsOf, freshness } from '../lib/member';
-import { endowmentDisplay } from '../logic/milestones';
+import {
+  endowmentDisplay, completionOf, callingEligible, ministeringAssignmentEligible,
+  aaronicEligible, melchizedekEligible, priesthoodEligible, templeRecommendEligible,
+  patriarchalEligible, ageOf,
+} from '../logic/milestones';
 import { agoOrNever } from '../logic/dates';
 import { Avatar, IconButton, SectionCard } from '../components/ui';
 import { Icon, type IconName } from '../components/Icon';
@@ -48,6 +52,9 @@ export function PersonDetailPage() {
       ? `Baptized ${baptismDate}`
       : null;
   const uuid = member['person_uuid'] != null ? String(member['person_uuid']) : undefined;
+  const sexLabel = member['sex'] === 'M' ? 'Male' : member['sex'] === 'F' ? 'Female' : '';
+  const age = ageOf(member);
+  const demo = [sexLabel, age].filter(Boolean).join(' · ');
 
   return (
     <div className="app-shell">
@@ -65,16 +72,22 @@ export function PersonDetailPage() {
                 <h1 style={{ fontSize: '1.25rem' }}>{name}</h1>
                 {String(member['unit_name'] ?? '') && <div>{String(member['unit_name'])}</div>}
                 {memberSince && <div>{memberSince}</div>}
+                {demo && <div className="small">{demo}</div>}
                 {baptismLine && <div className="small">{baptismLine}</div>}
               </div>
             </div>
           </div>
 
-          <SectionCard title="Covenant Path" icon="timelapse">
+          <SectionCard
+            title="Covenant Path"
+            iconNode={<CompletionRing pct={completionOf(member)} />}
+          >
             <GoldenHourChips member={member} highlightNext labeled />
           </SectionCard>
 
-          {details ? <RichBody member={member} d={details} /> : <FlatFallback member={member} />}
+          <RecordCard member={member} />
+
+          {details && <RichBody member={member} d={details} />}
 
           {uuid && <CommentsSection member={member} />}
         </div>
@@ -110,26 +123,37 @@ function DetailAppBar({ title, uuid, onBack }: { title: string; uuid?: string; o
 
 /** Two columns on wide screens, stacked on narrow. Mirrors `_RichBody`. */
 function RichBody({ member, d }: { member: Member; d: Record<string, unknown> }) {
+  // Eligibility-gated name sections: hide a section that doesn't APPLY to this person (no priesthood
+  // for women, no calling for a child) — but never hide a section that has real recorded data.
+  const priesthoodLines = strings(d['priesthoodOrdinations']);
+  const callingLines = strings(d['callings']);
+  const maLines = strings(d['ministeringAssignments']);
   const left = (
     <>
       <SacramentSection d={d} />
       <FriendsSection d={d} recordedYes={member['friends'] === 'Yes'} count={asNum(member['friends_count'])} />
-      <ListTextSection title="Priesthood Ordination" icon="premium" lines={strings(d['priesthoodOrdinations'])} emptyText="No priesthood ordination on record." />
-      <ListTextSection
-        title="Calling"
-        icon="badge"
-        lines={strings(d['callings'])}
-        emptyText="Not yet been given a calling."
-        emptyIsAlert
-        recordedYes={member['calling'] === 'Yes'}
-      />
-      <ListTextSection
-        title="Ministering Assignment"
-        icon="volunteer"
-        lines={strings(d['ministeringAssignments'])}
-        emptyText="Not yet received a ministering assignment."
-        recordedYes={member['ministering_assignment'] === 'Yes'}
-      />
+      {(priesthoodEligible(member) || priesthoodLines.length > 0) && (
+        <ListTextSection title="Priesthood Ordination" icon="premium" lines={priesthoodLines} emptyText="No priesthood ordination on record." />
+      )}
+      {(callingEligible(member) || callingLines.length > 0) && (
+        <ListTextSection
+          title="Calling"
+          icon="badge"
+          lines={callingLines}
+          emptyText="Not yet been given a calling."
+          emptyIsAlert
+          recordedYes={member['calling'] === 'Yes'}
+        />
+      )}
+      {(ministeringAssignmentEligible(member) || maLines.length > 0) && (
+        <ListTextSection
+          title="Ministering Assignment"
+          icon="volunteer"
+          lines={maLines}
+          emptyText="Not yet received a ministering assignment."
+          recordedYes={member['ministering_assignment'] === 'Yes'}
+        />
+      )}
       <NamesSection
         title="Ministering Brothers & Sisters"
         icon="diversity"
@@ -445,48 +469,96 @@ function TagsSection({ d }: { d: Record<string, unknown> }) {
   );
 }
 
-/** Pre-`details` rows: the original flat field list, so the page still works. Mirrors `_FlatFallback`. */
-function FlatFallback({ member }: { member: Member }) {
-  const fields: Array<[string, string]> = [
-    ['Unit', 'unit_name'],
-    ['Baptism date', 'baptism_date'],
-    ['Birth date', 'birth_date'],
-    ['Friends', 'friends'],
-    ['Aaronic Priesthood', 'aaronic_priesthood'],
-    ['Melchizedek Priesthood', 'melchizedek_priesthood'],
-    ['Calling', 'calling'],
-    ['Ministering brothers/sisters', 'ministering_brothers_sisters'],
-    ['Ministering assignment', 'ministering_assignment'],
-    ['Temple recommend', 'temple_recommend'],
-    ['Patriarchal blessing', 'patriarchal_blessing'],
-    ['Living ordinance', 'living_ordinance'],
-  ];
+/** Circular completion ring for the Covenant Path header: arc fills with the member's eligible-only
+ *  milestone completion, and goes solid green with a check at 100%. */
+function CompletionRing({ pct, size = 30 }: { pct: number; size?: number }) {
+  const done = pct >= 1;
+  const stroke = 3;
+  const r = (size - stroke) / 2;
+  const circ = 2 * Math.PI * r;
+  const GREEN = '#2e7d32';
+  const color = done ? GREEN : 'var(--primary)';
   return (
-    <div style={{ marginTop: 8 }}>
-      <hr className="divider" />
-      {fields.map(([label, key]) => {
-        const value = key === 'living_ordinance' ? endowmentDisplay(member) : String(member[key] ?? '—');
-        const fr = freshness(member, key);
-        const stale = fr.state === 'warn' || fr.state === 'error' || fr.state === 'never';
-        return (
-          <div key={key} className="row" style={{ justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--outline-variant)' }}>
-            <span>{label}</span>
-            <span className="row" style={{ gap: 6, alignItems: 'center' }}>
-              {stale && (
-                <Icon
-                  name="schedule"
-                  size={14}
-                  color={fr.state === 'warn' ? '#f9a825' : '#e53935'}
-                  title={fr.state === 'never' ? 'Not fetched yet' : `Last fetched ${agoOrNever(fr.fetched)}`}
-                />
-              )}
-              <strong>{value}</strong>
-            </span>
-          </div>
-        );
-      })}
-    </div>
+    <span
+      style={{ position: 'relative', display: 'inline-flex', width: size, height: size, flex: '0 0 auto' }}
+      title={`Covenant Path ${Math.round(pct * 100)}% complete${done ? ' — all steps done' : ''}`}
+      aria-label={`Covenant Path ${Math.round(pct * 100)} percent complete`}
+    >
+      <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--outline-variant)" strokeWidth={stroke} />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke={color}
+          strokeWidth={stroke}
+          strokeDasharray={circ}
+          strokeDashoffset={circ * (1 - Math.max(0, Math.min(1, pct)))}
+          strokeLinecap="round"
+          style={{ transition: 'stroke-dashoffset .45s ease' }}
+        />
+      </svg>
+      {done && (
+        <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Icon name="check" size={15} color={GREEN} />
+        </span>
+      )}
+    </span>
   );
+}
+
+/** "Record": every covenant-path status that APPLIES to this member, as key→value with stale clocks —
+ *  the comprehensive at-a-glance summary. Eligibility-gated (no priesthood rows for women, no calling
+ *  for a child); endowment shows "N/A" for the not-yet-eligible. Works from flat fields, so it renders
+ *  even when the rich `details` subtree is absent. */
+function RecordCard({ member }: { member: Member }) {
+  const rows: Array<[string, string, string]> = ([
+    ['Friends', 'friends', disp(member['friends']), true],
+    ['Calling', 'calling', disp(member['calling']), callingEligible(member)],
+    ['Has ministers', 'ministering_brothers_sisters', disp(member['ministering_brothers_sisters']), true],
+    ['Ministering assignment', 'ministering_assignment', disp(member['ministering_assignment']), ministeringAssignmentEligible(member)],
+    ['Aaronic Priesthood', 'aaronic_priesthood', disp(member['aaronic_priesthood']), aaronicEligible(member)],
+    ['Melchizedek Priesthood', 'melchizedek_priesthood', disp(member['melchizedek_priesthood']), melchizedekEligible(member)],
+    ['Temple recommend', 'temple_recommend', disp(member['temple_recommend']), templeRecommendEligible(member)],
+    ['Endowment', 'living_ordinance', disp(endowmentDisplay(member)), true],
+    ['Patriarchal blessing', 'patriarchal_blessing', disp(member['patriarchal_blessing']), patriarchalEligible(member)],
+  ] as Array<[string, string, string, boolean]>)
+    .filter(([, , , show]) => show)
+    .map(([label, key, value]) => [label, key, value]);
+  return (
+    <SectionCard title="Record" icon="badge">
+      <div>
+        {rows.map(([label, key, value]) => {
+          const fr = freshness(member, key);
+          const stale = fr.state === 'warn' || fr.state === 'error' || fr.state === 'never';
+          return (
+            <div key={key} className="row" style={{ justifyContent: 'space-between', padding: '7px 0', borderBottom: '1px solid var(--outline-variant)' }}>
+              <span className="muted">{label}</span>
+              <span className="row" style={{ gap: 6, alignItems: 'center' }}>
+                {stale && (
+                  <Icon
+                    name="schedule"
+                    size={13}
+                    color={fr.state === 'warn' ? '#f9a825' : '#e53935'}
+                    title={fr.state === 'never' ? 'Not fetched yet' : `Last fetched ${agoOrNever(fr.fetched)}`}
+                  />
+                )}
+                <strong>{value}</strong>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </SectionCard>
+  );
+}
+
+/** Clean a status value for display: sentinels (needs-profile-api / blocked) → "—" (unknown). */
+function disp(v: unknown): string {
+  const s = String(v ?? '');
+  if (!s || s === 'needs-profile-api' || s.startsWith('blocked')) return '—';
+  return s;
 }
 
 // ---- helpers ---------------------------------------------------------------

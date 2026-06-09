@@ -2,7 +2,10 @@
 // the single source of truth the dashboard, person detail, and completion stats all read.
 
 import { describe, it, expect } from 'vitest';
-import { milestones, milestonesFor, responsibleOrg, type OrgBucket } from '../logic/milestones';
+import {
+  milestones, milestonesFor, responsibleOrg, completionOf, priesthoodEligible, callingEligible,
+  aaronicEligible, endowmentEligible, type OrgBucket,
+} from '../logic/milestones';
 import type { Member } from '../lib/member';
 
 function member(over: Partial<Record<string, string>> = {}): Member {
@@ -105,5 +108,39 @@ describe('responsibleOrg (convert-care ownership by tenure)', () => {
   it('after a year → EQ (men) / RS (women)', () => {
     expect(responsibleOrg(member({ baptism_date: '1 Jan 2000', sex: 'M' }))).toBe<OrgBucket>('eq');
     expect(responsibleOrg(member({ baptism_date: '1 Jan 2000', sex: 'F' }))).toBe<OrgBucket>('rs');
+  });
+});
+
+describe('completionOf (detail-page ring) + detail eligibility gates', () => {
+  it('0 when nothing applicable is done, 1.0 when all applicable are done (→ green)', () => {
+    const none = member({ sex: 'F', baptism_date: '1 Jan 2000' });
+    expect(completionOf(none)).toBe(0);
+    // F adult, 1yr member: applicable = Friends, Calling, Has-ministers, Ministering-assignment.
+    const allDone = member({
+      sex: 'F', baptism_date: '1 Jan 2000', friends: 'Yes', calling: 'Yes',
+      ministering_brothers_sisters: 'Yes', ministering_assignment: 'Yes',
+    });
+    expect(completionOf(allDone)).toBe(1);
+  });
+
+  it('is a fraction in between for partial completion', () => {
+    const half = member({ sex: 'F', baptism_date: '1 Jan 2000', friends: 'Yes', ministering_brothers_sisters: 'Yes' });
+    const c = completionOf(half);
+    expect(c).toBeGreaterThan(0);
+    expect(c).toBeLessThan(1);
+  });
+
+  it('priesthood section gated to males; calling gated to age 12+', () => {
+    expect(priesthoodEligible(member({ sex: 'F' }))).toBe(false);
+    expect(priesthoodEligible(member({ sex: 'M', birth_date: `1 Jan ${thisYear - 20}` }))).toBe(true);
+    expect(callingEligible(member({ birth_date: `1 Jan ${thisYear - 8}` }))).toBe(false);
+    expect(callingEligible(member({ birth_date: `1 Jan ${thisYear - 12}` }))).toBe(true);
+  });
+
+  it('aaronic = male & 12+; endowment = 18+ & 1yr member', () => {
+    expect(aaronicEligible(member({ sex: 'F', birth_date: `1 Jan ${thisYear - 20}` }))).toBe(false);
+    expect(aaronicEligible(member({ sex: 'M', birth_date: `1 Jan ${thisYear - 14}` }))).toBe(true);
+    expect(endowmentEligible(member({ birth_date: `1 Jan ${thisYear - 30}`, baptism_date: '1 Jan 2000' }))).toBe(true);
+    expect(endowmentEligible(member({ birth_date: `1 Jan ${thisYear - 30}`, baptism_date: `1 Jan ${thisYear}` }))).toBe(false);
   });
 });

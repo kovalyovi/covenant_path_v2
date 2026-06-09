@@ -102,10 +102,34 @@ export function milestonesFor(m: Member): Milestone[] {
   return milestones.filter((x) => x.eligible(m));
 }
 
+/** Fraction 0..1 of this member's APPLICABLE Golden Hour milestones that are complete (eligible-only).
+ *  Drives the completion ring on the detail page — full + green at 1.0. (Friends + Has-ministers apply
+ *  to everyone, so there's always ≥1 applicable.) */
+export function completionOf(m: Member): number {
+  const applicable = milestonesFor(m);
+  if (applicable.length === 0) return 0;
+  return applicable.filter((x) => x.complete(m)).length / applicable.length;
+}
+
 /** Endowment eligibility: an adult (18+) who's been a member ~1 year. Same gate as the report. */
 export function endowmentEligible(m: Member): boolean {
   return ageNowAtLeast(m, 18) && memberOneYearPlus(m);
 }
+
+// Per-field eligibility for the member-detail view: which status rows / sections even APPLY to this
+// person, so we hide what's irrelevant (no priesthood for women, no calling for a child) instead of
+// showing a misleading "No". Mirrors the milestone gates above and the native Milestones logic so all
+// three surfaces hide the same things.
+export const callingEligible = (m: Member): boolean => turnsAtLeast(m, 12);
+export const ministeringAssignmentEligible = (m: Member): boolean => turnsAtLeast(m, 14);
+export const aaronicEligible = (m: Member): boolean => male(m) && turnsAtLeast(m, 12);
+export const melchizedekEligible = (m: Member): boolean =>
+  male(m) && ageNowAtLeast(m, 18) && memberOneYearPlus(m);
+/** Priesthood section applies to males old enough for the Aaronic priesthood (12+). */
+export const priesthoodEligible = (m: Member): boolean => male(m) && turnsAtLeast(m, 12);
+/** Temple recommend (incl. limited-use) and a patriarchal blessing both start around age 12. */
+export const templeRecommendEligible = (m: Member): boolean => turnsAtLeast(m, 12);
+export const patriarchalEligible = (m: Member): boolean => turnsAtLeast(m, 12);
 
 /** Display value for endowment (living_ordinance): N/A for INELIGIBLE members — they can't be endowed
  *  yet, so a raw "No" is misleading. Gates client-side so it's correct before the next sync re-scrapes
