@@ -94,7 +94,7 @@ export function LoginPage() {
             () =>
               reject(
                 new BrokerError(
-                  'Sign-in timed out (75s). The sign-in service may be down or still waking up — ' +
+                  'Sign-in timed out. The sign-in service may be down or still waking up — ' +
                     'please try again in a minute. If this keeps happening, use Email code sign-in.',
                 ),
               ),

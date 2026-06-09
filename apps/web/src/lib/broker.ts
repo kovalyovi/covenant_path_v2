@@ -130,17 +130,56 @@ export class BrokerClient {
     return brokerUrl.length > 0;
   }
 
+  /** Dedupes a warm-up that's already in flight so an early warmUp() and the submit-time
+   *  ensureWarm() share ONE wake, instead of racing two cold-start pings. */
+  private warmPromise: Promise<void> | null = null;
+
   /**
    * N5: wake the free-tier broker early — fire a cheap /health ping when the login screen appears,
    * so it spins up while the user types, hiding the ~30-60s cold start. Fire-and-forget.
    */
   warmUp(): void {
     if (!this.available) return;
-    fetchWithTimeout(`${brokerUrl}/health`, { method: 'GET' }, 30_000).catch(() => {});
+    void this.ensureWarm();
+  }
+
+  /**
+   * Ensure the broker is actually AWAKE before an expensive login call. The fire-and-forget warmUp()
+   * isn't enough on its own: when the user autofills + submits within a second (or a deploy restarts
+   * the container mid-login), the heavy /auth/password call lands on a cold container and absorbs the
+   * whole ~30-60s wake — the "took forever / timed out" report. Awaiting a /health (with the same
+   * cold-start retry) here guarantees the Okta round-trip always hits a warm broker, converting an
+   * unpredictable 50-110s hang into a visible, bounded "waking up…" then a fast sign-in.
+   * Resolves immediately when already warm (~0.3s health round-trip); concurrent callers share one.
+   */
+  async ensureWarm(): Promise<void> {
+    if (!this.available) return;
+    if (this.warmPromise) return this.warmPromise;
+    this.warmPromise = (async () => {
+      for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+        try {
+          const r = await fetchWithTimeout(`${brokerUrl}/health`, { method: 'GET' }, 30_000);
+          if (r.ok) return; // awake
+        } catch {
+          /* still cold — retry below */
+        }
+        if (attempt < RETRY_DELAYS_MS.length) {
+          this.onStatus?.('Waking up the sign-in service… this can take up to a minute on first use.');
+          await delay(RETRY_DELAYS_MS[attempt]);
+        }
+      }
+    })();
+    try {
+      await this.warmPromise;
+    } finally {
+      this.warmPromise = null; // clear so a later sign-in re-checks (the broker can sleep again)
+    }
   }
 
   private async postJson(path: string, body: unknown): Promise<Record<string, unknown>> {
     if (!this.available) throw new BrokerError('Church login is not configured (BROKER_URL).');
+    // Wake the broker FIRST so the expensive Okta call never eats the cold start (see ensureWarm).
+    await this.ensureWarm();
     const _t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
     // Login-completing calls run the broker's access evaluation server-side, which on a FIRST enroll
     // (no usable credential yet) legitimately takes 30-60s — a 30s abort made the client give up
