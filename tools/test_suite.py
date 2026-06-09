@@ -121,6 +121,45 @@ def test_report_degradation_helpers():
     return "feature gate + blocked-marking + coverage ok"
 
 
+def test_calling_union_and_neutralize():
+    """Calling: the per-member profile (individualCallings) UNIONs with the org-aggregate — a profile
+    'Yes' upgrades, a profile 'No' never downgrades a real org 'Yes' (the Terry Stoner sub-org-calling
+    fix). And a whole stake of uniform 'No' is neutralized as the stale-action signature."""
+    from covenant_path import report
+
+    def mk(calling="No"):
+        return report.CovenantPathMember(
+            name="t", unit="u", baptism_date="2024", birth_date="1 Jan 1990", friends="No",
+            aaronic_priesthood="N/A", melchizedek_priesthood="N/A", calling=calling,
+            ministering_brothers_sisters="No", ministering_assignment="No",
+            temple_recommend="No", patriarchal_blessing="No", living_ordinance="N/A",
+            membership_duration=None, weeks_since_last_attendance=None, baptism_goal_date=None,
+            friends_summary=None, sex="F")
+
+    # 1. org-aggregate said "No" (Terry's sub-org calling isn't in it); profile finds it -> "Yes" + name.
+    m = mk("No")
+    report._apply_profile(m, {"calling": "Yes",
+                              "_calling_names": ["Relief Society Service Committee Member"]})
+    assert m.calling == "Yes", m.calling
+    assert (m.details or {}).get("callings") == ["Relief Society Service Committee Member"], m.details
+    # 2. org-aggregate "Yes"; profile action missed (-> "No") must NOT downgrade a real calling.
+    m2 = mk("Yes")
+    report._apply_profile(m2, {"calling": "No"})
+    assert m2.calling == "Yes", "profile 'No' must not downgrade an org 'Yes'"
+    # 3. genuine no-calling: both "No" -> "No".
+    m3 = mk("No")
+    report._apply_profile(m3, {"calling": "No"})
+    assert m3.calling == "No", m3.calling
+    # 4. neutralizer: a whole cohort uniformly "No" -> sentinel (stale-action signature)…
+    rows = [mk("No") for _ in range(25)]
+    assert "calling" in report._neutralize_uniform_stale(rows, with_profile=True)
+    assert all(r.calling == report.NEEDS_PROFILE for r in rows)
+    # …but a single real "Yes" means it's NOT uniform -> don't neutralize.
+    rows2 = [mk("No") for _ in range(24)] + [mk("Yes")]
+    assert "calling" not in report._neutralize_uniform_stale(rows2, with_profile=True)
+    return "calling union + names + neutralize ok"
+
+
 def test_okta_building_blocks():
     from lcr_client import okta_login
     s = okta_login.session_from_cookies([{"name": "a", "value": "b", "domain": "x.churchofjesuschrist.org"}])
@@ -352,7 +391,8 @@ def main() -> int:
 
     print("== OFFLINE tests ==")
     offline = [test_token_store_roundtrip, test_token_store_key_mismatch,
-               test_report_degradation_helpers, test_okta_building_blocks, test_access_humanize,
+               test_report_degradation_helpers, test_calling_union_and_neutralize,
+               test_okta_building_blocks, test_access_humanize,
                test_name_cache_roundtrip, test_clean_missing_filters_unnamed,
                test_leadership_harvest, test_profile_cache, test_sheets_preserve_failed_units,
                test_missionary_roster_parse, test_email_relay_validation, test_google_oauth_state]

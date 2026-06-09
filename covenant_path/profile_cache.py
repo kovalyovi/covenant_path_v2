@@ -33,7 +33,10 @@ DEFAULT_PATH = Path(__file__).resolve().parent.parent / "tools" / "output" / "pr
 # forces a one-time refetch that captures them (2026-05-31). v4 = the recommend/ministering
 # action-ids were refreshed (2026-06-09) after LCR rotated them — cached values had been fetched with
 # the STALE ids (temple_recommend stuck on "No"), so bump forces a one-time refetch with the working ids.
-SCHEMA_VERSION = 4
+# v5 = added per-member callings via the dedicated `individualCallings` action (`_calling_names` +
+# authoritative `calling`); v4 entries predate it and would serve org-aggregate-only callings (missing
+# sub-org callings like Relief Society Service Committee), so bump forces a one-time refetch (2026-06-09).
+SCHEMA_VERSION = 5
 
 
 class ProfileCache:

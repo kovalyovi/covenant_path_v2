@@ -23,6 +23,12 @@ DEFAULTS = {
     "record": "60222763f6b2a0789a1082f23e8b873eee7fffce76",
     "recommend": "605d8832fe1e750fa97f025e0343e9b20c32c10f29",
     "ministering": "60b620883e890b14734d5eb38c5ad29c9df43d9328",
+    # /mlt member-profile callings action (args [uuid, "eng"]) — returns individualCallings
+    # [{positionName, organization, customCalling, sustainedDate, ...}]. The per-member AUTHORITATIVE
+    # calling list: the unit org-aggregate (backend.roles._ward_positions) MISSES sub-org callings like
+    # "Relief Society Service Committee Member" → members showed "No calling" (the Terry Stoner bug,
+    # 2026-06-09). Build-specific; action_discovery self-heals it (detects the individualCallings shape).
+    "callings": "6064bcb1a1cf344b1eb5f6223bdbf364e638cdb7a9",
     # /mlt/orgs leadership-directory action (args ["eng"]) — names every calling +
     # who holds it; used to enrich the role-name catalog (lcr_client/leadership.py) and as the
     # fallback for stake-leader provisioning. Build-specific; rotates on LCR redeploys.

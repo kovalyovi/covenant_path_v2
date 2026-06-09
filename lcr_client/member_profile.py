@@ -258,6 +258,38 @@ def _recommend_label(recommend: dict) -> str:
     return "No"
 
 
+_dumped_calling_shape = False
+
+
+def fetch_callings(session, person_uuid: str) -> dict:
+    """Per-member callings via the dedicated profile action (returns `individualCallings`). This is the
+    AUTHORITATIVE calling source: the unit org-aggregate (backend.roles._ward_positions) misses sub-org
+    callings like "Relief Society Service Committee Member", so members held a calling yet showed "No
+    calling" (the Terry Stoner bug). Returns {has_calling, calling_names: [positionName, ...]}."""
+    def call():
+        return _find(call_action(session, person_uuid, action_config.load()["callings"],
+                                 [person_uuid, "eng"]), "individualCallings")
+
+    obj = call()
+    if obj is None:
+        # Like recommend/ministering: a no-calling member can legitimately return nothing, so we do NOT
+        # self-heal here (the record action is the canary for a stale build). A genuinely stale callings
+        # id surfaces as a uniform "No calling" across everyone -> report._neutralize_uniform_stale flags
+        # it and the calling diagnostic logs matched=0.
+        logger.debug("no callings data for %s (no calling, or stale action id)", person_uuid)
+        return {"has_calling": False, "calling_names": []}
+    cals = obj.get("individualCallings") or []
+    global _dumped_calling_shape
+    if cals and not _dumped_calling_shape:
+        _dumped_calling_shape = True
+        c0 = cals[0]
+        dump_debug("calling_shape", shape=sorted(c0.keys()) if isinstance(c0, dict) else type(c0).__name__)
+    names = [c.get("positionName") or c.get("customCallingName") or c.get("name")
+             for c in cals if isinstance(c, dict)]
+    names = [n for n in names if n]
+    return {"has_calling": bool(cals), "calling_names": names}
+
+
 def profile_fields(session, person_uuid: str) -> dict:
     """All profile-sourced covenant-path fields via the server actions. Priesthood (office) +
     received ministering ('has ministers') come from here authoritatively; calling is derived
@@ -268,4 +300,9 @@ def profile_fields(session, person_uuid: str) -> dict:
     fields["ministering_assignment"] = "Yes" if minw["has_assignment"] else "No"
     fields["ministering_brothers_sisters"] = "Yes" if minw["has_ministers"] else "No"
     fields["_minister_names"] = minw.get("minister_names") or []  # transient: report injects into details
+    # Calling from the AUTHORITATIVE per-member action (individualCallings) — overrides the incomplete
+    # org-aggregate in covenant_path.report._apply_profile (the Terry Stoner "no calling" fix).
+    cal = fetch_callings(session, person_uuid)
+    fields["calling"] = "Yes" if cal["has_calling"] else "No"
+    fields["_calling_names"] = cal.get("calling_names") or []  # transient: report injects into details
     return fields

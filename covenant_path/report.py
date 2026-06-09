@@ -360,10 +360,21 @@ def _apply_profile(member: CovenantPathMember, prof: dict) -> None:
     em_e = {"sex": member.sex, "birth_date": member.birth_date, "baptism_date": member.baptism_date}
     if member.living_ordinance == "No" and not (is_at_least_now(em_e, 18) and member_one_year(em_e)):
         member.living_ordinance = NA
-    # calling / has-ministers when the profile supplies them (member_profile.extract_fields fills
-    # these when the member record exposes them; absent -> keep the value _assemble derived).
-    if prof.get("calling") in ("Yes", "No"):
-        member.calling = prof["calling"]
+    # Calling: the profile's individualCallings (member_profile.fetch_callings) is the AUTHORITATIVE
+    # per-member list. The unit org-aggregate (the calling_uuids set in build_stake_report) MISSES
+    # sub-org callings like "Relief Society Service Committee Member" — members held a calling yet
+    # showed "No calling" (the Terry Stoner bug, 2026-06-09). UNION the two sources: a profile "Yes"
+    # always upgrades; a profile "No" only applies when the org-aggregate didn't already establish a
+    # "Yes" (never downgrade a real calling — mirrors the ministering rule).
+    if prof.get("calling") == "Yes":
+        member.calling = "Yes"
+    elif prof.get("calling") == "No" and member.calling != "Yes":
+        member.calling = "No"
+    # Surface the calling NAME(s) in the detail view — the profile carries the full positionName even
+    # when LCR's details endpoint AND the org-aggregate came back empty for this member.
+    cnames = prof.get("_calling_names")
+    if cnames:
+        member.details = {**(member.details or {}), "callings": cnames}
     # The profile's ministering action carries OUTBOUND assignments, not INBOUND ministers, so its
     # has-ministers is "No" even when the details endpoint DID return ministers. NEVER let it
     # DOWNGRADE a details-derived "Yes" → "No" (the bug that left the flag "No" for all 85 members
@@ -475,9 +486,10 @@ def build_stake_report(
         member_maps = _retry(lambda u=unit: _build_member_maps(client, u.unit_number),
                              attempts=1, label=f"member_list {unit.unit_number}") or {}
 
-        # has-calling per member: whoever holds a position in the unit's org tree (the same
-        # org-callings endpoint roles.py uses). The member profile has no callings and the one-work
-        # record is sparse, so this is the authoritative source. None => couldn't fetch (don't override).
+        # has-calling BASELINE per member: whoever holds a position in the unit's org tree (the same
+        # org-callings endpoint roles.py uses). This MISSES sub-org callings (Relief Society Service
+        # Committee, etc.) — so it's only the BASELINE; the per-member profile action (fetch_callings)
+        # is authoritative and UNIONs in via _apply_profile. None => couldn't fetch (don't override).
         calling_names: dict[str, list] = {}  # person_uuid -> [calling name, ...] for the detail view
         try:
             from backend.roles import _ward_positions
@@ -528,7 +540,8 @@ def build_stake_report(
             birth = info.get("birth")
             member = _assemble(person, details, unit.name, birth, kind=kind)
             member.sex = info.get("sex") or member.sex  # member list is authoritative for sex
-            if calling_uuids is not None:  # org positions are authoritative for has-calling
+            if calling_uuids is not None:  # org positions seed the BASELINE (profile unions the
+                #                            authoritative per-member callings later, in _apply_profile)
                 pu = person.get("personUuid")
                 member.calling = "Yes" if (pu and pu in calling_uuids) else "No"
                 # Surface the calling NAME in the detail view when LCR's details endpoint came back
@@ -627,6 +640,16 @@ def _neutralize_uniform_stale(rows: list[CovenantPathMember], with_profile: bool
             if m.temple_recommend not in (BLOCKED, NEEDS_PROFILE):
                 m.temple_recommend = NEEDS_PROFILE
         neutralized.append("temple_recommend")
+    # calling: zero "Yes" across >=20 members ⇒ BOTH calling sources failed (a stale callings action AND
+    # a sparse org-aggregate). New-member cohorts DO accrue callings (integration is the whole point —
+    # Terry Stoner is a new member with one), so a whole stake with none is the stale-action signature,
+    # not real data. Same preserve-last-good treatment. (Won't fire while either source yields a "Yes".)
+    cals = [m.calling for m in rows]
+    if not all(v in (BLOCKED, NEEDS_PROFILE) for v in cals) and not any(v == "Yes" for v in cals):
+        for m in rows:
+            if m.calling not in (BLOCKED, NEEDS_PROFILE):
+                m.calling = NEEDS_PROFILE
+        neutralized.append("calling")
     if neutralized:
         logger.warning("neutralized uniformly-stale field(s) -> sentinel (preserve last-good, show "
                        "stale): %s", neutralized)

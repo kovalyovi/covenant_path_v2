@@ -40,6 +40,9 @@ DETECTORS = {
         (_find(objs, "ministeringBrothersAssignments") or _find(objs, "ministeringSistersAssignments")
          or _find(objs, "ministeringBrothers") or _find(objs, "ministeringSisters"))
         and not _find(objs, "uuid", "ordinances")),
+    # The callings action returns `individualCallings` (the per-member calling list). Distinct shape,
+    # so a plain key check identifies it.
+    "callings": lambda objs: bool(_find(objs, "individualCallings")),
 }
 
 
