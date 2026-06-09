@@ -29,6 +29,10 @@ create table if not exists church_identities (
 comment on table church_identities is
   'Broker-only: Church username -> identity verified on a prior full login (lets repeat logins skip LCR). RLS on, no policies — service-role access only.';
 alter table church_identities enable row level security;
+-- The broker (service_role, bypasses RLS) is the ONLY reader/writer; deliberately NO
+-- anon/authenticated grants. Without this the broker's REST calls fail 42501 (the cache
+-- silently never fills and every login stays on the slow full path).
+grant select, insert, update, delete on church_identities to service_role;
 
 alter table login_audit add column if not exists duration_ms integer;
 alter table login_audit add column if not exists phase text;
@@ -64,3 +68,7 @@ begin
     $job$ select net.http_get(url := 'https://covenant-path-broker.onrender.com/health', timeout_milliseconds := 8000) $job$
   );
 end $$;
+
+-- Make PostgREST pick up the new table/columns immediately (its schema cache otherwise serves
+-- 404/42501 for them until the next reload).
+notify pgrst, 'reload schema';
