@@ -130,6 +130,12 @@ button {
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
+  /* …but keep the loading spinner spinning — it's functional feedback (login/sync progress), not
+     decorative motion. Without this it freezes under prefers-reduced-motion. */
+  .spinner {
+    animation-duration: 0.8s !important;
+    animation-iteration-count: infinite !important;
+  }
 }
 
 /* Screen-reader-only utility. */

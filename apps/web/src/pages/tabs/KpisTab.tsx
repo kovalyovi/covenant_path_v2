@@ -300,20 +300,22 @@ function BaptismsCard({
   onDrill: (d: Drill) => void;
 }) {
   const [w, setW] = useState<BWindow>('ytd'); // default to year-to-date
+  const [sel, setSel] = useState<number | null>(null); // tapped month → filter the card to it
   const color = '#0277BD';
   const d = baptismsByMonth(baptized, w);
+  // Tapping a month FILTERS this card to that month (no detail sheet pops). The detail list stays
+  // reachable via the explicit "By unit" button, scoped to the selected month when one is chosen.
+  const selEvents = sel == null ? d.events : d.events.filter((e) => e.bucket === sel);
   return (
-    <SectionCard
-      title="Baptisms by month"
-      icon="water_drop"
-      iconColor={color}
-      onClick={d.events.length === 0 ? undefined : () => onDrill({ kind: 'metric', title: 'Baptisms', events: d.events, allUnits })}
-    >
+    <SectionCard title="Baptisms by month" icon="water_drop" iconColor={color}>
       <div style={{ display: 'flex', justifyContent: 'center' }}>
         <Segmented<BWindow>
           ariaLabel="Baptisms window"
           value={w}
-          onChange={setW}
+          onChange={(nw) => {
+            setW(nw);
+            setSel(null);
+          }}
           options={[
             { value: 'ytd', label: 'YTD' },
             { value: 'm12', label: '12 mo' },
@@ -324,7 +326,10 @@ function BaptismsCard({
       </div>
       <div style={{ height: 14 }} />
       <div className="row" style={{ alignItems: 'stretch' }}>
-        <Kv label="Baptized in window" value={String(d.total)} />
+        <Kv
+          label={sel == null ? 'Baptized in window' : (d.labels[sel] ?? 'Selected month')}
+          value={String(sel == null ? d.total : (d.counts[sel] ?? 0))}
+        />
         <div style={{ width: 1, background: 'var(--outline-variant)', margin: '0 14px' }} />
         <Kv label="Best month" value={d.bestLabel == null ? '—' : `${d.bestLabel}  ·  ${d.bestCount}`} />
       </div>
@@ -333,26 +338,27 @@ function BaptismsCard({
         values={d.counts}
         labels={d.labels}
         color={color}
-        onBucketTap={(i) =>
-          onDrill({
-            kind: 'metric',
-            title: 'Baptisms',
-            events: d.events.filter((e) => e.bucket === i),
-            allUnits,
-            bucketLabel: i < d.labels.length ? d.labels[i] : null,
-          })
-        }
+        onBucketTap={(i) => setSel((c) => (c === i ? null : i))}
       />
       <div className="row" style={{ justifyContent: 'space-between', marginTop: 4 }}>
-        <span className="small muted">Baptized &amp; confirmed converts, counted by baptism month.</span>
+        <span className="small muted">
+          {sel == null
+            ? 'Tap a month to filter; counted by baptism month.'
+            : `Showing ${d.labels[sel] ?? ''} — tap it again to clear.`}
+        </span>
         <button
           type="button"
           className="btn btn--text"
-          disabled={d.events.length === 0}
-          onClick={(e) => {
-            e.stopPropagation();
-            onDrill({ kind: 'metric', title: 'Baptisms', events: d.events, allUnits });
-          }}
+          disabled={selEvents.length === 0}
+          onClick={() =>
+            onDrill({
+              kind: 'metric',
+              title: 'Baptisms',
+              events: selEvents,
+              allUnits,
+              bucketLabel: sel == null ? null : (d.labels[sel] ?? null),
+            })
+          }
         >
           <Icon name="groups" size={16} />
           By unit
