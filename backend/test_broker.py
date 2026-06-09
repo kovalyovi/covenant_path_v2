@@ -14,7 +14,7 @@ import time
 from fastapi.testclient import TestClient
 
 from backend.auth_broker.app import app, require_admin
-from backend.auth_broker import admin, session_mint, okta_flow
+from backend.auth_broker import admin, session_mint, okta_flow, enroll
 
 client = TestClient(app)
 _PASS = 0
@@ -59,6 +59,105 @@ def test_cors() -> None:
     r = _preflight(bad)
     check("preflight denies foreign origin",
           r.headers.get("access-control-allow-origin") not in (bad, "*"))
+
+
+class _FakeResp:
+    def __init__(self, payload, status=200):
+        self._payload = payload
+        self.status_code = status
+
+    def json(self):
+        return self._payload
+
+
+def test_credential_embed_shape() -> None:
+    """REGRESSION: PostgREST returns a to-one embedded resource as a JSON OBJECT, not a list.
+    The old `for c in embed` iterated a dict's KEYS (strings) -> `c.get(...)` raised -> the offer
+    logic silently treated a HEALTHY enrolled stake as un-enrolled (the 'always prompted to set up
+    sync even though my credential is stored' bug). Both shapes must read identically."""
+    # --- pure normalizer: object, list, None, revoked-only, junk ---
+    obj = {"revoked": False, "coverage": {"complete": True}, "access_rank": 1000}
+    check("embed: single OBJECT yields the credential",
+          enroll._first_usable_credential(obj) == obj)
+    check("embed: single-element LIST yields the credential",
+          enroll._first_usable_credential([obj]) == obj)
+    check("embed: None yields nothing",
+          enroll._first_usable_credential(None) is None)
+    check("embed: empty list yields nothing",
+          enroll._first_usable_credential([]) is None)
+    check("embed: a revoked OBJECT is not usable",
+          enroll._first_usable_credential({"revoked": True, "coverage": {}}) is None)
+    check("embed: revoked-then-active LIST picks the active one",
+          enroll._first_usable_credential(
+              [{"revoked": True}, {"revoked": False, "coverage": {"complete": True}}])
+          == {"revoked": False, "coverage": {"complete": True}})
+    check("embed: malformed (string key leak) is tolerated, not raised",
+          enroll._first_usable_credential(["revoked", "coverage"]) is None)
+
+    # --- end-to-end: _stored_credential_summary against the REAL object shape ---
+    saved_get = enroll.requests.get
+    try:
+        # The exact shape PostgREST returned in prod: stake_credentials is an OBJECT.
+        enroll.requests.get = lambda *a, **k: _FakeResp(
+            [{"id": "x", "stake_credentials": {"revoked": False,
+                                               "coverage": {"complete": True},
+                                               "access_rank": 1000}}])
+        summary = enroll._stored_credential_summary(503991)
+        check("stored-credential summary: OBJECT embed -> non-None (can_enroll stays False)",
+              summary is not None and summary.get("access_rank") == 1000)
+
+        # No credential at all -> None (offer enrollment is correct here).
+        enroll.requests.get = lambda *a, **k: _FakeResp([{"id": "x", "stake_credentials": None}])
+        check("stored-credential summary: no credential -> None",
+              enroll._stored_credential_summary(503991) is None)
+
+        # Revoked credential -> None (offer enrollment).
+        enroll.requests.get = lambda *a, **k: _FakeResp(
+            [{"id": "x", "stake_credentials": {"revoked": True}}])
+        check("stored-credential summary: revoked -> None",
+              enroll._stored_credential_summary(503991) is None)
+
+        # No such stake -> None.
+        enroll.requests.get = lambda *a, **k: _FakeResp([])
+        check("stored-credential summary: unknown stake -> None",
+              enroll._stored_credential_summary(999999) is None)
+    finally:
+        enroll.requests.get = saved_get
+
+
+def test_enrolled_stakes_object_embed() -> None:
+    """REGRESSION: admin.enrolled_stakes must read the same OBJECT-shaped embed (it did
+    `creds[0]` on a dict -> KeyError -> the ops 'Enrolled stakes' panel failed to load)."""
+    saved = {k: getattr(admin, k) for k in
+             ("_member_counts", "_reauths_30d", "_jobs_last_7d")}
+    saved_get = admin.requests.get
+    saved_cfg = (admin.SUPABASE_URL, admin.SERVICE_KEY)
+    try:
+        admin.SUPABASE_URL = admin.SUPABASE_URL or "https://test.supabase.co"
+        admin.SERVICE_KEY = admin.SERVICE_KEY or "test-key"
+        admin._member_counts = lambda: {"stake-uuid": 84}
+        admin._reauths_30d = lambda: {503991: 0}
+        admin._jobs_last_7d = lambda: {}
+        admin.requests.get = lambda *a, **k: _FakeResp([{
+            "id": "stake-uuid", "name": "Raleigh", "unit_number": 503991,
+            "last_synced_at": None, "sync_state": None, "onboarded_at": None,
+            "stake_credentials": {  # OBJECT, not list — the prod shape
+                "principal_name": "Ilia", "principal_email": "ilia@example.com",
+                "revoked": False, "coverage": {"complete": True}, "access_rank": 1000,
+                "updated_at": None, "last_failed_at": None, "last_error": None,
+                "last_succeeded_at": None, "has_refresh_token": True}}])
+        rows = admin._enrolled_stakes()  # inner fn -> bypass the TTL cache
+        check("enrolled_stakes: OBJECT embed loads without raising", len(rows) == 1)
+        cred = (rows[0] or {}).get("credential") or {}
+        check("enrolled_stakes: reads the credential's principal",
+              cred.get("principal_email") == "ilia@example.com")
+        check("enrolled_stakes: derives active state for a healthy cred",
+              cred.get("state") == "active")
+    finally:
+        admin.requests.get = saved_get
+        admin.SUPABASE_URL, admin.SERVICE_KEY = saved_cfg
+        for k, v in saved.items():
+            setattr(admin, k, v)
 
 
 def test_mint_misconfig() -> None:
@@ -382,6 +481,8 @@ def main() -> int:
     print("broker tests")
     test_health()
     test_cors()
+    test_credential_embed_shape()
+    test_enrolled_stakes_object_embed()
     test_mint_misconfig()
     test_mint_empty_email()
     test_mfa_expiry()

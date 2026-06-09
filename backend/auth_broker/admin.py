@@ -479,7 +479,11 @@ def _enrolled_stakes() -> list[dict]:
     reauths = _reauths_30d()   # stake_unit -> re-authorizations in 30d (cadence visibility)
     out = []
     for s in r.json():
-        creds = s.get("stake_credentials") or []
+        # PostgREST returns a to-one embed as a JSON OBJECT (not a list) — `creds[0]` on a dict
+        # would KeyError. Normalize to a list so a single stored credential still reads. (Same shape
+        # bug that broke enroll._stored_credential_summary → the "always prompted to set up" issue.)
+        sc = s.get("stake_credentials")
+        creds = sc if isinstance(sc, list) else ([sc] if isinstance(sc, dict) else [])
         cred = creds[0] if creds else None
         cov = (cred or {}).get("coverage") or {}
         out.append({

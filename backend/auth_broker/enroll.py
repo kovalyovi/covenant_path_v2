@@ -41,30 +41,40 @@ def _client_from_cookies(cookies: list[dict]):
 
 
 def _stored_credential_summary(unit_number: int) -> dict | None:
-    """The stake's current USABLE credential (non-revoked AND not currently failing) — coverage +
-    access_rank, or None. None means "no usable credential" → the caller offers enrollment.
+    """The stake's current NON-REVOKED credential — coverage + access_rank — or None when there's no
+    credential at all (or it's revoked). Drives `can_enroll` (offer to SET UP sync) and `can_improve`.
 
-    A STALE credential (last_failed_at set — its delegated session died and the daily sync is failing)
-    counts as NOT usable, so the provider (or any authorized leader) is OFFERED re-enrollment instead of
-    being stuck: the credential looks "active/non-revoked" but can't actually sync. This was the
-    "re-logged in but nothing changed" bug — the app never offered re-auth for a stale-but-active cred."""
+    A STALE-but-present credential is NOT None here — re-authorization is surfaced by the dashboard
+    "re-authorize" BANNER (from enrollment_status state='stale'), NOT the "set up sync" prompt, so a
+    healthy/enrolled stake never wrongly shows "isn't set up yet".
+
+    BUG FIXED (2026-06-09): PostgREST returns a to-one embedded resource as a JSON OBJECT, not a list.
+    `for c in {dict}` iterates the KEYS (strings) → `c.get(...)` raised 'str has no attribute get' → the
+    except returned None → can_enroll was True on EVERY login (the long-standing 'always prompted to set
+    up sync even though my credential is stored' bug). Normalize the embed to a list."""
     try:
         sb = {"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}"}
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/stakes", headers=sb,
-            params={"select": "id,stake_credentials(coverage,access_rank,revoked,last_failed_at)",
+            params={"select": "id,stake_credentials(coverage,access_rank,revoked)",
                     "unit_number": f"eq.{unit_number}", "limit": "1"}, timeout=30)
         rows = r.json() if r.status_code == 200 else []
         if not rows:
             return None
-        cred = next((c for c in (rows[0].get("stake_credentials") or [])
-                     if not c.get("revoked") and not c.get("last_failed_at")), None)
+        cred = _first_usable_credential(rows[0].get("stake_credentials"))
         if not cred:
             return None
         return {"coverage": cred.get("coverage") or {}, "access_rank": cred.get("access_rank")}
     except Exception as exc:  # noqa: BLE001
         logger.warning("stored-credential lookup skipped: %s", exc)
         return None
+
+
+def _first_usable_credential(embed) -> dict | None:
+    """The first NON-REVOKED credential from a PostgREST embed that may be a single object (to-one
+    relationship), a list, or None. Shared so the dict-vs-list normalization lives in one place."""
+    creds = embed if isinstance(embed, list) else ([embed] if isinstance(embed, dict) else [])
+    return next((c for c in creds if isinstance(c, dict) and not c.get("revoked")), None)
 
 
 def _role_scope(email) -> str:
