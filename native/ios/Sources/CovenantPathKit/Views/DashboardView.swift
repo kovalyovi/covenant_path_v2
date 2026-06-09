@@ -53,7 +53,11 @@ struct DashboardView: View {
             VStack(spacing: 0) {
                 if store.syncing { SyncingBanner(startedAt: store.syncStartedAt) }
                 if store.staleCredential {
-                    StaleBanner { Task { await session.signOut() } }
+                    StaleBanner(state: store.enrollStatus?.credential.state ?? "revoked",
+                                isProvider: store.enrollStatus?.credential.isProvider == true,
+                                lastError: store.enrollStatus?.credential.lastError) {
+                        Task { await session.signOut() }
+                    }
                 }
                 pageBody(t)
             }
@@ -281,22 +285,43 @@ struct SyncingBanner: View {
     }
 }
 
-/// Revoked-credential banner (port of `_StaleBanner`).
+/// Revoked/stale-credential banner (port of web `StaleBanner`). Message + action depend on
+/// revoked vs stale, and — when stale — whether YOU are the credential's provider.
 struct StaleBanner: View {
+    var state: String = "revoked"
+    var isProvider: Bool = false
+    var lastError: String? = nil
     let onReenroll: () -> Void
+
+    private var message: String {
+        if state == "revoked" {
+            return "Sync paused — credential revoked. Re-enroll to resume daily updates."
+        }
+        if isProvider {
+            return "Sync stopped — your Church session expired, so this stake’s data isn’t updating. Re-authorize to resume."
+        }
+        return "This stake’s daily sync has failed. The leader who set it up needs to re-authorize — or you can take it over by signing in with your Church account."
+    }
+
+    private var actionLabel: String {
+        if state == "revoked" { return "Re-enroll" }
+        return isProvider ? "Re-authorize" : "Authorize on my account"
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(.orange)
-            Text("Sync paused — credential revoked. Re-enroll to resume daily updates.")
+            Text(message)
                 .font(.callout)
             Spacer(minLength: 0)
-            Button("Re-enroll", action: onReenroll).font(.callout)
+            Button(actionLabel, action: onReenroll).font(.callout)
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
         .frame(maxWidth: .infinity)
         // N4: frosted-glass banner (system material) tinted amber
         .background(Color.orange.opacity(0.12))
         .background(.ultraThinMaterial)
+        .accessibilityHint(lastError ?? "")
     }
 }
 
@@ -341,6 +366,11 @@ struct EmptyStateView: View {
             return ("Sync paused",
                     "The daily sync credential for your stake has been revoked. Re-enroll to resume data updates.",
                     brokerAvailable, "Re-enroll")
+        }
+        if cred?.isStale == true {
+            return ("Sync needs re-authorization",
+                    "This stake's daily sync stopped — the Church session that keeps it updated expired. Sign in again with your Church account to re-authorize and resume updates.",
+                    brokerAvailable, "Re-authorize")
         }
         if cred?.isActive == true {
             return ("Setting up your stake…",

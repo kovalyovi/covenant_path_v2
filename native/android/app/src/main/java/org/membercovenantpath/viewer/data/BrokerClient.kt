@@ -39,15 +39,19 @@ data class BrokerResult(
     val mfaRequired: Boolean get() = loginId != null && otp == null
 }
 
-/** Credential state from /auth/enrollment-status. */
+/** Credential state from /auth/enrollment-status: none | active | stale | revoked. */
 data class CredentialInfo(
     val state: String = "none",
     val complete: Boolean = false,
     val principalName: String? = null,
     val isProvider: Boolean = false,
     val enrolledAt: String? = null,
+    /** When state == "stale", the last sync error (e.g. "SSO did not complete…"). */
+    val lastError: String? = null,
 ) {
     val isActive get() = state == "active"
+    /** Stale = the delegated Church session died → daily sync is failing until re-authorized. */
+    val isStale get() = state == "stale"
     val isRevoked get() = state == "revoked"
     val isNone get() = state == "none"
 
@@ -58,6 +62,7 @@ data class CredentialInfo(
             principalName = j?.str("principal_name"),
             isProvider = j?.bool("is_provider") ?: false,
             enrolledAt = j?.str("enrolled_at"),
+            lastError = j?.str("last_error"),
         )
     }
 }

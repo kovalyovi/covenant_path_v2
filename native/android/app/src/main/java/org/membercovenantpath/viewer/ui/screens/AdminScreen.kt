@@ -109,7 +109,11 @@ fun AdminScreen(onBack: () -> Unit) {
                 item { PanelSection("Diagnostics", s.diagnostics) { DiagnosticsCard(it) } }
                 item {
                     PanelSection("Enrolled stakes", s.stakes) {
-                        EnrolledStakesCard(it, busy = s.busy, onRevoke = vm::revokeStake, onSync = vm::syncStake)
+                        EnrolledStakesCard(
+                            it, busy = s.busy,
+                            onRevoke = vm::revokeStake, onSync = vm::syncStake,
+                            onWipe = vm::wipeStakeData, onRemove = vm::removeStake,
+                        )
                     }
                 }
                 item {
@@ -345,15 +349,20 @@ private fun groupEndpoints(endpoints: List<JsonObject>): List<EpRow> {
         .sortedWith(compareByDescending<EpRow> { it.errors }.thenByDescending { it.calls })
 }
 
+/** One confirm-gated per-stake action (sync / revoke / wipe / remove) — copy mirrors the web ops console. */
+private data class StakeConfirm(val title: String, val message: String, val confirmLabel: String, val action: () -> Unit)
+
 @Composable
 private fun EnrolledStakesCard(
     data: JsonObject,
     busy: Boolean,
     onRevoke: (String, String) -> Unit,
     onSync: (String, String) -> Unit,
+    onWipe: (String, String) -> Unit,
+    onRemove: (String, String) -> Unit,
 ) {
     val stakes = data.arr("stakes")
-    var confirm by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
+    var confirm by remember { mutableStateOf<StakeConfirm?>(null) }
     SectionCard("Enrolled stakes${stakes?.let { " (${it.size})" } ?: ""}") {
         if (stakes == null || stakes.isEmpty()) {
             Text("No stakes yet.")
@@ -369,6 +378,8 @@ private fun EnrolledStakesCard(
                 val jobs7d = st.int("jobs_7d")
                 val members = st.int("member_count")
                 val running = st.str("sync_state") == "running"
+                val credState = if (cred == null) "none" else (cred.str("state") ?: "")
+                val lastError = cred?.str("last_error") ?: ""
                 val (credLabel, credColor) = credBadge(cred)
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(name, fontWeight = FontWeight.SemiBold)
@@ -380,13 +391,45 @@ private fun EnrolledStakesCard(
                     }
                     Spacer(Modifier.weight(1f))
                     if (running) CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
-                    if (!running && cred?.str("state") == "active") {
-                        IconButton(onClick = { confirm = "Sync $name now?" to { onSync(st.str("unit_number") ?: "", name) } }, enabled = !busy) {
+                    if (!running && credState != "revoked" && credState != "none") {
+                        IconButton(onClick = {
+                            confirm = StakeConfirm(
+                                title = "Sync $name now?",
+                                message = "Re-scrapes LCR for this one stake and writes to Supabase. Runs in the cloud (GitHub Actions) and takes a few minutes.",
+                                confirmLabel = "Sync",
+                            ) { onSync(st.str("unit_number") ?: "", name) }
+                        }, enabled = !busy) {
                             Icon(Icons.Filled.Sync, contentDescription = "Sync this stake", modifier = Modifier.size(18.dp))
                         }
-                        IconButton(onClick = { confirm = "Revoke sync for $name?" to { onRevoke(stakeId, name) } }, enabled = !busy) {
+                    }
+                    if (credState == "active" || credState == "stale") {
+                        IconButton(onClick = {
+                            confirm = StakeConfirm(
+                                title = "Revoke sync for $name?",
+                                message = "Daily sync for this stake will stop until a leader re-enrolls. You can do this to support a stake whose credential is stale or compromised.",
+                                confirmLabel = "Revoke",
+                            ) { onRevoke(stakeId, name) }
+                        }, enabled = !busy) {
                             Icon(Icons.Filled.LinkOff, contentDescription = "Revoke sync", modifier = Modifier.size(18.dp))
                         }
+                    }
+                    TextButton(onClick = {
+                        confirm = StakeConfirm(
+                            title = "Wipe $name's data?",
+                            message = "Deletes ALL of this stake's member records — but KEEPS the stake, its leaders' access, and the sync credential. The data re-populates on the next sync. Use this to clear out bad or partial data.",
+                            confirmLabel = "Wipe data",
+                        ) { onWipe(stakeId, name) }
+                    }, enabled = !busy) {
+                        Text("Wipe", color = Color(0xFFE65100), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                    }
+                    TextButton(onClick = {
+                        confirm = StakeConfirm(
+                            title = "Permanently remove $name?",
+                            message = "DELETES EVERYTHING for this stake — the sync credential, ALL member data, every leader's access role, and the stake itself, as if it never onboarded. This CANNOT be undone.",
+                            confirmLabel = "Remove everything",
+                        ) { onRemove(stakeId, name) }
+                    }, enabled = !busy) {
+                        Text("Remove", color = Color(0xFFC62828), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
                     }
                 }
                 @OptIn(ExperimentalLayoutApi::class)
@@ -400,19 +443,28 @@ private fun EnrolledStakesCard(
                         color = if (jobs7d == 0) Color(0xFFEF6C00) else MaterialTheme.colorScheme.onSurfaceVariant)
                     cred?.str("principal_name")?.let { Text("· by $it", style = MaterialTheme.typography.bodySmall) }
                 }
+                if (credState == "stale") {
+                    Text(
+                        "Last sync failed${if (lastError.isEmpty()) "" else ": ${lastError.take(120)}"} — a leader must re-authorize (or take over).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFE53935),
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
                 HorizontalDivider(Modifier.padding(vertical = 8.dp))
             }
         }
     }
-    confirm?.let { (title, action) ->
-        ConfirmDialog(title = title, message = "Runs in the cloud (GitHub Actions) and takes a few minutes.", confirmLabel = "OK",
-            onConfirm = action, onDismiss = { confirm = null })
+    confirm?.let { c ->
+        ConfirmDialog(title = c.title, message = c.message, confirmLabel = c.confirmLabel,
+            onConfirm = c.action, onDismiss = { confirm = null })
     }
 }
 
 private fun credBadge(cred: JsonObject?): Pair<String, Color> = when {
     cred == null -> "No credential" to Color(0xFF9E9E9E)
     cred.str("state") == "revoked" -> "Revoked" to Color(0xFFEF6C00)
+    cred.str("state") == "stale" -> "Stale · needs re-auth" to Color(0xFFE53935)
     cred.bool("complete") -> "Active · full coverage" to Color(0xFF2E7D32)
     else -> "Active · partial" to Color(0xFF1565C0)
 }

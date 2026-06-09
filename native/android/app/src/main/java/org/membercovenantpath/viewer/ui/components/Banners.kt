@@ -64,22 +64,48 @@ fun SyncingBanner(startedAtIso: String?) {
     }
 }
 
-/** Revoked-credential banner: sync paused → re-enroll (#9). Mirrors `_StaleBanner`. */
+/**
+ * Revoked/stale-credential banner (mirrors the web `StaleBanner`). Message + action depend on
+ * revoked vs stale, and — when stale — whether YOU are the credential's provider:
+ * provider → "Re-authorize"; other leaders → "take it over by signing in".
+ */
 @Composable
-fun StaleCredentialBanner(onReenroll: () -> Unit) {
+fun StaleCredentialBanner(
+    state: String = "revoked",
+    isProvider: Boolean = false,
+    lastError: String? = null,
+    onReenroll: () -> Unit,
+) {
+    val message: String
+    val actionLabel: String
+    when {
+        state == "revoked" -> {
+            message = "Sync paused — credential revoked. Re-enroll to resume daily updates."
+            actionLabel = "Re-enroll"
+        }
+        isProvider -> {
+            message = "Sync stopped — your Church session expired, so this stake’s data isn’t updating. Re-authorize to resume."
+            actionLabel = "Re-authorize"
+        }
+        else -> {
+            message = "This stake’s daily sync has failed. The leader who set it up needs to re-authorize — or you can take it over by signing in with your Church account."
+            actionLabel = "Authorize on my account"
+        }
+    }
     Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
         Row(
             Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Filled.SyncProblem, contentDescription = null, tint = Color(0xFFEF6C00))
+            // contentDescription carries the last sync error for accessibility (web shows it on hover).
+            Icon(Icons.Filled.SyncProblem, contentDescription = lastError, tint = Color(0xFFEF6C00))
             Spacer(Modifier.width(10.dp))
             Text(
-                "Sync paused — credential revoked. Re-enroll to resume daily updates.",
+                message,
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodyMedium,
             )
-            TextButton(onClick = onReenroll) { Text("Re-enroll") }
+            TextButton(onClick = onReenroll) { Text(actionLabel) }
         }
     }
 }

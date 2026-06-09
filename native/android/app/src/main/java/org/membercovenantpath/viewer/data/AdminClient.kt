@@ -44,6 +44,10 @@ class AdminClient(private val accessToken: String) {
     suspend fun diagnostics() = get("/admin/diagnostics")
     suspend fun enrolledStakes() = get("/admin/enrolled-stakes")
     suspend fun revokeStake(stakeId: String) = post("/admin/stakes/$stakeId/revoke")
+    /** Wipe a stake's member data (keeps the stake + roles + credential; repopulates next sync). */
+    suspend fun wipeStakeData(stakeId: String) = post("/admin/stakes/$stakeId/wipe-data")
+    /** Remove a stake completely (credential + members + roles + the stake row). Irreversible. */
+    suspend fun removeStake(stakeId: String) = post("/admin/stakes/$stakeId/remove")
     suspend fun run(workflow: String, inputs: JsonObject? = null) =
         post("/admin/actions/run", buildJsonObject {
             put("workflow", JsonPrimitive(workflow))

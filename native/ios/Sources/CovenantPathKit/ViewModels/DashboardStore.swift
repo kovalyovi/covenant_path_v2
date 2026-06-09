@@ -47,8 +47,11 @@ public final class DashboardStore {
     /// Unit-name → missionaries for the current stake (drives the per-unit missionary strip).
     public var missionariesByUnit: [String: [Missionary]] { currentStake?.missionaries ?? [:] }
 
-    /// Show the stale-credential banner when the stake's sync credential was revoked.
-    public var staleCredential: Bool { enrollStatus?.credential.isRevoked == true }
+    /// Show the stale-credential banner when the stake's sync credential was revoked OR went stale
+    /// (its delegated Church session died → daily sync is failing until a leader re-authorizes).
+    public var staleCredential: Bool {
+        enrollStatus?.credential.isRevoked == true || enrollStatus?.credential.isStale == true
+    }
 
     public var brokerAvailable: Bool { services.broker.available }
 

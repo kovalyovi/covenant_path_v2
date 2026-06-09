@@ -12,6 +12,16 @@ struct AdminView: View {
     @State private var me = ""
     @State private var showInviteAdmin = false
     @State private var inviteAdminEmail = ""
+    @State private var confirm: ConfirmAction?
+
+    /// A confirm-gated per-stake action (sync / revoke / wipe / remove) — copy mirrors the web ops console.
+    private struct ConfirmAction: Identifiable {
+        let id = UUID()
+        let title: String
+        let message: String
+        let confirmLabel: String
+        let action: () -> Void
+    }
 
     var body: some View {
         NavigationStack {
@@ -69,6 +79,14 @@ struct AdminView: View {
         .alert("", isPresented: Binding(get: { store.toast != nil }, set: { if !$0 { store.toast = nil } })) {
             Button("OK") { store.toast = nil }
         } message: { Text(store.toast ?? "") }
+        .alert(confirm?.title ?? "",
+               isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
+               presenting: confirm) { c in
+            Button(c.confirmLabel, role: .destructive) { c.action() }
+            Button("Cancel", role: .cancel) {}
+        } message: { c in
+            Text(c.message)
+        }
         .alert("Invite an admin", isPresented: $showInviteAdmin) {
             TextField("name@example.com", text: $inviteAdminEmail)
                 .textInputAutocapitalization(.never).keyboardType(.emailAddress)
@@ -237,7 +255,8 @@ struct AdminView: View {
         let jobs7d = (st["jobs_7d"] as? NSNumber)?.intValue ?? 0
         let members = (st["member_count"] as? NSNumber)?.intValue ?? 0
         let running = (st["sync_state"] as? String) == "running"
-        let credState = cred?["state"] as? String
+        let credState = cred == nil ? "none" : ((cred?["state"] as? String) ?? "")
+        let lastError = (cred?["last_error"] as? String) ?? ""
         let (credLabel, credColor) = credTag(cred)
 
         VStack(alignment: .leading, spacing: 4) {
@@ -249,13 +268,49 @@ struct AdminView: View {
                 }
                 Spacer()
                 if running { ProgressView().controlSize(.mini) }
-                if !running, credState == "active" {
-                    Button { Task { await store?.syncStake(unitNumber: "\(st["unit_number"] ?? "")", name: name) } } label: {
+                if !running, credState != "revoked", credState != "none" {
+                    Button {
+                        confirm = ConfirmAction(
+                            title: "Sync \(name) now?",
+                            message: "Re-scrapes LCR for this one stake and writes to Supabase. Runs in the cloud (GitHub Actions) and takes a few minutes.",
+                            confirmLabel: "Sync") {
+                                Task { await store?.syncStake(unitNumber: "\(st["unit_number"] ?? "")", name: name) }
+                            }
+                    } label: {
                         Image(systemName: "arrow.triangle.2.circlepath")
                     }
-                    Button(role: .destructive) { Task { await store?.revokeStake(stakeID: stakeID, name: name) } } label: {
+                }
+                if credState == "active" || credState == "stale" {
+                    Button(role: .destructive) {
+                        confirm = ConfirmAction(
+                            title: "Revoke sync for \(name)?",
+                            message: "Daily sync for this stake will stop until a leader re-enrolls. You can do this to support a stake whose credential is stale or compromised.",
+                            confirmLabel: "Revoke") {
+                                Task { await store?.revokeStake(stakeID: stakeID, name: name) }
+                            }
+                    } label: {
                         Image(systemName: "link.badge.plus")
                     }
+                }
+                Button {
+                    confirm = ConfirmAction(
+                        title: "Wipe \(name)'s data?",
+                        message: "Deletes ALL of this stake's member records — but KEEPS the stake, its leaders' access, and the sync credential. The data re-populates on the next sync. Use this to clear out bad or partial data.",
+                        confirmLabel: "Wipe data") {
+                            Task { await store?.wipeStakeData(stakeID: stakeID, name: name) }
+                        }
+                } label: {
+                    Text("Wipe").font(.caption.weight(.semibold)).foregroundStyle(Color(hex: 0xE65100))
+                }
+                Button {
+                    confirm = ConfirmAction(
+                        title: "Permanently remove \(name)?",
+                        message: "DELETES EVERYTHING for this stake — the sync credential, ALL member data, every leader's access role, and the stake itself, as if it never onboarded. This CANNOT be undone.",
+                        confirmLabel: "Remove everything") {
+                            Task { await store?.removeStake(stakeID: stakeID, name: name) }
+                        }
+                } label: {
+                    Text("Remove").font(.caption.weight(.semibold)).foregroundStyle(Color(hex: 0xC62828))
                 }
             }
             FlowLayout(spacing: 8, lineSpacing: 4) {
@@ -269,6 +324,10 @@ struct AdminView: View {
                     Text("· by \(p)").font(.caption).foregroundStyle(.secondary)
                 }
             }
+            if credState == "stale" {
+                Text("Last sync failed\(lastError.isEmpty ? "" : ": \(lastError.prefix(120))") — a leader must re-authorize (or take over).")
+                    .font(.caption).foregroundStyle(AppColors.danger)
+            }
             if let missing = cred?["missing"] as? [Any], !missing.isEmpty, (cred?["complete"] as? Bool) != true {
                 Text("Missing: \(missing.map { "\($0)" }.joined(separator: ", "))")
                     .font(.caption).foregroundStyle(.orange)
@@ -279,6 +338,7 @@ struct AdminView: View {
     private func credTag(_ cred: [String: Any]?) -> (String, Color) {
         guard let cred else { return ("No credential", AppColors.neutral) }
         if (cred["state"] as? String) == "revoked" { return ("Revoked", AppColors.warning) }
+        if (cred["state"] as? String) == "stale" { return ("Stale · needs re-auth", AppColors.danger) }
         if (cred["complete"] as? Bool) == true { return ("Active · full coverage", AppColors.success) }
         return ("Active · partial", AppColors.info)
     }

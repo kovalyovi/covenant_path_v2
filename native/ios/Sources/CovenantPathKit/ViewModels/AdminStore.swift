@@ -105,6 +105,24 @@ public final class AdminStore {
         }
     }
 
+    /// Wipe a stake's member data (keeps the stake + roles + credential; repopulates next sync).
+    public func wipeStakeData(stakeID: String, name: String) async {
+        await guarded {
+            _ = try await self.broker.adminWipeStakeData(stakeID)
+            await self.loadStakes()
+            return "Wiped member data for \(name)."
+        }
+    }
+
+    /// Remove a stake completely (credential + members + roles + the stake row). Irreversible.
+    public func removeStake(stakeID: String, name: String) async {
+        await guarded {
+            _ = try await self.broker.adminRemoveStake(stakeID)
+            await self.loadStakes()
+            return "Removed \(name) completely."
+        }
+    }
+
     public func inviteAdmin(_ email: String) async {
         await guarded {
             let res = try await self.broker.adminInvite(email)

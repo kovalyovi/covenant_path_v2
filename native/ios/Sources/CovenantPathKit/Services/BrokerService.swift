@@ -56,12 +56,16 @@ public struct BrokerResult: Sendable {
 
 /// Credential info from /auth/enrollment-status (port of `CredentialInfo`).
 public struct CredentialInfo: Sendable {
-    public let state: String          // "none" | "active" | "revoked"
+    public let state: String          // "none" | "active" | "stale" | "revoked"
     public let complete: Bool
     public let principalName: String?
     public let isProvider: Bool
     public let enrolledAt: String?
+    /// When state == "stale", the last sync error (e.g. "SSO did not complete…").
+    public let lastError: String?
     public var isActive: Bool { state == "active" }
+    /// Stale = the delegated Church session died → daily sync is failing until re-authorized.
+    public var isStale: Bool { state == "stale" }
     public var isRevoked: Bool { state == "revoked" }
     public var isNone: Bool { state == "none" }
     init(json: [String: Any]) {
@@ -70,6 +74,7 @@ public struct CredentialInfo: Sendable {
         principalName = json["principal_name"] as? String
         isProvider = (json["is_provider"] as? Bool) ?? false
         enrolledAt = json["enrolled_at"] as? String
+        lastError = json["last_error"] as? String
     }
 }
 
@@ -299,6 +304,14 @@ public final class BrokerService: @unchecked Sendable {
     public func adminEnrolledStakes() async throws -> [String: Any] { try await authed("GET", "/admin/enrolled-stakes") }
     public func adminRevokeStake(_ stakeID: String) async throws -> [String: Any] {
         try await authed("POST", "/admin/stakes/\(stakeID)/revoke")
+    }
+    /// Wipe a stake's member data (keeps the stake + roles + credential; repopulates next sync).
+    public func adminWipeStakeData(_ stakeID: String) async throws -> [String: Any] {
+        try await authed("POST", "/admin/stakes/\(stakeID)/wipe-data")
+    }
+    /// Remove a stake completely (credential + members + roles + the stake row). Irreversible.
+    public func adminRemoveStake(_ stakeID: String) async throws -> [String: Any] {
+        try await authed("POST", "/admin/stakes/\(stakeID)/remove")
     }
     public func adminRun(_ workflow: String, inputs: [String: Any]? = nil) async throws -> [String: Any] {
         var body: [String: Any] = ["workflow": workflow]

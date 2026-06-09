@@ -109,6 +109,20 @@ class AdminViewModel(
         loadAll()
     }
 
+    /** Wipe a stake's member data (keeps the stake + roles + credential; repopulates next sync). */
+    fun wipeStakeData(stakeId: String, name: String) = guard {
+        client().wipeStakeData(stakeId)
+        toast("Wiped member data for $name.")
+        loadAll()
+    }
+
+    /** Remove a stake completely (credential + members + roles + the stake row). Irreversible. */
+    fun removeStake(stakeId: String, name: String) = guard {
+        client().removeStake(stakeId)
+        toast("Removed $name completely.")
+        loadAll()
+    }
+
     fun syncStake(unitNumber: String, name: String) {
         if (unitNumber.isBlank() || unitNumber == "null") {
             toast("No unit number on file for $name — can't scope a sync.")

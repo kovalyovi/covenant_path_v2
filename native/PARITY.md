@@ -25,9 +25,9 @@ Reference each behavior against the Flutter source noted in [brackets]. Translat
 6. **Title = stake name**, and a **stake switcher** when the user can see >1 stake (persist choice).
 7. **Freshness chip** "Updated 2h ago" (amber >2d, red >2w); tap → dialog with exact local time + a **Sync now** button (provider only) [_LastUpdated]. **Refresh** action re-pulls.
 8. **Overflow menu**: Sync settings, Generate report, Invite a power user, Admin · Ops (admins only), Settings.
-9. **Syncing banner** (elapsed timer) while a sync runs; **stale-credential banner** (revoked → re-enroll) [_SyncingBanner, _StaleBanner].
+9. **Syncing banner** (elapsed timer) while a sync runs; **stale-credential banner** [_SyncingBanner, _StaleBanner]: revoked → re-enroll; **stale** (delegated session died, sync failing) → provider gets "Re-authorize", other leaders get "take it over by signing in" (mirrors web `StaleBanner`; broker enrollment_status returns credential.state = active|stale|revoked + last_error).
 10. **5 tabs, each its accent color** (Baptisms blue, Golden Hour gold, Needs deep-orange, KPIs green, Table purple). Single-stake scoped member query [_columns, .eq stake_id].
-11. **Loading**: content-shaped skeletons, not bare spinners [widgets/shimmer.dart]. **Empty states** with the right message per enrollment status [_EmptyState].
+11. **Loading**: content-shaped skeletons, not bare spinners [widgets/shimmer.dart]. **Empty states** with the right message per enrollment status [_EmptyState] — incl. the **stale** case ("Sync needs re-authorization" + Re-authorize action, mirrors web `EmptyState`).
 
 ## C. Tabs (full behavior)
 12. **Baptisms** [upcoming/baptisms_view.dart]: investigators w/ planned baptism_goal_date as a date timeline — **overdue** ("date passed") block then **Scheduled** block; combined OR per-unit (toggle); per-unit cards show the assigned full-time **missionaries** strip (name chips → tap shows phone/email) [_MissionaryStrip, stakes.missionaries].
@@ -48,7 +48,7 @@ Reference each behavior against the Flutter source noted in [brackets]. Translat
 23. **Invite a power user** [invite_page.dart]: list current power users (grouped by email, scope), **invite** by email (supabase rpc invite_power_user), **revoke** (rpc revoke_power_user).
 24. **Settings** [settings_page.dart]: Appearance (theme cycle); Security (Add a passkey [Recommended]; App lock toggle); Support (Contact support; Send feedback); About & privacy (disclaimer); Account (signed in as <email>; Sign out).
 25. **Contact support** dialog [broker POST /contact]; **Send feedback** dialog [broker/admin POST /feedback → GitHub issue]. + the **one-time post-login passkey upsell** snackbar where supported.
-26. **Admin · Ops console** [admin_page.dart, admin_client.dart] (app_admins only — broker verifies): panels — **system health/summary** (members/units/stakes/admins counts, last sync, tool links), **diagnostics** (recent sync rows), **GitHub Actions** (recent runs + Run/Re-run dispatch), **enrolled stakes** (per-stake state + member count + freshness + admin revoke), **admins** (list + invite + revoke). Each panel loads independently; admin-gated.
+26. **Admin · Ops console** [admin_page.dart, admin_client.dart] (app_admins only — broker verifies): panels — **system health/summary** (members/units/stakes/admins counts, last sync, tool links), **diagnostics** (recent sync rows), **GitHub Actions** (recent runs + Run/Re-run dispatch), **enrolled stakes** (per-stake state chip incl. "Stale · needs re-auth" + last-error line, member count, freshness; per-stake actions **Sync now / Revoke / Wipe data** (POST /admin/stakes/{id}/wipe-data) **/ Remove** (POST /admin/stakes/{id}/remove), each confirm-gated with copy spelling out exactly what it deletes — mirrors web `EnrolledStakesCard`), **admins** (list + invite + revoke). Each panel loads independently; admin-gated.
 
 ## F. Cross-cutting
 27. **Error reporting** [error_reporter.dart]: report uncaught errors to broker /log (type + truncated message + surface; never PII). iOS/Android global handlers. Optional Sentry parity is NICE-TO-HAVE, not required.

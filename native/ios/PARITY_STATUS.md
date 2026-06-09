@@ -17,9 +17,9 @@ Swift Charts).
 6. **Title = stake name + switcher** — **Done.** `DashboardView.stakeTitle` (Menu when >1 stake; choice persisted in `AppPrefs`).
 7. **Freshness chip + Sync now** — **Done.** Toolbar chip (amber/red staleness via `Freshness`) → alert with exact local time + "Sync now" (provider). Refresh action re-pulls. (`Freshness.swift`)
 8. **Overflow menu** — **Done.** Sync settings · Generate report · Invite a power user · Admin·Ops (admins only) · Settings.
-9. **Syncing + stale banners** — **Done.** `SyncingBanner` (1s elapsed timer) + `StaleBanner` (revoked → re-enroll).
+9. **Syncing + stale banners** — **Done.** `SyncingBanner` (1s elapsed timer) + `StaleBanner` (revoked → re-enroll; stale → provider "Re-authorize" / other leaders "Authorize on my account", mirrors web).
 10. **5 tabs, accent colors, single-stake scoped query** — **Done.** `DashboardTab` accents; `MembersRepository.members(stakeID:)` `.eq("stake_id")` ordered unit→name.
-11. **Skeleton loading + empty states** — **Done.** `MemberListSkeleton`/`CardSkeleton`/`SyncSettingsSkeleton`; `EmptyStateView` resolves the enrollment-status copy (no-role / revoked / active / default).
+11. **Skeleton loading + empty states** — **Done.** `MemberListSkeleton`/`CardSkeleton`/`SyncSettingsSkeleton`; `EmptyStateView` resolves the enrollment-status copy (no-role / revoked / stale "Sync needs re-authorization" / active / default).
 
 ## C. Tabs
 12. **Baptisms** — **Done.** Overdue ("date passed") then Scheduled date timeline; combined ↔ per-unit toggle; per-unit cards show the `MissionaryStrip` (name chips → tap reveals phone/email). (`BaptismsView.swift`)
@@ -40,7 +40,7 @@ Swift Charts).
 23. **Invite a power user** — **Done.** List (grouped by email) + invite (rpc `invite_power_user`, optional unit scope) + revoke (rpc `revoke_power_user`). (`InviteView.swift`)
 24. **Settings** — **Done.** Appearance (theme cycle); Security (Add a passkey [Recommended]; App-lock toggle); Support (Contact/Feedback); About & privacy (disclaimer); Account (signed in as <email>; Sign out). (`SettingsView.swift`)
 25. **Contact support / Send feedback / passkey upsell** — **Done.** Contact (`/contact`) + Feedback (`/feedback` → GitHub issue) sheets; one-time post-login passkey-upsell toast (where supported). (`SupportSheets.swift`, `DashboardView.maybeSuggestPasskey`)
-26. **Admin · Ops console** — **Done.** Independent panels: system health, data freshness, maintenance dispatch, tools/links, diagnostics (endpoint perf + failed units), enrolled stakes (per-stake state·members·freshness + admin sync/revoke), GitHub Actions runs (+ re-run) + changelog, admins (list + invite + revoke). Broker-gated; each panel loads on its own. (`AdminView.swift`, `AdminStore.swift`)
+26. **Admin · Ops console** — **Done.** Independent panels: system health, data freshness, maintenance dispatch, tools/links, diagnostics (endpoint perf + failed units), enrolled stakes (per-stake state chip incl. "Stale · needs re-auth" + last-error line; confirm-gated per-stake Sync now / Revoke / Wipe data / Remove, mirrors web), GitHub Actions runs (+ re-run) + changelog, admins (list + invite + revoke). Broker-gated; each panel loads on its own. (`AdminView.swift`, `AdminStore.swift`)
 
 ## F. Cross-cutting
 27. **Error reporting → /log** — **Done.** `ErrorReporter` (broker `/log`, type + truncated message + surface, no PII) + `NSSetUncaughtExceptionHandler`; explicit `report(_:where:)` for caught async errors. Sentry parity is NICE-TO-HAVE → not added (per spec). (`ErrorReporter.swift`, `BrokerService.log`)

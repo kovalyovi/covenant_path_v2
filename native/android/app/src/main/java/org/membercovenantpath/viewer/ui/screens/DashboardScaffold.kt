@@ -195,7 +195,14 @@ fun DashboardScaffold(
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             if (state.syncing) SyncingBanner(state.syncStartedAt)
-            if (state.staleCredential) StaleCredentialBanner(onReenroll = onSignOut)
+            if (state.staleCredential) {
+                StaleCredentialBanner(
+                    state = state.enrollStatus?.credential?.state ?: "revoked",
+                    isProvider = state.enrollStatus?.credential?.isProvider == true,
+                    lastError = state.enrollStatus?.credential?.lastError,
+                    onReenroll = onSignOut,
+                )
+            }
 
             // N6: breathing room so the last card/row isn't flush against the bottom nav bar
             // (the Scaffold already insets by the nav height under edge-to-edge; this just adds a gap).

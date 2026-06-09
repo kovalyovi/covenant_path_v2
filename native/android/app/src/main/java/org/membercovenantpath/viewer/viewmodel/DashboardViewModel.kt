@@ -41,8 +41,10 @@ data class DashboardUiState(
     val currentStake: Stake? get() = stakes.firstOrNull { it.id == currentStakeId }
     val stakeName: String? get() = currentStake?.name
     val lastSyncedAt: String? get() = currentStake?.lastSyncedAt
-    /** A revoked sync credential → show the re-enroll banner (matches dashboard_page staleCred). */
-    val staleCredential: Boolean get() = enrollStatus?.credential?.isRevoked == true
+    /** A revoked OR stale sync credential → show the banner (stale = delegated Church session died,
+     *  daily sync failing until a leader re-authorizes; matches the web `showStaleBanner`). */
+    val staleCredential: Boolean
+        get() = enrollStatus?.credential?.isRevoked == true || enrollStatus?.credential?.isStale == true
 }
 
 /**

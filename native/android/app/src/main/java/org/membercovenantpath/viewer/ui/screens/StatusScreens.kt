@@ -83,7 +83,8 @@ fun EmptyPanel(text: String) {
 /**
  * Empty-members state with the right message + action per enrollment status (#11). Mirrors the
  * Flutter `_EmptyState`: no-role/no-credential → "set up sync"; revoked → "sync paused / re-enroll";
- * active → "setting up your stake…"; otherwise the generic scoped-to-your-calling message.
+ * stale → "needs re-authorization / re-authorize"; active → "setting up your stake…"; otherwise the
+ * generic scoped-to-your-calling message.
  */
 @Composable
 fun EnrollmentEmptyState(
@@ -114,6 +115,11 @@ fun EnrollmentEmptyState(
             title = "Sync paused"
             body = "The daily sync credential for your stake has been revoked. Re-enroll to resume data updates."
             if (brokerAvailable) actionLabel = "Re-enroll"
+        }
+        cred?.isStale == true -> {
+            title = "Sync needs re-authorization"
+            body = "This stake's daily sync stopped — the Church session that keeps it updated expired. Sign in again with your Church account to re-authorize and resume updates."
+            if (brokerAvailable) actionLabel = "Re-authorize"
         }
         cred?.isActive == true -> {
             title = "Setting up your stake…"
