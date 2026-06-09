@@ -41,18 +41,24 @@ def _client_from_cookies(cookies: list[dict]):
 
 
 def _stored_credential_summary(unit_number: int) -> dict | None:
-    """The stake's current non-revoked credential coverage + access_rank (or None). Used to decide
-    whether a newly-signed-in leader would IMPROVE the sync (onboarding.should_take_over)."""
+    """The stake's current USABLE credential (non-revoked AND not currently failing) — coverage +
+    access_rank, or None. None means "no usable credential" → the caller offers enrollment.
+
+    A STALE credential (last_failed_at set — its delegated session died and the daily sync is failing)
+    counts as NOT usable, so the provider (or any authorized leader) is OFFERED re-enrollment instead of
+    being stuck: the credential looks "active/non-revoked" but can't actually sync. This was the
+    "re-logged in but nothing changed" bug — the app never offered re-auth for a stale-but-active cred."""
     try:
         sb = {"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}"}
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/stakes", headers=sb,
-            params={"select": "id,stake_credentials(coverage,access_rank,revoked)",
+            params={"select": "id,stake_credentials(coverage,access_rank,revoked,last_failed_at)",
                     "unit_number": f"eq.{unit_number}", "limit": "1"}, timeout=30)
         rows = r.json() if r.status_code == 200 else []
         if not rows:
             return None
-        cred = next((c for c in (rows[0].get("stake_credentials") or []) if not c.get("revoked")), None)
+        cred = next((c for c in (rows[0].get("stake_credentials") or [])
+                     if not c.get("revoked") and not c.get("last_failed_at")), None)
         if not cred:
             return None
         return {"coverage": cred.get("coverage") or {}, "access_rank": cred.get("access_rank")}
