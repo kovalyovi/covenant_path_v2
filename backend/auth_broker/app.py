@@ -255,11 +255,37 @@ def auth_sync_now(authorization: str = Header(default="")) -> dict:
     if not admin.github_configured():
         raise HTTPException(status_code=503, detail="sync dispatch not configured (GITHUB_TOKEN)")
     try:
-        admin.dispatch("daily-sync.yml", inputs={"targets": "supabase"})
+        # PER-STAKE: scope to the provider's own stake — without the `stake` input this dispatched
+        # the WHOLE matrix (same fan-out bug as the on-enroll kickoff, provider-path edition).
+        inputs = {"targets": "supabase"}
+        if status.get("unit_number"):
+            inputs["stake"] = str(status["unit_number"])
+        admin.dispatch("daily-sync.yml", inputs=inputs)
     except admin.AdminError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "dispatched", "coverage_complete": bool(cred.get("complete")),
             "last_synced_at": status.get("last_synced_at")}
+
+
+def _audit_okta_failure(who: str, stage: str, error: str, rid: str) -> None:
+    """Make OKTA-STAGE failures visible in the admin console: a wrong password / failed MFA never
+    reaches the login eval, so login_audit had NO row for them — a member 'stuck at login' was
+    invisible (the av_kov case: zero server-side evidence of his attempts). Best-effort write with
+    outcome='okta_failed'/'mfa_failed'; `who` is the Church USERNAME (identity hint, admin-only RLS)."""
+    try:
+        import requests as _rq
+        url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+        if not (url and key):
+            return
+        _rq.post(f"{url}/rest/v1/login_audit",
+                 headers={"apikey": key, "Authorization": f"Bearer {key}",
+                          "Content-Type": "application/json", "Prefer": "return=minimal"},
+                 json={"email": (who or "").lower()[:120], "outcome": stage,
+                       "error": (error or "")[:300], "request_id": rid},
+                 timeout=10)
+    except Exception:  # noqa: BLE001 — observability must never affect the login path
+        pass
 
 
 @app.post("/auth/password")
@@ -270,6 +296,7 @@ def auth_password(req: PasswordReq) -> dict:
         res = okta_flow.start_login(req.username.strip(), req.password)
     except okta_flow.AuthError as e:
         logger.warning("[req %s] auth failed: %s", rid, e)
+        _audit_okta_failure(req.username, "okta_failed", str(e), rid)
         raise HTTPException(status_code=401, detail=str(e))
     if res["status"] == "mfa_required":
         return {"status": "mfa_required", "login_id": res["login_id"], "factors": res["factors"]}
@@ -295,6 +322,7 @@ def auth_mfa_verify(req: MfaReq) -> dict:
     try:
         res = okta_flow.verify_mfa(req.login_id, req.code.strip())
     except okta_flow.AuthError as e:
+        _audit_okta_failure("", "mfa_failed", str(e), rid)
         raise HTTPException(status_code=401, detail=str(e))
     enrolled = _login_eval(res, req.enroll, rid)
     return {"status": "ok", "session": _mint(res["identity"], rid),
