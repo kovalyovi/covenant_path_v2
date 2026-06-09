@@ -334,6 +334,10 @@ def _apply_profile(member: CovenantPathMember, prof: dict) -> None:
         member.temple_recommend = prof["temple_recommend"]
     if prof.get("patriarchal_blessing"):
         member.patriarchal_blessing = prof["patriarchal_blessing"]
+    # The profile's ENDOWMENT ordinance date is authoritative — the one-work details endpoint often
+    # lacks templeOrdinances, leaving living_ordinance derived as "No". A real endowment date = endowed.
+    if prof.get("endowment_date"):
+        member.living_ordinance = "Yes"
     if prof.get("ministering_assignment"):
         member.ministering_assignment = prof["ministering_assignment"]
     if not member.birth_date and prof.get("birth_date"):
@@ -350,6 +354,12 @@ def _apply_profile(member: CovenantPathMember, prof: dict) -> None:
         member.aaronic_priesthood = a if (male and turns_at_least(em, 12)) else NA
         member.melchizedek_priesthood = (
             mel if (male and is_at_least_now(em, 18) and member_one_year(em)) else NA)
+    # Endowment eligibility: a temple endowment is only possible for adults (18+) who've been members
+    # ~1 year. Gate an ineligible member's "No" (not-yet-endowed) to N/A — "No" misleads (they can't be
+    # endowed yet), matching the reference sheet + the priesthood gates above. A genuine "Yes" is kept.
+    em_e = {"sex": member.sex, "birth_date": member.birth_date, "baptism_date": member.baptism_date}
+    if member.living_ordinance == "No" and not (is_at_least_now(em_e, 18) and member_one_year(em_e)):
+        member.living_ordinance = NA
     # calling / has-ministers when the profile supplies them (member_profile.extract_fields fills
     # these when the member record exposes them; absent -> keep the value _assemble derived).
     if prof.get("calling") in ("Yes", "No"):
