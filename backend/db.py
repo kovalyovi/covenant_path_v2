@@ -12,6 +12,7 @@ Env:
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import psycopg2
@@ -58,6 +59,32 @@ def _merge_expr(c: str) -> str:
             e = f"nullif({e}, '{s}')"
         return f"{c} = coalesce({e}, members.{c})"
     return f"{c} = excluded.{c}"
+
+
+# Per-field freshness (#data-correctness): the fields whose staleness we track. A SENTINEL value (or
+# None) means the endpoint didn't return it this run — keep the prior last-fetched stamp (staleness
+# grows); a real value (incl. a confirmed-empty like 'No' / 0) stamps it fresh.
+_FRESHNESS_FIELDS = tuple(_GATED_COLUMNS) + ("ministering_brothers_sisters", "friends_count")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _field_meta(m: dict, prior: dict | None, now: str) -> dict:
+    """{field: {"f": last-fetched-iso, "t": last-tried-iso}}. A failed/missing fetch bumps `t` only
+    and PRESERVES the prior `f`, so the UI shows growing staleness and we never blank a value we
+    didn't actually get this run. A real value (or a confirmed empty) stamps both."""
+    meta = {k: dict(v) for k, v in (prior or {}).items() if isinstance(v, dict)}
+    for c in _FRESHNESS_FIELDS:
+        v = m.get(c)
+        fetched = v is not None and not (isinstance(v, str) and v in _SENTINELS)
+        entry = dict(meta.get(c) or {})
+        entry["t"] = now
+        if fetched:
+            entry["f"] = now
+        meta[c] = entry
+    return meta
 
 
 def db_url() -> str:
@@ -135,6 +162,11 @@ def upsert_members(conn, stake_id: str, members: list[dict],
     `unit_number` existed still map to a unit). `unit_name` column ← the report's `unit`.
     """
     unit_id_by_name = unit_id_by_name or {}
+    now = _now_iso()
+    # Prior per-field freshness, so a not-fetched (sentinel) field keeps its last-fetched stamp.
+    with conn.cursor() as cur:
+        cur.execute("select person_uuid, field_meta from members where stake_id=%s", (stake_id,))
+        prior_meta = {p: (fm or {}) for p, fm in cur.fetchall()}
     rows = []
     for m in members:
         if not m.get("person_uuid"):
@@ -150,14 +182,15 @@ def upsert_members(conn, stake_id: str, members: list[dict],
                 vals.append(psycopg2.extras.Json(v) if v is not None else None)
             else:
                 vals.append(m.get(c))
-        rows.append((stake_id, unit_id, *vals))
+        fm = _field_meta(m, prior_meta.get(m.get("person_uuid")), now)
+        rows.append((stake_id, unit_id, *vals, psycopg2.extras.Json(fm)))
     if not rows:
         return 0
-    cols = "stake_id, unit_id, " + ", ".join(_MEMBER_COLUMNS)
-    # on conflict, refresh everything except the conflict key (person_uuid); unit_id
-    # isn't in _MEMBER_COLUMNS so add it once.
+    cols = "stake_id, unit_id, " + ", ".join(_MEMBER_COLUMNS) + ", field_meta"
+    # on conflict, refresh everything except the conflict key (person_uuid); unit_id + field_meta
+    # aren't in _MEMBER_COLUMNS so add them once. field_meta is the full merge (computed in Python).
     update_cols = ["unit_id"] + [c for c in _MEMBER_COLUMNS if c != "person_uuid"]
-    updates = ", ".join(_merge_expr(c) for c in update_cols)
+    updates = ", ".join(_merge_expr(c) for c in update_cols) + ", field_meta = excluded.field_meta"
     sql = (f"insert into members ({cols}) values %s "
            f"on conflict (stake_id, person_uuid) do update set {updates}")
     with conn.cursor() as cur:
