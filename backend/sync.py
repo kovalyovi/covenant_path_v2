@@ -135,6 +135,15 @@ def sync_stake(client: LcrClient, members: list[dict], conn,
     except Exception as exc:  # noqa: BLE001 — never fail the data sync over role provisioning
         logger.warning("role provisioning skipped for stake %s: %s", stake_id, exc)
         roles = None
+    # Calling → access-level catalog (feedback #1): seed the hardcoded baseline, then refresh from
+    # the LIVE LCR access matrix — so a Church-side permission change updates levels within a day.
+    try:
+        from backend import access_levels
+        from lcr_client.access import covenant_path_access
+        access_levels.seed_baseline(conn)
+        access_levels.persist_catalog(conn, covenant_path_access(client).get("features") or [])
+    except Exception as exc:  # noqa: BLE001 — never fail the data sync over the catalog
+        logger.warning("access catalog skipped for stake %s: %s", stake_id, exc)
     db.touch_stake_synced(conn, stake_id)
     db.set_sync_state(conn, stake_id, "done")
     return {"stake": ctx.unit_name, "stake_unit": ctx.unit_number, "stake_id": stake_id,
