@@ -15,6 +15,7 @@ import { IconButton, Button } from '../components/ui';
 import { CardSkeleton } from '../components/Skeletons';
 import { Modal } from '../components/Modal';
 import { useToast } from '../components/Toast';
+import { ViewAllLink } from './AdminListPage';
 
 type Json = Record<string, unknown>;
 
@@ -354,16 +355,17 @@ function Card({ title, trailing, children }: { title: string; trailing?: ReactNo
 // Recent Church-login evaluations (admin-only). The tool for debugging "this leader can't log in":
 // who tried, their stake + callings, the outcome, and what scope they actually RESOLVE to (role_scope
 // = 'none' means they signed in but see an empty app — the under-visibility signal).
-function LoginAuditCard({ logins }: { logins: Json[] }) {
-  if (!logins.length)
+function LoginAuditCard({ logins: all }: { logins: Json[] }) {
+  if (!all.length)
     return (
       <Card title="Recent logins">
         <p className="small muted">No login attempts recorded yet.</p>
       </Card>
     );
+  const logins = all.slice(0, 8); // full, paginated history at /admin/logins (#7)
   const color = (o: string) => (o === 'allowed' || o === 'enrolled' ? statusColors.successFg : statusColors.warning);
   return (
-    <Card title="Recent logins">
+    <Card title="Recent logins" trailing={all.length > 8 ? <ViewAllLink to="/admin/logins" n={all.length} /> : undefined}>
       {logins.map((r, i) => {
         const outcome = String(r['outcome'] ?? r['authorized'] ?? '');
         const callings = (Array.isArray(r['callings']) ? (r['callings'] as unknown[]) : []).join(', ');
@@ -767,9 +769,11 @@ function EnrolledStakesCard({
 
 function RunsCard({ actions, busy, onRerun }: { actions: Json; busy: boolean; onRerun: (id: number) => void }) {
   if (actions['configured'] !== true) return null;
-  const runs = ((actions['runs'] as Json[]) ?? []);
+  const all = ((actions['runs'] as Json[]) ?? []);
+  // Top of the list only — the full, paginated history lives at /admin/runs (#7).
+  const runs = all.slice(0, 8);
   return (
-    <Card title="Recent Actions runs">
+    <Card title="Recent Actions runs" trailing={all.length > 8 ? <ViewAllLink to="/admin/runs" n={all.length} /> : undefined}>
       {runs.length === 0 ? (
         <p>No runs found.</p>
       ) : (
@@ -822,10 +826,11 @@ function RunsCard({ actions, busy, onRerun }: { actions: Json; busy: boolean; on
 
 function ChangelogCard({ actions }: { actions: Json }) {
   if (actions['configured'] !== true) return null;
-  const commits = ((actions['commits'] as Json[]) ?? []);
-  if (commits.length === 0) return null;
+  const all = ((actions['commits'] as Json[]) ?? []);
+  if (all.length === 0) return null;
+  const commits = all.slice(0, 5); // full history at /admin/changelog (#7)
   return (
-    <Card title="Changelog">
+    <Card title="Changelog" trailing={all.length > 5 ? <ViewAllLink to="/admin/changelog" n={all.length} /> : undefined}>
       {commits.map((c, i) => (
         <button key={i} type="button" className="list-tile" style={{ padding: '8px 0' }} onClick={() => openUrl(c['html_url'] as string)}>
           <Icon name="commit" size={18} />

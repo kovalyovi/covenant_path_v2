@@ -24,6 +24,7 @@ import { InvitePage } from './pages/InvitePage';
 // initial bundle, so first paint of the dashboard stays lean.
 const KpisTab = lazy(() => import('./pages/tabs/KpisTab').then((m) => ({ default: m.KpisTab })));
 const AdminPage = lazy(() => import('./pages/AdminPage').then((m) => ({ default: m.AdminPage })));
+const AdminListPage = lazy(() => import('./pages/AdminListPage').then((m) => ({ default: m.AdminListPage })));
 
 function LazyRoute({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<FullScreenLoader />}>{children}</Suspense>;
@@ -82,6 +83,8 @@ export const router = createBrowserRouter([
       { path: 'settings', element: <SettingsPage /> },
       { path: 'invite', element: <InvitePage /> },
       { path: 'admin', element: <LazyRoute><AdminPage /></LazyRoute> },
+      // Full-history ops views (#7): /admin/runs · /admin/changelog · /admin/logins (paginated).
+      { path: 'admin/:section', element: <LazyRoute><AdminListPage /></LazyRoute> },
     ],
   },
   { path: '*', element: <Navigate to="/" replace /> },
