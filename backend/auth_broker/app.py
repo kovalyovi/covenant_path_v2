@@ -565,6 +565,37 @@ def admin_revoke_stake(stake_id: str, email: str = Depends(require_admin)) -> di
         raise HTTPException(status_code=503, detail=str(e))
 
 
+@app.post("/admin/stakes/{stake_id}/sync")
+def admin_stake_sync(stake_id: str, email: str = Depends(require_admin)) -> dict:
+    """Per-stake 'Sync now' — dispatches a sync for ONLY this stake (never the full matrix)."""
+    logger.info("admin %s syncing stake %s", email, stake_id)
+    try:
+        return admin.dispatch_stake_sync(stake_id)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/admin/stakes/{stake_id}/wipe-data")
+def admin_stake_wipe(stake_id: str, email: str = Depends(require_admin)) -> dict:
+    """Delete a stake's member DATA (keeps the stake, roles, credential). Re-populates on next sync."""
+    logger.warning("admin %s WIPING member data for stake %s", email, stake_id)
+    try:
+        return admin.wipe_stake_data(stake_id)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.post("/admin/stakes/{stake_id}/remove")
+def admin_stake_remove(stake_id: str, email: str = Depends(require_admin)) -> dict:
+    """FULL removal of a stake: credential + members + roles + diagnostics + the stake row.
+    Irreversible — admin only (the UI must confirm)."""
+    logger.warning("admin %s FULLY REMOVING stake %s", email, stake_id)
+    try:
+        return admin.remove_stake(stake_id)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 @app.get("/admin/actions")
 def admin_actions(email: str = Depends(require_admin)) -> dict:
     """Recent GitHub Actions runs + the commit changelog. Graceful when GITHUB_TOKEN unset."""

@@ -455,6 +455,39 @@ def admin_revoke_stake(stake_id: str) -> dict:
     return _patch_revoke(stake_id, _sb_headers())
 
 
+def _rpc(name: str, params: dict) -> requests.Response:
+    return requests.post(f"{SUPABASE_URL}/rest/v1/rpc/{name}",
+                         headers={**_sb_headers(), "Content-Type": "application/json"},
+                         json=params, timeout=_TIMEOUT)
+
+
+def dispatch_stake_sync(stake_id: str, targets: str = "supabase") -> dict:
+    """Trigger a sync for ONE stake — scoped via the workflow's `stake` input, never the full matrix."""
+    s = _one("stakes", {"select": "unit_number", "id": f"eq.{stake_id}", "limit": "1"})
+    if not s or not s.get("unit_number"):
+        raise AdminError("no such stake")
+    dispatch("daily-sync.yml", inputs={"stake": str(s["unit_number"]), "targets": targets})
+    return {"status": "dispatched", "unit_number": s["unit_number"]}
+
+
+def wipe_stake_data(stake_id: str) -> dict:
+    """Delete a stake's MEMBER data (keeps the stake shell + roles + credential; re-populates on the
+    next sync / re-enroll). 'Revoke + wipe data' tier."""
+    r = _rpc("wipe_stake_members", {"p_stake_id": stake_id})
+    if r.status_code >= 300:
+        raise AdminError(f"wipe failed ({r.status_code}): {r.text[:160]}")
+    return {"status": "wiped", "deleted": (r.json() if r.text else None)}
+
+
+def remove_stake(stake_id: str) -> dict:
+    """FULL removal (admin only): credential + members + roles + diagnostics + the stake row, as if it
+    never onboarded. Irreversible."""
+    r = _rpc("remove_stake", {"p_stake_id": stake_id})
+    if r.status_code >= 300:
+        raise AdminError(f"remove failed ({r.status_code}): {r.text[:160]}")
+    return {"status": "removed", "stake_id": stake_id}
+
+
 def summary() -> dict:
     """Row counts + data freshness from Supabase (service-role REST)."""
     last = _one("members", {"select": "updated_at", "order": "updated_at.desc", "limit": 1})
