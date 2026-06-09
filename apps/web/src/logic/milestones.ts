@@ -102,6 +102,20 @@ export function milestonesFor(m: Member): Milestone[] {
   return milestones.filter((x) => x.eligible(m));
 }
 
+/** Endowment eligibility: an adult (18+) who's been a member ~1 year. Same gate as the report. */
+export function endowmentEligible(m: Member): boolean {
+  return ageNowAtLeast(m, 18) && memberOneYearPlus(m);
+}
+
+/** Display value for endowment (living_ordinance): N/A for INELIGIBLE members — they can't be endowed
+ *  yet, so a raw "No" is misleading. Gates client-side so it's correct before the next sync re-scrapes
+ *  (the report applies the same gate server-side). A real "Yes" is always kept. */
+export function endowmentDisplay(m: Member): string {
+  const v = String(m['living_ordinance'] ?? '');
+  if (v === 'Yes') return 'Yes';
+  return endowmentEligible(m) ? v : 'N/A';
+}
+
 // ---- Convert responsibility (the stake's hand-off policy, #23) ---------------------------------
 
 export type OrgBucket = 'wml' | 'eq' | 'rs';

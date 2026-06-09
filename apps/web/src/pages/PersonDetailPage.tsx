@@ -7,7 +7,9 @@
 import { useNavigate, useParams } from 'react-router-dom';
 import { useDashboard } from '../hooks/useDashboard';
 import type { Member } from '../lib/member';
-import { detailsOf } from '../lib/member';
+import { detailsOf, freshness } from '../lib/member';
+import { endowmentDisplay } from '../logic/milestones';
+import { agoOrNever } from '../logic/dates';
 import { Avatar, IconButton, SectionCard } from '../components/ui';
 import { Icon, type IconName } from '../components/Icon';
 import { GoldenHourChips } from '../components/GoldenHourChips';
@@ -462,12 +464,27 @@ function FlatFallback({ member }: { member: Member }) {
   return (
     <div style={{ marginTop: 8 }}>
       <hr className="divider" />
-      {fields.map(([label, key]) => (
-        <div key={key} className="row" style={{ justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--outline-variant)' }}>
-          <span>{label}</span>
-          <strong>{String(member[key] ?? '—')}</strong>
-        </div>
-      ))}
+      {fields.map(([label, key]) => {
+        const value = key === 'living_ordinance' ? endowmentDisplay(member) : String(member[key] ?? '—');
+        const fr = freshness(member, key);
+        const stale = fr.state === 'warn' || fr.state === 'error' || fr.state === 'never';
+        return (
+          <div key={key} className="row" style={{ justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--outline-variant)' }}>
+            <span>{label}</span>
+            <span className="row" style={{ gap: 6, alignItems: 'center' }}>
+              {stale && (
+                <Icon
+                  name="schedule"
+                  size={14}
+                  color={fr.state === 'warn' ? '#f9a825' : '#e53935'}
+                  title={fr.state === 'never' ? 'Not fetched yet' : `Last fetched ${agoOrNever(fr.fetched)}`}
+                />
+              )}
+              <strong>{value}</strong>
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }

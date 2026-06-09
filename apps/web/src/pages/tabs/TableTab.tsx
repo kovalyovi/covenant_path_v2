@@ -9,6 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import { useDashboard } from '../../hooks/useDashboard';
 import type { Member } from '../../lib/member';
 import { isInvestigator } from '../../lib/member';
+import { endowmentDisplay } from '../../logic/milestones';
 import { Icon } from '../../components/Icon';
 import { Modal } from '../../components/Modal';
 import { Button } from '../../components/ui';
@@ -43,6 +44,8 @@ const COLS: Col[] = [
 
 /** Display value — friends shows the recorded count when present; strips redundant "Member for ". */
 function display(m: Member, key: string): string {
+  // Endowment: N/A for ineligible members (not 18+ AND ~1yr) — gates the raw DB "No" client-side.
+  if (key === 'living_ordinance') return endowmentDisplay(m);
   if (key === 'friends') {
     const c = m['friends_count'];
     if (c != null && String(c).length > 0) return String(c);
