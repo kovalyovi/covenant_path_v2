@@ -82,6 +82,8 @@ def persist_catalog(conn, access_rows: list[dict]) -> int:
         feature = row.get("feature")
         for g in row.get("granting_roles") or []:
             rid = g.get("id")
+            if isinstance(rid, str) and rid.isdigit():  # matrix role ids sometimes arrive as strings
+                rid = int(rid)
             if not isinstance(rid, int):
                 continue
             ent = by_role.setdefault(rid, {"name": g.get("name"), "features": set()})

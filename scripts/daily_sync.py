@@ -98,7 +98,7 @@ def _sync_one(args) -> dict:
             failed_unit_numbers = access.get("_run_stats", {}).get("failed_unit_numbers", [])
             result["supabase"] = bsync.sync_stake(
                 client, dicts, conn, failed_unit_numbers=failed_unit_numbers,
-                only_unit=getattr(args, "unit", None))
+                only_unit=getattr(args, "unit", None), access=access)
             if args.photos:
                 from backend import photos as photopipe
                 s = result["supabase"]

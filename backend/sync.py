@@ -67,7 +67,7 @@ def kpi_subtree(dash: dict) -> dict:
 
 
 def sync_stake(client: LcrClient, members: list[dict], conn,
-               failed_unit_numbers=None, only_unit=None) -> dict:
+               failed_unit_numbers=None, only_unit=None, access=None) -> dict:
     ctx = client.user_context()
     # Stake identity is keyed by unit_number (stable), so a stake RENAME just updates stakes.name —
     # never a duplicate. Units are upserted by unit_number too: a renamed ward updates its name, a
@@ -106,8 +106,23 @@ def sync_stake(client: LcrClient, members: list[dict], conn,
         include_orphans = True
     keep_unit_ids = [unit_id_by_number[n] for n in keep_numbers if n in unit_id_by_number]
     present_uuids = [m.get("person_uuid") for m in members if m.get("person_uuid")]
-    removed_people = db.reconcile_members(conn, stake_id, present_uuids, keep_unit_ids, include_orphans)
-    if removed_people:
+    # DEGRADED-RUN guard: when any unit failed this run, LCR is visibly unhealthy — and its 500s can
+    # also degrade the "successful" units' rosters (thinner-but-200 responses). A burst of departures
+    # in that state is far more likely bad data than 10 real same-day moves (2026-06-09: 10 'departed'
+    # while 2 units were 500-ing). Defer deletions to the next CLEAN run; small churn (≤3) still flows.
+    removed_people = 0
+    candidates = db.count_reconcile_candidates(conn, stake_id, present_uuids, keep_unit_ids, include_orphans)
+    if failed and candidates > 3:
+        logger.warning("reconcile DEFERRED for stake %s: %d would-be removals during a DEGRADED run "
+                       "(%d failed unit(s)) — preserving members until a clean run",
+                       ctx.unit_number, candidates, len(failed))
+        try:
+            db.insert_diagnostics(conn, stake_id, "reconcile_deferred",
+                                  {"candidates": candidates, "failed_units": sorted(failed)})
+        except Exception:  # noqa: BLE001
+            pass
+    elif candidates:
+        removed_people = db.reconcile_members(conn, stake_id, present_uuids, keep_unit_ids, include_orphans)
         logger.info("reconciled %d departed member(s) from stake %s (%s)",
                     removed_people, ctx.unit_name, ctx.unit_number)
     # stake-level KPIs for the viewer's KPIs tab (never fail the data sync over them)
@@ -136,12 +151,13 @@ def sync_stake(client: LcrClient, members: list[dict], conn,
         logger.warning("role provisioning skipped for stake %s: %s", stake_id, exc)
         roles = None
     # Calling → access-level catalog (feedback #1): seed the hardcoded baseline, then refresh from
-    # the LIVE LCR access matrix — so a Church-side permission change updates levels within a day.
+    # the access matrix the REPORT PHASE already evaluated (passed in — no re-fetch; a late re-fetch
+    # at the end of a 45-min run hit a degraded page and threw 'NoneType is not subscriptable').
     try:
         from backend import access_levels
-        from lcr_client.access import covenant_path_access
         access_levels.seed_baseline(conn)
-        access_levels.persist_catalog(conn, covenant_path_access(client).get("features") or [])
+        if access and access.get("features"):
+            access_levels.persist_catalog(conn, access["features"])
     except Exception as exc:  # noqa: BLE001 — never fail the data sync over the catalog
         logger.warning("access catalog skipped for stake %s: %s", stake_id, exc)
     db.touch_stake_synced(conn, stake_id)

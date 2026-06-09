@@ -199,6 +199,23 @@ def upsert_members(conn, stake_id: str, members: list[dict],
     return len(rows)
 
 
+def count_reconcile_candidates(conn, stake_id: str, present_uuids: list[str],
+                               keep_unit_ids: list[str], include_orphans: bool) -> int:
+    """How many members reconcile_members WOULD delete — same predicate, count only. Lets the sync
+    DEFER deletions on a degraded run: LCR 500s can return thinner-but-200 rosters, so a burst of
+    'departures' during an LCR outage is usually degraded data, not real moves (the 2026-06-09 case:
+    10 'departed' while 2 units were 500-ing)."""
+    if not present_uuids or not keep_unit_ids:
+        return 0
+    unit_clause = "unit_id::text = any(%s)"
+    if include_orphans:
+        unit_clause = f"({unit_clause} or unit_id is null)"
+    sql = f"select count(*) from members where stake_id = %s and person_uuid <> all(%s) and {unit_clause}"
+    with conn.cursor() as cur:
+        cur.execute(sql, (stake_id, list(present_uuids), [str(u) for u in keep_unit_ids]))
+        return cur.fetchone()[0]
+
+
 def reconcile_members(conn, stake_id: str, present_uuids: list[str],
                       keep_unit_ids: list[str], include_orphans: bool) -> int:
     """Hard-delete people who left: members no longer in LCR for a unit that scraped CLEANLY this
