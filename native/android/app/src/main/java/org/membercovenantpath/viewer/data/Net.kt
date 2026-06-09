@@ -31,7 +31,21 @@ object Net {
         explicitNulls = false
     }
 
-    val client: HttpClient by lazy { HttpClient(OkHttp) }
+    // Explicit timeouts: OkHttp's 10s read default aborted any broker call slower than 10s — a
+    // FIRST-ENROLL Church login runs the broker's access evaluation server-side (30-60s legitimately),
+    // so enrollment could never complete from Android. 120s read mirrors the web client's 95s window
+    // (plus margin for Render cold start).
+    val client: HttpClient by lazy {
+        HttpClient(OkHttp) {
+            engine {
+                config {
+                    connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+                    readTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
+                    writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                }
+            }
+        }
+    }
 
     suspend fun postJson(url: String, body: JsonElement, bearer: String? = null): HttpResponse =
         client.post(url) {

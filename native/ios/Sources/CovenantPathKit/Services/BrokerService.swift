@@ -144,7 +144,10 @@ public final class BrokerService: @unchecked Sendable {
         var status = 0
         for attempt in 0...Self.retryDelays.count {
             do {
-                var req = URLRequest(url: u, timeoutInterval: 30)
+                // 95s, not 30: a FIRST-ENROLL login runs the broker's access evaluation server-side
+                // (30-60s legitimately). A 30s abort dropped the response after the broker succeeded,
+                // so the authorize-sync offer never appeared (mirrors the web client fix).
+                var req = URLRequest(url: u, timeoutInterval: 95)
                 req.httpMethod = "POST"
                 req.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 req.httpBody = try JSONSerialization.data(withJSONObject: body)
