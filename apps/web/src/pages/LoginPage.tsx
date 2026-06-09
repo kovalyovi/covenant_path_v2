@@ -63,16 +63,48 @@ export function LoginPage() {
     setError(null);
   }
 
+  // Hard cap on any sign-in step + staged progress so a slow broker is VISIBLE, not a silent hang
+  // (the ">1 minute, is it broken?" report). The fetch may still resolve server-side; the UI recovers.
+  const LOGIN_TIMEOUT_MS = 75_000;
+  const STAGES: Array<[number, string]> = [
+    [6_000, 'Contacting the Church sign-in service…'],
+    [15_000, 'Verifying your Church session…'],
+    [30_000, 'Still working — the sign-in service may be waking up. Hang tight…'],
+    [50_000, 'Almost there — this is taking longer than usual…'],
+  ];
+
   async function run(action: () => Promise<void>) {
     setBusy(true);
     setError(null);
     setStatus(null);
+    const t0 = Date.now();
+    const stageTimer = window.setInterval(() => {
+      const elapsed = Date.now() - t0;
+      const stage = [...STAGES].reverse().find(([ms]) => elapsed >= ms);
+      if (stage) setStatus(stage[1]);
+    }, 1000);
     try {
-      await action();
+      await Promise.race([
+        action(),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new BrokerError(
+                  'Sign-in timed out (75s). The sign-in service may be down or still waking up — ' +
+                    'please try again in a minute. If this keeps happening, use Email code sign-in.',
+                ),
+              ),
+            LOGIN_TIMEOUT_MS,
+          ),
+        ),
+      ]);
     } catch (e) {
       setError(e instanceof BrokerError || e instanceof Error ? e.message : String(e));
     } finally {
+      window.clearInterval(stageTimer);
       setBusy(false);
+      setStatus(null);
     }
   }
 
@@ -343,8 +375,10 @@ function ChurchFields(p: ChurchProps) {
         <span>Church username</span>
         <input
           className="input"
+          name="church-username"
           value={p.username}
           autoComplete="username"
+          autoCapitalize="none"
           onChange={(e) => p.setUsername(e.target.value)}
         />
       </label>
@@ -400,10 +434,15 @@ function EmailFields(p: EmailProps) {
       )}
       <label className="field">
         <span>Email</span>
+        {/* Distinct name + email semantics so phone password managers offer the EMAIL address —
+            not the saved LCR username from the Church form (feedback #3). */}
         <input
           className="input"
           type="email"
+          name="email"
+          inputMode="email"
           autoComplete="email"
+          autoCapitalize="none"
           disabled={p.emailCodeSent}
           value={p.email}
           onChange={(e) => p.setEmail(e.target.value)}
