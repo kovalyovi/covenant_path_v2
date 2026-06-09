@@ -75,13 +75,13 @@ struct NeedsView: View {
     // MARK: - pieces
 
     private var categorySelector: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(Array(Milestones.needsCategories.enumerated()), id: \.element.id) { i, ms in
-                    CategoryChip(milestone: ms, count: missingByMilestone[i].count,
-                                 selected: i == selectedIndex) {
-                        selected = i
-                    }
+        // Wrap the category pills to the next line (FlowLayout) instead of horizontal scrolling —
+        // matches the OrgFilterBar and the web `.wrap` behaviour.
+        FlowLayout(spacing: 8) {
+            ForEach(Array(Milestones.needsCategories.enumerated()), id: \.element.id) { i, ms in
+                CategoryChip(milestone: ms, count: missingByMilestone[i].count,
+                             selected: i == selectedIndex) {
+                    selected = i
                 }
             }
         }

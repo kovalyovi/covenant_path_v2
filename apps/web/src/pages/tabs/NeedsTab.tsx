@@ -113,7 +113,7 @@ function NeedsBody() {
           <BigHeader text="Needs Action" subtitle="Eligible members still missing each integration step" />
           {filters}
           <div style={{ height: 12 }} />
-          <div className="wrap" style={{ flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: 4 }}>
+          <div className="wrap">
             {needsCategories.map((m, i) => (
               <CategoryChip key={m.abbr} ms={m} count={missingByMs[i].length} selected={i === sel} onClick={() => setSelected(i)} />
             ))}

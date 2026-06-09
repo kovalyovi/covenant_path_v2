@@ -328,6 +328,10 @@ button.card--tappable:hover {
   padding: 6px 12px;
   font-size: 0.8rem;
   font-weight: 600;
+  /* Keep each pill at its natural size and let the row wrap to the next line (flex-wrap) instead
+     of horizontal scrolling — filter/category pills never squish or clip. */
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .count-badge {
   display: inline-flex;

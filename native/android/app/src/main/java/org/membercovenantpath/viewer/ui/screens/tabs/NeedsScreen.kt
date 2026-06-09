@@ -3,7 +3,6 @@ package org.membercovenantpath.viewer.ui.screens.tabs
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,7 +15,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apartment
@@ -54,6 +52,7 @@ import org.membercovenantpath.viewer.logic.OrgBucket
 import org.membercovenantpath.viewer.logic.Orgs
 import org.membercovenantpath.viewer.model.Member
 import org.membercovenantpath.viewer.ui.components.CountBadge
+import org.membercovenantpath.viewer.ui.components.FlowLayout
 import org.membercovenantpath.viewer.ui.components.MemberRow
 import org.membercovenantpath.viewer.ui.components.OrgFilterBar
 import org.membercovenantpath.viewer.ui.components.BigHeader
@@ -158,9 +157,10 @@ fun NeedsScreen(
 
         item {
             Spacer(Modifier.size(12.dp))
-            Row(Modifier.horizontalScroll(rememberScrollState())) {
+            // Wrap the category pills to the next line instead of horizontal scrolling — matches
+            // OrgFilterBar / GoldenHour chips and the web `.wrap` behaviour.
+            FlowLayout {
                 Milestones.needsCategories.forEachIndexed { i, m ->
-                    if (i > 0) Spacer(Modifier.width(8.dp))
                     CategoryChip(
                         ms = m,
                         count = missingByMs[i].size,
