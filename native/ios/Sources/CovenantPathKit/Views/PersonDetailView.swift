@@ -23,18 +23,28 @@ struct PersonDetailView: View {
         d?.memberSince ?? member.membershipDuration
     }
 
+    private var demographics: String? {
+        let sex = member.sex == "M" ? "Male" : (member.sex == "F" ? "Female" : "")
+        let age = Milestones.ageLabel(member) ?? ""
+        let parts = [sex, age].filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
                 header
-                // Our covenant-path milestones (data LCR's view lacks).
-                SectionCard(title: "Covenant Path", systemImage: "timeline.selection") {
+                // Our covenant-path milestones (data LCR's view lacks). The leading glyph is a
+                // completion RING that fills with eligible-only progress and goes green at 100%.
+                SectionCard(title: "Covenant Path",
+                            leading: AnyView(CompletionRing(pct: Milestones.completionOf(member)))) {
                     GoldenHourChips(member: member, highlightNext: true, labeled: true)
                 }
+                // Each tracked status that lacks its own rich section, as its own card (eligibility-
+                // gated). Renders with or without `d`.
+                StatusSections(member: member)
                 if let d {
                     richBody(d)
-                } else {
-                    flatFallback
                 }
                 CommentsSection(member: member)
             }
@@ -67,6 +77,7 @@ struct PersonDetailView: View {
                 Text(member.displayName).font(.title3.bold())
                 if let u = member.unitName, !u.isEmpty { Text(u).font(.subheadline) }
                 if let ms = memberSince, !ms.isEmpty { Text(ms).font(.subheadline) }
+                if let demo = demographics { Text(demo).font(.caption) }
                 if let line = baptismLine { Text(line).font(.caption) }
             }
             .foregroundStyle(Color(hex: 0x1A237E))   // on-primaryContainer-ish indigo
@@ -83,17 +94,25 @@ struct PersonDetailView: View {
     private func richBody(_ d: MemberDetails) -> some View {
         SacramentSection(details: d)
         FriendsSection(details: d, recordedYes: member.friends == "Yes", count: member.friendsCount)
-        ListTextSection(title: "Priesthood Ordination", symbol: "rosette",
-                        lines: d.priesthoodOrdinations ?? [],
-                        emptyText: "No priesthood ordination on record.")
-        ListTextSection(title: "Calling", symbol: "person.text.rectangle",
-                        lines: d.callings ?? [],
-                        emptyText: "Not yet been given a calling.",
-                        emptyIsAlert: true, recordedYes: member.calling == "Yes")
-        ListTextSection(title: "Ministering Assignment", symbol: "hands.sparkles",
-                        lines: d.ministeringAssignments ?? [],
-                        emptyText: "Not yet received a ministering assignment.",
-                        recordedYes: member.ministeringAssignment == "Yes")
+        // Eligibility-gated: hide a section that doesn't APPLY (no priesthood for women, no calling for
+        // a child) — but never hide one that has real recorded data.
+        if Milestones.priesthoodEligible(member) || !(d.priesthoodOrdinations ?? []).isEmpty {
+            ListTextSection(title: "Priesthood Ordination", symbol: "rosette",
+                            lines: d.priesthoodOrdinations ?? [],
+                            emptyText: "No priesthood ordination on record.")
+        }
+        if Milestones.callingEligible(member) || !(d.callings ?? []).isEmpty {
+            ListTextSection(title: "Calling", symbol: "person.text.rectangle",
+                            lines: d.callings ?? [],
+                            emptyText: "Not yet been given a calling.",
+                            emptyIsAlert: true, recordedYes: member.calling == "Yes")
+        }
+        if Milestones.ministeringAssignmentEligible(member) || !(d.ministeringAssignments ?? []).isEmpty {
+            ListTextSection(title: "Ministering Assignment", symbol: "hands.sparkles",
+                            lines: d.ministeringAssignments ?? [],
+                            emptyText: "Not yet received a ministering assignment.",
+                            recordedYes: member.ministeringAssignment == "Yes")
+        }
         NamesSection(title: "Ministering Brothers & Sisters", symbol: "person.3",
                      names: (d.ministeringBrothers ?? []) + (d.ministeringSisters ?? []),
                      emptyText: "No ministers assigned.",
@@ -105,34 +124,75 @@ struct PersonDetailView: View {
         TagsSection(tags: d.tags ?? [])
     }
 
-    // MARK: - flat fallback (pre-`details` rows)
+}
 
-    private var flatFallback: some View {
-        let fields: [(String, String?)] = [
-            ("Unit", member.unitName), ("Baptism date", member.baptismDate),
-            ("Birth date", member.birthDate), ("Friends", member.friends),
-            ("Aaronic Priesthood", member.aaronicPriesthood),
-            ("Melchizedek Priesthood", member.melchizedekPriesthood),
-            ("Calling", member.calling),
-            ("Ministering brothers/sisters", member.ministeringBrothersSisters),
-            ("Ministering assignment", member.ministeringAssignment),
-            ("Temple recommend", member.templeRecommend),
-            ("Patriarchal blessing", member.patriarchalBlessing),
-            ("Living ordinance", member.livingOrdinance),
-        ]
-        return VStack(spacing: 0) {
-            Divider().padding(.vertical, 8)
-            ForEach(fields, id: \.0) { label, value in
-                HStack {
-                    Text(label)
-                    Spacer()
-                    Text(value ?? "—").fontWeight(.medium)
-                }
-                .padding(.vertical, 8)
-                Divider()
+// MARK: - completion ring + Record summary
+
+/// Circular completion ring for the Covenant Path header — the arc fills with eligible-only milestone
+/// completion and turns solid green with a check at 100%.
+struct CompletionRing: View {
+    let pct: Double
+    var size: CGFloat = 32
+    private var clamped: Double { max(0, min(1, pct)) }
+    private var done: Bool { pct >= 1 }
+    var body: some View {
+        let color: Color = done ? Color(hex: 0x2E7D32) : .accentColor
+        ZStack {
+            Circle().stroke(Color(.separator).opacity(0.5), lineWidth: 3)
+            Circle()
+                .trim(from: 0, to: clamped)
+                .stroke(color, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            if done {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Color(hex: 0x2E7D32))
             }
         }
+        .frame(width: size, height: size)
+        .accessibilityLabel("Covenant Path \(Int((clamped * 100).rounded())) percent complete")
     }
+}
+
+/// Each tracked status that lacks its own rich section, shown as its OWN section card (like "Attended
+/// Sacrament Meeting"): Temple Recommend, Endowment, Patriarchal Blessing. Eligibility-gated (endowment
+/// shows "N/A" for the not-yet-eligible). Works from flat fields, so it renders with or without the
+/// rich `details` subtree.
+struct StatusSections: View {
+    let member: Member
+    var body: some View {
+        if Milestones.templeRecommendEligible(member) {
+            StatusSection(title: "Temple Recommend", systemImage: "checkmark.seal",
+                          value: recordDisp(member.templeRecommend))
+        }
+        StatusSection(title: "Endowment", systemImage: "building.columns",
+                      value: recordDisp(Milestones.endowmentDisplay(member)))
+        if Milestones.patriarchalEligible(member) {
+            StatusSection(title: "Patriarchal Blessing", systemImage: "book.closed",
+                          value: recordDisp(member.patriarchalBlessing))
+        }
+    }
+}
+
+struct StatusSection: View {
+    let title: String
+    let systemImage: String
+    let value: String
+    private var good: Bool { value == "Active" || value == "Yes" }
+    var body: some View {
+        SectionCard(title: title, systemImage: systemImage) {
+            Text(value)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(good ? Color(hex: 0x2E7D32) : Color.primary)
+        }
+    }
+}
+
+/// Clean a status value for display: sentinels (needs-profile-api / blocked) → "—" (unknown).
+func recordDisp(_ v: String?) -> String {
+    let s = v ?? ""
+    if s.isEmpty || s == "needs-profile-api" || s.hasPrefix("blocked") { return "—" }
+    return s
 }
 
 // MARK: - "recorded yes" fallback note

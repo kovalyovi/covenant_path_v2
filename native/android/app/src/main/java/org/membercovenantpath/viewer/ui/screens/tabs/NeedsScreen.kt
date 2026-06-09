@@ -19,10 +19,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Apartment
 import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -73,6 +77,10 @@ fun NeedsScreen(
     var selected by remember { mutableStateOf<Int?>(null) }
     var ascending by remember { mutableStateOf(true) } // oldest-baptized (most overdue) first
     val orgs = remember { OrgBucket.entries.toMutableStateList() }
+    var ward by remember { mutableStateOf<String?>(null) } // null = Stake (all wards)
+    val wards = remember(members) {
+        members.filterNot { it.isInvestigator }.mapNotNull { it.unitName }.filter { it.isNotEmpty() }.distinct().sorted()
+    }
     // One distinct color per ward, assigned over ALL units (stable as org/category filters change).
     val unitColors = remember(members) { unitColorMap(members.map { it.unitName ?: "—" }) }
 
@@ -81,8 +89,10 @@ fun NeedsScreen(
     }
 
     val allOrgs = orgs.size == OrgBucket.entries.size
-    val baptized = members.filterNot { it.isInvestigator }
+    val orgScoped = members.filterNot { it.isInvestigator }
         .let { if (allOrgs) it else it.filter { m -> Orgs.responsibleOrg(m, today) in orgs } }
+    // Ward dropdown (default Stake = all wards) filters on top of the org filter.
+    val baptized = if (ward == null) orgScoped else orgScoped.filter { (it.unitName ?: "") == ward }
 
     val cmp = Comparator<Member> { a, b ->
         val da = DateParse.parseMemberDate(a.baptismDate)
@@ -97,7 +107,7 @@ fun NeedsScreen(
         if (ascending) c else -c
     }
 
-    val missingByMs: List<List<Member>> = Milestones.all.map { ms ->
+    val missingByMs: List<List<Member>> = Milestones.needsCategories.map { ms ->
         baptized.filter { ms.eligible(it, today) && !ms.complete(it) }.sortedWith(cmp)
     }
     val total = missingByMs.sumOf { it.size }
@@ -122,6 +132,10 @@ fun NeedsScreen(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
                 )
             }
+            if (wards.size > 1) {
+                Spacer(Modifier.size(8.dp))
+                WardDropdown(wards = wards, ward = ward, onSelect = { ward = it })
+            }
         }
 
         if (total == 0) {
@@ -139,13 +153,13 @@ fun NeedsScreen(
 
         val firstNonEmpty = missingByMs.indexOfFirst { it.isNotEmpty() }
         val sel = selected ?: (if (firstNonEmpty < 0) 0 else firstNonEmpty)
-        val ms = Milestones.all[sel]
+        val ms = Milestones.needsCategories[sel]
         val missing = missingByMs[sel]
 
         item {
             Spacer(Modifier.size(12.dp))
             Row(Modifier.horizontalScroll(rememberScrollState())) {
-                Milestones.all.forEachIndexed { i, m ->
+                Milestones.needsCategories.forEachIndexed { i, m ->
                     if (i > 0) Spacer(Modifier.width(8.dp))
                     CategoryChip(
                         ms = m,
@@ -261,6 +275,40 @@ private fun CategoryChip(ms: Milestone, count: Int, selected: Boolean, onClick: 
                         modifier = Modifier.padding(horizontal = 7.dp, vertical = 1.dp),
                     )
                 }
+            }
+        }
+    }
+}
+
+/** Ward picker below the org filters — one ward or the whole stake (default). The caller hides it
+ *  when there's only one unit in view. */
+@Composable
+private fun WardDropdown(wards: List<String>, ward: String?, onSelect: (String?) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(10.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { expanded = true },
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            ) {
+                Icon(
+                    Icons.Filled.Apartment, contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(ward ?: "Stake — all wards", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
+            }
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(text = { Text("Stake — all wards") }, onClick = { onSelect(null); expanded = false })
+            wards.forEach { w ->
+                DropdownMenuItem(text = { Text(w) }, onClick = { onSelect(w); expanded = false })
             }
         }
     }

@@ -122,6 +122,46 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(Milestones.missing(calling, in: rows).count, 1)
     }
 
+    // MARK: - detail-view eligibility + Needs categories (status-sections work)
+
+    func testEndowmentDisplayGatesIneligibleToNA() {
+        let year = Calendar.current.component(.year, from: Date())
+        // Adult (30), member 3yr → eligible: a "No" stays "No".
+        XCTAssertEqual(Milestones.endowmentDisplay(
+            Member(baptismDate: "\(year - 3)-01-01", birthDate: "\(year - 30)-01-01", livingOrdinance: "No")), "No")
+        // <1-year member → ineligible: "No" becomes "N/A".
+        XCTAssertEqual(Milestones.endowmentDisplay(
+            Member(baptismDate: "\(year)-01-01", birthDate: "\(year - 30)-01-01", livingOrdinance: "No")), "N/A")
+        // A real "Yes" is always kept (even for a child).
+        XCTAssertEqual(Milestones.endowmentDisplay(
+            Member(birthDate: "\(year - 8)-01-01", livingOrdinance: "Yes")), "Yes")
+    }
+
+    func testCompletionOfFractionEligibleOnly() {
+        let year = Calendar.current.component(.year, from: Date())
+        // Adult female, member 3yr → applicable: Friends, Calling, Has-ministers, Ministering-assignment.
+        let none = Member(baptismDate: "\(year - 3)-01-01", birthDate: "\(year - 30)-01-01", sex: "F")
+        XCTAssertEqual(Milestones.completionOf(none), 0.0, accuracy: 1e-9)
+        let allDone = Member(baptismDate: "\(year - 3)-01-01", birthDate: "\(year - 30)-01-01", sex: "F",
+                             friends: "Yes", calling: "Yes",
+                             ministeringBrothersSisters: "Yes", ministeringAssignment: "Yes")
+        XCTAssertEqual(Milestones.completionOf(allDone), 1.0, accuracy: 1e-9)
+    }
+
+    func testNeedsCategoriesAddLongerHorizonCovenants() {
+        let labels = Set(Milestones.needsCategories.map(\.label))
+        XCTAssertTrue(labels.contains("Temple Recommend"))
+        XCTAssertTrue(labels.contains("Endowment"))
+        XCTAssertTrue(labels.contains("Patriarchal Blessing"))
+        let year = Calendar.current.component(.year, from: Date())
+        let en = Milestones.needsCategories.first { $0.label == "Endowment" }!
+        // Eligible adult 1yr+ with no living ordinance is "missing" endowment.
+        let adult = Member(baptismDate: "\(year - 3)-01-01", birthDate: "\(year - 30)-01-01", livingOrdinance: "No")
+        XCTAssertTrue(en.eligible(adult) && !en.complete(adult))
+        // A child is not eligible for it.
+        XCTAssertFalse(en.eligible(Member(birthDate: "\(year - 8)-01-01")))
+    }
+
     // MARK: - org bucket
 
     func testResponsibleOrgFirstYearIsWML() {

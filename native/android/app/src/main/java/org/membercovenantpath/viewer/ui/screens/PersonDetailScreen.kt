@@ -59,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.membercovenantpath.viewer.logic.Milestones
 import org.membercovenantpath.viewer.model.Details
 import org.membercovenantpath.viewer.model.Member
 import org.membercovenantpath.viewer.model.Toggle
@@ -120,14 +121,20 @@ fun PersonDetailScreen(member: Member, onBack: () -> Unit) {
         ) {
             item { HeaderCard(member, d) }
             item {
-                SectionCard(title = "Covenant Path", leadingIcon = Icons.Filled.Timeline) {
+                // The leading glyph is a completion RING that fills with eligible-only progress and
+                // goes green at 100%.
+                SectionCard(
+                    title = "Covenant Path",
+                    leadingContent = { CompletionRing(Milestones.completionOf(member)) },
+                ) {
                     GoldenHourChips(member = member, highlightNext = true, labeled = true)
                 }
             }
+            // Each tracked status that lacks its own rich section, as its own card (eligibility-gated).
+            // Renders with or without details.
+            item { StatusSections(member) }
             if (d != null) {
                 richSections(d, member)
-            } else {
-                item { FlatFallback(member) }
             }
             item { CommentsSection(member) }
         }
@@ -142,6 +149,11 @@ private fun HeaderCard(member: Member, d: Details?) {
         member.baptismGoalDate?.takeIf { it.isNotBlank() }?.let { "Planned baptism $it" }
     } else {
         member.baptismDate?.takeIf { it.isNotBlank() && it != "needs-profile-api" }?.let { "Baptized $it" }
+    }
+    val demographics = run {
+        val sex = when (member.sex) { "M" -> "Male"; "F" -> "Female"; else -> "" }
+        val age = Milestones.ageLabel(member) ?: ""
+        listOf(sex, age).filter { it.isNotEmpty() }.joinToString(" · ").ifEmpty { null }
     }
     Box(
         Modifier
@@ -165,6 +177,9 @@ private fun HeaderCard(member: Member, d: Details?) {
                 memberSince?.takeIf { it.isNotEmpty() }?.let {
                     Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
                 }
+                demographics?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
                 baptismLine?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
                 }
@@ -177,25 +192,33 @@ private fun HeaderCard(member: Member, d: Details?) {
 private fun androidx.compose.foundation.lazy.LazyListScope.richSections(d: Details, member: Member) {
     item { SacramentSection(d) }
     item { FriendsSection(d, recordedYes = member.friends == "Yes", count = member.friendsCount) }
-    item {
-        ListTextSection(
-            title = "Priesthood Ordination", icon = Icons.Filled.WorkspacePremium,
-            lines = d.priesthoodOrdinations, emptyText = "No priesthood ordination on record.",
-        )
+    // Eligibility-gated: hide a section that doesn't APPLY (no priesthood for women, no calling for a
+    // child) — but never hide one that has real recorded data.
+    if (Milestones.priesthoodEligible(member) || d.priesthoodOrdinations.isNotEmpty()) {
+        item {
+            ListTextSection(
+                title = "Priesthood Ordination", icon = Icons.Filled.WorkspacePremium,
+                lines = d.priesthoodOrdinations, emptyText = "No priesthood ordination on record.",
+            )
+        }
     }
-    item {
-        ListTextSection(
-            title = "Calling", icon = Icons.Filled.AssignmentInd,
-            lines = d.callings, emptyText = "Not yet been given a calling.",
-            emptyIsAlert = true, recordedYes = member.calling == "Yes",
-        )
+    if (Milestones.callingEligible(member) || d.callings.isNotEmpty()) {
+        item {
+            ListTextSection(
+                title = "Calling", icon = Icons.Filled.AssignmentInd,
+                lines = d.callings, emptyText = "Not yet been given a calling.",
+                emptyIsAlert = true, recordedYes = member.calling == "Yes",
+            )
+        }
     }
-    item {
-        ListTextSection(
-            title = "Ministering Assignment", icon = Icons.Filled.VolunteerActivism,
-            lines = d.ministeringAssignments, emptyText = "Not yet received a ministering assignment.",
-            recordedYes = member.ministeringAssignment == "Yes",
-        )
+    if (Milestones.ministeringAssignmentEligible(member) || d.ministeringAssignments.isNotEmpty()) {
+        item {
+            ListTextSection(
+                title = "Ministering Assignment", icon = Icons.Filled.VolunteerActivism,
+                lines = d.ministeringAssignments, emptyText = "Not yet received a ministering assignment.",
+                recordedYes = member.ministeringAssignment == "Yes",
+            )
+        }
     }
     item {
         NamesSection(
@@ -522,32 +545,70 @@ private fun CommentTile(c: org.membercovenantpath.viewer.model.Comment) {
     }
 }
 
-/** Pre-`details` rows: the original flat field list (mirrors `_FlatFallback`). */
+/** Circular completion ring for the Covenant Path header — the arc fills with eligible-only milestone
+ *  completion and turns solid green with a check at 100%. */
 @Composable
-private fun FlatFallback(member: Member) {
-    val fields = listOf(
-        "Unit" to member.unitName,
-        "Baptism date" to member.baptismDate,
-        "Birth date" to member.birthDate,
-        "Friends" to member.friends,
-        "Aaronic Priesthood" to member.aaronicPriesthood,
-        "Melchizedek Priesthood" to member.melchizedekPriesthood,
-        "Calling" to member.calling,
-        "Ministering brothers/sisters" to member.ministeringBrothersSisters,
-        "Ministering assignment" to member.ministeringAssignment,
-        "Temple recommend" to member.templeRecommend,
-        "Patriarchal blessing" to member.patriarchalBlessing,
-        "Living ordinance" to member.livingOrdinance,
-    )
-    Column(Modifier.padding(top = 8.dp)) {
-        fields.forEach { (label, value) ->
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(label)
-                Text(value ?: "—", fontWeight = FontWeight.Medium)
-            }
+private fun CompletionRing(pct: Double, diameter: androidx.compose.ui.unit.Dp = 30.dp) {
+    val clamped = pct.coerceIn(0.0, 1.0).toFloat()
+    val done = pct >= 1.0
+    val ringColor = if (done) Green else MaterialTheme.colorScheme.primary
+    val trackColor = MaterialTheme.colorScheme.outlineVariant
+    Box(Modifier.size(diameter), contentAlignment = Alignment.Center) {
+        androidx.compose.foundation.Canvas(Modifier.size(diameter)) {
+            val stroke = 3.dp.toPx()
+            val arcSize = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke)
+            val topLeft = androidx.compose.ui.geometry.Offset(stroke / 2f, stroke / 2f)
+            drawArc(
+                color = trackColor, startAngle = 0f, sweepAngle = 360f, useCenter = false,
+                topLeft = topLeft, size = arcSize,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke),
+            )
+            drawArc(
+                color = ringColor, startAngle = -90f, sweepAngle = 360f * clamped, useCenter = false,
+                topLeft = topLeft, size = arcSize,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(
+                    width = stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                ),
+            )
+        }
+        if (done) {
+            Icon(Icons.Filled.Check, contentDescription = null, tint = Green, modifier = Modifier.size(15.dp))
         }
     }
+}
+
+/** Each tracked status that lacks its own rich section, shown as its OWN section card (like "Attended
+ *  Sacrament Meeting"): Temple Recommend, Endowment, Patriarchal Blessing. Eligibility-gated (endowment
+ *  shows "N/A" for the not-yet-eligible). Works from flat fields, so it renders with or without the
+ *  rich details subtree. */
+@Composable
+private fun StatusSections(member: Member) {
+    Column {
+        if (Milestones.templeRecommendEligible(member)) {
+            StatusSection("Temple Recommend", Icons.Filled.WorkspacePremium, recordDisp(member.templeRecommend))
+        }
+        StatusSection("Endowment", Icons.Filled.AccountBalance, recordDisp(Milestones.endowmentDisplay(member)))
+        if (Milestones.patriarchalEligible(member)) {
+            StatusSection("Patriarchal Blessing", Icons.AutoMirrored.Filled.MenuBook, recordDisp(member.patriarchalBlessing))
+        }
+    }
+}
+
+@Composable
+private fun StatusSection(title: String, icon: ImageVector, value: String) {
+    val good = value == "Active" || value == "Yes"
+    SectionCard(title = title, leadingIcon = icon) {
+        Text(
+            value,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = if (good) Green else MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+/** Clean a status value for display: sentinels (needs-profile-api / blocked) → "—" (unknown). */
+private fun recordDisp(v: String?): String {
+    val s = v ?: ""
+    return if (s.isEmpty() || s == "needs-profile-api" || s.startsWith("blocked")) "—" else s
 }

@@ -26,6 +26,7 @@ struct TableView: View {
     private let columns: [Column] = [
         Column(title: "Member", value: { $0.name ?? "" }, kind: .text),
         Column(title: "Sex", value: { $0.sex ?? "" }, kind: .gender),
+        Column(title: "Age", value: { Milestones.ageNow($0).map(String.init) ?? "" }, kind: .text),
         Column(title: "Unit", value: { $0.unitName ?? "" }, kind: .text),
         Column(title: "Baptism", value: { $0.baptismDate ?? "" }, kind: .text),
         Column(title: "Member for", value: { membershipShort($0) }, kind: .text),
@@ -53,6 +54,10 @@ struct TableView: View {
         var r = baptized.filter(passes)
         if let sortColumn, let col = columns.first(where: { $0.id == sortColumn }) {
             r.sort {
+                if col.title == "Age" {   // age sorts numerically, not as a string
+                    let a = Milestones.ageNow($0) ?? -1, b = Milestones.ageNow($1) ?? -1
+                    return ascending ? a < b : a > b
+                }
                 let c = col.value($0).lowercased().compare(col.value($1).lowercased())
                 return ascending ? c == .orderedAscending : c == .orderedDescending
             }
@@ -69,7 +74,7 @@ struct TableView: View {
         case "Unit": return 130
         case "Baptism": return 110
         case "Member for": return 110
-        case "Sex": return 56
+        case "Sex", "Age": return 56
         default: return 92
         }
     }

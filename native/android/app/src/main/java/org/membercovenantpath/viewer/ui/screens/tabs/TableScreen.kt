@@ -69,8 +69,12 @@ fun TableScreen(members: List<Member>, onOpen: (Member) -> Unit) {
         .let { list ->
             val col = sortCol ?: return@let list
             val key = Columns[col]
-            list.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { key.value(it) })
-                .let { if (sortAsc) it else it.reversed() }
+            val sorted = if (key.header == "Age") { // age sorts numerically, not as a string
+                list.sortedBy { org.membercovenantpath.viewer.logic.Milestones.ageYears(it) ?: -1 }
+            } else {
+                list.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { key.value(it) })
+            }
+            sorted.let { if (sortAsc) it else it.reversed() }
         }
 
     fun onSort(col: Int) {
@@ -314,6 +318,7 @@ private data class Col(val header: String, val kind: Kind, val width: Dp, val va
 private val Columns: List<Col> = listOf(
     Col("Member", Kind.TEXT, 158.dp) { it.name ?: "" },
     Col("Sex", Kind.GENDER, 66.dp) { it.sex ?: "" },
+    Col("Age", Kind.TEXT, 64.dp) { org.membercovenantpath.viewer.logic.Milestones.ageYears(it)?.toString() ?: "" },
     Col("Unit", Kind.TEXT, 140.dp) { it.unitName ?: "" },
     Col("Baptism", Kind.TEXT, 112.dp) { it.baptismDate ?: "" },
     Col("Member for", Kind.TEXT, 132.dp) {

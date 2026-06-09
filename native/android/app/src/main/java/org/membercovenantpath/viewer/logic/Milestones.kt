@@ -115,4 +115,81 @@ object Milestones {
         }
         return sum / members.size
     }
+
+    // Per-field eligibility for the member-detail view (mirrors web milestones.ts so every surface
+    // hides the same rows: no priesthood for women, no calling for a child, …).
+    fun callingEligible(m: Member, today: LocalDate = LocalDate.now()) = turnsAtLeast(m, 12, today)
+    fun ministeringAssignmentEligible(m: Member, today: LocalDate = LocalDate.now()) = turnsAtLeast(m, 14, today)
+    fun aaronicEligible(m: Member, today: LocalDate = LocalDate.now()) = male(m) && turnsAtLeast(m, 12, today)
+    fun melchizedekEligible(m: Member, today: LocalDate = LocalDate.now()) =
+        male(m) && ageNowAtLeast(m, 18, today) && memberOneYearPlus(m, today)
+
+    /** Priesthood section applies to males old enough for the Aaronic priesthood (12+). */
+    fun priesthoodEligible(m: Member, today: LocalDate = LocalDate.now()) = male(m) && turnsAtLeast(m, 12, today)
+
+    /** Temple recommend (incl. limited-use) and a patriarchal blessing both start around age 12. */
+    fun templeRecommendEligible(m: Member, today: LocalDate = LocalDate.now()) = turnsAtLeast(m, 12, today)
+    fun patriarchalEligible(m: Member, today: LocalDate = LocalDate.now()) = turnsAtLeast(m, 12, today)
+
+    /** Endowment eligibility: an adult (18+) who's been a member ~1 year (same gate as the report). */
+    fun endowmentEligible(m: Member, today: LocalDate = LocalDate.now()) =
+        ageNowAtLeast(m, 18, today) && memberOneYearPlus(m, today)
+
+    /**
+     * Endowment (living_ordinance) display: "N/A" for the not-yet-eligible (a raw "No" misleads — they
+     * can't be endowed yet); a real "Yes" is always kept. Same gate as the report + web.
+     */
+    fun endowmentDisplay(m: Member, today: LocalDate = LocalDate.now()): String {
+        val v = m.livingOrdinance ?: ""
+        if (v == "Yes") return "Yes"
+        return if (endowmentEligible(m, today)) v else "N/A"
+    }
+
+    /**
+     * Fraction 0..1 of this member's APPLICABLE milestones that are complete — drives the detail
+     * completion ring (full + green at 1.0). Friends + Has-ministers apply to everyone, so ≥1 applies.
+     */
+    fun completionOf(m: Member, today: LocalDate = LocalDate.now()): Double {
+        val applicable = forMember(m, today)
+        if (applicable.isEmpty()) return 0.0
+        return applicable.count { it.complete(m) }.toDouble() / applicable.size
+    }
+
+    /** Display age (e.g. "35 yrs"), or null when unknown/negative — for the detail header. */
+    fun ageLabel(m: Member, today: LocalDate = LocalDate.now()): String? {
+        val a = DateParse.ageNow(m.birthDate, today) ?: return null
+        return if (a >= 0) "$a yrs" else null
+    }
+
+    /** Numeric age in years (for the table column's display + numeric sort), or null when unknown. */
+    fun ageYears(m: Member, today: LocalDate = LocalDate.now()): Int? {
+        val a = DateParse.ageNow(m.birthDate, today) ?: return null
+        return if (a >= 0) a else null
+    }
+
+    /**
+     * The Needs view tracks the 6 Golden Hour milestones PLUS the longer-horizon covenants we also
+     * record (temple recommend, endowment, patriarchal blessing) — so leaders see everyone eligible-
+     * but-missing each. [all] stays the integration-only completion basis; this is the superset.
+     */
+    val needsCategories: List<Milestone> = all + listOf(
+        Milestone(
+            label = "Temple Recommend", abbr = "TR",
+            icon = Icons.Outlined.WorkspacePremium, color = Color(0xFF5E35B1),
+            complete = { it.templeRecommend == "Active" },
+            eligible = { m, today -> templeRecommendEligible(m, today) },
+        ),
+        Milestone(
+            label = "Endowment", abbr = "EN",
+            icon = Icons.Outlined.MilitaryTech, color = Color(0xFF00695C),
+            complete = { it.livingOrdinance == "Yes" },
+            eligible = { m, today -> endowmentEligible(m, today) },
+        ),
+        Milestone(
+            label = "Patriarchal Blessing", abbr = "PB",
+            icon = Icons.Outlined.Badge, color = Color(0xFFAD1457),
+            complete = { it.patriarchalBlessing == "Yes" },
+            eligible = { m, today -> patriarchalEligible(m, today) },
+        ),
+    )
 }

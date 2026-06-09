@@ -10,18 +10,26 @@ struct NeedsView: View {
     @State private var selected: Int?       // milestone index; defaults to first non-empty category
     @State private var ascending = true     // baptism-date order: oldest (most overdue) first
     @State private var orgs: Set<OrgBucket> = Set(OrgBucket.allCases)
+    @State private var ward: String?        // nil = Stake (all wards)
 
     private var allOrgs: Bool { orgs.count == OrgBucket.allCases.count }
 
-    /// Baptized members after the org filter (Needs is about converts the org now watches over).
-    private var baptized: [Member] {
-        let base = rows.filter { !$0.isInvestigator }
-        return allOrgs ? base : base.filter { Org.responsible(for: $0).map { orgs.contains($0) } ?? false }
+    /// Distinct wards in view (for the ward picker), sorted.
+    private var wards: [String] {
+        Array(Set(rows.filter { !$0.isInvestigator }.compactMap { $0.unitName }.filter { !$0.isEmpty })).sorted()
     }
 
-    /// Per-milestone "still need" lists, each sorted by baptism date then unit.
+    /// Baptized members after the org filter + ward picker (Needs is about converts the org watches).
+    private var baptized: [Member] {
+        let base = rows.filter { !$0.isInvestigator }
+        let orgScoped = allOrgs ? base : base.filter { Org.responsible(for: $0).map { orgs.contains($0) } ?? false }
+        guard let ward else { return orgScoped }
+        return orgScoped.filter { ($0.unitName ?? "") == ward }
+    }
+
+    /// Per-category "still need" lists, each sorted by baptism date then unit.
     private var missingByMilestone: [[Member]] {
-        Milestones.all.map { ms in
+        Milestones.needsCategories.map { ms in
             Milestones.missing(ms, in: baptized).sorted(by: compare)
         }
     }
@@ -43,6 +51,9 @@ struct NeedsView: View {
                 OrgFilterBar(selected: $orgs)
                 if !allOrgs && orgs.count == 1 {
                     SubtleNote(Org.responsibilityNote(orgs.first!))
+                }
+                if wards.count > 1 {
+                    WardPicker(wards: wards, selection: $ward)
                 }
 
                 if total == 0 {
@@ -66,7 +77,7 @@ struct NeedsView: View {
     private var categorySelector: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(Array(Milestones.all.enumerated()), id: \.element.id) { i, ms in
+                ForEach(Array(Milestones.needsCategories.enumerated()), id: \.element.id) { i, ms in
                     CategoryChip(milestone: ms, count: missingByMilestone[i].count,
                                  selected: i == selectedIndex) {
                         selected = i
@@ -90,7 +101,7 @@ struct NeedsView: View {
     }
 
     private var categorySection: some View {
-        let ms = Milestones.all[selectedIndex]
+        let ms = Milestones.needsCategories[selectedIndex]
         let missing = missingByMilestone[selectedIndex]
         let byUnit = Dictionary(grouping: missing) { $0.unitName ?? "—" }
             .map { (unit: $0.key, count: $0.value.count) }
@@ -202,6 +213,35 @@ struct BigHeader: View {
             }
             Spacer()
         }
+    }
+}
+
+/// Ward picker below the org filters — one ward or the whole stake (default). The caller hides it
+/// when there's only one unit in view.
+struct WardPicker: View {
+    let wards: [String]
+    @Binding var selection: String?
+    var body: some View {
+        Menu {
+            Button("Stake — all wards") { selection = nil }
+            Divider()
+            ForEach(wards, id: \.self) { w in
+                Button(w) { selection = w }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "building.2")
+                Text(selection ?? "Stake — all wards").lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.up.chevron.down").font(.caption2)
+            }
+            .font(.subheadline)
+            .padding(.horizontal, 12).padding(.vertical, 9)
+            .frame(maxWidth: 360, alignment: .leading)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(.separator).opacity(0.5), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
     }
 }
 #endif

@@ -60,6 +60,7 @@ fun SectionCard(
     modifier: Modifier = Modifier,
     leadingIcon: ImageVector? = null,
     iconColor: Color? = null,
+    leadingContent: (@Composable () -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
     onClick: (() -> Unit)? = null,
     content: @Composable () -> Unit,
@@ -79,7 +80,10 @@ fun SectionCard(
     ) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (leadingIcon != null) {
+                if (leadingContent != null) {
+                    leadingContent()   // custom leading element (e.g. a completion ring) replaces the glyph
+                    Spacer(Modifier.width(10.dp))
+                } else if (leadingIcon != null) {
                     Surface(
                         color = accent.copy(alpha = 0.14f),
                         shape = RoundedCornerShape(10.dp),

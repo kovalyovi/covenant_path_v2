@@ -75,4 +75,39 @@ class MilestonesTest {
         val missingOne = complete.copy(calling = "No")
         assertEquals(5.0 / 6.0, Milestones.avgCompletion(listOf(missingOne), today), 1e-9)
     }
+
+    // --- detail-view eligibility + Needs categories (status-sections work) ---
+
+    @Test fun endowmentDisplayGatesIneligibleToNA() {
+        // Adult, member 1yr+ → eligible: a "No" stays "No".
+        assertEquals("No", Milestones.endowmentDisplay(
+            Member(birthDate = "1990-01-01", baptismDate = "2023-01-01", livingOrdinance = "No"), today))
+        // <1-year member → ineligible: "No" becomes "N/A".
+        assertEquals("N/A", Milestones.endowmentDisplay(
+            Member(birthDate = "1990-01-01", baptismDate = "2026-02-01", livingOrdinance = "No"), today))
+        // A real "Yes" is always kept.
+        assertEquals("Yes", Milestones.endowmentDisplay(Member(birthDate = "2015", livingOrdinance = "Yes"), today))
+    }
+
+    @Test fun completionOfIsEligibleOnlyFraction() {
+        // Adult female, member 1yr+ → applicable: Friends, Calling, Has-ministers, Ministering-assignment.
+        val none = Member(sex = "F", birthDate = "1990-01-01", baptismDate = "2023-01-01")
+        assertEquals(0.0, Milestones.completionOf(none, today), 1e-9)
+        val allDone = none.copy(
+            friends = "Yes", calling = "Yes", ministeringBrothersSisters = "Yes", ministeringAssignment = "Yes",
+        )
+        assertEquals(1.0, Milestones.completionOf(allDone, today), 1e-9)
+    }
+
+    @Test fun needsCategoriesAddLongerHorizonCovenants() {
+        val labels = Milestones.needsCategories.map { it.label }
+        assertTrue("Temple Recommend" in labels)
+        assertTrue("Endowment" in labels)
+        assertTrue("Patriarchal Blessing" in labels)
+        val en = Milestones.needsCategories.first { it.label == "Endowment" }
+        // Eligible adult 1yr+ with no living ordinance is "missing" endowment.
+        val adult = Member(birthDate = "1990-01-01", baptismDate = "2023-01-01", livingOrdinance = "No")
+        assertTrue(en.eligible(adult, today) && !en.complete(adult))
+        assertFalse(en.eligible(Member(birthDate = "2018"), today)) // a child is not eligible
+    }
 }

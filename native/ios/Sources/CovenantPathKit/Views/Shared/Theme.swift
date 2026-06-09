@@ -67,19 +67,23 @@ public struct SectionCard<Content: View>: View {
     let title: String
     let systemImage: String?
     let iconColor: Color?
+    let leading: AnyView?
     let trailing: AnyView?
     @ViewBuilder let content: () -> Content
 
     public init(title: String, systemImage: String? = nil, iconColor: Color? = nil,
-                trailing: AnyView? = nil, @ViewBuilder content: @escaping () -> Content) {
+                leading: AnyView? = nil, trailing: AnyView? = nil,
+                @ViewBuilder content: @escaping () -> Content) {
         self.title = title; self.systemImage = systemImage; self.iconColor = iconColor
-        self.trailing = trailing; self.content = content
+        self.leading = leading; self.trailing = trailing; self.content = content
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                if let systemImage {
+                if let leading {
+                    leading   // custom leading element (e.g. a completion ring) replaces the glyph
+                } else if let systemImage {
                     let accent = iconColor ?? .accentColor
                     Image(systemName: systemImage)
                         .font(.system(size: 16, weight: .semibold))

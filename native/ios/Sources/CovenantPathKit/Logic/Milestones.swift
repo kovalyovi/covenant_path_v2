@@ -148,4 +148,54 @@ public enum Milestones {
         let list = applicable(to: m)
         return list.firstIndex { !$0.complete(m) }
     }
+
+    // MARK: - per-field eligibility for the member-detail view (mirrors web milestones.ts so every
+    // surface hides the same rows: no priesthood for women, no calling for a child, …).
+
+    public static func callingEligible(_ m: Member) -> Bool { turnsAtLeast(m, 12) }
+    public static func ministeringAssignmentEligible(_ m: Member) -> Bool { turnsAtLeast(m, 14) }
+    public static func aaronicEligible(_ m: Member) -> Bool { m.isMale && turnsAtLeast(m, 12) }
+    public static func melchizedekEligible(_ m: Member) -> Bool {
+        m.isMale && ageNowAtLeast(m, 18) && memberOneYearPlus(m)
+    }
+    /// Priesthood section applies to males old enough for the Aaronic priesthood (12+).
+    public static func priesthoodEligible(_ m: Member) -> Bool { m.isMale && turnsAtLeast(m, 12) }
+    /// Temple recommend (incl. limited-use) and a patriarchal blessing both start around age 12.
+    public static func templeRecommendEligible(_ m: Member) -> Bool { turnsAtLeast(m, 12) }
+    public static func patriarchalEligible(_ m: Member) -> Bool { turnsAtLeast(m, 12) }
+
+    /// Endowment eligibility: an adult (18+) who's been a member ~1 year (same gate as the report).
+    public static func endowmentEligible(_ m: Member) -> Bool {
+        ageNowAtLeast(m, 18) && memberOneYearPlus(m)
+    }
+    /// Endowment (living_ordinance) display: "N/A" for the not-yet-eligible (a raw "No" misleads —
+    /// they can't be endowed yet); a real "Yes" is always kept.
+    public static func endowmentDisplay(_ m: Member) -> String {
+        let v = m.livingOrdinance ?? ""
+        if v == "Yes" { return "Yes" }
+        return endowmentEligible(m) ? v : "N/A"
+    }
+
+    /// Fraction 0..1 of this member's APPLICABLE milestones that are complete — drives the detail
+    /// completion ring (full + green at 1.0). Friends + Has-ministers apply to everyone, so ≥1 applies.
+    public static func completionOf(_ m: Member) -> Double {
+        let applic = applicable(to: m)
+        guard !applic.isEmpty else { return 0 }
+        return Double(applic.filter { $0.complete(m) }.count) / Double(applic.count)
+    }
+
+    /// The Needs view tracks the 6 Golden Hour milestones PLUS the longer-horizon covenants we also
+    /// record (temple recommend, endowment, patriarchal blessing) — so leaders see everyone eligible-
+    /// but-missing each. `all` stays the integration-only completion basis; this is the superset.
+    public static let needsCategories: [Milestone] = all + [
+        Milestone("Temple Recommend", "TR", style: .init(hex: 0x5E35B1, symbol: "checkmark.seal"),
+                  eligible: { templeRecommendEligible($0) },
+                  complete: { $0.templeRecommend == "Active" }),
+        Milestone("Endowment", "EN", style: .init(hex: 0x00695C, symbol: "building.columns"),
+                  eligible: { endowmentEligible($0) },
+                  complete: { $0.livingOrdinance == "Yes" }),
+        Milestone("Patriarchal Blessing", "PB", style: .init(hex: 0xAD1457, symbol: "book.closed"),
+                  eligible: { patriarchalEligible($0) },
+                  complete: { $0.patriarchalBlessing == "Yes" }),
+    ]
 }
