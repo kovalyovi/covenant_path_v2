@@ -121,6 +121,10 @@
 .page__inner--mobile {
   padding-bottom: 96px; /* clear the glass bottom nav */
 }
+/* Table tab: use the FULL window width on desktop — no 1280px cap (the wide data table needs room). */
+.page__inner--wide {
+  max-width: none;
+}
 .maxw {
   max-width: 1000px;
   margin: 0 auto;
