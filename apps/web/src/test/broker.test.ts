@@ -98,4 +98,19 @@ describe('broker warm gate (cold-start fix)', () => {
     // Both should ride ONE health wake, not two racing cold-start pings.
     expect(healthHits).toBe(1);
   });
+
+  it('skips the redundant /health when the broker proved awake under 2 minutes ago', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calls.push(url);
+      if (url === HEALTH) return jsonResponse({ ok: true });
+      return jsonResponse({ session: { email: 'a@b.c', otp: '123456' } });
+    }));
+
+    const client = new BrokerClient();
+    await client.password('user', 'pass'); // first login: health gate runs
+    await client.password('user', 'pass'); // immediate retry: the response itself proved it's awake
+
+    expect(calls.filter((u) => u === HEALTH).length).toBe(1);
+    expect(calls.filter((u) => u === PASSWORD).length).toBe(2);
+  });
 });

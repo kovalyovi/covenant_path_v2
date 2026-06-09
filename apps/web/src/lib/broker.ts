@@ -110,6 +110,10 @@ function enrollmentFromJson(j: Record<string, unknown>): EnrollmentStatus {
 // holding page → "Failed to fetch"). Retry across ~63s so a cold start resolves itself.
 const RETRY_DELAYS_MS = [3000, 6000, 9000, 12000, 15000, 18000];
 
+// A successful broker response within this window proves it's awake — skip the pre-POST /health
+// round-trip. Render's idle sleep is ~15 min, so 2 minutes can never mask a real cold start.
+const WARM_FRESH_MS = 120_000;
+
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
@@ -134,6 +138,9 @@ export class BrokerClient {
    *  ensureWarm() share ONE wake, instead of racing two cold-start pings. */
   private warmPromise: Promise<void> | null = null;
 
+  /** Last time any broker call returned an HTTP response (= the container is awake). */
+  private lastWarmOkAt = 0;
+
   /**
    * N5: wake the free-tier broker early — fire a cheap /health ping when the login screen appears,
    * so it spins up while the user types, hiding the ~30-60s cold start. Fire-and-forget.
@@ -154,12 +161,17 @@ export class BrokerClient {
    */
   async ensureWarm(): Promise<void> {
     if (!this.available) return;
+    // Proven awake moments ago (e.g. the mount-time warmUp() or a prior call) — skip the ping.
+    if (Date.now() - this.lastWarmOkAt < WARM_FRESH_MS) return;
     if (this.warmPromise) return this.warmPromise;
     this.warmPromise = (async () => {
       for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
         try {
           const r = await fetchWithTimeout(`${brokerUrl}/health`, { method: 'GET' }, 30_000);
-          if (r.ok) return; // awake
+          if (r.ok) {
+            this.lastWarmOkAt = Date.now();
+            return; // awake
+          }
         } catch {
           /* still cold — retry below */
         }
@@ -218,26 +230,37 @@ export class BrokerClient {
     } catch {
       throw new BrokerError(`Sign-in service error (${resp.status}).`);
     }
+    this.lastWarmOkAt = Date.now(); // any HTTP response (even an error) proves it's awake
     if (resp.status >= 400) {
       throw new BrokerError(String(data['detail'] ?? `Sign-in failed (${resp.status}).`));
     }
-    this.logTiming(path, _t0, _retries);
+    const timing = data['timing'] as Record<string, unknown> | undefined;
+    const serverMs = typeof timing?.['total_ms'] === 'number' ? (timing['total_ms'] as number) : undefined;
+    this.logTiming(path, _t0, _retries, serverMs);
     return data;
   }
 
   /** #6 login profiling: time the login round-trip (incl. cold-start retries) → console + the broker
    *  /log endpoint (→ Axiom), so the client-EXPERIENCED latency is easy to harvest and compare with
    *  the broker's server-side `login.complete`. Fire-and-forget; never blocks login. */
-  private logTiming(path: string, t0: number, retries: number): void {
+  private logTiming(path: string, t0: number, retries: number, serverMs?: number): void {
     if (!/\/auth\/(password|mfa\/verify|email\/verify)/.test(path)) return;
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
     const ms = Math.round(now - t0);
-    console.info(`[login-timing] ${path} ${ms}ms (cold-start retries: ${retries})`);
+    console.info(`[login-timing] ${path} ${ms}ms (cold-start retries: ${retries}, server: ${serverMs ?? '?'}ms)`);
+    const context: Record<string, string | number | boolean> = { path, ms, retries };
+    if (serverMs != null) context.serverMs = serverMs; // ms - serverMs = network/TLS overhead
+    this.logEvent('client.login.timing', context);
+  }
+
+  /** Fire-and-forget client telemetry → broker /log → Axiom. Never blocks, never throws. */
+  logEvent(event: string, context: Record<string, string | number | boolean>): void {
+    if (!this.available) return;
     try {
       void fetch(`${brokerUrl}/log`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ level: 'info', event: 'client.login.timing', surface: 'web', context: { path, ms, retries } }),
+        body: JSON.stringify({ level: 'info', event, surface: 'web', context }),
       }).catch(() => {});
     } catch {
       /* ignore */

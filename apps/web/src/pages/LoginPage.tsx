@@ -130,6 +130,7 @@ export function LoginPage() {
 
   const churchSignIn = () =>
     run(async () => {
+      const t0 = performance.now();
       const r = await broker.password(username.trim(), password, authorizeSync);
       if (mfaRequired(r)) {
         setLoginId(r.loginId ?? null);
@@ -138,6 +139,9 @@ export function LoginPage() {
         return;
       }
       await finishChurch(r);
+      // Click → Supabase session, as the user experienced it (serverMs in client.login.timing
+      // isolates the broker's share; the gap is network + the supabase verifyOtp).
+      broker.logEvent('client.login.total', { ms: Math.round(performance.now() - t0), method: 'church' });
     });
 
   const selectFactor = (f: BrokerFactor) =>
@@ -148,8 +152,10 @@ export function LoginPage() {
 
   const verifyMfa = () =>
     run(async () => {
+      const t0 = performance.now();
       const r = await broker.verifyMfa(loginId!, mfaCode.trim(), authorizeSync);
       await finishChurch(r);
+      broker.logEvent('client.login.total', { ms: Math.round(performance.now() - t0), method: 'church-mfa' });
     });
 
   // After a successful Church login: block a no-access calling (N2); else, if the stake has no
@@ -185,8 +191,10 @@ export function LoginPage() {
 
   const passkeySignIn = () =>
     run(async () => {
+      const t0 = performance.now();
       const r = await passkey.login();
       await consume(r);
+      broker.logEvent('client.login.total', { ms: Math.round(performance.now() - t0), method: 'passkey' });
     });
 
   const sendEmailCode = () =>
@@ -202,6 +210,7 @@ export function LoginPage() {
 
   const verifyEmailCode = () =>
     run(async () => {
+      const t0 = performance.now();
       if (useRelay) {
         const t = await broker.emailVerify(email.trim(), emailCode.trim());
         const { error: e } = await supabase.auth.setSession({
@@ -217,6 +226,10 @@ export function LoginPage() {
         });
         if (e) throw e;
       }
+      broker.logEvent('client.login.total', {
+        ms: Math.round(performance.now() - t0),
+        method: useRelay ? 'email-relay' : 'email',
+      });
     });
 
   return (

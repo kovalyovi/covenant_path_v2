@@ -19,6 +19,7 @@ from pathlib import Path
 import requests
 
 from lcr_client.logging_setup import get_logger
+from backend.auth_broker import identity_cache
 
 logger = get_logger()
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
@@ -98,7 +99,7 @@ def _role_scope(email) -> str:
 
 
 def _audit_login(email, name, ctx, access, authorized, rank, outcome, error=None,
-                 request_id=None) -> None:
+                 request_id=None, duration_ms=None, phase=None) -> None:
     """Best-effort login-audit row (who / stake / callings / access / outcome) for admin debugging
     via the login_audit table (migration 0033, admin-only RLS). NEVER raises — observability must
     never affect the login that just happened."""
@@ -118,13 +119,15 @@ def _audit_login(email, name, ctx, access, authorized, rank, outcome, error=None
                   "authorized": auth_str, "access_rank": rank,
                   "can_pull_all": bool(access.get("can_pull_all")),
                   "role_scope": _role_scope(email),
-                  "outcome": outcome, "error": error, "request_id": request_id},
+                  "outcome": outcome, "error": error, "request_id": request_id,
+                  "duration_ms": duration_ms, "phase": phase},
             timeout=15)
     except Exception as exc:  # noqa: BLE001
         logger.warning("login audit write skipped (non-fatal): %s", exc)
 
 
-def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool) -> dict:
+def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *,
+                             request_id: str | None = None, t_start: float | None = None) -> dict:
     """The single login-time entry point. ALWAYS evaluates the captured session's covenant-path
     access — so the no-access gate (N2) and the higher-access "you can improve the sync" offer work
     on every Church login — but STORES the encrypted credential (and kicks off the first sync) ONLY
@@ -140,9 +143,47 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool) -
     from backend.roles import _calling_always_allowed
 
     t0 = _time.monotonic()
+
+    def _elapsed_ms() -> int:
+        """ms since the REQUEST started (t_start from the API handler) — what login_audit records."""
+        return int((_time.monotonic() - (t_start if t_start is not None else t0)) * 1000)
+
+    # ZERO-LCR FAST LANE: a cached-identity repeat login already knows its unit; when that stake has
+    # a usable credential on file, authorization needs only this DB check (RLS is the real data
+    # gate, same trust as the credential-on-file fast path below). No LcrClient, no user_context —
+    # a routine repeat sign-in stops depending on LCR weather entirely.
+    if not store and identity.get("cached") and identity.get("unit_number"):
+        from types import SimpleNamespace
+        active_fast = _stored_credential_summary(identity["unit_number"])
+        if active_fast is not None:
+            logger.info("login eval: FAST-LANE (cached identity + usable credential) %.2fs",
+                        _time.monotonic() - t0)
+            ctx_shim = SimpleNamespace(unit_number=identity["unit_number"],
+                                       unit_name=identity.get("stake_name"))
+            _audit_login(identity.get("email"), identity.get("name"), ctx_shim, {}, True, None,
+                         "allowed", None, request_id=request_id,
+                         duration_ms=_elapsed_ms(), phase="fast-lane")
+            return {"stake": identity.get("stake_name"), "unit_number": identity["unit_number"],
+                    "authorized": True, "access_rank": None, "complete": None, "missing": [],
+                    "can_improve": False, "can_enroll": False, "stored": False, "fast": True}
+        # No usable credential for the cached unit → the full eval below (it establishes LCR itself).
+
     client = _client_from_cookies(cookies)
-    ctx = client.user_context()
+    try:
+        ctx = client.user_context()
+    except Exception:  # noqa: BLE001
+        # Fast-lane cookies carry only the Okta session (no LCR SSO yet) — establish it, retry once.
+        from lcr_client.okta_login import establish_lcr_session, session_from_cookies
+        s = session_from_cookies(cookies)
+        establish_lcr_session(s)
+        cookies = [{"name": c.name, "value": c.value, "domain": c.domain, "path": c.path or "/"}
+                   for c in s.cookies]
+        client = _client_from_cookies(cookies)
+        ctx = client.user_context()
     logger.info("login eval: user_context %.1fs (unit=%s)", _time.monotonic() - t0, ctx.unit_number)
+    # Record the unit now — this is what makes this user's NEXT login zero-LCR.
+    identity_cache.set_unit(identity.get("login_username") or identity.get("username") or "",
+                            identity, ctx.unit_number, ctx.unit_name)
 
     # FAST PATH (the ">1 minute to sign in" fix): the full covenant_path_access scrape below hits
     # dozens of LCR endpoints and routinely took 30-60s+ on every Church login. It only EARNS that
@@ -154,7 +195,7 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool) -
     if not store and active_fast is not None:
         logger.info("login eval: FAST path (usable credential on file) %.1fs total", _time.monotonic() - t0)
         _audit_login(identity.get("email"), identity.get("name"), ctx, {}, True, None,
-                     "allowed", None)
+                     "allowed", None, request_id=request_id, duration_ms=_elapsed_ms(), phase="fast")
         return {"stake": ctx.unit_name, "unit_number": ctx.unit_number,
                 "authorized": True, "access_rank": None, "complete": None, "missing": [],
                 "can_improve": False, "can_enroll": False, "stored": False, "fast": True}
@@ -201,7 +242,7 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool) -
 
     def _audit(outcome: str, error: str | None = None) -> None:
         _audit_login(identity.get("email"), identity.get("name"), ctx, access, authorized, rank,
-                     outcome, error)
+                     outcome, error, request_id=request_id, duration_ms=_elapsed_ms(), phase="full")
 
     if authorized is not True:
         reason = ("clearly lacks covenant-path access" if authorized is False

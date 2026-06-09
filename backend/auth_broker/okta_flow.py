@@ -27,6 +27,7 @@ from lcr_client.okta_login import (
     _follow, _idx_messages, _idx_post, _password_authenticator_id, _pkce,
     _remediations, establish_lcr_session, new_session, verify_session,
 )
+from backend.auth_broker import identity_cache
 
 logger = get_logger()
 
@@ -36,6 +37,12 @@ _TTL = 600                              # 10 min to complete an MFA challenge
 
 class AuthError(RuntimeError):
     pass
+
+
+class IdentityError(AuthError):
+    """Okta ACCEPTED the password, but the LCR identity fetch failed — we can't learn the email to
+    mint a session for. Not a credential problem: the API layer maps this to 503 with an honest
+    "LCR didn't answer, try again" message (previously it escaped as an opaque 500 after a hang)."""
 
 
 def _new_login_id() -> str:
@@ -245,14 +252,72 @@ def _exchange_code(session: requests.Session, payload: dict, verifier: str, logi
 
 
 def _store_pending(login_id: str, session: requests.Session, payload: dict,
-                   verifier: str, factors: list[dict]) -> None:
+                   verifier: str, factors: list[dict], username: str = "") -> None:
     _PENDING[login_id] = {"session": session, "payload": payload, "verifier": verifier,
-                          "factors": factors, "ts": time.time()}
+                          "factors": factors, "username": username, "ts": time.time()}
 
 
-def start_login(username: str, password: str) -> dict:
+def _finish_success(session: requests.Session, payload: dict, verifier: str, login_id: str,
+                    cid: str, t0: float, username: str,
+                    want_refresh_token: bool, allow_cached_identity: bool) -> dict:
+    """Shared tail of a successful password/MFA verification: resolve the identity and time it.
+
+    CACHE FAST LANE (plain repeat sign-ins): Okta just verified the password, and church_identities
+    already maps this username to a verified email/name/unit from a prior full login — so the LCR
+    SSO + /api/auth/me leg (measured 13s on a good day, 90s+ with LCR under load; the dominant cost
+    of a warm sign-in) is pure re-derivation and is SKIPPED. Cookies stay Okta-only; the login eval
+    establishes an LCR session itself in the one case it still needs one (no usable stake credential).
+
+    FULL PATH (first login on this broker DB, cache miss, or enroll): the interaction-code exchange
+    runs only when the refresh token is actually wanted (enroll stores it; it currently 401s anyway),
+    then the LCR identity fetch — now guarded: an LCR failure surfaces as IdentityError instead of
+    an unhandled 500 after a ~90s hang. A successful full fetch (re)fills the cache."""
+    from backend import observability as obs
+    cached = identity_cache.get(username) if allow_cached_identity else None
+    if cached and cached.get("email"):
+        ident = {"email": cached["email"], "name": cached.get("name"),
+                 "cmis_id": cached.get("cmis_id"), "username": cached.get("username"),
+                 "login_username": username, "unit_number": cached.get("unit_number"),
+                 "stake_name": cached.get("stake_name"),
+                 "cached": True, "cache_stale": bool(cached.get("stale"))}
+        ms = round((time.time() - t0) * 1000, 1)
+        obs.event("login.complete", correlation_id=cid, status="success", duration_ms=ms,
+                  lane="cached")
+        logger.info("[auth %s] login.complete in %.0fms (cached identity — no LCR)", login_id, ms)
+        return ident
+    rt = None
+    if want_refresh_token:
+        with obs.span("login.token_exchange", correlation_id=cid):
+            rt = _exchange_code(session, payload, verifier, login_id)
+    try:
+        with obs.span("login.identity", correlation_id=cid, endpoint="lcr"):
+            ident = _identity(session, login_id)
+    except Exception as exc:  # noqa: BLE001 — LCR failed AFTER the password was accepted
+        dump_debug("broker_identity_error", login_id=login_id, error=str(exc))
+        obs.event("login.complete", correlation_id=cid, status="error",
+                  duration_ms=round((time.time() - t0) * 1000, 1), message=str(exc)[:200])
+        raise IdentityError(
+            "Your password was accepted, but the Church directory (LCR) didn't answer when we "
+            "asked who you are — it may be slow or briefly down. Please try again in a minute."
+        ) from exc
+    ident["login_username"] = username
+    if rt:
+        ident["refresh_token"] = rt
+    identity_cache.put(username, ident)
+    ms = round((time.time() - t0) * 1000, 1)
+    obs.event("login.complete", correlation_id=cid, status="success", duration_ms=ms, lane="full")
+    logger.info("[auth %s] login.complete in %.0fms (full identity)", login_id, ms)
+    return ident
+
+
+def start_login(username: str, password: str, *, want_refresh_token: bool = True,
+                allow_cached_identity: bool = False) -> dict:
     """Begin a Church login. Returns {status: 'success', identity} or
-    {status: 'mfa_required', login_id, factors:[{id,label,method}]}."""
+    {status: 'mfa_required', login_id, factors:[{id,label,method}]}.
+
+    allow_cached_identity: plain sign-ins serve identity from church_identities once Okta verifies
+    the password (skipping the slow LCR leg — see _finish_success). want_refresh_token: only an
+    enroll needs the interaction-code exchange (the token rides the stored credential)."""
     from backend import observability as obs
     _prune()
     login_id = _new_login_id()
@@ -269,16 +334,8 @@ def start_login(username: str, password: str) -> dict:
         raise AuthError(f"login failed: {exc}") from exc
 
     if "successWithInteractionCode" in payload:
-        with obs.span("login.token_exchange", correlation_id=cid):
-            rt = _exchange_code(session, payload, verifier, login_id)
-        with obs.span("login.identity", correlation_id=cid, endpoint="lcr"):
-            ident = _identity(session, login_id)
-        if rt:
-            ident["refresh_token"] = rt
-        _ms = round((time.time() - _t0) * 1000, 1)
-        obs.event("login.complete", correlation_id=cid, status="success", duration_ms=_ms)
-        obs.flush()
-        logger.info("[auth %s] login.complete in %.0fms (no MFA)", login_id, _ms)
+        ident = _finish_success(session, payload, verifier, login_id, cid, _t0, username,
+                                want_refresh_token, allow_cached_identity)
         return {"status": "success", "identity": ident, "cookies": serialize_cookies(session)}
 
     rems = _remediations(payload)
@@ -286,7 +343,7 @@ def start_login(username: str, password: str) -> dict:
     # MFA shape A: Okta offers a list of 2nd-factor authenticators to choose from.
     if "select-authenticator-authenticate" in rems and _factors(rems["select-authenticator-authenticate"], types):
         factors = _factors(rems["select-authenticator-authenticate"], types)
-        _store_pending(login_id, session, payload, verifier, factors)
+        _store_pending(login_id, session, payload, verifier, factors, username)
         # Log the factor TYPES offered (PII-safe) — so if a member's only factor is one we mishandle
         # (e.g. webauthn/security key), the logs show exactly what was on the menu.
         logger.info("[auth %s] MFA required (shape A); factor_types=%s", login_id,
@@ -296,7 +353,7 @@ def start_login(username: str, password: str) -> dict:
     # an email/SMS code). Surface a generic factor so the app shows the code field; select_factor is a
     # no-op (the code is already pending) and verify_mfa submits it. (Previously this raised "stuck".)
     if "challenge-authenticator" in rems:
-        _store_pending(login_id, session, payload, verifier, [])
+        _store_pending(login_id, session, payload, verifier, [], username)
         logger.info("[auth %s] MFA required (shape B); single-factor code challenge, types=%s",
                     login_id, sorted(set(types.values())))
         return {"status": "mfa_required", "login_id": login_id,
@@ -352,8 +409,9 @@ def select_factor(login_id: str, factor_id: str) -> dict:
     return {"status": "code_sent"}
 
 
-def verify_mfa(login_id: str, code: str) -> dict:
-    """Submit the MFA code and finish login."""
+def verify_mfa(login_id: str, code: str, *, want_refresh_token: bool = True,
+               allow_cached_identity: bool = False) -> dict:
+    """Submit the MFA code and finish login (same fast-lane/full-path tail as start_login)."""
     pend = _PENDING.get(login_id)
     if not pend:
         raise AuthError("login session expired — start over")
@@ -378,13 +436,9 @@ def verify_mfa(login_id: str, code: str) -> dict:
         raise AuthError(_idx_messages(payload) or "incorrect code")
     from backend import observability as obs
     cid = obs.new_correlation_id()
-    with obs.span("login.token_exchange", correlation_id=cid):
-        rt = _exchange_code(session, payload, verifier, login_id)
-    with obs.span("login.identity", correlation_id=cid, endpoint="lcr"):
-        ident = _identity(session, login_id)
-    obs.flush()
-    if rt:
-        ident["refresh_token"] = rt
+    # t0 = now: times only this completion leg (the gap since start_login is human typing time).
+    ident = _finish_success(session, payload, verifier, login_id, cid, time.time(),
+                            pend.get("username") or "", want_refresh_token, allow_cached_identity)
     cookies = serialize_cookies(session)
     _PENDING.pop(login_id, None)
     return {"status": "success", "identity": ident, "cookies": cookies}
@@ -402,3 +456,17 @@ def verify_captured_session(cookies: list[dict]) -> dict:
     except Exception as exc:  # noqa: BLE001
         dump_debug("broker_session_verify_error", login_id=login_id, error=str(exc))
         raise AuthError(f"could not verify captured session: {exc}") from exc
+
+
+def refresh_cached_identity(cookies: list[dict], login_username: str) -> None:
+    """Background refresh of a STALE church_identities row: establish LCR from the login's Okta
+    cookies and re-fetch /api/auth/me. Fire-and-forget — never raises, never blocks a login."""
+    try:
+        from lcr_client.okta_login import session_from_cookies
+        session = session_from_cookies(cookies)
+        ident = _identity(session, _new_login_id())
+        ident["login_username"] = login_username
+        identity_cache.put(login_username or ident.get("username") or "", ident)
+        logger.info("identity cache refreshed (stale row) for login=%s", login_username or "?")
+    except Exception as exc:  # noqa: BLE001
+        logger.info("identity cache refresh skipped: %s", exc)

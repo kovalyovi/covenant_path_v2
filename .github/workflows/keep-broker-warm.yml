@@ -2,9 +2,10 @@ name: Keep auth broker warm
 
 # Render's free tier sleeps the auth broker after ~15 min idle; the first request after a
 # sleep then fails in the browser (holding page has no CORS header). This pings /health to
-# keep it awake. NOTE: GitHub cron is best-effort and can be delayed under load, so this is
-# a free backstop only — for reliable keep-warm use an external monitor (UptimeRobot), see
-# docs/DEPLOYMENT.md. Override the URL with repo variable BROKER_URL if it ever changes.
+# keep it awake. NOTE: GitHub cron is best-effort — measured firing every 2-4 HOURS despite
+# the */5 schedule — so this is a BACKSTOP only. The PRIMARY keep-warm is Supabase pg_cron
+# (migration 0042: cron.job 'keep-broker-warm', every 4 min via pg_net), which fires on time.
+# Override the URL with repo variable BROKER_URL if it ever changes (and update 0042).
 
 on:
   schedule:

@@ -6,6 +6,37 @@ Newest first.
 
 ---
 
+## ADR-009 — Login fast lane: cache the verified identity, keep LCR off the sign-in path (2026-06-09)
+
+**Context.** A Church-account sign-in took 75–110s even on a WARM broker. Measured breakdown:
+Okta verifies the password in ~1.2s; the LCR SSO + `/api/auth/me` identity fetch took **13s on a
+good day and 90s+ under LCR load** (and could escape as an unhandled 500) — all to re-learn the
+email/name/unit we learned on every prior login. Separately, the GitHub keep-warm cron (`*/5`)
+actually fired every **2–4 hours** (best-effort scheduling), so Render's free tier slept and most
+real logins also paid a ~50–75s cold start.
+
+**Decision.** (a) **`church_identities`** (0042): after any full login the broker caches
+username → verified email/name/cmis/unit (service-role only, RLS no-policies). On a plain repeat
+sign-in, once Okta accepts the password the identity comes from the cache and the eval authorizes
+via the stored-credential DB check — **zero LCR calls**. Enroll/consent logins still take the full
+LCR path (they need the live session), which also refreshes the cache; stale rows (>7d) refresh in
+the background. (b) **pg_cron + pg_net** ping the broker `/health` every 4 minutes from Supabase —
+cron that actually fires on time — with the GH workflow demoted to backstop. (c) The mint runs in
+**parallel** with the eval; the dead interaction-code exchange (refresh tokens don't work —
+`1c0a6fc`) is skipped unless enrolling; LCR identity failures map to **503 + honest message**.
+
+**Why safe.** The cache is consulted only AFTER Okta verifies the password for that username, and
+only maps it to our own prior verified observation; RLS remains the sole data gate (same trust as
+the existing credential-on-file fast path, which already skipped the access scrape). Login timing
+is now first-class: `login.request` Axiom events carry okta/eval/mint phase ms, the response echoes
+`timing` to clients, and `login_audit` gains `duration_ms`/`phase`.
+
+**Consequence.** Warm repeat sign-in ≈ Okta (~1–3s) + DB check + mint — comfortably under the 5s
+budget on every surface (native apps hit the same `/auth/password`); LCR weather can no longer
+stall sign-in. First-ever logins still pay one full identity fetch.
+
+---
+
 ## ADR-008 — Dashboard scopes to one selected stake (2026-05-31)
 
 **Context.** Power users and operators hold roles in several stakes, so the members query

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import time
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -102,28 +103,39 @@ import concurrent.futures as _futures
 # Background evaluator for the time-budgeted login eval (threads keep running past the budget so
 # the audit row + staleness offers still land; only the RESPONSE stops waiting).
 _EVAL_POOL = _futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="login-eval")
+# Small-fast-task pool (session mint, telemetry flush) — SEPARATE from _EVAL_POOL on purpose:
+# long background access-evals can occupy every eval worker, and the mint must never queue
+# behind them (it's on the response's critical path).
+_FAST_POOL = _futures.ThreadPoolExecutor(max_workers=8, thread_name_prefix="login-fast")
 # "Login must be under 5 seconds": how long a NON-consent login waits for its access evaluation
 # before answering without it (the dashboard re-derives offers from /auth/enrollment-status).
 _EVAL_BUDGET_S = float(os.environ.get("LOGIN_EVAL_BUDGET_SECONDS", "4"))
 
 
-def _login_eval(res: dict, store: bool, rid: str) -> dict | None:
+def _login_eval(res: dict, store: bool, rid: str, t0: float | None = None) -> dict | None:
     """Evaluate the captured session on a Church login and STORE the credential only when the leader
     consented (`store`). Consent stays SYNCHRONOUS (the leader just asked for setup — the client shows
-    progress and allows 95s). A plain sign-in waits at most _EVAL_BUDGET_S: the fast path (usable
-    credential on file) answers within it; a full first-eval continues in the BACKGROUND (audit still
-    written) while the user gets their session immediately — the dashboard surfaces any enroll/re-auth
-    offer from /auth/enrollment-status instead. Always guarded — never breaks the login itself."""
+    progress and allows 95s). A plain sign-in waits at most _EVAL_BUDGET_S: the fast lanes (cached
+    identity / usable credential on file) answer well within it; a full first-eval continues in the
+    BACKGROUND (audit still written) while the user gets their session immediately — the dashboard
+    surfaces any enroll/re-auth offer from /auth/enrollment-status instead. Always guarded — never
+    breaks the login itself."""
     if not res.get("cookies"):
         return None
     from backend.auth_broker import enroll
-    import time as _t
-    t0 = _t.monotonic()
-    fut = _EVAL_POOL.submit(enroll.evaluate_and_maybe_store, res["cookies"], res["identity"], store)
+    ident = res.get("identity") or {}
+    if not store and ident.get("cached") and ident.get("cache_stale"):
+        # Stale cache row: refresh OFF the login path so the zero-LCR lane stays honest over time.
+        _EVAL_POOL.submit(okta_flow.refresh_cached_identity, res.get("cookies") or [],
+                          ident.get("login_username") or "")
+    t_req = t0 if t0 is not None else time.monotonic()
+    t_eval = time.monotonic()
+    fut = _EVAL_POOL.submit(enroll.evaluate_and_maybe_store, res["cookies"], ident, store,
+                            request_id=rid, t_start=t_req)
     try:
         out = fut.result(timeout=None if store else _EVAL_BUDGET_S)
         logger.info("[req %s] login eval %.1fs (authorized=%s stored=%s can_improve=%s can_enroll=%s)",
-                    rid, _t.monotonic() - t0, out.get("authorized"), out.get("stored"),
+                    rid, time.monotonic() - t_eval, out.get("authorized"), out.get("stored"),
                     out.get("can_improve"), out.get("can_enroll"))
         return out
     except _futures.TimeoutError:
@@ -133,6 +145,33 @@ def _login_eval(res: dict, store: bool, rid: str) -> dict | None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("[req %s] login eval failed (login still ok): %s", rid, exc)
         return {"error": str(exc)}
+
+
+def _complete_login(res: dict, store: bool, rid: str, t0: float) -> dict:
+    """Shared completion for password/MFA/native logins: mint the Supabase session and run the login
+    eval IN PARALLEL (independent — the mint needs only the verified email), then emit the per-phase
+    timing event and echo `timing` to the client, so "which part was slow" is one Axiom query
+    (server-side) or one /log row (client-experienced) instead of guesswork."""
+    okta_ms = int((time.monotonic() - t0) * 1000)
+    mint_fut = _FAST_POOL.submit(_mint, res["identity"], rid)
+    t1 = time.monotonic()
+    enrolled = _login_eval(res, store, rid, t0=t0)
+    eval_ms = int((time.monotonic() - t1) * 1000)
+    t2 = time.monotonic()
+    session = mint_fut.result()  # raises the mint's HTTPException if it failed
+    mint_wait_ms = int((time.monotonic() - t2) * 1000)
+    total_ms = int((time.monotonic() - t0) * 1000)
+    lane = "cached" if (res.get("identity") or {}).get("cached") else "full"
+    deferred = bool(isinstance(enrolled, dict) and enrolled.get("deferred"))
+    from backend import observability as obs
+    obs.event("login.request", duration_ms=total_ms, okta_ms=okta_ms, eval_ms=eval_ms,
+              mint_wait_ms=mint_wait_ms, lane=lane, status="ok", deferred=deferred)
+    _FAST_POOL.submit(obs.flush)
+    logger.info("[req %s] login %dms (okta=%d eval=%d mint_wait=%d lane=%s deferred=%s)",
+                rid, total_ms, okta_ms, eval_ms, mint_wait_ms, lane, deferred)
+    return {"status": "ok", "session": session,
+            "identity_name": (res.get("identity") or {}).get("name"), "enroll": enrolled,
+            "timing": {"total_ms": total_ms, "okta_ms": okta_ms, "eval_ms": eval_ms, "lane": lane}}
 
 
 def _mint(identity: dict, rid: str) -> dict:
@@ -291,18 +330,25 @@ def _audit_okta_failure(who: str, stage: str, error: str, rid: str) -> None:
 @app.post("/auth/password")
 def auth_password(req: PasswordReq) -> dict:
     rid = _rid()
+    t0 = time.monotonic()
     logger.info("[req %s] /auth/password user=%s", rid, req.username)
     try:
-        res = okta_flow.start_login(req.username.strip(), req.password)
+        # Plain sign-ins ride the cached-identity fast lane (no LCR) and skip the dead token
+        # exchange; an enroll needs the real LCR session + refresh token, so it takes the full path.
+        res = okta_flow.start_login(req.username.strip(), req.password,
+                                    want_refresh_token=req.enroll,
+                                    allow_cached_identity=not req.enroll)
+    except okta_flow.IdentityError as e:
+        logger.warning("[req %s] LCR identity failed after password OK: %s", rid, e)
+        _audit_okta_failure(req.username, "lcr_identity_failed", str(e), rid)
+        raise HTTPException(status_code=503, detail=str(e))
     except okta_flow.AuthError as e:
         logger.warning("[req %s] auth failed: %s", rid, e)
         _audit_okta_failure(req.username, "okta_failed", str(e), rid)
         raise HTTPException(status_code=401, detail=str(e))
     if res["status"] == "mfa_required":
         return {"status": "mfa_required", "login_id": res["login_id"], "factors": res["factors"]}
-    enrolled = _login_eval(res, req.enroll, rid)
-    return {"status": "ok", "session": _mint(res["identity"], rid),
-            "identity_name": res["identity"].get("name"), "enroll": enrolled}
+    return _complete_login(res, req.enroll, rid, t0)
 
 
 @app.post("/auth/mfa/select")
@@ -318,29 +364,33 @@ def auth_mfa_select(req: FactorReq) -> dict:
 @app.post("/auth/mfa/verify")
 def auth_mfa_verify(req: MfaReq) -> dict:
     rid = _rid()
+    t0 = time.monotonic()
     logger.info("[req %s] /auth/mfa/verify login=%s", rid, req.login_id)
     try:
-        res = okta_flow.verify_mfa(req.login_id, req.code.strip())
+        res = okta_flow.verify_mfa(req.login_id, req.code.strip(),
+                                   want_refresh_token=req.enroll,
+                                   allow_cached_identity=not req.enroll)
+    except okta_flow.IdentityError as e:
+        logger.warning("[req %s] LCR identity failed after MFA OK: %s", rid, e)
+        _audit_okta_failure("", "lcr_identity_failed", str(e), rid)
+        raise HTTPException(status_code=503, detail=str(e))
     except okta_flow.AuthError as e:
         _audit_okta_failure("", "mfa_failed", str(e), rid)
         raise HTTPException(status_code=401, detail=str(e))
-    enrolled = _login_eval(res, req.enroll, rid)
-    return {"status": "ok", "session": _mint(res["identity"], rid),
-            "identity_name": res["identity"].get("name"), "enroll": enrolled}
+    return _complete_login(res, req.enroll, rid, t0)
 
 
 @app.post("/auth/session")
 def auth_session(req: SessionReq) -> dict:
     """Native WebView path: app captured the Okta session itself (password only to Okta)."""
     rid = _rid()
+    t0 = time.monotonic()
     logger.info("[req %s] /auth/session (native captured)", rid)
     try:
         res = okta_flow.verify_captured_session(req.cookies)
     except okta_flow.AuthError as e:
         raise HTTPException(status_code=401, detail=str(e))
-    enrolled = _login_eval(res, req.enroll, rid)
-    return {"status": "ok", "session": _mint(res["identity"], rid),
-            "identity_name": res["identity"].get("name"), "enroll": enrolled}
+    return _complete_login(res, req.enroll, rid, t0)
 
 
 # --- email-OTP relay (sign in when the browser can't reach Supabase directly) ---

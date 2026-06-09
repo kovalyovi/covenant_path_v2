@@ -142,14 +142,15 @@ with **no CORS header**, so the browser reports `Failed to fetch`. Two mitigatio
 - **In-app:** `broker_client.dart` retries network failures across ~60s and shows
   "Waking up the sign-in service…", so a cold start resolves itself instead of erroring.
 - **Keep-warm pings:**
-  - *Free backstop (already committed):* `.github/workflows/keep-broker-warm.yml` pings
-    `/health` every 10 min. GitHub cron is best-effort (can be delayed), so treat it as a
-    backstop, not a guarantee.
-  - *Reliable (recommended): **UptimeRobot*** — free, pings every 5 min:
-    1. uptimerobot.com → sign up → **+ New monitor**.
-    2. Type **HTTP(s)**, URL `https://covenant-path-broker.onrender.com/health`,
-       interval **5 minutes**.
-    3. Save. It both keeps the broker awake and emails you if it ever goes down.
+  - *Primary (live since 2026-06-09): **Supabase pg_cron*** — migration `0042_login_fast_lane.sql`
+    schedules cron job **`keep-broker-warm`** to `net.http_get` the broker `/health` every
+    **4 minutes** from Postgres. Unlike GitHub cron it fires on time. Inspect with
+    `select * from cron.job;` and recent firings in `cron.job_run_details`.
+  - *Free backstop:* `.github/workflows/keep-broker-warm.yml` pings `/health` every 5 min on
+    paper — measured firing every **2–4 hours** (GitHub cron is best-effort). Backstop only.
+  - *Optional extra: **UptimeRobot*** — free, pings every 5 min and also emails you if the
+    broker is ever down: uptimerobot.com → **+ New monitor** → HTTP(s),
+    `https://covenant-path-broker.onrender.com/health`, interval 5 min.
 
 If the broker URL ever changes, set repo variable `BROKER_URL` (Settings → Secrets and
 variables → Actions → Variables) and update the UptimeRobot monitor + the viewer's

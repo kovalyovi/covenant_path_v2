@@ -47,14 +47,20 @@ def mint_otp(email: str) -> dict:
         raise MintError("no email on the Church identity — can't mint a session")
     url, key = _cfg()
     h = _headers(key)
-    # ensure the user exists (idempotent; ignore 'already registered')
-    r = requests.post(f"{url}/auth/v1/admin/users",
-                      json={"email": email, "email_confirm": True}, headers=h, timeout=30)
-    if r.status_code not in (200, 201) and "already" not in r.text.lower():
-        logger.warning("admin create_user %s -> %s %s", email, r.status_code, r.text[:160])
-    # generate a magic-link OTP
-    r = requests.post(f"{url}/auth/v1/admin/generate_link",
-                      json={"type": "magiclink", "email": email}, headers=h, timeout=30)
+
+    def _link():
+        return requests.post(f"{url}/auth/v1/admin/generate_link",
+                             json={"type": "magiclink", "email": email}, headers=h, timeout=30)
+
+    # Cheap path first: everyone but a brand-new user gets their OTP in ONE round-trip; the
+    # idempotent create-user call only runs when generate_link says the user doesn't exist.
+    r = _link()
+    if r.status_code in (400, 404, 422):
+        c = requests.post(f"{url}/auth/v1/admin/users",
+                          json={"email": email, "email_confirm": True}, headers=h, timeout=30)
+        if c.status_code not in (200, 201) and "already" not in c.text.lower():
+            logger.warning("admin create_user %s -> %s %s", email, c.status_code, c.text[:160])
+        r = _link()
     if r.status_code not in (200, 201):
         raise MintError(f"generate_link failed: {r.status_code} {r.text[:160]}")
     data = r.json()

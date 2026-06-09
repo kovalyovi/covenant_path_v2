@@ -515,8 +515,72 @@ def _raises(exc, fn, *args) -> bool:
         return False
 
 
+def test_fast_lane_eval_zero_lcr() -> None:
+    # Cached-identity repeat login + usable credential on file → authorization is ONE DB check;
+    # any LcrClient construction here means the zero-LCR fast lane regressed.
+    old = (enroll.SUPABASE_URL, enroll.SERVICE_KEY, enroll._stored_credential_summary,
+           enroll._client_from_cookies, enroll._audit_login)
+    enroll.SUPABASE_URL, enroll.SERVICE_KEY = "https://example.invalid", "key"
+    enroll._stored_credential_summary = lambda unit: {"coverage": {}, "access_rank": 3}
+
+    def _boom(cookies):
+        raise AssertionError("fast lane must not touch LCR")
+
+    enroll._client_from_cookies = _boom
+    audited: dict = {}
+    enroll._audit_login = lambda *a, **k: audited.update(k)
+    try:
+        out = enroll.evaluate_and_maybe_store(
+            [{"name": "sid", "value": "x", "domain": "d", "path": "/"}],
+            {"email": "x@y.z", "cached": True, "unit_number": 503991, "stake_name": "Test Stake"},
+            False, request_id="rid42")
+        check("fast-lane authorized", out.get("authorized") is True)
+        check("fast-lane marks fast", out.get("fast") is True)
+        check("fast-lane offers nothing", out.get("can_enroll") is False and out.get("can_improve") is False)
+        check("fast-lane audit phase", audited.get("phase") == "fast-lane")
+        check("fast-lane audit request id", audited.get("request_id") == "rid42")
+    finally:
+        (enroll.SUPABASE_URL, enroll.SERVICE_KEY, enroll._stored_credential_summary,
+         enroll._client_from_cookies, enroll._audit_login) = old
+
+
+def test_start_login_cached_identity_skips_lcr() -> None:
+    # Okta verifies the password; church_identities supplies the identity. The LCR identity leg and
+    # the (dead) token exchange must not run on a plain repeat sign-in.
+    from backend.auth_broker import identity_cache
+    old_drive = okta_flow._drive_to_password
+    old_get = identity_cache.get
+    old_ident = okta_flow._identity
+    old_exchange = okta_flow._exchange_code
+    okta_flow._drive_to_password = lambda s, u, p, lid: ({"successWithInteractionCode": {"value": []}}, "ver")
+    identity_cache.get = lambda u: {"username": "canonical", "email": "x@y.z", "name": "X",
+                                    "unit_number": 1, "stale": False}
+
+    def _no_lcr(*a, **k):
+        raise AssertionError("cached lane must not fetch the LCR identity")
+
+    def _no_exchange(*a, **k):
+        raise AssertionError("plain sign-in must skip the token exchange")
+
+    okta_flow._identity = _no_lcr
+    okta_flow._exchange_code = _no_exchange
+    try:
+        res = okta_flow.start_login("USER", "pw", want_refresh_token=False, allow_cached_identity=True)
+        check("cached lane success", res.get("status") == "success")
+        check("cached lane email", res["identity"].get("email") == "x@y.z")
+        check("cached lane marker", res["identity"].get("cached") is True)
+        check("cached lane keeps typed username", res["identity"].get("login_username") == "USER")
+    finally:
+        okta_flow._drive_to_password = old_drive
+        identity_cache.get = old_get
+        okta_flow._identity = old_ident
+        okta_flow._exchange_code = old_exchange
+
+
 def main() -> int:
     print("broker tests")
+    test_fast_lane_eval_zero_lcr()
+    test_start_login_cached_identity_skips_lcr()
     test_health()
     test_cors()
     test_credential_embed_shape()
