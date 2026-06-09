@@ -549,6 +549,10 @@ def admin_enrolled_stakes(email: str = Depends(require_admin)) -> dict:
         return {"stakes": admin.enrolled_stakes()}
     except admin.AdminError as e:
         raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:  # noqa: BLE001 — never surface a raw 500: an uncaught error can reach the
+        # browser without CORS headers and show as "Failed to fetch" (exactly the reported symptom).
+        logger.warning("enrolled-stakes failed: %s", e)
+        raise HTTPException(status_code=503, detail="enrolled-stakes temporarily unavailable")
 
 
 @app.post("/admin/stakes/{stake_id}/revoke")

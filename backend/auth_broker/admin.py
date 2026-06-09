@@ -163,6 +163,23 @@ def _jobs_last_7d() -> dict:
     return out
 
 
+def _member_counts() -> dict:
+    """stake_id -> member count in ONE query. Replaces the per-stake count loop in enrolled_stakes()
+    that made it N+1 round-trips (a slow/hung count there dropped the whole ops request → the admin's
+    'Enrolled stakes: Failed to fetch')."""
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/members", headers=_sb_headers(),
+                         params={"select": "stake_id", "limit": "100000"}, timeout=_TIMEOUT)
+    except requests.RequestException:
+        return {}
+    out: dict[str, int] = {}
+    for row in (r.json() if r.status_code == 200 else []):
+        sid = row.get("stake_id")
+        if sid:
+            out[sid] = out.get(sid, 0) + 1
+    return out
+
+
 def _jwt_sub(token: str) -> str:
     """Extract the 'sub' (auth_id UUID) from a Supabase JWT without re-verifying.
     Caller must have already verified the token via verify_user() before calling this."""
@@ -393,12 +410,14 @@ def enrolled_stakes() -> list[dict]:
         f"{SUPABASE_URL}/rest/v1/stakes",
         headers=_sb_headers(),
         params={"select": "id,name,unit_number,last_synced_at,sync_state,onboarded_at,"
-                          "stake_credentials(principal_name,revoked,coverage,access_rank,updated_at)",
+                          "stake_credentials(principal_name,principal_email,revoked,coverage,access_rank,"
+                          "updated_at,last_failed_at,last_error,last_succeeded_at)",
                 "order": "name.asc"},
         timeout=_TIMEOUT)
     if r.status_code != 200:
         raise AdminError(f"could not list stakes ({r.status_code}): {r.text[:160]}")
-    jobs = _jobs_last_7d()  # stake_id -> sync runs in the last 7 days (#9)
+    jobs = _jobs_last_7d()      # stake_id -> sync runs in the last 7 days (#9)
+    counts = _member_counts()  # stake_id -> member count in ONE query (was N+1 → could hang the request)
     out = []
     for s in r.json():
         creds = s.get("stake_credentials") or []
@@ -412,14 +431,20 @@ def enrolled_stakes() -> list[dict]:
             "sync_state": s.get("sync_state"),
             "onboarded_at": s.get("onboarded_at"),
             "jobs_7d": jobs.get(s["id"], 0),
-            "member_count": _count_where("members", {"stake_id": f"eq.{s['id']}"}) or 0,
+            "member_count": counts.get(s["id"], 0),
             "credential": None if not cred else {
-                "state": "revoked" if cred.get("revoked") else "active",
+                # active / stale (last delegated sync failed — needs re-auth) / revoked
+                "state": ("revoked" if cred.get("revoked")
+                          else "stale" if cred.get("last_failed_at") else "active"),
                 "principal_name": cred.get("principal_name"),
+                "principal_email": cred.get("principal_email"),
                 "complete": bool(cov.get("complete")),
                 "missing": cov.get("missing") or [],
                 "access_rank": cred.get("access_rank"),
                 "updated_at": cred.get("updated_at"),
+                "last_failed_at": cred.get("last_failed_at"),
+                "last_error": cred.get("last_error"),
+                "last_succeeded_at": cred.get("last_succeeded_at"),
             },
         })
     return out
