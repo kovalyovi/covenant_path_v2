@@ -269,8 +269,12 @@ def _kickoff_initial_sync(unit_number: int) -> bool:
                        json={"sync_state": "running",
                              "sync_started_at": datetime.now(timezone.utc).isoformat()},
                        timeout=30)
-        admin.dispatch("daily-sync.yml", inputs={"targets": "supabase"})
-        logger.info("kicked off initial sync for new stake unit=%s", unit_number)
+        # PER-STAKE: scope the kickoff to THIS stake only (the `stake` input → prepare `--only`).
+        # Without it the dispatch fanned out the whole matrix, so one leader's enroll re-synced every
+        # other stake too (the "my father's sync hit my stake" bug).
+        admin.dispatch("daily-sync.yml", inputs={"targets": "supabase", "stake": str(unit_number)})
+        logger.info("kicked off initial sync for new stake unit=%s (scoped --stake %s)",
+                    unit_number, unit_number)
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("initial-sync kickoff skipped (non-fatal): %s", exc)

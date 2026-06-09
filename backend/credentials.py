@@ -121,3 +121,45 @@ def revoke(conn, stake_id: str, reason: str = "manual") -> None:
                     (json.dumps([{"event": "revoked", "reason": reason}]), stake_id))
     conn.commit()
     logger.warning("revoked stake credential %s (%s)", stake_id, reason)
+
+
+# --- staleness state (migration 0038): drives the app's re-authorize banner, the no-spam alert edge,
+#     the enroll-RPC takeover clause, and the ops staleness view. -----------------------------------
+
+def mark_failed(conn, stake_id: str, error: str) -> None:
+    """Stamp a credential as currently FAILING (its delegated session couldn't mint). Records the
+    reason; leaves stale_notified_at to the alert edge below."""
+    with conn.cursor() as cur:
+        cur.execute("update stake_credentials set last_failed_at=now(), last_error=%s where stake_id=%s",
+                    ((error or "")[:500], stake_id))
+    conn.commit()
+
+
+def mark_succeeded(conn, stake_id: str) -> None:
+    """Stamp a credential healthy after a successful sync — clears the failing + notified state so the
+    NEXT failure re-alerts (the success->failure edge), never spamming on a streak of failures."""
+    with conn.cursor() as cur:
+        cur.execute("update stake_credentials set last_succeeded_at=now(), last_failed_at=null, "
+                    "last_error=null, stale_notified_at=null where stake_id=%s", (stake_id,))
+    conn.commit()
+
+
+def claim_stale_notification(conn, stake_id: str) -> bool:
+    """Atomically claim the right to send ONE stale-credential alert for this failure streak. Returns
+    True only the FIRST failure after a success (mark_succeeded cleared stale_notified_at). Subsequent
+    consecutive failures return False, so we email once per streak, not once per run."""
+    with conn.cursor() as cur:
+        cur.execute("update stake_credentials set stale_notified_at=now() "
+                    "where stake_id=%s and stale_notified_at is null", (stake_id,))
+        claimed = cur.rowcount > 0
+    conn.commit()
+    return claimed
+
+
+def provider_email(conn, stake_id: str) -> str | None:
+    """The email of the leader whose session backs this stake (for the stale-credential alert)."""
+    with conn.cursor() as cur:
+        cur.execute("select principal_email from stake_credentials where stake_id=%s and not revoked",
+                    (stake_id,))
+        row = cur.fetchone()
+    return (row[0] if row else None) or None

@@ -359,6 +359,7 @@ def _mint_and_sync(args, st: dict) -> None:
     # (the app then shows "sync paused — re-enroll" and stops trusting a now-ineligible session).
     _revoke_if_ineligible(st)
     res = _sync_one(args)
+    _mark_succeeded(st["stake_id"])  # healthy sync → clear any prior failing/stale state (alert edge)
     print(f"[+] {st['name']} ({st['unit_number']}): {res['members']} members synced")
 
 
@@ -537,6 +538,7 @@ def run_one_stake(args, unit: int) -> int:
                         recovered = (_sync_one(args).get("supabase") or {}).get("stake_unit")
                         if recovered == unit:
                             logger.info("stake %s recovered via the self baseline", unit)
+                            _mark_succeeded(st["stake_id"])  # operator's own stake is fresh; clear stale
                             return 0
                     else:
                         logger.warning("self-baseline can't recover stake %s (operator account is %s) — "
@@ -558,16 +560,31 @@ def run_one_stake(args, unit: int) -> int:
     return 0
 
 
+def _mark_succeeded(stake_id) -> None:
+    """Clear a credential's failing/stale state after a healthy sync (guarded — never blocks the run)."""
+    try:
+        from backend import credentials, db
+        conn = db.connect()
+        try:
+            credentials.mark_succeeded(conn, stake_id)
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("mark_succeeded skipped: %s", exc)
+
+
 def _alert_sync_failure(unit, reason: str) -> None:
-    """Sync-failure alert: make a failed/stale stake VISIBLE (app + admin console + Axiom) so it gets
-    re-authorized instead of silently going stale. Sets the stake's sync_state='error', records a
-    diagnostic, emits an Axiom event, and best-effort emails the owner. Fully guarded — alerting must
-    never change the run's exit status."""
+    """Sync-failure alert: make a failed/stale stake VISIBLE (app banner + admin console + Axiom) and
+    FLAG its credential stale (drives the re-authorize banner + the enroll takeover). Emails the owner
+    AND the credential's provider ONCE per failure streak — not every run (claim_stale_notification).
+    Fully guarded — alerting must never change the run's exit status."""
     if not unit:
         return
     try:
-        from backend import db, observability as obs
+        from backend import credentials, db, observability as obs
         stake_name = str(unit)
+        notify = False
+        provider = None
         conn = db.connect()
         try:
             with conn.cursor() as cur:
@@ -576,14 +593,20 @@ def _alert_sync_failure(unit, reason: str) -> None:
                 row = cur.fetchone()
             conn.commit()
             if row:
-                stake_name = row[1] or stake_name
-                db.insert_diagnostics(conn, row[0], "sync_error", {"unit": unit, "reason": reason[:400]})
+                stake_id, stake_name = row[0], (row[1] or stake_name)
+                db.insert_diagnostics(conn, stake_id, "sync_error", {"unit": unit, "reason": reason[:400]})
+                credentials.mark_failed(conn, stake_id, reason)               # flag stale (banner + takeover)
+                notify = credentials.claim_stale_notification(conn, stake_id)  # no-spam: once per streak
+                provider = credentials.provider_email(conn, stake_id)
         finally:
             conn.close()
         obs.event("sync.stake.failed", level="error", stake=int(unit), status="error", message=reason[:200])
         obs.flush()
         logger.error("SYNC ALERT: stake %s (%s) failed — %s", unit, stake_name, reason[:160])
-        _email_owner_failure(stake_name, unit, reason)
+        if notify:  # success->failure edge only
+            _email_owner_failure(stake_name, unit, reason)
+            if provider:
+                _email_provider_failure(provider, stake_name, unit, reason)
     except Exception as exc:  # noqa: BLE001
         logger.warning("sync-failure alert skipped (non-fatal): %s", exc)
 
@@ -604,6 +627,31 @@ def _email_owner_failure(stake_name: str, unit, reason: str) -> None:
         logger.info("sync-failure email sent to owner")
     except Exception as exc:  # noqa: BLE001
         logger.debug("sync-failure email skipped: %s", exc)
+
+
+def _email_provider_failure(to: str, stake_name: str, unit, reason: str) -> None:
+    """Tell the credential's PROVIDER (the leader who authorized it) — in plain terms — that their
+    stake's sync stopped, with a one-tap path back into the app to re-authorize. Best-effort; sent at
+    most once per failure streak (the caller gates on claim_stale_notification)."""
+    app_url = (os.environ.get("APP_URL") or "").rstrip("/")
+    try:
+        from backend.auth_broker import admin
+        link = (f'<p style="margin:18px 0"><a href="{app_url}" '
+                f'style="background:#3949ab;color:#fff;padding:10px 18px;border-radius:8px;'
+                f'text-decoration:none">Open Covenant Path → re-authorize</a></p>') if app_url else ""
+        html = (f"<p>Hi,</p>"
+                f"<p>The daily sync for <b>{stake_name}</b> has <b>paused</b> — the Church (LCR) session "
+                f"that keeps it updated has expired, so your members' data is frozen at the last good "
+                f"sync.</p>"
+                f"<p><b>To fix it:</b> sign in to Covenant Path again with sync enabled. That re-authorizes "
+                f"the session (your password is never stored) and the data resumes within minutes — you "
+                f"can also kick off a sync right away from <b>Settings → Sync settings</b>.</p>"
+                f"{link}"
+                f"<p style='color:#888;font-size:12px'>Technical detail: {reason[:300]}</p>")
+        admin._send_email(to, f"Covenant Path — action needed: sync paused for {stake_name}", html)
+        logger.info("stale-credential email sent to provider")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("provider stale email skipped: %s", exc)
 
 
 def run_delegated(args, skip_unit: int | None = None) -> int:
