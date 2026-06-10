@@ -93,6 +93,29 @@ def yes_no(present: bool) -> str:
     return "Yes" if present else "No"
 
 
+# The two LCR "Temple Ordinances and Experiences" new-member commitments we promote to tracked
+# covenant-path fields. Matched by substring (case-insensitive) so minor LCR label tweaks
+# ("Prepare a Family Name for the Temple" / "Perform Baptisms for Deceased Ancestors") don't break.
+_FAMILY_NAME_NEEDLE = "family name"
+_TEMPLE_VISIT_NEEDLE = "baptisms for deceased"
+
+
+def parse_temple_experiences(commitments: list | None) -> tuple[str, str]:
+    """(family_name_prepared, first_temple_visit) Yes/No from newMemberOtherCommitments.
+    family_name = the 'Prepare a Family Name for the Temple' commitment is being kept;
+    first_temple_visit = 'Perform Baptisms for Deceased Ancestors' (a proxy-baptism trip IS the
+    first temple visit for a new member). Absent commitment -> 'No' (LCR tracks it unchecked)."""
+    family = temple = False
+    for c in commitments or []:
+        name = (c.get("name") or "").lower()
+        done = bool(c.get("isKeeping"))
+        if _FAMILY_NAME_NEEDLE in name:
+            family = family or done
+        elif _TEMPLE_VISIT_NEEDLE in name:
+            temple = temple or done
+    return (yes_no(family), yes_no(temple))
+
+
 def _progress_subtree(d: dict) -> dict:
     """The covenant-path *progress* fields from a one-work details record, shaped for the
     rich member view (sacrament dots, friends, lessons, ministering, commitments).
@@ -191,6 +214,10 @@ class CovenantPathMember:
     # number of friends recorded in LCR (len of the friends array); None when this run
     # couldn't determine it (so the merge-upsert preserves the last-good count).
     friends_count: int | None = field(default=None)
+    # Temple Ordinances and Experiences commitments, promoted to tracked fields: a prepared family
+    # name (genealogy) and a first temple visit (proxy baptisms). Sentinel when details didn't fetch.
+    family_name_prepared: str = field(default=NEEDS_PROFILE)
+    first_temple_visit: str = field(default=NEEDS_PROFILE)
 
 
 # --- build -------------------------------------------------------------------
@@ -277,6 +304,10 @@ def _assemble(person_raw: dict, details: dict | None, unit_name: str, birth: str
         aaronic = melch = NEEDS_PROFILE
     calling = yes_no(bool(d.get("callings"))) if _has("callings") else NEEDS_PROFILE
     living = parse_endowment(d.get("templeOrdinances")) if _has("templeOrdinances") else NEEDS_PROFILE
+    if _has("newMemberOtherCommitments"):
+        family_name, temple_visit = parse_temple_experiences(d.get("newMemberOtherCommitments"))
+    else:  # details didn't fetch — sentinel so the merge-upsert preserves last-good
+        family_name = temple_visit = NEEDS_PROFILE
     ministering = d.get("ministering") or {}
     has_ministers = bool(ministering.get("ministeringBrothers") or ministering.get("ministeringSisters"))
     friend_count = _friend_count(person_raw, d)
@@ -304,6 +335,8 @@ def _assemble(person_raw: dict, details: dict | None, unit_name: str, birth: str
         sex=d.get("sex"),
         person_uuid=person_raw.get("personUuid") or person_raw.get("id"),
         kind=kind,
+        family_name_prepared=family_name,
+        first_temple_visit=temple_visit,
         details=_progress_subtree(d),
     )
 
@@ -345,6 +378,14 @@ def _apply_profile(member: CovenantPathMember, prof: dict) -> None:
     em_e = {"sex": member.sex, "birth_date": member.birth_date, "baptism_date": member.baptism_date}
     if member.living_ordinance == "No" and not (is_at_least_now(em_e, 18) and member_one_year(em_e)):
         member.living_ordinance = NA
+    # First temple visit (proxy baptisms) + family name: only meaningful from the year someone turns
+    # 12 (limited-use recommend age — same by-year rule as the Aaronic gate). An ineligible "No"
+    # shows as N/A (they can't go yet); a genuine "Yes" is always kept.
+    if not turns_at_least(em_e, 12):
+        if member.first_temple_visit == "No":
+            member.first_temple_visit = NA
+        if member.family_name_prepared == "No":
+            member.family_name_prepared = NA
     # Calling: the profile's individualCallings (member_profile.fetch_callings) is the AUTHORITATIVE
     # per-member list. The unit org-aggregate (the calling_uuids set in build_stake_report) MISSES
     # sub-org callings like "Relief Society Service Committee Member" — members held a calling yet

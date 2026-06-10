@@ -144,8 +144,34 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(Milestones.completionOf(none), 0.0, accuracy: 1e-9)
         let allDone = Member(baptismDate: "\(year - 3)-01-01", birthDate: "\(year - 30)-01-01", sex: "F",
                              friends: "Yes", calling: "Yes",
-                             ministeringBrothersSisters: "Yes", ministeringAssignment: "Yes")
+                             ministeringBrothersSisters: "Yes", ministeringAssignment: "Yes",
+                             familyNamePrepared: "Yes", firstTempleVisit: "Yes")
         XCTAssertEqual(Milestones.completionOf(allDone), 1.0, accuracy: 1e-9)
+    }
+
+    func testTempleExperienceValueAndDisplay() {
+        let year = Calendar.current.component(.year, from: Date())
+        // Flat column (filled by the daily sync) wins.
+        XCTAssertEqual(Milestones.firstTempleVisitValue(Member(firstTempleVisit: "Yes")), "Yes")
+        // Sentinel/empty flat value falls back to details.templeExperiences.
+        var d = MemberDetails()
+        d.templeExperiences = [
+            .init(name: "Prepare a Family Name for the Temple", done: false),
+            .init(name: "Perform Baptisms for Deceased Ancestors", done: true),
+        ]
+        let m = Member(birthDate: "\(year - 20)-01-01", firstTempleVisit: "needs-profile-api",
+                       details: d)
+        XCTAssertEqual(Milestones.firstTempleVisitValue(m), "Yes")
+        XCTAssertEqual(Milestones.familyNameValue(m), "No")
+        // Under-12 "No" displays as N/A (can't do proxy baptisms yet); a real "Yes" is kept.
+        XCTAssertEqual(Milestones.firstTempleVisitDisplay(
+            Member(birthDate: "\(year - 8)-01-01", firstTempleVisit: "No")), "N/A")
+        XCTAssertEqual(Milestones.firstTempleVisitDisplay(
+            Member(birthDate: "\(year - 8)-01-01", firstTempleVisit: "Yes")), "Yes")
+        // Eligible from the year someone turns 12 (by-year rule), like calling.
+        let fn = Milestones.all.first { $0.abbr == "FN" }!
+        XCTAssertTrue(fn.eligible(Member(birthDate: "\(year - 12)-01-01")))
+        XCTAssertFalse(fn.eligible(Member(birthDate: "\(year - 8)-01-01")))
     }
 
     func testNeedsCategoriesAddLongerHorizonCovenants() {

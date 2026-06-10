@@ -30,6 +30,8 @@ public struct Member: Codable, Identifiable, Hashable, Sendable {
     public let templeRecommend: String?
     public let patriarchalBlessing: String?
     public let livingOrdinance: String?
+    public let familyNamePrepared: String?   // genealogy: "Prepare a Family Name for the Temple"
+    public let firstTempleVisit: String?     // proxy baptisms: "Perform Baptisms for Deceased Ancestors"
 
     public let kind: String?        // "new_member" | "investigator" | "returning"
     public let photoURL: String?
@@ -63,6 +65,8 @@ public struct Member: Codable, Identifiable, Hashable, Sendable {
         case templeRecommend = "temple_recommend"
         case patriarchalBlessing = "patriarchal_blessing"
         case livingOrdinance = "living_ordinance"
+        case familyNamePrepared = "family_name_prepared"
+        case firstTempleVisit = "first_temple_visit"
         case kind
         case photoURL = "photo_url"
         case details
@@ -76,7 +80,8 @@ public struct Member: Codable, Identifiable, Hashable, Sendable {
         melchizedekPriesthood: String? = nil, calling: String? = nil,
         ministeringBrothersSisters: String? = nil, ministeringAssignment: String? = nil,
         templeRecommend: String? = nil, patriarchalBlessing: String? = nil,
-        livingOrdinance: String? = nil, kind: String? = nil, photoURL: String? = nil,
+        livingOrdinance: String? = nil, familyNamePrepared: String? = nil,
+        firstTempleVisit: String? = nil, kind: String? = nil, photoURL: String? = nil,
         details: MemberDetails? = nil
     ) {
         self.personUUID = personUUID; self.stakeID = stakeID; self.unitID = unitID
@@ -88,6 +93,7 @@ public struct Member: Codable, Identifiable, Hashable, Sendable {
         self.calling = calling; self.ministeringBrothersSisters = ministeringBrothersSisters
         self.ministeringAssignment = ministeringAssignment; self.templeRecommend = templeRecommend
         self.patriarchalBlessing = patriarchalBlessing; self.livingOrdinance = livingOrdinance
+        self.familyNamePrepared = familyNamePrepared; self.firstTempleVisit = firstTempleVisit
         self.kind = kind; self.photoURL = photoURL; self.details = details
     }
 

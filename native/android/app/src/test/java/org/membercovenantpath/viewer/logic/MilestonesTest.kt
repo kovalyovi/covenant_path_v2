@@ -1,5 +1,9 @@
 package org.membercovenantpath.viewer.logic
 
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -68,12 +72,13 @@ class MilestonesTest {
             sex = "M", birthDate = "1990-01-01", baptismDate = "2024-01-01",
             friends = "Yes", calling = "Yes", ministeringBrothersSisters = "Yes",
             ministeringAssignment = "Yes", aaronicPriesthood = "Yes", melchizedekPriesthood = "Yes",
+            familyNamePrepared = "Yes", firstTempleVisit = "Yes",
         )
         assertEquals(1.0, Milestones.avgCompletion(listOf(complete), today), 1e-9)
 
-        // Same person missing exactly one of six eligible milestones → 5/6.
+        // Same person missing exactly one of eight eligible milestones → 7/8.
         val missingOne = complete.copy(calling = "No")
-        assertEquals(5.0 / 6.0, Milestones.avgCompletion(listOf(missingOne), today), 1e-9)
+        assertEquals(7.0 / 8.0, Milestones.avgCompletion(listOf(missingOne), today), 1e-9)
     }
 
     // --- detail-view eligibility + Needs categories (status-sections work) ---
@@ -90,13 +95,51 @@ class MilestonesTest {
     }
 
     @Test fun completionOfIsEligibleOnlyFraction() {
-        // Adult female, member 1yr+ → applicable: Friends, Calling, Has-ministers, Ministering-assignment.
+        // Adult female, member 1yr+ → applicable: Friends, Calling, Has-ministers,
+        // Ministering-assignment, Family name, First temple visit.
         val none = Member(sex = "F", birthDate = "1990-01-01", baptismDate = "2023-01-01")
         assertEquals(0.0, Milestones.completionOf(none, today), 1e-9)
         val allDone = none.copy(
             friends = "Yes", calling = "Yes", ministeringBrothersSisters = "Yes", ministeringAssignment = "Yes",
+            familyNamePrepared = "Yes", firstTempleVisit = "Yes",
         )
         assertEquals(1.0, Milestones.completionOf(allDone, today), 1e-9)
+    }
+
+    // --- Temple Ordinances and Experiences (family name + first temple visit) ---
+
+    @Test fun templeExperiencesEligibleAt12LikeCalling() {
+        val fn = ms("Family name prepared")
+        val ft = ms("First temple visit")
+        assertTrue(fn.eligible(Member(birthDate = "2014"), today))  // turns 12 in 2026
+        assertTrue(ft.eligible(Member(birthDate = "2014"), today))
+        assertFalse(fn.eligible(Member(birthDate = "2018"), today)) // a child is not eligible
+        assertFalse(ft.eligible(Member(birthDate = "2018"), today))
+    }
+
+    @Test fun templeExperienceFlatColumnWinsAndDetailsFallback() {
+        // Flat column (filled by the daily sync) wins.
+        assertEquals("Yes", Milestones.firstTempleVisitValue(Member(firstTempleVisit = "Yes")))
+        // Sentinel flat value falls back to details.templeExperiences (same LCR commitments).
+        val details = buildJsonObject {
+            put("templeExperiences", buildJsonArray {
+                add(buildJsonObject { put("name", "Prepare a Family Name for the Temple"); put("done", false) })
+                add(buildJsonObject { put("name", "Perform Baptisms for Deceased Ancestors"); put("done", true) })
+            })
+        }
+        val m = Member(birthDate = "2006", firstTempleVisit = "needs-profile-api", details = details)
+        assertEquals("Yes", Milestones.firstTempleVisitValue(m))
+        assertEquals("No", Milestones.familyNameValue(m))
+    }
+
+    @Test fun templeExperienceDisplayGatesIneligibleToNA() {
+        // Under-12 "No" displays as N/A (can't do proxy baptisms yet); a real "Yes" is kept.
+        assertEquals("N/A", Milestones.firstTempleVisitDisplay(
+            Member(birthDate = "2018", firstTempleVisit = "No"), today))
+        assertEquals("Yes", Milestones.firstTempleVisitDisplay(
+            Member(birthDate = "2018", firstTempleVisit = "Yes"), today))
+        assertEquals("No", Milestones.familyNameDisplay(
+            Member(birthDate = "2006", familyNamePrepared = "No"), today))
     }
 
     @Test fun needsCategoriesAddLongerHorizonCovenants() {

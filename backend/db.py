@@ -28,7 +28,8 @@ _MEMBER_COLUMNS = [
     "person_uuid", "name", "unit_name", "baptism_date", "birth_date", "friends", "friends_count",
     "aaronic_priesthood", "melchizedek_priesthood", "calling",
     "ministering_brothers_sisters", "ministering_assignment", "temple_recommend",
-    "patriarchal_blessing", "living_ordinance", "membership_duration", "sex",
+    "patriarchal_blessing", "living_ordinance", "family_name_prepared", "first_temple_visit",
+    "membership_duration", "sex",
     "kind", "baptism_goal_date",  # new_member|investigator|returning + planned baptism date
     "details",  # jsonb — the rich progress subtree (dict; wrapped as Json on write)
 ]
@@ -40,6 +41,7 @@ _MEMBER_COLUMNS = [
 _GATED_COLUMNS = frozenset({
     "baptism_date", "aaronic_priesthood", "melchizedek_priesthood", "calling",
     "ministering_assignment", "temple_recommend", "patriarchal_blessing", "living_ordinance",
+    "family_name_prepared", "first_temple_visit",
 })
 _SENTINELS = ("needs-profile-api", "blocked: insufficient calling access")
 

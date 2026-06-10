@@ -31,6 +31,8 @@ final class DecodingTests: XCTestCase {
           "temple_recommend": "Active",
           "patriarchal_blessing": "No",
           "living_ordinance": "No",
+          "family_name_prepared": "No",
+          "first_temple_visit": "Yes",
           "kind": "new_member",
           "photo_url": null,
           "details": null
@@ -43,6 +45,8 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(m.baptismDate, "2026-02-06")
         XCTAssertEqual(m.friends, "Yes")
         XCTAssertEqual(m.aaronicPriesthood, "N/A")
+        XCTAssertEqual(m.familyNamePrepared, "No")
+        XCTAssertEqual(m.firstTempleVisit, "Yes")
         XCTAssertEqual(m.kind, "new_member")
         XCTAssertFalse(m.isInvestigator)
         XCTAssertEqual(m.displayName, "Doe, Jane")

@@ -82,8 +82,9 @@ def member_one_year(m: dict) -> bool:
 # (label, is-complete, is-eligible) — the single source of milestone eligibility. Confirmed rules
 # (2026-05-30): turning-N-this-year = currentYear-birthYear>=N; "now" = actual current age.
 #   Aaronic = male & turning-12;  calling = turning-12;  gives-ministering = turning-14 (both sexes);
-#   has-ministers = everyone;  Melchizedek = male & age>=18 NOW & member>=1yr.
-# Mirrored in apps/viewer/lib/golden_hour.dart — keep in sync.
+#   has-ministers = everyone;  Melchizedek = male & age>=18 NOW & member>=1yr;
+#   family-name + first-temple-visit = turning-12 (limited-use recommend age, both sexes).
+# Mirrored in apps/web/src/logic/milestones.ts (+ the native Milestones ports) — keep in sync.
 MILESTONES = [
     ("a friend in the ward", lambda m: m.get("friends") == "Yes", lambda m: True),
     ("a calling", lambda m: m.get("calling") == "Yes", lambda m: turns_at_least(m, 12)),
@@ -93,6 +94,10 @@ MILESTONES = [
      lambda m: m.get("sex") == "M" and turns_at_least(m, 12)),
     ("the Melchizedek Priesthood", lambda m: m.get("melchizedek_priesthood") == "Yes",
      lambda m: m.get("sex") == "M" and is_at_least_now(m, 18) and member_one_year(m)),
+    ("a family name prepared for the temple", lambda m: m.get("family_name_prepared") == "Yes",
+     lambda m: turns_at_least(m, 12)),
+    ("a first temple visit (baptisms for ancestors)", lambda m: m.get("first_temple_visit") == "Yes",
+     lambda m: turns_at_least(m, 12)),
 ]
 
 

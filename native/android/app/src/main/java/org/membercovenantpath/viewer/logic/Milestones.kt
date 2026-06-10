@@ -1,15 +1,18 @@
 package org.membercovenantpath.viewer.logic
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material.icons.outlined.Badge
 import androidx.compose.material.icons.outlined.Handshake
+import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.MilitaryTech
 import androidx.compose.material.icons.outlined.VolunteerActivism
 import androidx.compose.material.icons.outlined.WorkspacePremium
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import org.membercovenantpath.viewer.model.Member
+import org.membercovenantpath.viewer.model.parsedDetails
 import org.membercovenantpath.viewer.ui.theme.MilestoneColors
 import java.time.LocalDate
 
@@ -95,7 +98,66 @@ object Milestones {
                 male(m) && ageNowAtLeast(m, 18, today) && memberOneYearPlus(m, today)
             },
         ),
+        // Temple Ordinances and Experiences: genealogy + proxy baptisms, both from the year someone
+        // turns 12 (limited-use recommend age — same by-year rule as calling/Aaronic).
+        Milestone(
+            label = "Family name prepared", abbr = "FN",
+            icon = Icons.Outlined.MenuBook, color = MilestoneColors.FamilyName, // brown · 12+
+            complete = { familyNameValue(it) == "Yes" },
+            eligible = { m, today -> turnsAtLeast(m, 12, today) },
+        ),
+        Milestone(
+            label = "First temple visit", abbr = "FT",
+            icon = Icons.Filled.AccountBalance, color = MilestoneColors.FirstTempleVisit, // teal · 12+
+            complete = { firstTempleVisitValue(it) == "Yes" },
+            eligible = { m, today -> turnsAtLeast(m, 12, today) },
+        ),
     )
+
+    // ---- Temple Ordinances and Experiences (family name + first temple visit), mirrors web
+    // milestones.ts `templeExperienceValue` / `templeExperienceDisplay`. ------------------------
+
+    /**
+     * Effective Yes/No for a temple-experience field. The flat column (filled by the daily sync)
+     * wins; a row not yet re-synced falls back to `details.templeExperiences` — the same LCR
+     * commitments, scraped earlier. Returns the raw flat value (sentinel/empty) when neither knows.
+     */
+    private fun templeExperienceValue(m: Member, flat: String?, needle: String): String {
+        val v = flat ?: ""
+        if (v == "Yes" || v == "No" || v == "N/A") return v
+        val match = m.parsedDetails()?.templeExperiences
+            ?.firstOrNull { (it.name ?: "").lowercase().contains(needle) }
+        if (match != null) return if (match.done) "Yes" else "No"
+        return v
+    }
+
+    /** Genealogy: the "Prepare a Family Name for the Temple" commitment. */
+    fun familyNameValue(m: Member): String =
+        templeExperienceValue(m, m.familyNamePrepared, "family name")
+
+    /** First temple visit: the "Perform Baptisms for Deceased Ancestors" commitment. */
+    fun firstTempleVisitValue(m: Member): String =
+        templeExperienceValue(m, m.firstTempleVisit, "baptisms for deceased")
+
+    /** Family name + first temple visit start at the limited-use recommend age (12, by-year rule). */
+    fun templeExperienceEligible(m: Member, today: LocalDate = LocalDate.now()) =
+        turnsAtLeast(m, 12, today)
+
+    /**
+     * Display: same N/A-for-ineligible gate as endowment (an under-12 can't do proxy baptisms yet,
+     * so a raw "No" misleads); a real "Yes" is always kept.
+     */
+    fun familyNameDisplay(m: Member, today: LocalDate = LocalDate.now()): String {
+        val v = familyNameValue(m)
+        if (v == "Yes") return "Yes"
+        return if (templeExperienceEligible(m, today)) v else "N/A"
+    }
+
+    fun firstTempleVisitDisplay(m: Member, today: LocalDate = LocalDate.now()): String {
+        val v = firstTempleVisitValue(m)
+        if (v == "Yes") return "Yes"
+        return if (templeExperienceEligible(m, today)) v else "N/A"
+    }
 
     /** Milestones that can apply to [m] (eligible-only). Mirrors `milestonesFor`. */
     fun forMember(m: Member, today: LocalDate = LocalDate.now()): List<Milestone> =

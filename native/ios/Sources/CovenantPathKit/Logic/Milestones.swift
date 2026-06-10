@@ -60,6 +60,16 @@ public enum Milestones {
                   style: .init(hex: 0x2E7D32, symbol: "rosette"),                  // green
                   eligible: { $0.isMale && ageNowAtLeast($0, 18) && memberOneYearPlus($0) },
                   complete: { $0.melchizedekPriesthood == "Yes" }),
+        // Temple Ordinances and Experiences: genealogy + proxy baptisms, both from the year someone
+        // turns 12 (limited-use recommend age — same by-year rule as calling/Aaronic).
+        Milestone("Family name prepared", "FN",
+                  style: .init(hex: 0x6D4C41, symbol: "book.closed"),              // brown · 12+
+                  eligible: { turnsAtLeast($0, 12) },
+                  complete: { familyNameValue($0) == "Yes" }),
+        Milestone("First temple visit", "FT",
+                  style: .init(hex: 0x00897B, symbol: "building.columns"),         // teal · 12+
+                  eligible: { turnsAtLeast($0, 12) },
+                  complete: { firstTempleVisitValue($0) == "Yes" }),
     ]
 
     /// Milestones that apply to this member (the eligible subset), in canonical order.
@@ -167,6 +177,49 @@ public enum Milestones {
     /// Endowment eligibility: an adult (18+) who's been a member ~1 year (same gate as the report).
     public static func endowmentEligible(_ m: Member) -> Bool {
         ageNowAtLeast(m, 18) && memberOneYearPlus(m)
+    }
+
+    // MARK: - Temple Ordinances and Experiences (family name + first temple visit), mirrors
+    // web milestones.ts `templeExperienceValue` / `templeExperienceDisplay`.
+
+    /// Effective Yes/No for a temple-experience field. The flat column (filled by the daily sync)
+    /// wins; a row not yet re-synced falls back to `details.templeExperiences` — the same LCR
+    /// commitments, scraped earlier. Returns the raw flat value (sentinel/empty) when neither knows.
+    public static func templeExperienceValue(_ m: Member, flat: String?, needle: String) -> String {
+        let v = flat ?? ""
+        if v == "Yes" || v == "No" || v == "N/A" { return v }
+        for t in m.details?.templeExperiences ?? []
+        where (t.name ?? "").lowercased().contains(needle) {
+            return t.done == true ? "Yes" : "No"
+        }
+        return v
+    }
+
+    /// Genealogy: the "Prepare a Family Name for the Temple" commitment.
+    public static func familyNameValue(_ m: Member) -> String {
+        templeExperienceValue(m, flat: m.familyNamePrepared, needle: "family name")
+    }
+
+    /// First temple visit: the "Perform Baptisms for Deceased Ancestors" commitment.
+    public static func firstTempleVisitValue(_ m: Member) -> String {
+        templeExperienceValue(m, flat: m.firstTempleVisit, needle: "baptisms for deceased")
+    }
+
+    /// Family name + first temple visit start at the limited-use recommend age (12, by-year rule).
+    public static func templeExperienceEligible(_ m: Member) -> Bool { turnsAtLeast(m, 12) }
+
+    /// Display: same N/A-for-ineligible gate as endowment (an under-12 can't do proxy baptisms yet,
+    /// so a raw "No" misleads); a real "Yes" is always kept.
+    public static func familyNameDisplay(_ m: Member) -> String {
+        let v = familyNameValue(m)
+        if v == "Yes" { return "Yes" }
+        return templeExperienceEligible(m) ? v : "N/A"
+    }
+
+    public static func firstTempleVisitDisplay(_ m: Member) -> String {
+        let v = firstTempleVisitValue(m)
+        if v == "Yes" { return "Yes" }
+        return templeExperienceEligible(m) ? v : "N/A"
     }
     /// Endowment (living_ordinance) display: "N/A" for the not-yet-eligible (a raw "No" misleads —
     /// they can't be endowed yet); a real "Yes" is always kept.

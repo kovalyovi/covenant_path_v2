@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.membercovenantpath.viewer.logic.Milestones
 import org.membercovenantpath.viewer.model.Member
 import org.membercovenantpath.viewer.ui.theme.StatusColors
 
@@ -357,4 +358,6 @@ private val Columns: List<Col> = listOf(
     Col("Recommend", Kind.RECOMMEND, 118.dp) { it.templeRecommend ?: "" },
     Col("Patriarchal", Kind.YESNO, 116.dp) { it.patriarchalBlessing ?: "" },
     Col("Endowed", Kind.YESNO, 102.dp) { it.livingOrdinance ?: "" },
+    Col("1st temple visit", Kind.YESNO, 128.dp) { Milestones.firstTempleVisitDisplay(it) },
+    Col("Family name", Kind.YESNO, 116.dp) { Milestones.familyNameDisplay(it) },
 )

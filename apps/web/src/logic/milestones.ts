@@ -4,6 +4,7 @@
 // milestone is even *asked*; completion is whether the member has done it.
 
 import type { Member } from '../lib/member';
+import { detailsOf } from '../lib/member';
 import { parseMemberDate, yearOf } from './dates';
 
 export interface Milestone {
@@ -66,6 +67,37 @@ function male(m: Member): boolean {
   return m['sex'] === 'M';
 }
 
+// ---- Temple Ordinances and Experiences (family name + first temple visit) ----------------------
+
+/** The LCR commitment each flat column is derived from, matched by substring (mirrors the report's
+ *  parse_temple_experiences): "Prepare a Family Name for the Temple" / "Perform Baptisms for
+ *  Deceased Ancestors". */
+const TEMPLE_EXPERIENCE_NEEDLES: Record<string, string> = {
+  family_name_prepared: 'family name',
+  first_temple_visit: 'baptisms for deceased',
+};
+
+/** Effective Yes/No for a temple-experience field. The flat column (filled by the daily sync) wins;
+ *  a row not yet re-synced (sentinel/empty flat value) falls back to the `details.templeExperiences`
+ *  subtree — the same LCR commitments, scraped earlier — so the milestone lights up immediately.
+ *  Returns the raw flat value (sentinel/empty) when neither source knows. */
+export function templeExperienceValue(m: Member, key: string): string {
+  const v = String(m[key] ?? '');
+  if (v === 'Yes' || v === 'No' || v === 'N/A') return v;
+  const list = detailsOf(m)?.['templeExperiences'];
+  if (Array.isArray(list)) {
+    const needle = TEMPLE_EXPERIENCE_NEEDLES[key] ?? '';
+    for (const t of list) {
+      if (!t || typeof t !== 'object') continue;
+      const r = t as Record<string, unknown>;
+      if (String(r['name'] ?? '').toLowerCase().includes(needle)) {
+        return r['done'] === true ? 'Yes' : 'No';
+      }
+    }
+  }
+  return v;
+}
+
 // Golden Hour = a new member's first-year integration milestones, each gated to who it can apply
 // to (age / sex / tenure). Baptism is intentionally NOT a milestone.
 export const milestones: Milestone[] = [
@@ -94,6 +126,18 @@ export const milestones: Milestone[] = [
     label: 'Melchizedek Priesthood', abbr: 'MP', icon: 'premium', color: '#2E7D32',
     complete: (m) => m['melchizedek_priesthood'] === 'Yes',
     eligible: (m) => male(m) && ageNowAtLeast(m, 18) && memberOneYearPlus(m),
+  },
+  // Temple Ordinances and Experiences (#first-temple-visit): genealogy + proxy baptisms, both from
+  // the year someone turns 12 (limited-use recommend age — same by-year rule as calling/Aaronic).
+  {
+    label: 'Family name prepared', abbr: 'FN', icon: 'menu_book', color: '#6D4C41',
+    complete: (m) => templeExperienceValue(m, 'family_name_prepared') === 'Yes',
+    eligible: (m) => turnsAtLeast(m, 12),
+  },
+  {
+    label: 'First temple visit', abbr: 'FT', icon: 'account_balance', color: '#00897B',
+    complete: (m) => templeExperienceValue(m, 'first_temple_visit') === 'Yes',
+    eligible: (m) => turnsAtLeast(m, 12),
   },
 ];
 
@@ -130,6 +174,8 @@ export const priesthoodEligible = (m: Member): boolean => male(m) && turnsAtLeas
 /** Temple recommend (incl. limited-use) and a patriarchal blessing both start around age 12. */
 export const templeRecommendEligible = (m: Member): boolean => turnsAtLeast(m, 12);
 export const patriarchalEligible = (m: Member): boolean => turnsAtLeast(m, 12);
+/** Family name + first temple visit (proxy baptisms) start at the limited-use recommend age (12). */
+export const templeExperienceEligible = (m: Member): boolean => turnsAtLeast(m, 12);
 
 /** Needs-view categories: the 6 Golden Hour milestones PLUS the longer-horizon covenants we also track
  *  (temple recommend, endowment, patriarchal blessing) — so leaders see everyone eligible-but-missing
@@ -161,6 +207,14 @@ export function endowmentDisplay(m: Member): string {
   const v = String(m['living_ordinance'] ?? '');
   if (v === 'Yes') return 'Yes';
   return endowmentEligible(m) ? v : 'N/A';
+}
+
+/** Display value for family-name / first-temple-visit: same N/A-for-ineligible gate as endowment
+ *  (an under-12 can't do proxy baptisms yet, so a raw "No" misleads); a real "Yes" is always kept. */
+export function templeExperienceDisplay(m: Member, key: string): string {
+  const v = templeExperienceValue(m, key);
+  if (v === 'Yes') return 'Yes';
+  return templeExperienceEligible(m) ? v : 'N/A';
 }
 
 // ---- Convert responsibility (the stake's hand-off policy, #23) ---------------------------------

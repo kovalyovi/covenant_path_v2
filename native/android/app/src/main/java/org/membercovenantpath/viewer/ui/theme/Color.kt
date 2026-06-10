@@ -37,6 +37,8 @@ object MilestoneColors {
     val MinisteringAssignment = Color(0xFFEF6C00) // orange
     val AaronicPriesthood = Color(0xFF1565C0)     // blue
     val MelchizedekPriesthood = Color(0xFF2E7D32) // green
+    val FamilyName = Color(0xFF6D4C41)            // brown
+    val FirstTempleVisit = Color(0xFF00897B)      // teal
 }
 
 // ---- status palette (chips, table cells) ------------------------------------

@@ -113,10 +113,10 @@ describe('lessons + completion helpers', () => {
 
   it('avgCompletion is eligible-only and 0 for empty input', () => {
     expect(avgCompletion([])).toBe(0);
-    // A female adult born 1990 is eligible for 4 milestones (Friends, Has ministers, Calling ≥12,
-    // Ministering assignment ≥14 — neither calling nor giving-ministering is sex-gated). Only
-    // Friends is done → 1/4 = 0.25.
+    // A female adult born 1990 is eligible for 6 milestones (Friends, Has ministers, Calling ≥12,
+    // Ministering assignment ≥14, Family name ≥12, First temple visit ≥12 — none of these is
+    // sex-gated). Only Friends is done → 1/6.
     const m: Member = { sex: 'F', birth_date: '1 Jan 1990', friends: 'Yes', ministering_brothers_sisters: 'No' };
-    expect(avgCompletion([m])).toBeCloseTo(0.25, 5);
+    expect(avgCompletion([m])).toBeCloseTo(1 / 6, 5);
   });
 });

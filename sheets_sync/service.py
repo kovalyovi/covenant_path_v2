@@ -26,7 +26,8 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
 from lcr_client.logging_setup import get_logger
-from sheets_sync.row_mapper import DATA_WIDTH, GATED_COLUMNS, to_row
+from sheets_sync.row_mapper import (DATA_WIDTH, GATED_COLUMNS, HEADER_LABELS, synced_header_width,
+                                    to_row)
 
 logger = get_logger()
 
@@ -186,10 +187,16 @@ class SheetsSync:
         from sheets_sync.row_mapper import format_unit
         preserve = {format_unit(u) for u in (preserve_units or set())}
         members = sorted(members, key=lambda m: (m.get("unit") or "", m.get("name") or ""))
-        headers, existing = self._fetch_existing()
+        old_headers, existing = self._fetch_existing()
         existing_by_name = {str(r[0]): r for r in existing if r and r[0]}
 
-        merged, changes = self._merge(members, existing_by_name, headers, preserve)
+        # Where the sheet's MANUAL columns start in the EXISTING rows. On a pre-temple-experiences
+        # sheet that's 15/16 (< DATA_WIDTH): the merge reads gated values only from the aligned
+        # synced columns and shifts the manual tail (e.g. "Notes") right of the widened block.
+        old_width = synced_header_width(old_headers)
+        headers = HEADER_LABELS + [str(h) for h in old_headers[old_width:]]
+
+        merged, changes = self._merge(members, existing_by_name, headers, preserve, old_width)
         summary = {
             "title": None, "members": len(members),
             "added": sum(c["field"] == "Added" for c in changes),
@@ -201,6 +208,7 @@ class SheetsSync:
             summary["sample_row"] = merged[0] if merged else None
             return summary
 
+        self._ensure_headers(old_headers, headers)
         self._write_main(merged)
         self._timestamp()
         if changes and existing:
@@ -293,28 +301,32 @@ class SheetsSync:
         existing = vr[1].get("values", []) if len(vr) > 1 else []
         return headers, existing
 
-    def _merge(self, members, existing_by_name, headers, preserve_units=None):
-        """Build merged rows; preserve P+ manual cols, gated cells on empty, and the
-        rows of units that failed to scrape (preserve_units, stripped names)."""
+    def _merge(self, members, existing_by_name, headers, preserve_units=None,
+               old_width=DATA_WIDTH):
+        """Build merged rows; preserve the manual cols (the existing rows' tail from `old_width`
+        on), gated cells on empty, and the rows of units that failed to scrape (preserve_units,
+        stripped names)."""
         preserve_units = preserve_units or set()
         merged, changes = [], []
         for m in members:
             row = to_row(m)
             old = existing_by_name.get(str(m.get("name") or ""))
             if old:
-                # preserve an existing value where our scrape came back empty (gated/blocked)
+                # preserve an existing value where our scrape came back empty (gated/blocked) —
+                # only from ALIGNED old columns (a legacy sheet has no synced col beyond old_width;
+                # reading there would pull manual-tail text into a data column)
                 for c in GATED_COLUMNS:
-                    if (not row[c]) and c < len(old) and old[c]:
+                    if (not row[c]) and c < old_width and c < len(old) and old[c]:
                         row[c] = old[c]
                 # change detection (skip the two duration columns 3 & 5 — derived)
                 for i, new_val in enumerate(row):
-                    old_val = old[i] if i < len(old) else ""
+                    old_val = old[i] if i < len(old) and i < old_width else ""
                     if new_val != old_val and i not in (3, 5):
                         changes.append({"name": m.get("name"), "ward": row[1],
                                         "field": headers[i] if i < len(headers) else f"Col{i+1}",
                                         "old": old_val, "new": new_val})
-                if len(old) > DATA_WIDTH:        # keep manual columns P+
-                    row += old[DATA_WIDTH:]
+                if len(old) > old_width:         # keep manual columns (shifted right of the block)
+                    row += old[old_width:]
             else:
                 changes.append({"name": m.get("name"), "ward": row[1],
                                 "field": "Added", "old": "", "new": "new"})
@@ -324,13 +336,28 @@ class SheetsSync:
             old = existing_by_name[name]
             unit_b = old[1] if len(old) > 1 else ""
             if unit_b in preserve_units:
-                merged.append(old)              # keep rows of units we couldn't scrape
+                # keep rows of units we couldn't scrape — re-shaped to the (possibly widened)
+                # synced layout so their manual tail stays under the right headers
+                if len(old) > old_width:
+                    old = (list(old[:old_width]) + [""] * (DATA_WIDTH - old_width)
+                           + list(old[old_width:]))
+                merged.append(old)
             else:
                 changes.append({"name": name, "ward": unit_b,
                                 "field": "Removed", "old": "existing", "new": ""})
         # keep the sheet ordered by unit then name
         merged.sort(key=lambda r: (r[1] if len(r) > 1 else "", r[0] if r else ""))
         return merged, changes
+
+    def _ensure_headers(self, old_headers: list, headers: list) -> None:
+        """Re-assert the synced header labels (row 2) + the preserved manual tail, so widening the
+        synced block (e.g. the 2026-06 temple-experiences columns) relabels P/Q and shifts a manual
+        'Notes' header right along with its data. No-op when the row already matches."""
+        if [str(h) for h in old_headers] == headers:
+            return
+        self._svc.values().update(
+            spreadsheetId=self.spreadsheet_id, range=f"{self.sheet}!A2",
+            valueInputOption="RAW", body={"values": [headers]}).execute()
 
     def _write_main(self, merged: list[list]) -> None:
         self._svc.values().clear(spreadsheetId=self.spreadsheet_id,

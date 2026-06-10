@@ -9,7 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import { useDashboard } from '../../hooks/useDashboard';
 import type { Member } from '../../lib/member';
 import { isInvestigator } from '../../lib/member';
-import { endowmentDisplay, ageYears } from '../../logic/milestones';
+import { endowmentDisplay, templeExperienceDisplay, ageYears } from '../../logic/milestones';
 import { Icon } from '../../components/Icon';
 import { Modal } from '../../components/Modal';
 import { Button } from '../../components/ui';
@@ -41,12 +41,18 @@ const COLS: Col[] = [
   { header: 'Recommend', key: 'temple_recommend', kind: 'recommend' },
   { header: 'Patriarchal', key: 'patriarchal_blessing', kind: 'yesno' },
   { header: 'Endowed', key: 'living_ordinance', kind: 'yesno' },
+  { header: '1st temple visit', key: 'first_temple_visit', kind: 'yesno' },
+  { header: 'Family name', key: 'family_name_prepared', kind: 'yesno' },
 ];
 
 /** Display value — friends shows the recorded count when present; strips redundant "Member for ". */
 function display(m: Member, key: string): string {
   // Endowment: N/A for ineligible members (not 18+ AND ~1yr) — gates the raw DB "No" client-side.
   if (key === 'living_ordinance') return endowmentDisplay(m);
+  // Temple experiences: N/A under 12; falls back to details.templeExperiences pre-resync.
+  if (key === 'first_temple_visit' || key === 'family_name_prepared') {
+    return templeExperienceDisplay(m, key);
+  }
   if (key === 'age') {
     const a = ageYears(m);
     return a == null ? '' : String(a);

@@ -40,6 +40,8 @@ struct TableView: View {
         Column(title: "Recommend", value: { $0.templeRecommend ?? "" }, kind: .recommend),
         Column(title: "Patriarchal", value: { $0.patriarchalBlessing ?? "" }, kind: .yesno),
         Column(title: "Endowed", value: { $0.livingOrdinance ?? "" }, kind: .yesno),
+        Column(title: "1st temple visit", value: { Milestones.firstTempleVisitDisplay($0) }, kind: .yesno),
+        Column(title: "Family name", value: { Milestones.familyNameDisplay($0) }, kind: .yesno),
     ]
 
     private var baptized: [Member] { rows.filter { !$0.isInvestigator } }

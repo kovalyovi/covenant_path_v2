@@ -40,6 +40,10 @@ data class Member(
     @SerialName("temple_recommend") val templeRecommend: String? = null, // Active / Expired / No
     @SerialName("patriarchal_blessing") val patriarchalBlessing: String? = null,
     @SerialName("living_ordinance") val livingOrdinance: String? = null,
+    // Temple Ordinances and Experiences commitments, promoted to tracked fields by the sync:
+    // a prepared family name (genealogy) and a first temple visit (proxy baptisms).
+    @SerialName("family_name_prepared") val familyNamePrepared: String? = null,
+    @SerialName("first_temple_visit") val firstTempleVisit: String? = null,
 
     // Rich detail subtree for the person-detail page (may be partial / null).
     @SerialName("details") val details: JsonObject? = null,
@@ -58,6 +62,8 @@ data class Member(
         "temple_recommend" -> templeRecommend
         "patriarchal_blessing" -> patriarchalBlessing
         "living_ordinance" -> livingOrdinance
+        "family_name_prepared" -> familyNamePrepared
+        "first_temple_visit" -> firstTempleVisit
         else -> null
     }
 }

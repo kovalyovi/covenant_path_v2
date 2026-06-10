@@ -144,6 +144,8 @@ _DIGEST_MILESTONES = [
     ("Ministers", "ministering_assignment='Yes'"),
     ("Temple recommend", "temple_recommend='Active'"),
     ("Patriarchal", "patriarchal_blessing='Yes'"),
+    ("Family name prepared", "family_name_prepared='Yes'"),
+    ("First temple visit", "first_temple_visit='Yes'"),
 ]
 
 
