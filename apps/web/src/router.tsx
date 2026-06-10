@@ -10,6 +10,8 @@ import { createBrowserRouter, Navigate, Outlet, useLocation } from 'react-router
 import { useAuth } from './hooks/useAuth';
 import { DashboardProvider } from './hooks/useDashboard';
 import { Spinner } from './components/ui';
+import { lazyWithReload } from './lib/lazyReload';
+import { RouteError } from './pages/RouteError';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardShell } from './pages/DashboardShell';
 import { BaptismsTab } from './pages/tabs/BaptismsTab';
@@ -21,10 +23,11 @@ import { SettingsPage } from './pages/SettingsPage';
 import { InvitePage } from './pages/InvitePage';
 
 // Code-split the chart-heavy KPIs tab (Recharts) and the rarely-used Admin console out of the
-// initial bundle, so first paint of the dashboard stays lean.
-const KpisTab = lazy(() => import('./pages/tabs/KpisTab').then((m) => ({ default: m.KpisTab })));
-const AdminPage = lazy(() => import('./pages/AdminPage').then((m) => ({ default: m.AdminPage })));
-const AdminListPage = lazy(() => import('./pages/AdminListPage').then((m) => ({ default: m.AdminListPage })));
+// initial bundle, so first paint of the dashboard stays lean. lazyWithReload reloads the page once
+// when a chunk 404s because a deploy replaced the hashed assets under an open tab.
+const KpisTab = lazy(lazyWithReload(() => import('./pages/tabs/KpisTab').then((m) => ({ default: m.KpisTab }))));
+const AdminPage = lazy(lazyWithReload(() => import('./pages/AdminPage').then((m) => ({ default: m.AdminPage }))));
+const AdminListPage = lazy(lazyWithReload(() => import('./pages/AdminListPage').then((m) => ({ default: m.AdminListPage }))));
 
 function LazyRoute({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<FullScreenLoader />}>{children}</Suspense>;
@@ -61,10 +64,11 @@ function LoginRoute() {
 }
 
 export const router = createBrowserRouter([
-  { path: '/login', element: <LoginRoute /> },
+  { path: '/login', element: <LoginRoute />, errorElement: <RouteError /> },
   {
     path: '/',
     element: <RequireAuth />,
+    errorElement: <RouteError />,
     children: [
       {
         element: <DashboardShell />,

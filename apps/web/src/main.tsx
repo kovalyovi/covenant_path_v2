@@ -12,6 +12,7 @@ import { ThemeProvider } from './hooks/useTheme';
 import { ToastProvider } from './components/Toast';
 import { sentryDsn, hasSupabaseConfig } from './lib/config';
 import { installErrorReporting, reportError } from './lib/errorReporter';
+import { reloadOnceForStaleChunk } from './lib/lazyReload';
 import { ConfigError } from './pages/ConfigError';
 
 // Sentry auto-captures uncaught errors + performance; our reporter chains on top so the same errors
@@ -26,6 +27,13 @@ if (sentryDsn) {
   });
 }
 installErrorReporting();
+
+// Vite fires this when a lazy chunk (or its CSS/deps) fails to load — typically a tab that
+// outlived a deploy referencing now-deleted hashed assets. Reload once to pick up the new build;
+// if that already happened this session, let the error bubble to the route errorElement.
+window.addEventListener('vite:preloadError', (event) => {
+  if (reloadOnceForStaleChunk()) event.preventDefault();
+});
 
 // Core Web Vitals → broker telemetry (mirrors the Flutter app's perf intent; PII-free).
 function reportVital(name: string, value: number) {
@@ -63,9 +71,10 @@ root.render(
 
 function AppCrash() {
   return (
-    <div className="center-col" style={{ minHeight: '100vh' }}>
+    <div className="center-col" style={{ minHeight: '100vh', gap: 12 }}>
       <h1>Something went wrong</h1>
-      <p className="muted">An unexpected error occurred. Please refresh the page.</p>
+      <p className="muted">An unexpected error occurred. Reloading usually fixes it.</p>
+      <button className="btn btn--filled" onClick={() => window.location.reload()}>Reload</button>
     </div>
   );
 }
