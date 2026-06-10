@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from backend.auth_broker.app import app, require_admin
 from backend.auth_broker import admin, session_mint, okta_flow, enroll
+import backend.auth_broker.app as appmod
 
 client = TestClient(app)
 _PASS = 0
@@ -649,6 +650,37 @@ def test_calling_gate_partial_context_passes() -> None:
             restore()
 
 
+def test_login_eval_fast_calling_gate() -> None:
+    # The "no calling but still signed in / saw the set-up-sync prompt" fix: a cached identity with
+    # has_calling=False must be blocked SYNCHRONOUSLY in _login_eval (in the login response, zero
+    # LCR) — not deferred to the background eval whose verdict lands after the ≤5s budget. A cached
+    # leader (has_calling=True) is NOT fast-blocked; the eval runs as before.
+    called = {"eval": False}
+    old = enroll.evaluate_and_maybe_store
+    enroll.evaluate_and_maybe_store = (
+        lambda *a, **k: (called.__setitem__("eval", True), {"authorized": True})[1])
+    try:
+        res_block = {"cookies": [{"name": "x", "value": "y", "domain": "d", "path": "/"}],
+                     "identity": {"email": "member@example.org", "cached": True,
+                                  "has_calling": False, "unit_number": 1102966,
+                                  "stake_name": "Green Level Ward", "login_username": "okotoks"}}
+        out = appmod._login_eval(res_block, False, "rid-fastgate")
+        check("fast gate: authorized false", out.get("authorized") is False)
+        check("fast gate: eval skipped (zero LCR)", called["eval"] is False)
+        check("fast gate: no offers", not out.get("can_enroll") and not out.get("can_improve"))
+
+        called["eval"] = False
+        res_ok = {"cookies": [{"name": "x", "value": "y", "domain": "d", "path": "/"}],
+                  "identity": {"email": "leader@example.org", "cached": True, "has_calling": True,
+                               "unit_number": 503991, "stake_name": "Test Stake",
+                               "login_username": "leader"}}
+        out2 = appmod._login_eval(res_ok, False, "rid-okgate")
+        check("leader cached: not fast-blocked (eval runs)", called["eval"] is True)
+        check("leader cached: authorized true", out2.get("authorized") is True)
+    finally:
+        enroll.evaluate_and_maybe_store = old
+
+
 def test_zero_lcr_lane_requires_has_calling() -> None:
     # A cached identity WITHOUT has_calling=true (pre-0044 row, or a blocked member) must fall
     # through to the LCR-backed path — where the gate re-runs — instead of being authorized blind.
@@ -826,6 +858,7 @@ def main() -> int:
     test_calling_gate_blocks_enroll_attempt()
     test_calling_gate_passes_leader()
     test_calling_gate_partial_context_passes()
+    test_login_eval_fast_calling_gate()
     test_zero_lcr_lane_requires_has_calling()
     test_start_login_cached_identity_skips_lcr()
     test_identity_refresh_throttle()

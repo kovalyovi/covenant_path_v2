@@ -130,9 +130,31 @@ def _login_eval(res: dict, store: bool, rid: str, t0: float | None = None) -> di
     if not store and ident.get("cached"):
         # EVERY cached login refreshes its identity row OFF the login path (throttled per user in
         # enroll), so an email or stake change is healed by the user's NEXT login — not a 7-day
-        # TTL (ADR-009 amendment: B).
+        # TTL (ADR-009 amendment: B). Submitted BEFORE the fast calling-gate below so a member who
+        # was blocked but has since been CALLED to a position re-fetches user_context and heals their
+        # has_calling flag (otherwise a cached False would lock them out permanently).
         _REFRESH_POOL.submit(enroll.refresh_cached_identity, res.get("cookies") or [],
                              ident.get("login_username") or "")
+    # FAST CALLING-GATE (zero LCR, in-budget): a prior login positively determined this account has
+    # no calling and cached has_calling=False (migration 0044), which the cached-identity lane now
+    # carries on `ident`. The full eval reaches the same block, but only AFTER a cold user_context
+    # (~30s here) — far past _EVAL_BUDGET_S — so it deferred to the background and the block landed
+    # too late: the response went out with no verdict and the client minted a session (the "no
+    # calling but still signed in / saw the set-up-sync prompt" report). Decide synchronously here so
+    # authorized:false is in the RESPONSE. RLS already gates data; this makes the client refuse the
+    # session. A consent flow (store) is never auto-blocked; the eval re-verifies on a real attempt.
+    # The background refresh above keeps this self-healing if the member is later called.
+    if not store and ident.get("has_calling") is False:
+        from types import SimpleNamespace
+        ctx = SimpleNamespace(unit_number=ident.get("unit_number"), unit_name=ident.get("stake_name"))
+        _FAST_POOL.submit(enroll._audit_login, ident.get("email"), ident.get("name"), ctx, {},
+                          False, None, "blocked", None, request_id=rid,
+                          duration_ms=int((time.monotonic() - (t0 or time.monotonic())) * 1000),
+                          phase="gate-cached")
+        logger.info("[req %s] login eval: FAST calling-gate block (cached has_calling=False, zero LCR)", rid)
+        return {"authorized": False, "stake": ident.get("stake_name"),
+                "unit_number": ident.get("unit_number"), "complete": None, "missing": [],
+                "can_improve": False, "can_enroll": False, "stored": False}
     t_req = t0 if t0 is not None else time.monotonic()
     t_eval = time.monotonic()
     fut = _EVAL_POOL.submit(enroll.evaluate_and_maybe_store, res["cookies"], ident, store,
