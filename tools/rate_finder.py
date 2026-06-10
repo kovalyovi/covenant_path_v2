@@ -93,6 +93,13 @@ class Sample:
         return 200 <= self.status < 300
 
     @property
+    def auth_bad(self) -> bool:
+        # 401/403 = our SESSION expired/insufficient — NOT an LCR outage. Must trigger a re-auth and
+        # be excluded from both the stability denominator and the outage logic, else an expired
+        # session masquerades as a permanent "500 storm" and strands the endpoint forever.
+        return self.status in (401, 403)
+
+    @property
     def transient_bad(self) -> bool:
         # Retryable failure: server overload / throttle / transport error. These are what we must
         # NOT provoke — the gold spot is the rate that keeps this at zero.
@@ -100,8 +107,8 @@ class Sample:
 
     @property
     def permanent_bad(self) -> bool:
-        # A deterministic 4xx (e.g. member-list 404). Not load-related — never back off for it.
-        return 400 <= self.status < 500 and self.status not in (429, 408)
+        # A deterministic 4xx that is NOT auth (e.g. member-list 404). Not load-related, not session.
+        return 400 <= self.status < 500 and self.status not in (429, 408, 401, 403)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -206,6 +213,8 @@ class Episode:
     probes: int = 0             # recovery single-probes sent during the outage
     duration_s: float | None = None     # measured outage length (None = still ongoing)
     recovered_iso: str | None = None
+    gave_up: bool = False       # closed by the probe cap (still failing) rather than a clean recovery
+    flaky: bool = False         # saw interspersed successes (chronic flakiness, not a clean storm)
 
 
 class EndpointController:
@@ -229,7 +238,7 @@ class EndpointController:
                  window: int, confirm: int, cooldown_s: float, kill_after: int,
                  stability_confirm: int = 5, recovery_min: float = 30.0,
                  recovery_max: float = 900.0, recovery_confirm: int = 2,
-                 clock=time.monotonic):
+                 max_recovery_probes: int = 24, clock=time.monotonic):
         self.name = name
         self.success_target = success_target
         self.p95_cap_ms = p95_cap_ms
@@ -244,6 +253,7 @@ class EndpointController:
         self.recovery_min = recovery_min             # first recovery-probe interval (s)
         self.recovery_max = recovery_max             # widest recovery-probe interval (s)
         self.recovery_confirm = recovery_confirm     # consecutive probe successes to declare recovery
+        self.max_recovery_probes = max_recovery_probes  # cap probes per outage so we never strand
         self.clock = clock                           # injectable for deterministic tests
 
         # current pressure — start gentle
@@ -260,12 +270,21 @@ class EndpointController:
         self.bad_streak = 0
         self.parked_until = 0.0                          # coarse bound; episodes are the real gate
 
+        # FLOOR error rate: error % observed at the GENTLEST rate (concurrency=1, max delay). If this
+        # is > 0 the endpoint errors even when barely touched → 100% stability is NOT achievable by
+        # rate-limiting alone (it needs retries/caching/off-peak). The killer metric for "can we
+        # actually hit 100%?".
+        self.floor_attempts = 0
+        self.floor_errors = 0
+        self.needs_reauth = False                         # set when a round/probe sees 401/403
+
         # outage / recovery state
         self.episodes: list[Episode] = []
         self.current_episode: Episode | None = None
         self._episode_start = 0.0
         self._recovery_interval = 0.0
         self._recovery_ok_streak = 0
+        self._recovery_successes = 0                      # total probe successes this episode (flaky)
         self.next_probe_at = 0.0
 
         self.rounds: list[dict] = []
@@ -292,31 +311,37 @@ class EndpointController:
         ok = sum(1 for s in samples if s.ok)
         transient = sum(1 for s in samples if s.transient_bad)
         permanent = sum(1 for s in samples if s.permanent_bad)
+        auth = sum(1 for s in samples if s.auth_bad)
         lat = sorted(s.ms for s in samples if s.ok)
         p50 = lat[len(lat) // 2] if lat else 0.0
         p95 = lat[int(len(lat) * 0.95)] if lat else 0.0
         per_min = n / elapsed_s * 60 if elapsed_s else 0.0
-        # Success is measured over NON-PERMANENT responses: a deterministic 404 (dead member-list
-        # route) is load-independent, so an all-404 round is "clean" (no overload) and must not drag
-        # the SLO down or trigger back-off. Only transient 5xx/429/timeout signal that we pushed too
-        # hard.
-        non_permanent = n - permanent
-        success = ok / non_permanent if non_permanent else 1.0
-        zero_err = transient == 0 and ok == non_permanent  # a TRULY clean round (for 100% stability)
+        # Success is measured over COUNTABLE responses — excluding a deterministic 404 (dead route,
+        # load-independent) AND a 401/403 (our session, not LCR). Only transient 5xx/429/timeout
+        # signal that we pushed too hard.
+        countable = n - permanent - auth
+        success = ok / countable if countable else 1.0
+        zero_err = transient == 0 and ok == countable and countable > 0  # truly clean (100% stability)
+        if auth:
+            self.needs_reauth = True  # the harness re-authenticates before the next call
         self.total_requests += n
+        # Floor error rate: are we erroring even at the gentlest rate? (the "is 100% possible" metric)
+        if self._at_floor() and countable:
+            self.floor_attempts += countable
+            self.floor_errors += transient
         hour = datetime.now().hour
         self.by_hour_total[hour] += n
         self.by_hour_ok[hour] += ok
         max_ra = max((s.retry_after for s in samples if s.retry_after), default=0)
 
-        # SLO: a 404-only endpoint (member-list control) is "clean" — permanent != load failure.
+        # SLO: a 404-only / 401-only round is "clean" w.r.t. LOAD — neither is overload.
         slo_ok = (success >= self.success_target and transient == 0
                   and (self.p95_cap_ms is None or not lat or p95 <= self.p95_cap_ms))
 
         rnd = {
             "t": _now(), "endpoint": self.name, "concurrency": self.concurrency,
             "delay_s": round(self.delay_s, 2), "sent": n, "ok": ok, "success": round(success, 3),
-            "transient_err": transient, "permanent": permanent, "p50_ms": round(p50),
+            "transient_err": transient, "permanent": permanent, "auth_err": auth, "p50_ms": round(p50),
             "p95_ms": round(p95), "per_min": round(per_min, 1), "slo_ok": slo_ok,
             "retry_after": max_ra or None,
         }
@@ -377,14 +402,48 @@ class EndpointController:
         self._recovery_interval = self.recovery_min
         self.next_probe_at = now + self.recovery_min
         self._recovery_ok_streak = 0
+        self._recovery_successes = 0
         self.bad_streak = 0
         self.parked_until = now + self.cooldown_s  # coarse bound; recovery probing is the real gate
         logger.warning("[%s] OUTAGE — even the gentlest rate fails; probing for recovery every "
                        "%.0fs (was %.1f/min at onset)", self.name, self.recovery_min, per_min)
 
+    def _close_episode(self, ep: "Episode", now: float, *, gave_up: bool) -> None:
+        ep.duration_s = round(now - self._episode_start, 1)
+        ep.recovered_iso = _now()
+        ep.gave_up = gave_up
+        ep.flaky = self._recovery_successes > 0 and not gave_up and ep.probes > self.recovery_confirm
+        self.episodes.append(ep)
+        verb = "GAVE UP probing" if gave_up else ("RECOVERED (flaky)" if ep.flaky else "RECOVERED")
+        logger.warning("[%s] %s after %.0fs (%d probes); resuming gently",
+                       self.name, verb, ep.duration_s, ep.probes)
+        self.current_episode = None
+        self._recovery_ok_streak = 0
+        self.parked_until = 0.0
+        self.concurrency = 1
+        self.delay_s = max(self.min_delay, min(self.max_delay, 5.0))  # resume conservatively
+        self.bad_streak = 0
+
+    def note_auth_probe(self, now: float | None = None) -> None:
+        """A recovery probe returned 401/403 — that's our SESSION, not an LCR outage. The harness
+        re-authenticates; here we just retry SOON (don't widen, don't count as recovery progress) so
+        an expired session can never masquerade as a never-ending 500-storm."""
+        now = self.clock() if now is None else now
+        self.needs_reauth = True
+        if self.current_episode is not None:
+            self.current_episode.probes += 1
+            self.total_requests += 1
+        self._recovery_interval = self.recovery_min
+        self.next_probe_at = now + self.recovery_min
+
     def record_recovery_probe(self, sample: "Sample", now: float | None = None) -> None:
-        """Feed one recovery single-probe. On `recovery_confirm` consecutive successes the outage is
-        declared OVER (duration measured); a failure widens the next probe interval (×1.5, capped)."""
+        """Feed one recovery single-probe. `recovery_confirm` consecutive successes → outage OVER
+        (duration measured). A 401/403 → re-auth path (note_auth_probe), never "still down". A
+        transient failure widens the interval (×1.5, capped). After `max_recovery_probes` we GIVE UP
+        and resume normal slow rounds, so a chronically-failing endpoint is never stranded forever."""
+        if sample.auth_bad:
+            self.note_auth_probe(now)
+            return
         now = self.clock() if now is None else now
         ep = self.current_episode
         if ep is None:
@@ -393,22 +452,20 @@ class EndpointController:
         self.total_requests += 1
         if sample.ok:
             self._recovery_ok_streak += 1
+            self._recovery_successes += 1
             self._recovery_interval = self.recovery_min  # it's coming back — confirm quickly (precision)
             if self._recovery_ok_streak >= self.recovery_confirm:
-                ep.duration_s = round(now - self._episode_start, 1)
-                ep.recovered_iso = _now()
-                self.episodes.append(ep)
-                logger.warning("[%s] RECOVERED after %.0fs (%d probes); resuming gently",
-                               self.name, ep.duration_s, ep.probes)
-                self.current_episode = None
-                self._recovery_ok_streak = 0
-                self.parked_until = 0.0
-                self.concurrency = 1
-                self.delay_s = max(self.min_delay, min(self.max_delay, 5.0))  # resume conservatively
-                self.bad_streak = 0
+                self._close_episode(ep, now, gave_up=False)
+                return
         else:
             self._recovery_ok_streak = 0
             self._recovery_interval = min(self.recovery_max, self._recovery_interval * 1.5)
+        if ep.probes >= self.max_recovery_probes:
+            # Still not cleanly recovered after the cap — stop probing and resume normal rounds (they
+            # keep measuring; a chronically-flaky endpoint just never banks a stable rate, which IS
+            # the finding). Prevents the 401/permanent-storm strand we caught in the live run.
+            self._close_episode(ep, now, gave_up=True)
+            return
         self.next_probe_at = now + self._recovery_interval
 
     def _at_floor(self) -> bool:
@@ -464,6 +521,21 @@ class EndpointController:
             "ongoing_since": self.current_episode.onset_iso if self.in_episode() else None,
         }
 
+    def floor_error_pct(self) -> float | None:
+        """Error % at the GENTLEST rate. None = never reached the floor. 0 = clean even when barely
+        touched (100% stability achievable). > 0 = errors persist at the floor → NOT achievable by
+        rate alone."""
+        return round(100 * self.floor_errors / self.floor_attempts, 1) if self.floor_attempts else None
+
+    def stability_verdict(self) -> str:
+        """One-word read on whether 100% stability is reachable for this endpoint by pacing alone."""
+        fe = self.floor_error_pct()
+        if self.stable_rate_per_min:
+            return "achievable"               # found a zero-error sustained rate
+        if fe is not None and fe > 0:
+            return "not-by-rate"              # errors even at the floor → needs retries/caching/off-peak
+        return "unknown"                      # not enough floor data yet
+
     def summary(self) -> dict:
         hourly = {str(h): round(self.by_hour_ok[h] / self.by_hour_total[h], 3)
                   for h in sorted(self.by_hour_total) if self.by_hour_total[h]}
@@ -472,6 +544,9 @@ class EndpointController:
             # THE HEADLINE: the rate that held 100% stability (zero errors), as req/min AND interval.
             "stable_rate_per_min": stable,
             "stable_interval_s": round(60 / stable, 1) if stable else None,
+            # can we even reach 100%? error % at the gentlest rate + a one-word verdict.
+            "floor_error_pct": self.floor_error_pct(),
+            "stability_verdict": self.stability_verdict(),
             "gold_spot": None if not self.gold else self.gold.__dict__,
             "observed_ceiling_per_min": self.ceiling_per_min,
             "first_error_per_min": self.first_error_per_min,
@@ -516,7 +591,8 @@ class Harness:
             max_delay=args.max_delay, window=args.window, confirm=args.confirm,
             cooldown_s=args.cooldown, kill_after=args.kill_after,
             stability_confirm=args.stability_confirm, recovery_min=args.recovery_probe_min,
-            recovery_max=args.recovery_probe_max, recovery_confirm=args.recovery_confirm)
+            recovery_max=args.recovery_probe_max, recovery_confirm=args.recovery_confirm,
+            max_recovery_probes=args.max_recovery_probes)
             for t in self.targets}
         if args.resume:
             self._resume(args.resume)
@@ -580,18 +656,24 @@ class Harness:
                 self.jsonl.write(json.dumps({"t": _now(), "endpoint": target.name,
                                              "status": s.status, "ms": round(s.ms)}) + "\n")
         rnd = ctrl.observe(samples, elapsed)
-        logger.info("[%s] c=%d delay=%.2fs -> %.0f%% ok, %d transient, p95=%dms, %.0f/min%s",
+        logger.info("[%s] c=%d delay=%.2fs -> %.0f%% ok, %d transient, %d auth, p95=%dms, %.0f/min%s",
                     target.name, rnd["concurrency"], rnd["delay_s"], rnd["success"] * 100,
-                    rnd["transient_err"], rnd["p95_ms"], rnd["per_min"],
+                    rnd["transient_err"], rnd["auth_err"], rnd["p95_ms"], rnd["per_min"],
                     "  SLO-OK" if rnd["slo_ok"] else "")
-        # Re-auth guard: a whole round of redirects/401s means the session lapsed.
-        if rnd["success"] == 0 and rnd["transient_err"] == 0 and rnd["permanent"] < n:
-            logger.warning("[%s] round fully unauthenticated — refreshing session", target.name)
-            try:
-                self.client = LcrClient()
-            except Exception as exc:  # noqa: BLE001
-                logger.error("re-auth failed: %s", exc)
+        # 401/403 anywhere → our session lapsed (NOT an LCR outage). Re-authenticate so a dead session
+        # never masquerades as a 500-storm. (This was the live bug: 3 endpoints stuck on 401s forever.)
+        if ctrl.needs_reauth or (rnd["success"] == 0 and rnd["transient_err"] == 0 and rnd["permanent"] < n):
+            self._reauth(target.name)
+            ctrl.needs_reauth = False
         self.persist()
+
+    def _reauth(self, who: str) -> None:
+        logger.warning("[%s] 401/403 — refreshing the LCR session", who)
+        try:
+            self.client = LcrClient()
+            logger.info("session refreshed")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("re-auth failed: %s", exc)
 
     def persist(self) -> None:
         with self._lock:
@@ -599,9 +681,11 @@ class Harness:
                 "updated": _now(),
                 "note": "stable_rate_per_min / stable_interval_s = the rate that held 100%% stability "
                         "(ZERO errors over N rounds) — the safe pace ('1 request per X seconds'). "
-                        "gold_spot = max throughput at the looser SLO. first_error_per_min = where "
-                        "500s began. recovery = how long 500-storms last once they start (measured by "
-                        "active probing during an outage). episodes = each outage with its duration.",
+                        "floor_error_pct = error %% at the gentlest rate; stability_verdict: "
+                        "'achievable' (found a zero-error rate) / 'not-by-rate' (errors even at the "
+                        "floor → needs retries/caching/off-peak) / 'unknown'. gold_spot = max "
+                        "throughput at the looser SLO. recovery = how long 500-storms last (active "
+                        "probing during an outage); episodes carry gave_up/flaky flags.",
                 "slo": {"success_target": self.args.success_target,
                         "p95_cap_ms": self.args.p95_cap_ms,
                         "stability_confirm": self.args.stability_confirm},
@@ -617,7 +701,13 @@ class Harness:
             self.jsonl.write(json.dumps({"t": _now(), "endpoint": target.name, "probe": True,
                                          "status": sample.status, "ms": round(sample.ms)}) + "\n")
         ctrl.record_recovery_probe(sample)
-        if ctrl.in_episode():
+        if sample.auth_bad:
+            # 401 during recovery = our session, not LCR — re-auth so the NEXT probe is real.
+            self._reauth(target.name)
+            ctrl.needs_reauth = False
+            logger.info("[%s] recovery probe: status=%s (auth — re-authed) — retry in %.0fs",
+                        target.name, sample.status, ctrl._recovery_interval)
+        elif ctrl.in_episode():
             logger.info("[%s] recovery probe: status=%s (still down) — next in %.0fs",
                         target.name, sample.status, ctrl._recovery_interval)
         self.persist()
@@ -659,10 +749,10 @@ class Harness:
             for name, c in self.ctrls.items():
                 stable = c.stable_rate_per_min
                 rec = c._recovery_stats()
-                logger.info("  %-22s stable=%s  ceiling=%.0f/min  first_error=%s  outages=%d (median %ss)",
+                logger.info("  %-22s stable=%-22s floor_err=%s%% verdict=%s  outages=%d (median %ss)",
                             name,
                             f"{stable:.1f}/min (1 per {60 / stable:.0f}s)" if stable else "none-found",
-                            c.ceiling_per_min or 0.0, c.first_error_per_min,
+                            c.floor_error_pct(), c.stability_verdict(),
                             rec["outages"], rec["median_s"])
 
 
@@ -692,6 +782,8 @@ def main() -> int:
                     help="widest recovery-probe interval (s) — caps how often we poke a long outage")
     ap.add_argument("--recovery-confirm", type=int, default=2,
                     help="consecutive probe successes to declare an outage recovered")
+    ap.add_argument("--max-recovery-probes", type=int, default=24,
+                    help="cap probes per outage, then give up + resume normal rounds (never strand)")
     ap.add_argument("--resume", default=None,
                     help="seed gold spots from a prior recommendation.json (path, or 'auto' for the "
                          "latest in the output dir) — for tiled GitHub-Actions runs")

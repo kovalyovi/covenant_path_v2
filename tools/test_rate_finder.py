@@ -86,8 +86,47 @@ def test_sample_classification() -> None:
     check("500 is transient", Sample(500, 1).transient_bad and not Sample(500, 1).permanent_bad)
     check("429 is transient", Sample(429, 1).transient_bad)
     check("timeout(0) is transient", Sample(0, 1).transient_bad)
-    check("404 is permanent, not transient",
-          Sample(404, 1).permanent_bad and not Sample(404, 1).transient_bad)
+    check("404 is permanent, not transient/auth",
+          Sample(404, 1).permanent_bad and not Sample(404, 1).transient_bad
+          and not Sample(404, 1).auth_bad)
+    check("401 is AUTH, not transient/permanent",
+          Sample(401, 1).auth_bad and not Sample(401, 1).transient_bad
+          and not Sample(401, 1).permanent_bad)
+    check("403 is AUTH", Sample(403, 1).auth_bad)
+
+
+def test_auth_excluded_and_flags_reauth() -> None:
+    # A 401/403 is our session, not LCR. It must NOT count as a transient outage, must NOT drag the
+    # stability denominator, and must flag a re-auth.
+    c = _ctrl()
+    rnd = c.observe([Sample(401, 50.0) for _ in range(10)], elapsed_s=1.0)
+    check("all-401 round has zero transient errors", rnd["transient_err"] == 0)
+    check("all-401 round is SLO-OK (auth != overload)", rnd["slo_ok"] is True)
+    check("all-401 round sets needs_reauth", c.needs_reauth is True)
+    check("all-401 round opens no outage", not c.in_episode())
+
+
+def test_floor_error_rate_and_verdict() -> None:
+    # The "is 100% even possible?" metric: error % at the gentlest rate.
+    clean = _ctrl()
+    clean.concurrency = 1
+    clean.delay_s = clean.max_delay  # at the floor
+    for _ in range(3):
+        clean.observe(_ok(n=10), elapsed_s=1.0)
+    check("clean floor -> 0% floor error", clean.floor_error_pct() == 0.0)
+    # but verdict needs an actual banked stable rate to say 'achievable'
+    for _ in range(3):
+        clean.observe(_ok(n=10), elapsed_s=1.0)
+    check("clean + stable rate -> verdict 'achievable'", clean.stability_verdict() == "achievable")
+
+    flaky = _ctrl(kill_after=99)  # don't open an episode; just measure the floor
+    flaky.concurrency = 1
+    flaky.delay_s = flaky.max_delay
+    for _ in range(4):
+        flaky.observe([Sample(200, 50.0)] * 7 + [Sample(500, 50.0)] * 3, elapsed_s=1.0)
+    check("flaky floor -> >0% floor error", (flaky.floor_error_pct() or 0) > 0)
+    check("errors-at-floor -> verdict 'not-by-rate' (100% impossible by pacing)",
+          flaky.stability_verdict() == "not-by-rate")
 
 
 def test_gold_spot_after_confirmation() -> None:
@@ -163,7 +202,7 @@ def test_recovery_measures_outage_duration_and_requests() -> None:
     # for 300s. The prober single-probes at widening intervals and must measure ~300s + count probes.
     clock = FakeClock()
     server = RecoveringServer(clock, recovery_s=300.0)
-    # recovery_max caps the probe spacing → bounds the measurement granularity (here ≤60s late).
+    # recovery_max caps the probe spacing -> bounds the measurement granularity (here ≤60s late).
     c = _ctrl(kill_after=2, clock=clock, recovery_min=30.0, recovery_max=60.0, recovery_confirm=2)
     c.concurrency = 1
     c.delay_s = c.max_delay
@@ -205,6 +244,54 @@ def test_recovery_probe_interval_widens_on_continued_failure() -> None:
     check("probe interval is capped at recovery_max", max(intervals) <= 240.0)
 
 
+def test_recovery_probe_auth_does_not_strand() -> None:
+    # THE LIVE BUG: during an outage, probes returned 401 (expired session). A 401 must flag re-auth
+    # and retry at the MIN interval — never be counted as "still down" (which widened forever and
+    # stranded the endpoint). It must not advance recovery either.
+    clock = FakeClock()
+    c = _ctrl(kill_after=1, clock=clock, recovery_min=30.0, recovery_max=600.0, recovery_confirm=2)
+    c.concurrency = 1
+    c.delay_s = c.max_delay
+    c.observe(_transient(), elapsed_s=1.0)  # open the episode
+    c.record_recovery_probe(Sample(401, 50.0))  # auth blip mid-outage
+    check("401 probe flags a re-auth", c.needs_reauth is True)
+    check("401 probe does NOT widen the interval (stays at min)", c._recovery_interval == 30.0)
+    check("401 probe does not advance recovery", c._recovery_ok_streak == 0)
+    check("still in episode (auth blip isn't a recovery)", c.in_episode())
+
+
+def test_recovery_gives_up_after_cap() -> None:
+    # A chronically-failing endpoint must never strand: after max_recovery_probes we give up probing,
+    # close the episode (gave_up=True) and resume normal rounds so measurement continues.
+    clock = FakeClock()
+    c = _ctrl(kill_after=1, clock=clock, recovery_min=30.0, recovery_max=600.0,
+              recovery_confirm=2, max_recovery_probes=5)
+    c.concurrency = 1
+    c.delay_s = c.max_delay
+    c.observe(_transient(), elapsed_s=1.0)
+    for _ in range(5):
+        clock.t = c.next_probe_at
+        c.record_recovery_probe(Sample(500, 100.0))  # never recovers
+    check("episode closed after the probe cap (no infinite strand)", not c.in_episode())
+    check("the episode is flagged gave_up", c.episodes[-1].gave_up is True)
+    check("controller resumed normal rounds (c=1)", c.concurrency == 1)
+
+
+def test_recovery_flaky_flag() -> None:
+    # Interspersed successes during recovery -> flagged 'flaky' (chronic flakiness, not a clean storm).
+    clock = FakeClock()
+    c = _ctrl(kill_after=1, clock=clock, recovery_min=30.0, recovery_confirm=2, max_recovery_probes=20)
+    c.concurrency = 1
+    c.delay_s = c.max_delay
+    c.observe(_transient(), elapsed_s=1.0)
+    # success, fail, success, success -> recovers but with an interspersed failure -> flaky
+    for s in (Sample(200, 50), Sample(500, 50), Sample(200, 50), Sample(200, 50)):
+        clock.t = c.next_probe_at
+        c.record_recovery_probe(s)
+    check("recovered with interspersed failures -> episode flagged flaky",
+          c.episodes[-1].flaky is True and not c.episodes[-1].gave_up)
+
+
 def test_total_requests_counted() -> None:
     clock = FakeClock()
     c = _ctrl(kill_after=1, clock=clock)
@@ -239,6 +326,8 @@ def test_resume_seeds_stability_and_episodes() -> None:
 def main() -> int:
     print("rate_finder controller tests")
     test_sample_classification()
+    test_auth_excluded_and_flags_reauth()
+    test_floor_error_rate_and_verdict()
     test_gold_spot_after_confirmation()
     test_stable_rate_zero_errors()
     test_backoff_on_transient()
@@ -247,6 +336,9 @@ def main() -> int:
     test_outage_opens_episode_at_floor()
     test_recovery_measures_outage_duration_and_requests()
     test_recovery_probe_interval_widens_on_continued_failure()
+    test_recovery_probe_auth_does_not_strand()
+    test_recovery_gives_up_after_cap()
+    test_recovery_flaky_flag()
     test_total_requests_counted()
     test_resume_seeds_stability_and_episodes()
     print(f"\n{_PASS} passed, {_FAIL} failed")
