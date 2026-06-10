@@ -21,6 +21,13 @@ So this tool runs an **independent adaptive controller per endpoint** on TWO tim
     exactly how long the 500-storm lasts (10 min? 10 hours?) and how many requests it took to get
     out, then resumes gently. Across days this yields the recovery-time distribution per endpoint.
 
+  • hours↔days (FRAGILE endpoints only) — the /api/report/one-work/* + /api/umlu/* cluster takes
+    MULTI-HOUR 503 outages (this run proved >12h). For those, after a few short probes confirm it's
+    down we stop hammering and LONG-PAUSE on an escalating schedule (12h→24h→36h→48h, holding at the
+    last value), doing ONE health check after each pause until the cluster is back — then resume on a
+    GENTLE cadence (low concurrency, a multi-second delay) to find how often it can safely be called.
+    They also get a longer per-request timeout (they're slow when degraded).
+
 Designed to run 24h–several days; the output is meant to be read straight into the sync's pacing.
 
 It is deliberately CONSERVATIVE and polite (this hits the real Church servers for days):
@@ -121,12 +128,16 @@ class Target:
     is_post: bool
     fire: object  # Callable[(sess, ctx) -> Sample]; ctx = {"unit": int, "member": (uuid, cmis)}
     needs_member: bool = False
+    # FRAGILE = the /api/report/one-work/* + /api/umlu/* cluster: it takes MULTI-HOUR 503 outages
+    # (proven by this very run), so it gets a longer per-request timeout, an escalating LONG-PAUSE
+    # recovery (12h→24h→36h→48h, vs hammering every 15min), and a gentle resume once it's back.
+    fragile: bool = False
 
 
-def _get(sess, path: str, params: dict | None) -> Sample:
+def _get(sess, path: str, params: dict | None, timeout: float = 45) -> Sample:
     t0 = time.monotonic()
     try:
-        r = sess.get(f"{LCR}{path}", params=params, timeout=45, allow_redirects=False)
+        r = sess.get(f"{LCR}{path}", params=params, timeout=timeout, allow_redirects=False)
         ms = (time.monotonic() - t0) * 1000
         ra = r.headers.get("Retry-After")
         return Sample(r.status_code, ms, int(ra) if str(ra or "").isdigit() else None)
@@ -157,22 +168,23 @@ def _profile_post(sess, uuid: str, action_id: str, args: list) -> Sample:
         return Sample(0, (time.monotonic() - t0) * 1000)
 
 
-def build_targets(include_post: bool, only: set[str] | None) -> list[Target]:
+def build_targets(include_post: bool, only: set[str] | None, fragile_timeout: float = 90.0) -> list[Target]:
     acts = action_config.load()
+    ft = fragile_timeout  # the one-work/umlu cluster gets a longer timeout (it's slow when degraded)
     targets = [
-        Target("progress_record", False,
-               lambda s, c: _get(s, "/api/report/one-work/progress-record",
-                                 {"unitNumber": c["unit"]})),
-        Target("details", False, needs_member=True,
+        Target("progress_record", False, fragile=True,
+               fire=lambda s, c: _get(s, "/api/report/one-work/progress-record",
+                                      {"unitNumber": c["unit"]}, timeout=ft)),
+        Target("details", False, needs_member=True, fragile=True,
                fire=lambda s, c: _get(s, f"/api/report/one-work/details/{c['member'][0]}",
-                                      {"legacyCmisId": c["member"][1]})),
+                                      {"legacyCmisId": c["member"][1]}, timeout=ft)),
         Target("org_callings", False,
                fire=lambda s, c: _get(s, "/mlt/api/orgs", {"unitNumber": c["unit"]})),
         # member-list is the known-dead route — keep it as a CONTROL: it should stay a clean,
         # load-independent 404 (proves the breaker/classification logic, never a back-off trigger).
-        Target("member_list", False,
+        Target("member_list", False, fragile=True,
                fire=lambda s, c: _get(s, "/api/umlu/report/member-list",
-                                      {"unitNumber": c["unit"]})),
+                                      {"unitNumber": c["unit"]}, timeout=ft)),
     ]
     if include_post:
         targets += [
@@ -238,11 +250,12 @@ class EndpointController:
                  window: int, confirm: int, cooldown_s: float, kill_after: int,
                  stability_confirm: int = 5, recovery_min: float = 30.0,
                  recovery_max: float = 900.0, recovery_confirm: int = 2,
-                 max_recovery_probes: int = 24, clock=time.monotonic):
+                 max_recovery_probes: int = 24, fragile: bool = False,
+                 long_pause_hours=(12, 24, 36, 48), graceful_delay: float = 15.0,
+                 clock=time.monotonic):
         self.name = name
         self.success_target = success_target
         self.p95_cap_ms = p95_cap_ms
-        self.max_concurrency = max_concurrency
         self.min_delay = min_delay
         self.max_delay = max_delay
         self.window = window
@@ -253,12 +266,23 @@ class EndpointController:
         self.recovery_min = recovery_min             # first recovery-probe interval (s)
         self.recovery_max = recovery_max             # widest recovery-probe interval (s)
         self.recovery_confirm = recovery_confirm     # consecutive probe successes to declare recovery
-        self.max_recovery_probes = max_recovery_probes  # cap probes per outage so we never strand
         self.clock = clock                           # injectable for deterministic tests
 
-        # current pressure — start gentle
+        # FRAGILE endpoints (one-work/umlu) take MULTI-HOUR outages, so: cap the pressure low, give up
+        # short-probing FAST (a few probes ≈ minutes, not hours), then LONG-PAUSE 12h→24h→36h→48h
+        # (escalating until healthy) and resume gently — vs hammering a dead cluster every 15min.
+        self.fragile = fragile
+        self.max_concurrency = 2 if fragile else max_concurrency
+        self.graceful_delay = graceful_delay
+        self.max_recovery_probes = 4 if fragile else max_recovery_probes
+        # escalating long-pause schedule (seconds) — only used by fragile endpoints after a give-up.
+        self.long_pause_schedule = [h * 3600 for h in long_pause_hours] if fragile else []
+        self.long_pause_until = 0.0
+        self.long_pause_idx = 0
+
+        # current pressure — start gentle (fragile starts even gentler — the graceful delay)
         self.concurrency = 1
-        self.delay_s = max(min_delay, 1.5)
+        self.delay_s = max(min_delay, graceful_delay if fragile else 1.5)
 
         self.gold: GoldSpot | None = None
         self.stable_rate_per_min: float | None = None    # highest ZERO-error sustained throughput
@@ -296,10 +320,19 @@ class EndpointController:
     def in_episode(self) -> bool:
         return self.current_episode is not None
 
+    def is_long_paused(self) -> bool:
+        """A fragile endpoint mid-outage, sleeping 12/24/36/48h before the next health check."""
+        return self.long_pause_until > 0 and self.clock() < self.long_pause_until
+
+    def due_for_health_check(self, now: float | None = None) -> bool:
+        """A long pause has elapsed → time for ONE gentle request to see if the cluster is back."""
+        now = self.clock() if now is None else now
+        return self.long_pause_until > 0 and now >= self.long_pause_until
+
     def is_parked(self) -> bool:
-        """True while we should NOT run normal rounds — i.e. during an outage episode (recovery
-        probing takes over) or the coarse cooldown bound."""
-        return self.in_episode() or self.clock() < self.parked_until
+        """True while we should NOT run normal rounds — during an outage episode (recovery probing),
+        a long pause (fragile-endpoint backoff), or the coarse cooldown bound."""
+        return self.in_episode() or self.is_long_paused() or self.clock() < self.parked_until
 
     def due_for_recovery_probe(self, now: float | None = None) -> bool:
         now = self.clock() if now is None else now
@@ -414,15 +447,47 @@ class EndpointController:
         ep.gave_up = gave_up
         ep.flaky = self._recovery_successes > 0 and not gave_up and ep.probes > self.recovery_confirm
         self.episodes.append(ep)
-        verb = "GAVE UP probing" if gave_up else ("RECOVERED (flaky)" if ep.flaky else "RECOVERED")
-        logger.warning("[%s] %s after %.0fs (%d probes); resuming gently",
-                       self.name, verb, ep.duration_s, ep.probes)
         self.current_episode = None
         self._recovery_ok_streak = 0
         self.parked_until = 0.0
+        self.bad_streak = 0
+        # A FRAGILE endpoint that gave up (still down) → don't resume hammering; LONG-PAUSE and escalate
+        # 12h→24h→36h→48h until a single health check finds it back (the user's strategy).
+        if gave_up and self.long_pause_schedule:
+            self._enter_long_pause(now)
+            return
+        verb = "GAVE UP probing" if gave_up else ("RECOVERED (flaky)" if ep.flaky else "RECOVERED")
+        logger.warning("[%s] %s after %.0fs (%d probes); resuming gently",
+                       self.name, verb, ep.duration_s, ep.probes)
         self.concurrency = 1
         self.delay_s = max(self.min_delay, min(self.max_delay, 5.0))  # resume conservatively
-        self.bad_streak = 0
+
+    def _enter_long_pause(self, now: float) -> None:
+        pause = self.long_pause_schedule[min(self.long_pause_idx, len(self.long_pause_schedule) - 1)]
+        self.long_pause_until = now + pause
+        self.long_pause_idx += 1
+        logger.warning("[%s] still down after short probing — LONG-PAUSE %.0fh, then one health check",
+                       self.name, pause / 3600)
+
+    def record_health_check(self, sample: "Sample", now: float | None = None) -> None:
+        """One gentle request after a long pause. Healthy → clear the pause and resume GENTLE rounds
+        (low concurrency, graceful delay) to find how often we can safely call this fragile endpoint.
+        Still failing → escalate to the next long pause (24h → 36h → 48h …). A 401 just re-auths."""
+        now = self.clock() if now is None else now
+        self.total_requests += 1
+        if sample.auth_bad:
+            self.needs_reauth = True
+            return  # keep the pause window; the harness re-auths and we re-check at the same time
+        if sample.ok:
+            logger.warning("[%s] HEALTH CHECK ok after long pause — resuming gentle probing", self.name)
+            self.long_pause_until = 0.0
+            self.long_pause_idx = 0
+            self.concurrency = 1
+            self.delay_s = max(self.min_delay, self.graceful_delay)  # find its safe cadence gently
+            self.bad_streak = 0
+            self.zero_streak = 0
+        else:
+            self._enter_long_pause(now)
 
     def note_auth_probe(self, now: float | None = None) -> None:
         """A recovery probe returned 401/403 — that's our SESSION, not an LCR outage. The harness
@@ -556,6 +621,12 @@ class EndpointController:
             "episodes": [e.__dict__ for e in self.episodes[-20:]],
             "current": {"concurrency": self.concurrency, "delay_s": round(self.delay_s, 2)},
             "in_episode": self.in_episode(),
+            "fragile": self.fragile,
+            # long-pause state for fragile endpoints (12h→24h→36h→48h escalation)
+            "long_paused": self.is_long_paused(),
+            "long_pause_level": self.long_pause_idx,
+            "next_health_check_in_h": (round(max(0.0, self.long_pause_until - self.clock()) / 3600, 2)
+                                       if self.long_pause_until > 0 else None),
             "rounds": len(self.rounds),
             "success_by_hour": hourly,
             "recent_rounds": self.rounds[-8:],
@@ -580,7 +651,8 @@ class Harness:
             or [ctx.unit_number]
         logger.info("rate-finding across %d unit(s)", len(self.units))
         self.members = self._sample_members(args.members_per_unit)
-        self.targets = build_targets(include_post=not args.no_post, only=args.only)
+        self.targets = build_targets(include_post=not args.no_post, only=args.only,
+                                     fragile_timeout=args.fragile_timeout)
         for t in self.targets:
             if t.needs_member and not self.members:
                 logger.warning("no member ids harvested — skipping member endpoint %s", t.name)
@@ -592,7 +664,8 @@ class Harness:
             cooldown_s=args.cooldown, kill_after=args.kill_after,
             stability_confirm=args.stability_confirm, recovery_min=args.recovery_probe_min,
             recovery_max=args.recovery_probe_max, recovery_confirm=args.recovery_confirm,
-            max_recovery_probes=args.max_recovery_probes)
+            max_recovery_probes=args.max_recovery_probes, fragile=t.fragile,
+            long_pause_hours=args.long_pause_hours, graceful_delay=args.graceful_delay)
             for t in self.targets}
         if args.resume:
             self._resume(args.resume)
@@ -712,14 +785,31 @@ class Harness:
                         target.name, sample.status, ctrl._recovery_interval)
         self.persist()
 
+    def run_health_check(self, target: Target, ctrl: EndpointController) -> None:
+        """One gentle request after a long pause to see if a fragile endpoint's cluster is back."""
+        sess = self.client.session.session
+        sample = target.fire(sess, self._ctx(target))
+        with self._lock:
+            self.jsonl.write(json.dumps({"t": _now(), "endpoint": target.name, "health_check": True,
+                                         "status": sample.status, "ms": round(sample.ms)}) + "\n")
+        ctrl.record_health_check(sample)
+        if sample.auth_bad:
+            self._reauth(target.name)
+            ctrl.needs_reauth = False
+        else:
+            logger.info("[%s] health check after long pause: status=%s -> %s", target.name,
+                        sample.status, "BACK" if sample.ok else "still down (escalating pause)")
+        self.persist()
+
     def loop(self, hours: float) -> None:
         deadline = time.monotonic() + hours * 3600
         i = 0
         try:
             while time.monotonic() < deadline:
                 progressed = False
-                # one pass over all endpoints; act on the first that's actionable (a normal round if
-                # healthy, or a recovery probe if it's in an outage and a probe is due).
+                # one pass over all endpoints; act on the first that's actionable: a normal round if
+                # healthy, a recovery probe if mid-outage and due, or a health check if a long pause
+                # has elapsed.
                 for k in range(len(self.targets)):
                     target = self.targets[(i + k) % len(self.targets)]
                     ctrl = self.ctrls[target.name]
@@ -729,16 +819,23 @@ class Harness:
                             i = (i + k + 1) % len(self.targets)
                             progressed = True
                             break
+                    elif ctrl.due_for_health_check():
+                        self.run_health_check(target, ctrl)
+                        i = (i + k + 1) % len(self.targets)
+                        progressed = True
+                        break
                     elif not ctrl.is_parked():
                         self.run_round(target, ctrl)
                         i = (i + k + 1) % len(self.targets)
                         progressed = True
                         break
                 if not progressed:
-                    # everything is mid-outage and no probe is due yet — sleep until the soonest one.
+                    # everything is mid-outage/long-pause and nothing is due — sleep until the soonest.
                     waits = [self.ctrls[t.name].next_probe_at - time.monotonic()
                              for t in self.targets if self.ctrls[t.name].in_episode()]
-                    nap = max(2.0, min(30.0, min(waits))) if waits else 15.0
+                    waits += [self.ctrls[t.name].long_pause_until - time.monotonic()
+                              for t in self.targets if self.ctrls[t.name].is_long_paused()]
+                    nap = max(2.0, min(60.0, min(waits))) if waits else 30.0
                     time.sleep(nap)
         except KeyboardInterrupt:
             logger.info("interrupted — writing final recommendation")
@@ -784,6 +881,16 @@ def main() -> int:
                     help="consecutive probe successes to declare an outage recovered")
     ap.add_argument("--max-recovery-probes", type=int, default=24,
                     help="cap probes per outage, then give up + resume normal rounds (never strand)")
+    ap.add_argument("--fragile-timeout", type=float, default=90.0,
+                    help="per-request timeout (s) for the fragile one-work/umlu cluster")
+    ap.add_argument("--long-pause-hours", type=lambda s: [float(x) for x in s.split(",") if x],
+                    default=[12, 24, 36, 48],
+                    help="escalating long-pause schedule (h) for a fragile endpoint stuck down — "
+                         "after each give-up wait the next value, then one health check; holds at the "
+                         "last value until healthy")
+    ap.add_argument("--graceful-delay", type=float, default=15.0,
+                    help="inter-request delay (s) a fragile endpoint resumes at once it's back — find "
+                         "its safe cadence gently")
     ap.add_argument("--resume", default=None,
                     help="seed gold spots from a prior recommendation.json (path, or 'auto' for the "
                          "latest in the output dir) — for tiled GitHub-Actions runs")

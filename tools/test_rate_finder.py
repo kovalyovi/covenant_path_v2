@@ -292,6 +292,56 @@ def test_recovery_flaky_flag() -> None:
           c.episodes[-1].flaky is True and not c.episodes[-1].gave_up)
 
 
+def test_fragile_long_pause_escalation() -> None:
+    # A fragile endpoint stuck down must LONG-PAUSE (12h→24h→36h→48h) instead of hammering, and
+    # resume gently once a post-pause health check finds it back (the user's strategy).
+    clock = FakeClock()
+    c = _ctrl(kill_after=1, clock=clock, fragile=True,
+              long_pause_hours=(12, 24, 36, 48), graceful_delay=15.0)
+    check("fragile caps concurrency low", c.max_concurrency == 2)
+    check("fragile gives up short-probing fast (few probes)", c.max_recovery_probes == 4)
+    # open an outage and exhaust the short probes -> should enter a 12h long pause, not resume.
+    c.concurrency = 1
+    c.delay_s = c.max_delay  # at the floor so an outage opens
+    c.observe(_transient(), elapsed_s=1.0)
+    for _ in range(c.max_recovery_probes):
+        clock.t = c.next_probe_at
+        c.record_recovery_probe(Sample(503, 100.0))
+    check("after give-up the fragile endpoint is LONG-PAUSED (not resuming)", c.is_long_paused())
+    check("first pause is 12h", abs(c.long_pause_until - (clock() + 12 * 3600)) < 1)
+    check("is_parked() True during a long pause", c.is_parked())
+
+    # pause elapses → health check still down → escalate to 24h
+    clock.t = c.long_pause_until
+    check("health check due after the pause elapses", c.due_for_health_check())
+    c.record_health_check(Sample(503, 100.0))
+    check("still-down health check escalates to 24h", abs(c.long_pause_until - (clock() + 24 * 3600)) < 1)
+
+    # next pause → health check OK → clears pause, resumes at the graceful delay
+    clock.t = c.long_pause_until
+    c.record_health_check(Sample(200, 80.0))
+    check("healthy health check clears the long pause", not c.is_long_paused())
+    check("resumes at the graceful delay (gentle cadence)", c.delay_s == 15.0)
+    check("pause level reset after recovery", c.long_pause_idx == 0)
+
+
+def test_long_pause_holds_at_last_value() -> None:
+    clock = FakeClock()
+    c = _ctrl(kill_after=1, clock=clock, fragile=True, long_pause_hours=(12, 24))
+    c.concurrency = 1
+    c.delay_s = c.max_delay
+    c.observe(_transient(), elapsed_s=1.0)
+    for _ in range(c.max_recovery_probes):
+        clock.t = c.next_probe_at
+        c.record_recovery_probe(Sample(503, 100.0))  # → 12h
+    clock.t = c.long_pause_until
+    c.record_health_check(Sample(503, 100.0))  # → 24h
+    clock.t = c.long_pause_until
+    c.record_health_check(Sample(503, 100.0))  # → holds at 24h (last value)
+    check("pause holds at the last scheduled value once exhausted",
+          abs(c.long_pause_until - (clock() + 24 * 3600)) < 1)
+
+
 def test_total_requests_counted() -> None:
     clock = FakeClock()
     c = _ctrl(kill_after=1, clock=clock)
@@ -339,6 +389,8 @@ def main() -> int:
     test_recovery_probe_auth_does_not_strand()
     test_recovery_gives_up_after_cap()
     test_recovery_flaky_flag()
+    test_fragile_long_pause_escalation()
+    test_long_pause_holds_at_last_value()
     test_total_requests_counted()
     test_resume_seeds_stability_and_episodes()
     print(f"\n{_PASS} passed, {_FAIL} failed")
