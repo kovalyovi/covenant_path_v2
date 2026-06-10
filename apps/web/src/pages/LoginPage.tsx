@@ -158,12 +158,25 @@ export function LoginPage() {
       broker.logEvent('client.login.total', { ms: Math.round(performance.now() - t0), method: 'church-mfa' });
     });
 
+  // A consented (enroll=true) login that stored nothing is a FAILED sync setup — say so before the
+  // app navigates away, instead of silently dropping it (2026-06-10: an LCR outage failed the eval
+  // and the father had no idea why his stake never synced). alert() matches the confirm() flow here.
+  function warnSyncNotStored(r: BrokerResult) {
+    window.alert(
+      'You are signed in, but the daily sync could NOT be set up' +
+        (r.enrollError ? ` — ${r.enrollError}` : '.') +
+        ' You can retry anytime from Sync settings → Re-authorize.',
+    );
+  }
+
   // After a successful Church login: block a no-access calling (N2); else, if the stake has no
   // sufficient sync credential and this leader could provide one (set one up, or improve a weaker
   // existing one), OFFER it post-login (#8 — consent is no longer a login-form checkbox). On accept,
   // re-auth WITH consent so the broker stores the credential. Finally, adopt the session.
   async function finishChurch(r: BrokerResult) {
     if (noAccess(r)) return;
+    // Consent was given on THIS login (the MFA continuation of an accepted enroll offer).
+    if (authorizeSync && !r.stored) warnSyncNotStored(r);
     if (!authorizeSync && (r.canEnroll || r.canImprove)) {
       const stake = r.stake ?? 'Your stake';
       const missing = r.canImprove && r.missing?.length ? ` (missing: ${r.missing.slice(0, 3).join(', ')})` : '';
@@ -182,6 +195,7 @@ export function LoginPage() {
           return;
         }
         if (noAccess(r2)) return;
+        if (!r2.stored) warnSyncNotStored(r2);
         await consume(r2);
         return;
       }

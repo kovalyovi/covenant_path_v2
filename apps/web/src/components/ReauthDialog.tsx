@@ -62,11 +62,18 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
     if (r.email && r.otp) {
       await supabase.auth.verifyOtp({ email: r.email, token: r.otp, type: 'email' });
     }
-    toast.show({
-      message: r.stored
-        ? 'Daily sync authorized — your stake will refresh within minutes.'
-        : 'Signed in — sync authorization completed.',
-    });
+    // The whole point of this dialog is storing the credential (enroll=true). If the broker's eval
+    // failed (e.g. LCR outage — the 2026-06-10 "couldn't do sync for his stake" report), nothing was
+    // stored: say so and keep the dialog open instead of toasting a success that didn't happen.
+    if (!r.stored) {
+      setError(
+        'Your sign-in worked, but the daily sync could not be set up' +
+          (r.enrollError ? ` — ${r.enrollError}` : '.') +
+          ' Please try again (Sync settings → Re-authorize).',
+      );
+      return;
+    }
+    toast.show({ message: 'Daily sync authorized — your stake will refresh within minutes.' });
     void d.reloadEnrollStatus();
     resetAll();
     setUsername('');

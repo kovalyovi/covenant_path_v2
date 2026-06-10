@@ -20,6 +20,12 @@ interface ModalProps {
 export function Modal({ open, onClose, title, children, actions, sheet, hideClose }: ModalProps) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useRef(`modal-${Math.random().toString(36).slice(2)}`).current;
+  // Callers pass inline `onClose` arrows, so its identity changes every render. The focus effect
+  // must depend only on `open` — re-running it per render refocuses the dialog container on every
+  // keystroke, which made the ReauthDialog password field impossible to type into (cursor lost
+  // after each character). The listener reads the latest callback through this ref instead.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return;
@@ -30,7 +36,7 @@ export function Modal({ open, onClose, title, children, actions, sheet, hideClos
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key === 'Tab' && ref.current) {
@@ -57,7 +63,7 @@ export function Modal({ open, onClose, title, children, actions, sheet, hideClos
       document.body.style.overflow = prevOverflow;
       prev?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

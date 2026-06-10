@@ -46,6 +46,9 @@ export interface BrokerResult {
   canEnroll?: boolean;
   stake?: string | null;
   missing?: string[];
+  /** When the server-side login eval failed (e.g. LCR outage), its error — so a consented enroll
+   *  can say WHY nothing was stored instead of pretending it succeeded. */
+  enrollError?: string;
 }
 
 export function mfaRequired(r: BrokerResult): boolean {
@@ -292,6 +295,7 @@ export class BrokerClient {
       canEnroll: enroll?.['can_enroll'] === true,
       stake: (enroll?.['stake'] as string) ?? null,
       missing: ((enroll?.['missing'] as unknown[]) ?? []).map((m) => String(m)),
+      enrollError: typeof enroll?.['error'] === 'string' ? (enroll['error'] as string) : undefined,
     };
   }
 
