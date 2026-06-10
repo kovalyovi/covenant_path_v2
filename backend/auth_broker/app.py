@@ -107,6 +107,9 @@ _EVAL_POOL = _futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="logi
 # long background access-evals can occupy every eval worker, and the mint must never queue
 # behind them (it's on the response's critical path).
 _FAST_POOL = _futures.ThreadPoolExecutor(max_workers=8, thread_name_prefix="login-fast")
+# Identity-refresh pool: ONE worker on purpose — refreshes serialize so a bad-LCR (90s) refresh
+# can never crowd the eval/mint pools, and enroll's per-username throttle dedupes login bursts.
+_REFRESH_POOL = _futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="ident-refresh")
 # "Login must be under 5 seconds": how long a NON-consent login waits for its access evaluation
 # before answering without it (the dashboard re-derives offers from /auth/enrollment-status).
 _EVAL_BUDGET_S = float(os.environ.get("LOGIN_EVAL_BUDGET_SECONDS", "4"))
@@ -124,10 +127,12 @@ def _login_eval(res: dict, store: bool, rid: str, t0: float | None = None) -> di
         return None
     from backend.auth_broker import enroll
     ident = res.get("identity") or {}
-    if not store and ident.get("cached") and ident.get("cache_stale"):
-        # Stale cache row: refresh OFF the login path so the zero-LCR lane stays honest over time.
-        _EVAL_POOL.submit(okta_flow.refresh_cached_identity, res.get("cookies") or [],
-                          ident.get("login_username") or "")
+    if not store and ident.get("cached"):
+        # EVERY cached login refreshes its identity row OFF the login path (throttled per user in
+        # enroll), so an email or stake change is healed by the user's NEXT login — not a 7-day
+        # TTL (ADR-009 amendment: B).
+        _REFRESH_POOL.submit(enroll.refresh_cached_identity, res.get("cookies") or [],
+                             ident.get("login_username") or "")
     t_req = t0 if t0 is not None else time.monotonic()
     t_eval = time.monotonic()
     fut = _EVAL_POOL.submit(enroll.evaluate_and_maybe_store, res["cookies"], ident, store,

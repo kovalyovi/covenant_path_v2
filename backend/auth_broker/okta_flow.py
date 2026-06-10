@@ -278,8 +278,7 @@ def _finish_success(session: requests.Session, payload: dict, verifier: str, log
         ident = {"email": cached["email"], "name": cached.get("name"),
                  "cmis_id": cached.get("cmis_id"), "username": cached.get("username"),
                  "login_username": username, "unit_number": cached.get("unit_number"),
-                 "stake_name": cached.get("stake_name"),
-                 "cached": True, "cache_stale": bool(cached.get("stale"))}
+                 "stake_name": cached.get("stake_name"), "cached": True}
         ms = round((time.time() - t0) * 1000, 1)
         obs.event("login.complete", correlation_id=cid, status="success", duration_ms=ms,
                   lane="cached")
@@ -457,16 +456,5 @@ def verify_captured_session(cookies: list[dict]) -> dict:
         dump_debug("broker_session_verify_error", login_id=login_id, error=str(exc))
         raise AuthError(f"could not verify captured session: {exc}") from exc
 
-
-def refresh_cached_identity(cookies: list[dict], login_username: str) -> None:
-    """Background refresh of a STALE church_identities row: establish LCR from the login's Okta
-    cookies and re-fetch /api/auth/me. Fire-and-forget — never raises, never blocks a login."""
-    try:
-        from lcr_client.okta_login import session_from_cookies
-        session = session_from_cookies(cookies)
-        ident = _identity(session, _new_login_id())
-        ident["login_username"] = login_username
-        identity_cache.put(login_username or ident.get("username") or "", ident)
-        logger.info("identity cache refreshed (stale row) for login=%s", login_username or "?")
-    except Exception as exc:  # noqa: BLE001
-        logger.info("identity cache refresh skipped: %s", exc)
+# (The background cache refresh lives in enroll.refresh_cached_identity — it also re-reads the
+# UNIT via user_context, which a /api/auth/me-only refresher here couldn't.)

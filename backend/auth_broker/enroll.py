@@ -298,6 +298,59 @@ def persist(cookies: list[dict], identity: dict) -> dict:
     return evaluate_and_maybe_store(cookies, identity, store=True)
 
 
+# --- background identity refresh (ADR-009 amendment: B) ----------------------------------------
+
+# Per-username throttle: a login burst (autofill retries, back-to-back e2e runs) triggers ONE
+# refresh, not one per login. In-process state is fine — the broker is a single instance, and a
+# restart just means one extra refresh.
+_REFRESH_TTL_S = 600.0
+_REFRESH_AT: dict[str, float] = {}
+
+
+def _refresh_due(username: str) -> bool:
+    """Consume the per-username refresh slot (True = caller should refresh now)."""
+    import time as _time
+    now = _time.monotonic()
+    if len(_REFRESH_AT) > 256:  # opportunistic prune — the map must not grow unbounded
+        cutoff = now - _REFRESH_TTL_S
+        for k in [k for k, v in _REFRESH_AT.items() if v < cutoff]:
+            _REFRESH_AT.pop(k, None)
+    last = _REFRESH_AT.get(username)
+    if last is not None and now - last < _REFRESH_TTL_S:
+        return False
+    _REFRESH_AT[username] = now
+    return True
+
+
+def refresh_cached_identity(cookies: list[dict], login_username: str) -> None:
+    """Background refresh of a cached-lane login's church_identities row — email/name (the
+    changed-email case) AND unit/stake (the moved-stakes case, which the old stale-only refresher
+    missed: unit comes from user_context, not /api/auth/me). Runs AFTER the login has already
+    answered, on the broker's dedicated refresh pool; throttled per username; never raises."""
+    from backend import observability as obs
+    key = (login_username or "").strip().lower()
+    if not key or not _refresh_due(key):
+        return
+    import time as _time
+    t0 = _time.monotonic()
+    try:
+        from backend.auth_broker import okta_flow
+        from lcr_client.okta_login import session_from_cookies
+        s = session_from_cookies(cookies)
+        ident = okta_flow._identity(s, "bg-refresh")  # establishes LCR + reads /api/auth/me
+        ident["login_username"] = login_username
+        ctx = _client_from_cookies(okta_flow.serialize_cookies(s)).user_context()
+        identity_cache.put(login_username or ident.get("username") or "", ident,
+                           unit_number=ctx.unit_number, stake_name=ctx.unit_name)
+        obs.event("identity.refresh", status="ok",
+                  duration_ms=round((_time.monotonic() - t0) * 1000, 1))
+        logger.info("identity cache refreshed for login=%s (%.1fs, unit=%s)",
+                    key, _time.monotonic() - t0, ctx.unit_number)
+    except Exception as exc:  # noqa: BLE001 — must never matter to the login that spawned it
+        obs.event("identity.refresh", status="error", message=str(exc)[:200])
+        logger.info("identity cache refresh skipped: %s", exc)
+
+
 def _notify_enrolled(identity: dict, ctx, coverage: dict, initial_sync: bool) -> None:
     """Email the leader confirming their stake's daily sync is now set up (the "then notify them"
     step). Best-effort — a notification problem must never affect the enrollment that just succeeded."""

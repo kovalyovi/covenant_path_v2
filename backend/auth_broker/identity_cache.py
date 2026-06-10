@@ -10,7 +10,8 @@ its stored-credential check, making a routine repeat sign-in ZERO-LCR.
 
 Trust model: consulted only AFTER a successful Okta password/MFA verification, and it only maps the
 verified username to our own prior verified observation. Staleness heals: every full login
-overwrites the row, and a `stale` hit (older than REFRESH_AFTER) triggers a background re-fetch.
+overwrites the row, and every cached-lane login triggers a throttled background re-fetch
+(enroll.refresh_cached_identity) — an email/stake change lands by the user's next login.
 
 Best-effort by design: any failure (missing table, REST hiccup) returns None / no-ops, and the
 login simply takes the full path it always took.
@@ -19,7 +20,7 @@ login simply takes the full path it always took.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import requests
 
@@ -29,9 +30,6 @@ logger = get_logger()
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-# A hit older than this still serves the login, but flags `stale` so the caller refreshes it
-# in the background (catches the rare email/stake change without ever slowing a sign-in).
-REFRESH_AFTER = timedelta(days=7)
 
 
 def _headers() -> dict:
@@ -44,24 +42,14 @@ def _key(username: str) -> str:
 
 
 def get(username: str) -> dict | None:
-    """Cached identity for a Church username, or None. Adds `stale: bool`."""
+    """Cached identity for a Church username, or None."""
     if not (SUPABASE_URL and SERVICE_KEY and _key(username)):
         return None
     try:
         r = requests.get(f"{SUPABASE_URL}/rest/v1/church_identities", headers=_headers(),
                          params={"username": f"eq.{_key(username)}", "limit": "1"}, timeout=6)
         rows = r.json() if r.status_code == 200 else []
-        if not rows:
-            return None
-        row = rows[0]
-        stale = True
-        try:
-            updated = datetime.fromisoformat(str(row.get("updated_at")).replace("Z", "+00:00"))
-            stale = datetime.now(timezone.utc) - updated > REFRESH_AFTER
-        except Exception:  # noqa: BLE001 — unparseable timestamp just means "treat as stale"
-            pass
-        row["stale"] = stale
-        return row
+        return rows[0] if rows else None
     except Exception as exc:  # noqa: BLE001 — cache miss must never break a login
         logger.info("identity cache read skipped: %s", exc)
         return None

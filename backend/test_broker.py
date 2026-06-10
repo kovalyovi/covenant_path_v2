@@ -577,10 +577,40 @@ def test_start_login_cached_identity_skips_lcr() -> None:
         okta_flow._exchange_code = old_exchange
 
 
+def test_identity_refresh_throttle() -> None:
+    # A login burst must trigger ONE background refresh per user, not one per login (B).
+    import time as _t
+    enroll._REFRESH_AT.clear()
+    check("first refresh due", enroll._refresh_due("user_a") is True)
+    check("burst suppressed", enroll._refresh_due("user_a") is False)
+    check("other user independent", enroll._refresh_due("user_b") is True)
+    enroll._REFRESH_AT["user_a"] = _t.monotonic() - enroll._REFRESH_TTL_S - 1
+    check("due again after TTL", enroll._refresh_due("user_a") is True)
+    enroll._REFRESH_AT.clear()
+
+
+def test_identity_refresh_never_raises() -> None:
+    # An LCR outage during the background refresh must be swallowed (the login already answered).
+    enroll._REFRESH_AT.clear()
+    old = okta_flow._identity
+    okta_flow._identity = lambda s, lid: (_ for _ in ()).throw(RuntimeError("LCR down"))
+    try:
+        enroll.refresh_cached_identity(
+            [{"name": "x", "value": "y", "domain": "d", "path": "/"}], "user_c")
+        check("refresh swallowed the LCR failure", True)
+    except Exception:  # noqa: BLE001
+        check("refresh swallowed the LCR failure", False)
+    finally:
+        okta_flow._identity = old
+        enroll._REFRESH_AT.clear()
+
+
 def main() -> int:
     print("broker tests")
     test_fast_lane_eval_zero_lcr()
     test_start_login_cached_identity_skips_lcr()
+    test_identity_refresh_throttle()
+    test_identity_refresh_never_raises()
     test_health()
     test_cors()
     test_credential_embed_shape()
