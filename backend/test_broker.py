@@ -605,6 +605,50 @@ def test_identity_refresh_never_raises() -> None:
         enroll._REFRESH_AT.clear()
 
 
+def test_identity_email_binding() -> None:
+    # The link that lets a provisioned leader (e.g. a high councilor) actually SEE their stake:
+    # a Church login stamps its verified email onto user_roles rows matched by lcr_person_uuid
+    # (== auth/me churchCMISUUID). Best-effort — must never raise, never fire without a real uuid.
+    import types as _types
+    uuid_ok = "3c888028-fa94-4422-9bdd-c6c48ffa7c4d"
+    old = (enroll.SUPABASE_URL, enroll.SERVICE_KEY, enroll.requests)
+    enroll.SUPABASE_URL, enroll.SERVICE_KEY = "https://example.invalid", "key"
+    calls: list[dict] = []
+
+    def _patch(url, headers=None, params=None, json=None, timeout=None):
+        calls.append({"url": url, "params": params, "json": json})
+        resp = _FakeResp([{"role": "stake_leader"}], 200)
+        resp.text = '[{"role":"stake_leader"}]'
+        return resp
+
+    enroll.requests = _types.SimpleNamespace(patch=_patch)
+    try:
+        enroll._bind_identity_email({"email": "HC@Example.org", "cmis_uuid": uuid_ok})
+        check("bind: one PATCH", len(calls) == 1)
+        check("bind: targets user_roles", calls and calls[0]["url"].endswith("/rest/v1/user_roles"))
+        check("bind: matches by person uuid",
+              calls and calls[0]["params"].get("lcr_person_uuid") == f"eq.{uuid_ok}")
+        check("bind: stamps lowercased email", calls and calls[0]["json"] == {"email": "hc@example.org"})
+
+        calls.clear()
+        enroll._bind_identity_email({"email": "hc@example.org"})                      # no uuid
+        enroll._bind_identity_email({"cmis_uuid": uuid_ok})                            # no email
+        enroll._bind_identity_email({"email": "hc@example.org", "cmis_uuid": "junk"})  # not a uuid
+        check("bind: no-ops never PATCH", len(calls) == 0)
+
+        def _boom(*a, **k):
+            raise RuntimeError("REST down")
+
+        enroll.requests = _types.SimpleNamespace(patch=_boom)
+        try:
+            enroll._bind_identity_email({"email": "hc@example.org", "cmis_uuid": uuid_ok})
+            check("bind: REST failure swallowed", True)
+        except Exception:  # noqa: BLE001
+            check("bind: REST failure swallowed", False)
+    finally:
+        enroll.SUPABASE_URL, enroll.SERVICE_KEY, enroll.requests = old
+
+
 def test_enrollment_status_no_role_resolves_stake_via_identity_cache() -> None:
     # G: a no-role caller WITH an identity-cache row + an EXISTING stake row gets that stake's
     # real state (honest "no access with your calling" UI). A never-enrolled stake (no stakes
@@ -657,6 +701,7 @@ def main() -> int:
     test_start_login_cached_identity_skips_lcr()
     test_identity_refresh_throttle()
     test_identity_refresh_never_raises()
+    test_identity_email_binding()
     test_enrollment_status_no_role_resolves_stake_via_identity_cache()
     test_health()
     test_cors()

@@ -78,6 +78,46 @@ def _first_usable_credential(embed) -> dict | None:
     return next((c for c in creds if isinstance(c, dict) and not c.get("revoked")), None)
 
 
+def _bind_identity_email(identity: dict) -> None:
+    """Stamp this login's VERIFIED email onto the person's calling-provisioned user_roles rows
+    (matched by lcr_person_uuid == auth/me churchCMISUUID — probe-verified to be the same uuid).
+
+    This is the missing link that made provisioned leaders (e.g. every high councilor) see an
+    EMPTY app: their stake-wide rows exist nightly, but RLS matches by auth_id (never the LCR
+    uuid) or by email (NULL since the member-list enrichment endpoint died). One Church login
+    binds them forever — afterwards plain Google/OTP sign-ins with the same address match too.
+
+    Runs on EVERY login and is idempotent: re-stamping heals a leader provisioned AFTER their
+    first login and follows a verified email change (latest Church login wins). Only rows with
+    a lcr_person_uuid are touchable — invite/manual grants (NULL uuid) can't be hit by the
+    predicate. Best-effort: never raises, a failure just leaves the binding for the next login."""
+    email = (identity.get("email") or "").lower()
+    person_uuid = identity.get("cmis_uuid") or ""
+    if not (email and person_uuid and SUPABASE_URL and SERVICE_KEY):
+        return
+    import uuid as _uuid
+    try:
+        _uuid.UUID(person_uuid)  # sanity: only ever a uuid in the REST predicate
+    except ValueError:
+        logger.info("identity bind skipped: cmis_uuid not a uuid")
+        return
+    try:
+        r = requests.patch(
+            f"{SUPABASE_URL}/rest/v1/user_roles",
+            headers={"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}",
+                     "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"lcr_person_uuid": f"eq.{person_uuid}", "select": "role"},
+            json={"email": email}, timeout=8)
+        if r.status_code < 300:
+            bound = len(r.json()) if r.text else 0
+            if bound:
+                logger.info("identity bind: verified email stamped onto %d role row(s)", bound)
+        else:
+            logger.warning("identity bind failed (%s): %s", r.status_code, r.text[:160])
+    except Exception as exc:  # noqa: BLE001 — binding must never break a login
+        logger.warning("identity bind skipped: %s", exc)
+
+
 def _role_scope(email) -> str:
     """What this sign-in will ACTUALLY see — their user_roles scope, the way RLS resolves it (by
     email). Flags the two failure modes: 'none' = logged in but sees an empty app (under-visibility,
@@ -147,6 +187,10 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
     def _elapsed_ms() -> int:
         """ms since the REQUEST started (t_start from the API handler) — what login_audit records."""
         return int((_time.monotonic() - (t_start if t_start is not None else t0)) * 1000)
+
+    # Bind FIRST (one indexed UPDATE, both lanes): the audit's role_scope below then reports
+    # what this login will actually see post-bind, not the pre-bind 'none'.
+    _bind_identity_email(identity)
 
     # ZERO-LCR FAST LANE: a cached-identity repeat login already knows its unit; when that stake has
     # a usable credential on file, authorization needs only this DB check (RLS is the real data

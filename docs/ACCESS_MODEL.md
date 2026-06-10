@@ -131,6 +131,14 @@ Email/OAuth logins are matched to roles by **verified email**; calling-derived r
 **person UUID**. The provider-binding trigger (`0029`) binds a freshly-enrolled leader's verified
 email to a stake-wide `stake_leader` row so they see their stake immediately.
 
+**Every other provisioned leader binds on their first Church login** (`0043` +
+`enroll._bind_identity_email`): `/api/auth/me` returns `churchCMISUUID`, which **is** the LCR person
+UUID the role rows are keyed by (probe-verified), so the broker stamps the login's verified email
+onto that person's `user_roles` rows on every Church login — idempotent, zero added LCR calls, and
+the nightly upsert preserves it. Until a leader's first Church login their calling-derived rows have
+no email and they see an empty app (`login_audit.role_scope = 'none'` is the tell); afterwards plain
+email/Google sign-ins with the same address match too.
+
 ---
 
 ## 7. Privacy summary (read this)

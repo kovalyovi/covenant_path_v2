@@ -72,6 +72,8 @@ def put(username: str, identity: dict, *, unit_number: int | None = None,
         row = {"username": k, "email": email, "name": identity.get("name"),
                "cmis_id": identity.get("cmis_id"),
                "updated_at": datetime.now(timezone.utc).isoformat()}
+        if identity.get("cmis_uuid"):  # never blank a stored uuid with a cached/partial identity
+            row["cmis_uuid"] = identity.get("cmis_uuid")
         if unit_number is not None:
             row["unit_number"] = unit_number
         if stake_name is not None:

@@ -152,6 +152,9 @@ def _identity(session: requests.Session, login_id: str) -> dict:
         "email": (me.get("email") or me.get("personalEmail") or "").lower(),
         "name": me.get("name") or me.get("displayName"),
         "cmis_id": me.get("churchCMISID") or me.get("churchCMISUUID"),
+        # churchCMISUUID == the LCR person uuid in user_roles.lcr_person_uuid (probe-verified) —
+        # the join key that lets a login bind its verified email to its provisioned roles.
+        "cmis_uuid": me.get("churchCMISUUID"),
         "username": me.get("preferred_username"),
     }
     logger.info("[auth %s] success: identified %s", login_id, ident.get("username") or ident.get("email"))
@@ -276,7 +279,8 @@ def _finish_success(session: requests.Session, payload: dict, verifier: str, log
     cached = identity_cache.get(username) if allow_cached_identity else None
     if cached and cached.get("email"):
         ident = {"email": cached["email"], "name": cached.get("name"),
-                 "cmis_id": cached.get("cmis_id"), "username": cached.get("username"),
+                 "cmis_id": cached.get("cmis_id"), "cmis_uuid": cached.get("cmis_uuid"),
+                 "username": cached.get("username"),
                  "login_username": username, "unit_number": cached.get("unit_number"),
                  "stake_name": cached.get("stake_name"), "cached": True}
         ms = round((time.time() - t0) * 1000, 1)
