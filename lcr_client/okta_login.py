@@ -194,11 +194,11 @@ def _authenticate_okta(session: requests.Session, identifier: str, password: str
     raise LoginError("IDX flow did not reach success within step budget")
 
 
-def _establish_lcr_session(session: requests.Session) -> None:
+def _establish_lcr_session(session: requests.Session, timeout: int = 60) -> None:
     """Phase 2: SSO through LCR's auth handler to mint the LCR session cookies."""
     logger.info("lcr /api/auth/login (SSO via existing Okta session)")
     resp = session.get(f"{LCR}/api/auth/login", params={"returnTo": "/"},
-                       allow_redirects=True, timeout=60)
+                       allow_redirects=True, timeout=timeout)
     host = requests.utils.urlparse(resp.url).hostname or ""
     if host.startswith("id."):
         dump_debug("lcr_sso_failed", final_url=resp.url, status=resp.status_code)
@@ -229,8 +229,8 @@ def _write_storage_state(session: requests.Session, path: Path) -> int:
     return len(cookies)
 
 
-def _verify(session: requests.Session) -> dict[str, Any]:
-    resp = session.get(f"{LCR}/api/auth/me", params={"lang": "eng"}, timeout=60)
+def _verify(session: requests.Session, timeout: int = 60) -> dict[str, Any]:
+    resp = session.get(f"{LCR}/api/auth/me", params={"lang": "eng"}, timeout=timeout)
     ctype = resp.headers.get("content-type", "")
     if resp.status_code != 200 or "application/json" not in ctype:
         raise LoginError(f"verification /api/auth/me failed: {resp.status_code} {ctype}")
@@ -257,6 +257,77 @@ def session_from_cookies(cookies: list[dict]) -> requests.Session:
 def establish_lcr_session(session: requests.Session) -> None:
     """Public: SSO through LCR to (re)mint LCR session cookies (Okta session must be live)."""
     _establish_lcr_session(session)
+
+
+# --- LCR identity leg: failure classification + transient retry (2026-06-10 outage) -------------
+# That day LCR's /api/auth/me returned instant 502s for hours; every first-time login died with a
+# generic "LCR didn't answer" and login_audit kept no root cause. These helpers make the leg
+# self-diagnosing (kind + root cause) and survive brief blips (cheap retries on FAST failures).
+
+# Kinds worth retrying inside one login request. sso_rejected is retried once separately (it needs
+# the SSO re-driven, and a second identical rejection is a real answer, not weather).
+TRANSIENT_LCR_KINDS = frozenset({"lcr_5xx", "timeout", "network"})
+
+
+def classify_lcr_failure(exc: BaseException) -> tuple[str, str]:
+    """(kind, root_cause) for an identity-leg failure. Kinds: lcr_5xx | sso_rejected | timeout |
+    network | lcr_http | other. root_cause is the compact operator-facing truth (e.g.
+    'auth/me 502 text/plain') — what login_audit should record instead of the friendly message."""
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, requests.exceptions.Timeout):
+            return "timeout", f"timeout: {str(cur)[:140]}"
+        if isinstance(cur, requests.exceptions.ConnectionError):
+            return "network", f"network: {str(cur)[:140]}"
+        if isinstance(cur, LoginError):
+            text = str(cur)
+            if "landed back on Okta" in text:
+                return "sso_rejected", "SSO landed back on Okta"
+            if "/api/auth/me failed:" in text:
+                status = text.split("failed:", 1)[1].strip()
+                kind = "lcr_5xx" if status[:1] == "5" else "lcr_http"
+                return kind, f"auth/me {status[:120]}"
+        cur = cur.__cause__ or cur.__context__
+    return "other", str(exc)[:160]
+
+
+def establish_and_verify(session: requests.Session, *, attempts: int = 3, backoff_s: float = 2.0,
+                         retry_window_s: float = 15.0,
+                         establish_timeout: int = 45, verify_timeout: int = 30) -> dict[str, Any]:
+    """SSO into LCR + /api/auth/me with retries on transient failures; returns the auth/me JSON.
+
+    Retries only while total elapsed time is under `retry_window_s`: the retryable failures are the
+    FAST ones (instant 5xx, connection reset); a leg that burned 30-45s in a timeout already spent
+    the request's budget. Timeouts are tighter than the old flat 60s so the worst case
+    (45s establish + 30s verify) plus overhead stays inside the web client's 95s attempt window."""
+    import time as _time
+    t0 = _time.monotonic()
+    established = False
+    sso_retried = False
+    for i in range(attempts):
+        try:
+            if not established:
+                _establish_lcr_session(session, timeout=establish_timeout)
+                established = True
+            return _verify(session, timeout=verify_timeout)
+        except Exception as exc:  # noqa: BLE001 — classified below; non-retryable kinds re-raise
+            kind, root = classify_lcr_failure(exc)
+            if kind == "sso_rejected":
+                established = False  # the SSO itself must be re-driven
+                retryable = not sso_retried
+                sso_retried = True
+            else:
+                retryable = kind in TRANSIENT_LCR_KINDS
+            wait = backoff_s * (i + 1)
+            elapsed = _time.monotonic() - t0
+            if not retryable or i == attempts - 1 or elapsed + wait > retry_window_s:
+                raise
+            logger.info("LCR identity leg failed (%s: %s) — retry %d/%d in %.0fs",
+                        kind, root, i + 1, attempts - 1, wait)
+            _time.sleep(wait)
+    raise LoginError("identity retries exhausted")  # unreachable (last attempt re-raises)
 
 
 def write_storage_state(session: requests.Session, path: str | Path) -> int:

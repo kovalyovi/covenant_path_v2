@@ -921,6 +921,147 @@ def test_enrollment_status_no_role_resolves_stake_via_identity_cache() -> None:
         admin._one, admin.requests = old_one, old_requests
 
 
+def test_classify_lcr_failure() -> None:
+    # 2026-06-10 outage postmortem: login_audit stored only the friendly message, so a hard 502, a
+    # rejected SSO, and a timeout were indistinguishable. The classifier is what makes the next
+    # outage diagnosable from the audit row alone.
+    import requests as _rq
+    from lcr_client.okta_login import LoginError, classify_lcr_failure
+
+    k, r = classify_lcr_failure(LoginError("verification /api/auth/me failed: 502 text/plain"))
+    check("classify: auth/me 502 -> lcr_5xx", k == "lcr_5xx" and r.startswith("auth/me 502"))
+    k, _r = classify_lcr_failure(LoginError("verification /api/auth/me failed: 403 text/html"))
+    check("classify: auth/me 403 -> lcr_http (no retry)", k == "lcr_http")
+    k, r = classify_lcr_failure(LoginError(
+        "SSO did not complete — landed back on Okta. The Okta session cookie was not honored."))
+    check("classify: SSO bounce -> sso_rejected",
+          k == "sso_rejected" and r == "SSO landed back on Okta")
+    # Wrapped causes (the shape _finish_success actually sees) must classify by the CHAIN.
+    try:
+        try:
+            raise _rq.exceptions.ConnectTimeout("hang")
+        except Exception as inner:
+            raise LoginError("identity failed") from inner
+    except LoginError as outer:
+        k, _r = classify_lcr_failure(outer)
+        check("classify: chained timeout -> timeout", k == "timeout")
+    k, _r = classify_lcr_failure(_rq.exceptions.ConnectionError("reset"))
+    check("classify: connection error -> network", k == "network")
+    k, _r = classify_lcr_failure(RuntimeError("???"))
+    check("classify: unknown -> other", k == "other")
+
+
+def test_establish_and_verify_retry_behavior() -> None:
+    # The identity leg must survive a BLIP (one instant 5xx) but not loop on real answers:
+    # lcr_http (e.g. 403) fails immediately, an SSO rejection is re-driven exactly once.
+    from lcr_client import okta_login as ol
+
+    old_est, old_ver = ol._establish_lcr_session, ol._verify
+    calls = {"est": 0, "ver": 0}
+    try:
+        # 1) 502 once, then success — establish must NOT be redone (cookies are fine).
+        def _est(session, timeout=60):
+            calls["est"] += 1
+
+        def _ver_blip(session, timeout=60):
+            calls["ver"] += 1
+            if calls["ver"] == 1:
+                raise ol.LoginError("verification /api/auth/me failed: 502 text/plain")
+            return {"email": "x@y.z"}
+
+        ol._establish_lcr_session, ol._verify = _est, _ver_blip
+        out = ol.establish_and_verify(object(), backoff_s=0)
+        check("retry: survives one 502 blip", out.get("email") == "x@y.z")
+        check("retry: establish ran once", calls["est"] == 1)
+
+        # 2) non-5xx HTTP answer (403) is a real answer — no retry.
+        calls.update(est=0, ver=0)
+
+        def _ver_403(session, timeout=60):
+            calls["ver"] += 1
+            raise ol.LoginError("verification /api/auth/me failed: 403 text/html")
+
+        ol._verify = _ver_403
+        try:
+            ol.establish_and_verify(object(), backoff_s=0)
+            check("retry: 403 raises", False)
+        except ol.LoginError:
+            check("retry: 403 raises", True)
+        check("retry: 403 not retried", calls["ver"] == 1)
+
+        # 3) SSO rejection: re-driven exactly once, then surfaces.
+        calls.update(est=0, ver=0)
+
+        def _est_bounce(session, timeout=60):
+            calls["est"] += 1
+            raise ol.LoginError("SSO did not complete — landed back on Okta. x")
+
+        ol._establish_lcr_session = _est_bounce
+        try:
+            ol.establish_and_verify(object(), backoff_s=0)
+            check("retry: persistent SSO bounce raises", False)
+        except ol.LoginError:
+            check("retry: persistent SSO bounce raises", True)
+        check("retry: SSO re-driven exactly once", calls["est"] == 2)
+    finally:
+        ol._establish_lcr_session, ol._verify = old_est, old_ver
+
+
+def test_identity_failure_kind_message_and_audit() -> None:
+    # End-to-end through the API layer: a hard 502 outage yields a 503 whose detail says LCR (not
+    # us, not the account) is down, and the audit row records the ROOT CAUSE + identity phase —
+    # exactly what was missing while diagnosing vzhdanov's 2026-06-10 attempts.
+    from lcr_client.okta_login import LoginError
+
+    old_drive, old_identity = okta_flow._drive_to_password, okta_flow._identity
+    old_get = okta_flow.identity_cache.get
+    old_audit = appmod._audit_okta_failure
+    audited: dict = {}
+    okta_flow._drive_to_password = (
+        lambda s, u, p, lid: ({"successWithInteractionCode": {"value": []}}, "ver"))
+    okta_flow.identity_cache.get = lambda u: None
+    okta_flow._identity = (lambda s, lid: (_ for _ in ()).throw(
+        LoginError("verification /api/auth/me failed: 502 text/plain")))
+    appmod._audit_okta_failure = (
+        lambda who, stage, error, rid, duration_ms=None, phase=None:
+        audited.update(who=who, stage=stage, error=error, duration_ms=duration_ms, phase=phase))
+    okta_flow._note_lcr_identity(True, "")  # reset outage state
+    try:
+        r = client.post("/auth/password", json={"username": "vzh", "password": "pw"})
+        check("identity 502 -> HTTP 503", r.status_code == 503)
+        detail = r.json().get("detail", "")
+        check("identity 502 detail blames LCR, not the user",
+              "LCR itself appears to be down" in detail and "account or permissions" in detail)
+        check("audit stage lcr_identity_failed", audited.get("stage") == "lcr_identity_failed")
+        check("audit error is the ROOT CAUSE", str(audited.get("error", "")).startswith("auth/me 502"))
+        check("audit phase identity:lcr_5xx", audited.get("phase") == "identity:lcr_5xx")
+        check("audit duration recorded", isinstance(audited.get("duration_ms"), int))
+    finally:
+        okta_flow._drive_to_password, okta_flow._identity = old_drive, old_identity
+        okta_flow.identity_cache.get = old_get
+        appmod._audit_okta_failure = old_audit
+        okta_flow._note_lcr_identity(True, "")
+
+
+def test_lcr_outage_tracker_and_health() -> None:
+    # One failing account is one weird account; TWO distinct accounts = an outage. /health then says
+    # so (lcr: degraded + since), the user message gains the "failing for everyone" suffix, and any
+    # full-identity success resets it.
+    okta_flow._note_lcr_identity(True, "")  # clean slate
+    okta_flow._note_lcr_identity(False, "userA")
+    check("outage: one user is not an outage", okta_flow.lcr_outage_since() is None)
+    okta_flow._note_lcr_identity(False, "userB")
+    check("outage: two distinct users is", okta_flow.lcr_outage_since() is not None)
+    check("outage: message suffix names the start",
+          "failing for everyone since" in okta_flow._outage_suffix())
+    r = client.get("/health")
+    check("health: lcr degraded", r.json().get("lcr") == "degraded")
+    check("health: failing-since stamped", bool(r.json().get("lcr_failing_since")))
+    okta_flow._note_lcr_identity(True, "userA")
+    check("outage: success resets", okta_flow.lcr_outage_since() is None)
+    check("health: lcr ok again", client.get("/health").json().get("lcr") == "ok")
+
+
 def main() -> int:
     print("broker tests")
     test_fast_lane_eval_zero_lcr()
@@ -933,6 +1074,10 @@ def main() -> int:
     test_login_eval_fast_calling_gate()
     test_zero_lcr_lane_requires_has_calling()
     test_start_login_cached_identity_skips_lcr()
+    test_classify_lcr_failure()
+    test_establish_and_verify_retry_behavior()
+    test_identity_failure_kind_message_and_audit()
+    test_lcr_outage_tracker_and_health()
     test_identity_refresh_throttle()
     test_identity_refresh_never_raises()
     test_identity_email_binding()

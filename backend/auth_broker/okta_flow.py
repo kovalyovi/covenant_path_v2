@@ -25,7 +25,7 @@ from lcr_client.logging_setup import dump_debug, get_logger
 from lcr_client.okta_login import (
     CLIENT_ID, INTROSPECT_URL, ISSUER, REDIRECT_URI, SCOPE,
     _follow, _idx_messages, _idx_post, _password_authenticator_id, _pkce,
-    _remediations, establish_lcr_session, new_session, verify_session,
+    _remediations, classify_lcr_failure, establish_and_verify, new_session,
 )
 from backend.auth_broker import identity_cache
 
@@ -42,7 +42,51 @@ class AuthError(RuntimeError):
 class IdentityError(AuthError):
     """Okta ACCEPTED the password, but the LCR identity fetch failed — we can't learn the email to
     mint a session for. Not a credential problem: the API layer maps this to 503 with an honest
-    "LCR didn't answer, try again" message (previously it escaped as an opaque 500 after a hang)."""
+    "LCR didn't answer, try again" message (previously it escaped as an opaque 500 after a hang).
+    Carries `kind` (classify_lcr_failure) + `root_cause` so login_audit records the actual failure
+    (e.g. 'auth/me 502'), not just the friendly text — the 2026-06-10 outage was undiagnosable
+    from audit rows alone."""
+
+    def __init__(self, message: str, *, kind: str = "other", root_cause: str = ""):
+        super().__init__(message)
+        self.kind = kind
+        self.root_cause = root_cause
+
+
+# In-process LCR outage tracker (single broker instance, best-effort): consecutive identity-leg
+# failures across DISTINCT usernames mean LCR itself is down, not one weird account — tell users
+# since when, and surface it on /health. Reset by any full-identity success.
+_LCR_OUTAGE: dict = {"first_fail": None, "users": set()}
+_OUTAGE_STALE_S = 1800  # forget a stale streak: a quiet half hour means new failures are new news
+
+
+def _note_lcr_identity(ok: bool, username: str) -> None:
+    now = time.time()
+    if ok:
+        _LCR_OUTAGE["first_fail"] = None
+        _LCR_OUTAGE["users"] = set()
+        return
+    first = _LCR_OUTAGE["first_fail"]
+    if first is None or now - first > _OUTAGE_STALE_S:
+        _LCR_OUTAGE["first_fail"] = now
+        _LCR_OUTAGE["users"] = set()
+    _LCR_OUTAGE["users"].add((username or "?").lower())
+
+
+def lcr_outage_since() -> float | None:
+    """Epoch seconds of the first failure of the CURRENT outage window, or None when healthy.
+    Degraded only once 2+ distinct accounts failed — one user can be one weird account."""
+    first = _LCR_OUTAGE["first_fail"]
+    if first is None or len(_LCR_OUTAGE["users"]) < 2 or time.time() - first > _OUTAGE_STALE_S:
+        return None
+    return first
+
+
+def _outage_suffix() -> str:
+    since = lcr_outage_since()
+    if since is None:
+        return ""
+    return time.strftime(" (LCR has been failing for everyone since %H:%M UTC.)", time.gmtime(since))
 
 
 def _new_login_id() -> str:
@@ -145,9 +189,10 @@ def serialize_cookies(session: requests.Session) -> list[dict]:
 
 
 def _identity(session: requests.Session, login_id: str) -> dict:
-    """After IDX success: mint an LCR session and read /api/auth/me for identity."""
-    establish_lcr_session(session)
-    me = verify_session(session)
+    """After IDX success: mint an LCR session and read /api/auth/me for identity.
+    Retries transient LCR failures (instant 5xx / connection drops) inside the request — see
+    establish_and_verify; timeouts are sized so the worst case fits the client's 95s window."""
+    me = establish_and_verify(session)
     ident = {
         "email": (me.get("email") or me.get("personalEmail") or "").lower(),
         "name": me.get("name") or me.get("displayName"),
@@ -297,13 +342,27 @@ def _finish_success(session: requests.Session, payload: dict, verifier: str, log
         with obs.span("login.identity", correlation_id=cid, endpoint="lcr"):
             ident = _identity(session, login_id)
     except Exception as exc:  # noqa: BLE001 — LCR failed AFTER the password was accepted
-        dump_debug("broker_identity_error", login_id=login_id, error=str(exc))
-        obs.event("login.complete", correlation_id=cid, status="error",
-                  duration_ms=round((time.time() - t0) * 1000, 1), message=str(exc)[:200])
-        raise IdentityError(
-            "Your password was accepted, but the Church directory (LCR) didn't answer when we "
-            "asked who you are — it may be slow or briefly down. Please try again in a minute."
-        ) from exc
+        kind, root = classify_lcr_failure(exc)
+        _note_lcr_identity(False, username)
+        dump_debug("broker_identity_error", login_id=login_id, kind=kind, root_cause=root,
+                   error=str(exc))
+        obs.event("login.complete", correlation_id=cid, status="error", kind=kind,
+                  duration_ms=round((time.time() - t0) * 1000, 1), message=root[:200])
+        # Per-mode honesty: a hard 5xx is LCR's outage (not this account, not this app); a rejected
+        # SSO is account/session-shaped; everything else keeps the "slow or briefly down" framing.
+        if kind == "lcr_5xx":
+            msg = ("Your password was accepted, but the Church's LCR system is returning errors "
+                   "right now — LCR itself appears to be down. This isn't about your account or "
+                   "permissions; please try again later.")
+        elif kind == "sso_rejected":
+            msg = ("Your Church sign-in worked, but LCR did not accept the session. Try signing "
+                   "in once at lcr.churchofjesuschrist.org, then retry here.")
+        else:
+            msg = ("Your password was accepted, but the Church directory (LCR) didn't answer when "
+                   "we asked who you are — it may be slow or briefly down. Please try again in a "
+                   "minute.")
+        raise IdentityError(msg + _outage_suffix(), kind=kind, root_cause=root) from exc
+    _note_lcr_identity(True, username)
     ident["login_username"] = username
     if rt:
         ident["refresh_token"] = rt
