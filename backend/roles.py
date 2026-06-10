@@ -186,16 +186,23 @@ def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]
     # wards use) — no rotating server-action id to go stale. Fall back to the leadership
     # directory action only if orgs returns nothing. We keep stake-prefixed callings (Stake
     # Presidency / clerks / stake auxiliaries); ward callings come from the per-unit loop below.
+    # Always-allowed stewardship callings are kept regardless of prefix: the orgs endpoint says
+    # "Stake High Councilor" today, but LCR's own access catalog names the same position
+    # "High Councilor" — a name-variant drift must not silently drop stake-wide access.
+    def _stake_scoped(p: dict) -> bool:
+        c = p["calling"] or ""
+        return c.startswith(_STAKE_PREFIXES) or _calling_always_allowed(c)
+
     stake_positions: list[dict] = []
     try:
         stake_positions = [p for p in _ward_positions(client.org_callings(ctx.unit_number))
-                           if (p["calling"] or "").startswith(_STAKE_PREFIXES)]
+                           if _stake_scoped(p)]
     except Exception as exc:  # noqa: BLE001
         logger.warning("stake org callings unavailable: %s", exc)
     if not stake_positions:
         try:
             stake_positions = [p for p in _positions(leadership.fetch_leadership(client.session))
-                               if (p["calling"] or "").startswith(_STAKE_PREFIXES)]
+                               if _stake_scoped(p)]
         except Exception as exc:  # noqa: BLE001
             logger.warning("stake leadership fallback failed: %s", exc)
     # If BOTH sources come back empty we must NOT treat that as "every stake leader was
