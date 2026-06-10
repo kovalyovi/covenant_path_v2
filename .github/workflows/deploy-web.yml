@@ -48,3 +48,12 @@ jobs:
           projectName: covenant-path-app   # must match the project name in Cloudflare Pages
           directory: apps/web/dist
           gitHubToken: ${{ secrets.GITHUB_TOKEN }} # posts deploy status on the commit
+
+      # E2E smoke: wait for the deploy to propagate, then verify the LIVE site serves the shell
+      # uncached and every lazy route chunk (KpisTab/AdminPage/AdminListPage) with 200 + immutable —
+      # catches the "Failed to fetch dynamically imported module" class of breakage before users do.
+      - name: Smoke-test live site
+        working-directory: apps/web
+        env:
+          APP_URL: ${{ secrets.APP_URL }} # falls back to production URL when unset
+        run: npm run smoke
