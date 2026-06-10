@@ -282,7 +282,8 @@ def _finish_success(session: requests.Session, payload: dict, verifier: str, log
                  "cmis_id": cached.get("cmis_id"), "cmis_uuid": cached.get("cmis_uuid"),
                  "username": cached.get("username"),
                  "login_username": username, "unit_number": cached.get("unit_number"),
-                 "stake_name": cached.get("stake_name"), "cached": True}
+                 "stake_name": cached.get("stake_name"),
+                 "has_calling": cached.get("has_calling"), "cached": True}
         ms = round((time.time() - t0) * 1000, 1)
         obs.event("login.complete", correlation_id=cid, status="success", duration_ms=ms,
                   lane="cached")

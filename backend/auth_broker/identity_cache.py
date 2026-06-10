@@ -56,7 +56,7 @@ def get(username: str) -> dict | None:
 
 
 def put(username: str, identity: dict, *, unit_number: int | None = None,
-        stake_name: str | None = None) -> None:
+        stake_name: str | None = None, has_calling: bool | None = None) -> None:
     """Upsert the verified identity under the TYPED username and under the canonical LCR username
     when different (members sign in with either form). Omitted columns keep their stored values
     (PostgREST updates only payload columns), so a put without unit_number preserves a known unit.
@@ -78,6 +78,8 @@ def put(username: str, identity: dict, *, unit_number: int | None = None,
             row["unit_number"] = unit_number
         if stake_name is not None:
             row["stake_name"] = stake_name
+        if has_calling is not None:
+            row["has_calling"] = has_calling
         rows.append(row)
     try:
         requests.post(f"{SUPABASE_URL}/rest/v1/church_identities",
@@ -88,9 +90,12 @@ def put(username: str, identity: dict, *, unit_number: int | None = None,
 
 
 def set_unit(username: str, identity: dict, unit_number: int | None,
-             stake_name: str | None) -> None:
+             stake_name: str | None, has_calling: bool | None = None) -> None:
     """Record the unit learned during the login eval (user_context) — this is what makes the NEXT
-    login zero-LCR. Never raises."""
-    if unit_number is None:
+    login zero-LCR — plus the calling-gate outcome (migration 0044): the zero-LCR lane only
+    authorizes when has_calling is TRUE, so a no-calling member can't ride the cache past the
+    gate. Never raises."""
+    if unit_number is None and has_calling is None:
         return
-    put(username, identity, unit_number=unit_number, stake_name=stake_name)
+    put(username, identity, unit_number=unit_number, stake_name=stake_name,
+        has_calling=has_calling)

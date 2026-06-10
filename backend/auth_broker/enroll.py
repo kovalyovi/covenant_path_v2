@@ -78,6 +78,26 @@ def _first_usable_credential(embed) -> dict | None:
     return next((c for c in creds if isinstance(c, dict) and not c.get("revoked")), None)
 
 
+def _clearly_no_calling(ctx) -> bool:
+    """True only when LCR POSITIVELY told us this account holds no calling at all: user-context
+    succeeded and shows no active position, no positions, and no child units. HAR-verified
+    (2026-06-10) against a real no-calling member: activePosition/activePositionEnglish/positions
+    are all null, while anyone LCR grants leader access has at least an active position.
+
+    This is the cheap calling gate for the fast paths, which previously returned authorized:true
+    for ANY valid Church account once their stake had a credential on file. It runs on the
+    user-context response the eval already fetched — zero added LCR calls. Deliberately
+    conservative, preserving the err-toward-allow rule that protects real leaders: an LCR
+    hiccup/outage raises before this point (login proceeds undetermined), and a leader with ANY
+    of the three signals present passes. CP_DISABLE_CALLING_GATE=1 is the ops kill switch if a
+    legitimate leader shape we haven't seen ever trips it."""
+    if os.environ.get("CP_DISABLE_CALLING_GATE") == "1":
+        return False
+    return not (getattr(ctx, "active_position", None)
+                or getattr(ctx, "positions", None)
+                or getattr(ctx, "child_units", None))
+
+
 def _bind_identity_email(identity: dict) -> None:
     """Stamp this login's VERIFIED email onto the person's calling-provisioned user_roles rows
     (matched by lcr_person_uuid == auth/me churchCMISUUID — probe-verified to be the same uuid).
@@ -196,7 +216,11 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
     # a usable credential on file, authorization needs only this DB check (RLS is the real data
     # gate, same trust as the credential-on-file fast path below). No LcrClient, no user_context —
     # a routine repeat sign-in stops depending on LCR weather entirely.
-    if not store and identity.get("cached") and identity.get("unit_number"):
+    # has_calling must be EXPLICITLY true (0044): the cached row carries the last calling-gate
+    # outcome; false or null (pre-0044 row) falls through to the LCR-backed path below, which
+    # re-runs the gate and refreshes the flag — so a no-calling member can't ride the cache in.
+    if (not store and identity.get("cached") and identity.get("unit_number")
+            and identity.get("has_calling") is True):
         from types import SimpleNamespace
         active_fast = _stored_credential_summary(identity["unit_number"])
         if active_fast is not None:
@@ -225,9 +249,26 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
         client = _client_from_cookies(cookies)
         ctx = client.user_context()
     logger.info("login eval: user_context %.1fs (unit=%s)", _time.monotonic() - t0, ctx.unit_number)
-    # Record the unit now — this is what makes this user's NEXT login zero-LCR.
+    # Record the unit now (this is what makes this user's NEXT login zero-LCR) plus the
+    # calling-gate outcome the zero-LCR lane will require.
+    no_calling = _clearly_no_calling(ctx)
     identity_cache.set_unit(identity.get("login_username") or identity.get("username") or "",
-                            identity, ctx.unit_number, ctx.unit_name)
+                            identity, ctx.unit_number, ctx.unit_name,
+                            has_calling=not no_calling)
+
+    # CALLING GATE (the "my wife with no calling could sign in" report): user-context positively
+    # shows this account holds NO calling → blocked, before any fast path can authorize and before
+    # the expensive access scrape. Leaders are untouched: any active position / positions /
+    # child_units passes, and an LCR failure raised above (login proceeds undetermined, as ever).
+    if no_calling:
+        logger.info("login eval: GATE — user-context shows no calling (unit=%s); blocking",
+                    ctx.unit_number)
+        _audit_login(identity.get("email"), identity.get("name"), ctx, {}, False, None,
+                     "blocked", None, request_id=request_id,
+                     duration_ms=_elapsed_ms(), phase="gate")
+        return {"stake": ctx.unit_name, "unit_number": ctx.unit_number,
+                "authorized": False, "access_rank": None, "complete": None, "missing": [],
+                "can_improve": False, "can_enroll": False, "stored": False}
 
     # FAST PATH (the ">1 minute to sign in" fix): the full covenant_path_access scrape below hits
     # dozens of LCR endpoints and routinely took 30-60s+ on every Church login. It only EARNS that
@@ -384,8 +425,11 @@ def refresh_cached_identity(cookies: list[dict], login_username: str) -> None:
         ident = okta_flow._identity(s, "bg-refresh")  # establishes LCR + reads /api/auth/me
         ident["login_username"] = login_username
         ctx = _client_from_cookies(okta_flow.serialize_cookies(s)).user_context()
+        # Refresh the calling-gate flag too: a released leader stops riding the zero-LCR lane by
+        # their next login; a newly-called leader heals the other way.
         identity_cache.put(login_username or ident.get("username") or "", ident,
-                           unit_number=ctx.unit_number, stake_name=ctx.unit_name)
+                           unit_number=ctx.unit_number, stake_name=ctx.unit_name,
+                           has_calling=not _clearly_no_calling(ctx))
         obs.event("identity.refresh", status="ok",
                   duration_ms=round((_time.monotonic() - t0) * 1000, 1))
         logger.info("identity cache refreshed for login=%s (%.1fs, unit=%s)",

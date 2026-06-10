@@ -532,7 +532,8 @@ def test_fast_lane_eval_zero_lcr() -> None:
     try:
         out = enroll.evaluate_and_maybe_store(
             [{"name": "sid", "value": "x", "domain": "d", "path": "/"}],
-            {"email": "x@y.z", "cached": True, "unit_number": 503991, "stake_name": "Test Stake"},
+            {"email": "x@y.z", "cached": True, "unit_number": 503991, "stake_name": "Test Stake",
+             "has_calling": True},
             False, request_id="rid42")
         check("fast-lane authorized", out.get("authorized") is True)
         check("fast-lane marks fast", out.get("fast") is True)
@@ -542,6 +543,129 @@ def test_fast_lane_eval_zero_lcr() -> None:
     finally:
         (enroll.SUPABASE_URL, enroll.SERVICE_KEY, enroll._stored_credential_summary,
          enroll._client_from_cookies, enroll._audit_login) = old
+
+
+def _gate_env(ctx, cred_summary):
+    """Patch enroll for a calling-gate test: no network, a fake LcrClient whose user_context()
+    returns `ctx`, a stubbed stored-credential lookup, and captured audit/cache writes.
+    Returns (audited, cached, restore_fn)."""
+    import types as _types
+    from backend.auth_broker import identity_cache
+    old = (enroll.SUPABASE_URL, enroll.SERVICE_KEY, enroll._stored_credential_summary,
+           enroll._client_from_cookies, enroll._audit_login, identity_cache.set_unit)
+    enroll.SUPABASE_URL, enroll.SERVICE_KEY = "https://example.invalid", "key"
+    enroll._stored_credential_summary = lambda unit: cred_summary
+    enroll._client_from_cookies = lambda cookies: _types.SimpleNamespace(user_context=lambda: ctx)
+    audited: dict = {}
+    cached: dict = {}
+    enroll._audit_login = lambda *a, **k: audited.update(k)
+    identity_cache.set_unit = (
+        lambda username, identity, unit, stake, has_calling=None:
+        cached.update({"unit": unit, "has_calling": has_calling}))
+
+    def _restore():
+        (enroll.SUPABASE_URL, enroll.SERVICE_KEY, enroll._stored_credential_summary,
+         enroll._client_from_cookies, enroll._audit_login, identity_cache.set_unit) = old
+
+    return audited, cached, _restore
+
+
+def test_calling_gate_blocks_no_calling_member() -> None:
+    # The wife-with-no-calling repro: a valid Church account whose user-context shows NO calling
+    # (activePosition/positions/childUnits all null — HAR-verified shape) must be blocked even
+    # though her stake has a usable credential on file (previously the FAST path authorized her).
+    import types as _types
+    ctx = _types.SimpleNamespace(active_position=None, positions=[], child_units=[],
+                                 unit_number=1102966, unit_name="Green Level Ward")
+    audited, cached, restore = _gate_env(ctx, {"coverage": {}, "access_rank": 3})
+    try:
+        out = enroll.evaluate_and_maybe_store(
+            [{"name": "sid", "value": "x", "domain": "d", "path": "/"}],
+            {"email": "member@example.org"}, False, request_id="rid-gate")
+        check("gate blocks no-calling member", out.get("authorized") is False)
+        check("gate offers nothing",
+              out.get("can_enroll") is False and out.get("can_improve") is False)
+        check("gate audit phase", audited.get("phase") == "gate")
+        check("gate caches has_calling=False", cached.get("has_calling") is False)
+    finally:
+        restore()
+
+
+def test_calling_gate_blocks_enroll_attempt() -> None:
+    # store=True (an explicit enroll) from a no-calling account is blocked the same way — it must
+    # never reach the access scrape or the enroll RPC.
+    import types as _types
+    ctx = _types.SimpleNamespace(active_position=None, positions=[], child_units=[],
+                                 unit_number=1102966, unit_name="Green Level Ward")
+    audited, _cached, restore = _gate_env(ctx, None)
+    try:
+        out = enroll.evaluate_and_maybe_store(
+            [{"name": "sid", "value": "x", "domain": "d", "path": "/"}],
+            {"email": "member@example.org"}, True, request_id="rid-gate2")
+        check("gate blocks enroll attempt", out.get("authorized") is False)
+        check("gate enroll not stored", out.get("stored") is False)
+        check("gate enroll audit blocked", audited.get("phase") == "gate")
+    finally:
+        restore()
+
+
+def test_calling_gate_passes_leader() -> None:
+    # NO REGRESSION for real leaders: an active position (a brand-new stake-clerk account, say)
+    # passes the gate and the credential-on-file FAST path authorizes exactly as before — and the
+    # cache records has_calling=True so their NEXT login rides the zero-LCR lane.
+    import types as _types
+    ctx = _types.SimpleNamespace(active_position="Stake Clerk", positions=[{"name": "Stake Clerk"}],
+                                 child_units=[], unit_number=503991, unit_name="Test Stake")
+    audited, cached, restore = _gate_env(ctx, {"coverage": {}, "access_rank": 3})
+    try:
+        out = enroll.evaluate_and_maybe_store(
+            [{"name": "sid", "value": "x", "domain": "d", "path": "/"}],
+            {"email": "clerk@example.org"}, False, request_id="rid-gate3")
+        check("leader passes gate (fast path)", out.get("authorized") is True)
+        check("leader audit phase fast", audited.get("phase") == "fast")
+        check("leader caches has_calling=True", cached.get("has_calling") is True)
+    finally:
+        restore()
+
+
+def test_calling_gate_partial_context_passes() -> None:
+    # Err-toward-allow: a leader whose user-context came back DEGRADED (no active position but
+    # child units present — or any single signal) must NOT be blocked by the gate.
+    from types import SimpleNamespace
+    for shim, label in [
+        (SimpleNamespace(active_position=None, positions=[],
+                         child_units=[SimpleNamespace(name="W1", unit_number=1, type="WARD")],
+                         unit_number=503991, unit_name="Test Stake"), "child units only"),
+        (SimpleNamespace(active_position=None, positions=[{"name": "High Councilor"}],
+                         child_units=[], unit_number=503991, unit_name="Test Stake"), "positions only"),
+    ]:
+        audited, _cached, restore = _gate_env(shim, {"coverage": {}, "access_rank": 1})
+        try:
+            out = enroll.evaluate_and_maybe_store(
+                [{"name": "sid", "value": "x", "domain": "d", "path": "/"}],
+                {"email": "leader@example.org"}, False)
+            check(f"partial context passes ({label})", out.get("authorized") is True)
+        finally:
+            restore()
+
+
+def test_zero_lcr_lane_requires_has_calling() -> None:
+    # A cached identity WITHOUT has_calling=true (pre-0044 row, or a blocked member) must fall
+    # through to the LCR-backed path — where the gate re-runs — instead of being authorized blind.
+    import types as _types
+    ctx = _types.SimpleNamespace(active_position=None, positions=[], child_units=[],
+                                 unit_number=1102966, unit_name="Green Level Ward")
+    audited, _cached, restore = _gate_env(ctx, {"coverage": {}, "access_rank": 3})
+    try:
+        out = enroll.evaluate_and_maybe_store(
+            [{"name": "sid", "value": "x", "domain": "d", "path": "/"}],
+            {"email": "member@example.org", "cached": True, "unit_number": 503991,
+             "stake_name": "Test Stake"},  # no has_calling → no zero-LCR shortcut
+            False)
+        check("cached row without has_calling falls through to gate",
+              out.get("authorized") is False and audited.get("phase") == "gate")
+    finally:
+        restore()
 
 
 def test_start_login_cached_identity_skips_lcr() -> None:
@@ -698,6 +822,11 @@ def test_enrollment_status_no_role_resolves_stake_via_identity_cache() -> None:
 def main() -> int:
     print("broker tests")
     test_fast_lane_eval_zero_lcr()
+    test_calling_gate_blocks_no_calling_member()
+    test_calling_gate_blocks_enroll_attempt()
+    test_calling_gate_passes_leader()
+    test_calling_gate_partial_context_passes()
+    test_zero_lcr_lane_requires_has_calling()
     test_start_login_cached_identity_skips_lcr()
     test_identity_refresh_throttle()
     test_identity_refresh_never_raises()
