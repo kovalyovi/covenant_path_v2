@@ -365,6 +365,14 @@ struct EmptyStateView: View {
                     "Access is scoped to your LCR calling. Sign in with the email your stake has on file.",
                     false, "")
         }
+        if noRole, let stake = enrollStatus?.stakeName, !stake.isEmpty {
+            // Released-or-no-access member of a KNOWN stake (resolved via the broker's identity
+            // cache — ADR-009 amendment G): tell the truth instead of "set up stake sync" /
+            // "setting up your stake…" (nothing is coming for them).
+            return ("No access with your current calling",
+                    "\(stake) is synced with Covenant Path, but your current calling doesn't grant access to its member data. If you were recently released, access ends automatically. If this seems wrong, contact your stake leadership.",
+                    false, "")
+        }
         if noRole && cred?.isNone == true {
             if brokerAvailable {
                 return ("Set up stake sync",

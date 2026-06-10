@@ -35,6 +35,17 @@ is now first-class: `login.request` Axiom events carry okta/eval/mint phase ms, 
 budget on every surface (native apps hit the same `/auth/password`); LCR weather can no longer
 stall sign-in. First-ever logins still pay one full identity fetch.
 
+**Amendment (2026-06-09, B+G).** (B) Every cached-lane login now triggers a THROTTLED
+(10 min/user) background refresh of its identity row — including `unit_number` via
+`user_context`, which the original stale-only refresher missed — so a changed Church email or a
+stake move heals by the user's NEXT login instead of a 7-day TTL; refreshes run on a dedicated
+1-worker pool so a bad-LCR refresh can never crowd the login evals. (G) `enrollment_status`
+resolves a NO-ROLE caller's stake through the identity cache (only when a `stakes` row exists —
+never-enrolled leaders keep their "set up sync" CTA) and returns its real credential state with
+`member_count` omitted; all three apps show an honest "No access with your current calling"
+state instead of the misleading "your stake hasn't set up Covenant Path yet" / "setting up your
+stake…".
+
 ---
 
 ## ADR-008 — Dashboard scopes to one selected stake (2026-05-31)

@@ -21,6 +21,15 @@ export function EmptyState({ enrollStatus }: { enrollStatus: EnrollmentStatus | 
   if (enrollStatus == null) {
     title = 'No members visible';
     body = 'Access is scoped to your LCR calling. Sign in with the email your stake has on file.';
+  } else if (hasNoRole && enrollStatus.stakeName) {
+    // Released-or-no-access member of a KNOWN stake (resolved via the broker's identity cache —
+    // ADR-009 amendment G): tell the truth. Without this branch they fell into "Set up stake
+    // sync" (their stake IS set up) or "Setting up your stake…" (nothing is coming for them).
+    title = 'No access with your current calling';
+    body =
+      `${enrollStatus.stakeName} is synced with Covenant Path, but your current calling doesn't ` +
+      'grant access to its member data. If you were recently released, access ends automatically. ' +
+      'If this seems wrong, contact your stake leadership.';
   } else if (hasNoRole && cred?.state === 'none') {
     if (churchLoginAvailable) {
       title = 'Set up stake sync';

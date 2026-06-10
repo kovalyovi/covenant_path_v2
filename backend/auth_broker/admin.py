@@ -358,6 +358,31 @@ def enrollment_status(email: str, auth_id: str) -> dict:
                         "complete": bool(cov.get("complete")), "missing": cov.get("missing") or [],
                         "principal_name": cred.get("principal_name"), "is_provider": True,
                         "enrolled_at": cred.get("updated_at")}}
+        # G (ADR-009 amendment): a no-role caller may be a RELEASED leader (or a member whose
+        # calling never granted access) in a stake that IS synced. user_roles can no longer tell
+        # us their stake — but the identity cache can. Return that stake's REAL state so the app
+        # says "your calling doesn't grant access" instead of the misleading "your stake hasn't
+        # set up Covenant Path yet". Only when a `stakes` row exists: a leader of a NEVER-enrolled
+        # stake keeps the legacy payload (and the "set up stake sync" CTA). member_count is
+        # deliberately omitted (least privilege for a no-role caller); email-OTP-only users have
+        # no cache row and also keep the legacy payload.
+        ident = _one("church_identities",
+                     {"select": "unit_number,stake_name", "email": f"eq.{email.lower()}",
+                      "unit_number": "not.is.null", "limit": "1"})
+        if ident and ident.get("unit_number"):
+            stake = _one("stakes", {"select": "id,name,unit_number,last_synced_at",
+                                    "unit_number": f"eq.{ident['unit_number']}", "limit": "1"})
+            if stake:
+                cred2 = _one("stake_credentials", {"select": "revoked,last_failed_at",
+                                                   "stake_id": f"eq.{stake['id']}", "limit": "1"})
+                state = ("none" if not cred2
+                         else "revoked" if cred2.get("revoked")
+                         else "stale" if cred2.get("last_failed_at") else "active")
+                return {"status": "no_role", "stake_name": stake.get("name"),
+                        "stake_id": stake.get("id"), "unit_number": stake.get("unit_number"),
+                        "last_synced_at": stake.get("last_synced_at"),
+                        "member_count": 0, "has_data": False,
+                        "credential": {"state": state}}
         return {"status": "no_role", "has_data": False, "credential": {"state": "none"}}
     stake_id = roles[0].get("stake_id")
 

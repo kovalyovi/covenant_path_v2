@@ -102,6 +102,15 @@ fun EnrollmentEmptyState(
 
     when {
         enrollStatus == null -> {}
+        hasNoRole && !enrollStatus?.stakeName.isNullOrBlank() -> {
+            // Released-or-no-access member of a KNOWN stake (resolved via the broker's identity
+            // cache — ADR-009 amendment G): tell the truth instead of "set up stake sync" /
+            // "setting up your stake…" (nothing is coming for them).
+            title = "No access with your current calling"
+            body = "${enrollStatus?.stakeName} is synced with Covenant Path, but your current calling " +
+                "doesn't grant access to its member data. If you were recently released, access ends " +
+                "automatically. If this seems wrong, contact your stake leadership."
+        }
         hasNoRole && cred?.isNone == true -> {
             if (brokerAvailable) {
                 title = "Set up stake sync"

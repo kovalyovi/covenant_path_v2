@@ -605,12 +605,59 @@ def test_identity_refresh_never_raises() -> None:
         enroll._REFRESH_AT.clear()
 
 
+def test_enrollment_status_no_role_resolves_stake_via_identity_cache() -> None:
+    # G: a no-role caller WITH an identity-cache row + an EXISTING stake row gets that stake's
+    # real state (honest "no access with your calling" UI). A never-enrolled stake (no stakes
+    # row) stays legacy — preserving the "set up stake sync" CTA for first-time leaders — and so
+    # do email-OTP-only users (no cache row).
+    import types as _types
+    old_env = (admin.SUPABASE_URL, admin.SERVICE_KEY)
+    old_one, old_requests = admin._one, admin.requests
+    admin.SUPABASE_URL, admin.SERVICE_KEY = "https://example.invalid", "key"
+    admin.requests = _types.SimpleNamespace(get=lambda *a, **k: _FakeResp([], 404))
+
+    def one_with_cache(table, params):
+        if table == "stake_credentials" and "principal_email" in params:
+            return None  # not a first-enroller provider
+        if table == "church_identities":
+            return {"unit_number": 503991, "stake_name": "Test Stake"}
+        if table == "stakes":
+            return {"id": "stk1", "name": "Test Stake", "unit_number": 503991,
+                    "last_synced_at": "2026-06-09T11:00:00+00:00"}
+        if table == "stake_credentials":
+            return {"revoked": False, "last_failed_at": None}
+        return None
+
+    try:
+        admin._one = one_with_cache
+        out = admin.enrollment_status("released@example.com", "")
+        check("released: status no_role", out.get("status") == "no_role")
+        check("released: stake resolved", out.get("stake_name") == "Test Stake")
+        check("released: credential active", (out.get("credential") or {}).get("state") == "active")
+        check("released: member_count omitted", out.get("member_count") == 0)
+
+        admin._one = lambda table, params: (one_with_cache(table, params)
+                                            if table != "stakes" else None)
+        out_new = admin.enrollment_status("released@example.com", "")
+        check("never-enrolled stake: legacy payload",
+              (out_new.get("credential") or {}).get("state") == "none")
+
+        admin._one = lambda table, params: None
+        out2 = admin.enrollment_status("emailonly@example.com", "")
+        check("email-only: legacy payload", (out2.get("credential") or {}).get("state") == "none")
+        check("email-only: no stake leak", out2.get("stake_name") is None)
+    finally:
+        admin.SUPABASE_URL, admin.SERVICE_KEY = old_env
+        admin._one, admin.requests = old_one, old_requests
+
+
 def main() -> int:
     print("broker tests")
     test_fast_lane_eval_zero_lcr()
     test_start_login_cached_identity_skips_lcr()
     test_identity_refresh_throttle()
     test_identity_refresh_never_raises()
+    test_enrollment_status_no_role_resolves_stake_via_identity_cache()
     test_health()
     test_cors()
     test_credential_embed_shape()
