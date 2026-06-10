@@ -670,22 +670,26 @@ class Harness:
         if args.resume:
             self._resume(args.resume)
 
-    def _bootstrap(self):
-        """Authenticate + read user-context, retried across transient LCR failures (502/503/timeouts)
-        so the run starts even when LCR is mid-wobble. Backs off up to ~10min, re-minting the session
-        each attempt (a fresh LcrClient re-logs in if the cookie lapsed)."""
+    def _bootstrap(self, max_wait_h: float = 12.0):
+        """Authenticate + read user-context, retried PATIENTLY across LCR's own outages so a days-long
+        run starts even when LCR is broadly down (its /api/auth/me itself 502/503s for hours, observed).
+        Waiting an hour to start beats crashing. Backoff capped at 2min; gives up only after max_wait_h
+        of solid failure (then the supervisor can relaunch later). Fresh session each attempt."""
         last = None
-        for attempt in range(12):
+        deadline = time.monotonic() + max_wait_h * 3600
+        attempt = 0
+        while time.monotonic() < deadline:
+            attempt += 1
             try:
                 client = LcrClient()
                 return client, client.whoami(), client.user_context()
             except Exception as exc:  # noqa: BLE001
                 last = exc
-                wait = min(60.0, 5.0 * (attempt + 1))
-                logger.warning("bootstrap attempt %d failed (%s) — retrying in %.0fs",
-                               attempt + 1, exc, wait)
+                wait = min(120.0, 5.0 * attempt)
+                logger.warning("bootstrap attempt %d failed (%s) — retrying in %.0fs (LCR may be down)",
+                               attempt, exc, wait)
                 time.sleep(wait)
-        raise RuntimeError(f"could not authenticate after retries: {last}")
+        raise RuntimeError(f"could not authenticate within {max_wait_h}h: {last}")
 
     def _resume(self, path_arg: str) -> None:
         """Seed controllers from a prior recommendation.json so tiled (<6h) runs accumulate. Pass a
