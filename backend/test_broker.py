@@ -650,6 +650,76 @@ def test_calling_gate_partial_context_passes() -> None:
             restore()
 
 
+def test_calling_gate_check_sync() -> None:
+    # The synchronous first-login gate (one user_context call, no scrape): blocks a clear no-calling
+    # account, passes a leader, and ALLOWS on an LCR error (err toward allow — never block a leader
+    # on a slow/down LCR). Caches has_calling either way.
+    import types as _types
+    from backend.auth_broker import identity_cache
+    old = (enroll.SUPABASE_URL, enroll.SERVICE_KEY, enroll._user_context_with_establish,
+           identity_cache.set_unit, enroll._audit_login)
+    enroll.SUPABASE_URL, enroll.SERVICE_KEY = "https://example.invalid", "key"
+    cached: dict = {}
+    identity_cache.set_unit = (lambda u, i, unit, stake, has_calling=None:
+                               cached.update({"has_calling": has_calling}))
+    audited: dict = {}
+    enroll._audit_login = lambda *a, **k: audited.update(k)
+    cookies = [{"name": "s", "value": "x", "domain": "d", "path": "/"}]
+    try:
+        enroll._user_context_with_establish = lambda c: (
+            _types.SimpleNamespace(active_position=None, positions=[], child_units=[],
+                                   unit_number=1102966, unit_name="Green Level Ward"), c)
+        out = enroll.calling_gate_check(cookies, {"email": "m@e.org"}, request_id="r")
+        check("sync gate blocks no-calling", out is not None and out.get("authorized") is False)
+        check("sync gate caches has_calling False", cached.get("has_calling") is False)
+        check("sync gate audit phase gate-sync", audited.get("phase") == "gate-sync")
+
+        cached.clear()
+        enroll._user_context_with_establish = lambda c: (
+            _types.SimpleNamespace(active_position="Bishop", positions=[{"name": "Bishop"}],
+                                   child_units=[], unit_number=503991, unit_name="Test Stake"), c)
+        out2 = enroll.calling_gate_check(cookies, {"email": "l@e.org"})
+        check("sync gate passes leader (None)", out2 is None)
+        check("sync gate caches has_calling True", cached.get("has_calling") is True)
+
+        def _boom(c):
+            raise RuntimeError("LCR down")
+
+        enroll._user_context_with_establish = _boom
+        out3 = enroll.calling_gate_check(cookies, {"email": "x@e.org"})
+        check("sync gate allows on LCR error", out3 is None)
+    finally:
+        (enroll.SUPABASE_URL, enroll.SERVICE_KEY, enroll._user_context_with_establish,
+         identity_cache.set_unit, enroll._audit_login) = old
+
+
+def test_login_eval_first_login_sync_gate() -> None:
+    # _login_eval on an UNCACHED (first) login runs the synchronous gate: a block verdict is returned
+    # in the response and the full eval is NEVER run; a pass (None) falls through to the full eval.
+    old_check = enroll.calling_gate_check
+    old_eval = enroll.evaluate_and_maybe_store
+    eval_called = {"v": False}
+    enroll.evaluate_and_maybe_store = (
+        lambda *a, **k: (eval_called.__setitem__("v", True), {"authorized": True})[1])
+    res = {"cookies": [{"name": "s", "value": "x", "domain": "d", "path": "/"}],
+           "identity": {"email": "m@e.org"}}  # uncached, no has_calling → sync gate runs
+    try:
+        enroll.calling_gate_check = (lambda *a, **k: {"authorized": False, "can_enroll": False,
+                                                      "can_improve": False, "stored": False})
+        out = appmod._login_eval(res, False, "rid-sg")
+        check("first-login gate blocks in response", out.get("authorized") is False)
+        check("first-login gate skips full eval", eval_called["v"] is False)
+
+        eval_called["v"] = False
+        enroll.calling_gate_check = lambda *a, **k: None
+        out2 = appmod._login_eval(res, False, "rid-sg2")
+        check("first-login gate pass -> full eval runs", eval_called["v"] is True)
+        check("first-login gate pass -> authorized true", out2.get("authorized") is True)
+    finally:
+        enroll.calling_gate_check = old_check
+        enroll.evaluate_and_maybe_store = old_eval
+
+
 def test_login_eval_fast_calling_gate() -> None:
     # The "no calling but still signed in / saw the set-up-sync prompt" fix: a cached identity with
     # has_calling=False must be blocked SYNCHRONOUSLY in _login_eval (in the login response, zero
@@ -858,6 +928,8 @@ def main() -> int:
     test_calling_gate_blocks_enroll_attempt()
     test_calling_gate_passes_leader()
     test_calling_gate_partial_context_passes()
+    test_calling_gate_check_sync()
+    test_login_eval_first_login_sync_gate()
     test_login_eval_fast_calling_gate()
     test_zero_lcr_lane_requires_has_calling()
     test_start_login_cached_identity_skips_lcr()

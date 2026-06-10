@@ -78,6 +78,57 @@ def _first_usable_credential(embed) -> dict | None:
     return next((c for c in creds if isinstance(c, dict) and not c.get("revoked")), None)
 
 
+def _user_context_with_establish(cookies: list[dict]):
+    """`user_context()` from captured cookies; if the cookies carry only an Okta session (no LCR SSO
+    yet — the cached fast-lane shape), establish LCR and retry once. Returns (ctx, cookies) with the
+    possibly-refreshed cookie list. Shared by the full eval and the synchronous first-login gate so
+    the establish-retry lives in one place."""
+    client = _client_from_cookies(cookies)
+    try:
+        return client.user_context(), cookies
+    except Exception:  # noqa: BLE001
+        from lcr_client.okta_login import establish_lcr_session, session_from_cookies
+        s = session_from_cookies(cookies)
+        establish_lcr_session(s)
+        cookies = [{"name": c.name, "value": c.value, "domain": c.domain, "path": c.path or "/"}
+                   for c in s.cookies]
+        return _client_from_cookies(cookies).user_context(), cookies
+
+
+def calling_gate_check(cookies: list[dict], identity: dict, *,
+                       request_id: str | None = None, t_start: float | None = None) -> dict | None:
+    """SYNCHRONOUS, user_context-only calling gate for a FIRST (uncached) login — so a no-calling
+    member is blocked in the login RESPONSE, not after the deferred full eval (which lands ~30s late
+    on a cold login and let them in once). Same signal + caching + err-toward-allow rules as the full
+    eval's gate, minus the slow access scrape (one LCR call, not dozens).
+
+    Returns {"authorized": False, ...} when the account CLEARLY holds no calling (block); else None —
+    the account has a calling, OR the read was undetermined / LCR errored → let the full eval proceed
+    (never block a real leader on a slow/down LCR). Caches has_calling so the cheap zero-LCR fast
+    block applies on later logins. Best-effort: any failure returns None (allow)."""
+    if not (SUPABASE_URL and SERVICE_KEY):
+        return None
+    import time as _time
+    t0 = _time.monotonic()
+    try:
+        ctx, _ = _user_context_with_establish(cookies)
+    except Exception as exc:  # noqa: BLE001 — LCR error → allow (the deferred full eval still audits)
+        logger.info("first-login calling gate skipped (LCR error → allow): %s", exc)
+        return None
+    no_calling = _clearly_no_calling(ctx)
+    identity_cache.set_unit(identity.get("login_username") or identity.get("username") or "",
+                            identity, ctx.unit_number, ctx.unit_name, has_calling=not no_calling)
+    if not no_calling:
+        return None  # has a calling → proceed to the (deferred) full eval as usual
+    ms = int((_time.monotonic() - (t_start if t_start is not None else t0)) * 1000)
+    _audit_login(identity.get("email"), identity.get("name"), ctx, {}, False, None,
+                 "blocked", None, request_id=request_id, duration_ms=ms, phase="gate-sync")
+    logger.info("first-login calling gate: no calling (unit=%s) — blocking in response", ctx.unit_number)
+    return {"stake": ctx.unit_name, "unit_number": ctx.unit_number,
+            "authorized": False, "access_rank": None, "complete": None, "missing": [],
+            "can_improve": False, "can_enroll": False, "stored": False}
+
+
 def _clearly_no_calling(ctx) -> bool:
     """True only when LCR POSITIVELY told us this account holds no calling at all: user-context
     succeeded and shows no active position, no positions, and no child units. HAR-verified
@@ -236,18 +287,7 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
                     "can_improve": False, "can_enroll": False, "stored": False, "fast": True}
         # No usable credential for the cached unit → the full eval below (it establishes LCR itself).
 
-    client = _client_from_cookies(cookies)
-    try:
-        ctx = client.user_context()
-    except Exception:  # noqa: BLE001
-        # Fast-lane cookies carry only the Okta session (no LCR SSO yet) — establish it, retry once.
-        from lcr_client.okta_login import establish_lcr_session, session_from_cookies
-        s = session_from_cookies(cookies)
-        establish_lcr_session(s)
-        cookies = [{"name": c.name, "value": c.value, "domain": c.domain, "path": c.path or "/"}
-                   for c in s.cookies]
-        client = _client_from_cookies(cookies)
-        ctx = client.user_context()
+    ctx, cookies = _user_context_with_establish(cookies)
     logger.info("login eval: user_context %.1fs (unit=%s)", _time.monotonic() - t0, ctx.unit_number)
     # Record the unit now (this is what makes this user's NEXT login zero-LCR) plus the
     # calling-gate outcome the zero-LCR lane will require.

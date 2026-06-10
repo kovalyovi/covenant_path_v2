@@ -113,6 +113,11 @@ _REFRESH_POOL = _futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="i
 # "Login must be under 5 seconds": how long a NON-consent login waits for its access evaluation
 # before answering without it (the dashboard re-derives offers from /auth/enrollment-status).
 _EVAL_BUDGET_S = float(os.environ.get("LOGIN_EVAL_BUDGET_SECONDS", "4"))
+# First (uncached) logins additionally wait — up to this — for a user_context-only calling gate, so
+# a no-calling member is blocked IN THE RESPONSE (the full eval's verdict defers past the budget on
+# a cold login). On timeout (LCR slow) the login proceeds; the background eval still audits. Repeat
+# logins skip this entirely (they take the zero-LCR cached fast block).
+_GATE_BUDGET_S = float(os.environ.get("LOGIN_GATE_BUDGET_SECONDS", "12"))
 
 
 def _login_eval(res: dict, store: bool, rid: str, t0: float | None = None) -> dict | None:
@@ -155,6 +160,27 @@ def _login_eval(res: dict, store: bool, rid: str, t0: float | None = None) -> di
         return {"authorized": False, "stake": ident.get("stake_name"),
                 "unit_number": ident.get("unit_number"), "complete": None, "missing": [],
                 "can_improve": False, "can_enroll": False, "stored": False}
+    # FIRST-LOGIN SYNCHRONOUS CALLING GATE: an uncached login has no cached has_calling flag, so the
+    # zero-LCR fast block above can't apply and the full eval's verdict would land after the budget
+    # (deferred) — letting a no-calling member in once. Run a user_context-ONLY gate synchronously
+    # (one LCR call, not the dozens of the access scrape) so a clear "no calling" is blocked in the
+    # RESPONSE. Bounded by _GATE_BUDGET_S; on timeout (slow LCR) or error the gate returns None / the
+    # wait ends and we proceed to the full eval — err toward allow, never block a real leader on a
+    # slow/down LCR (RLS still gates data in that residual window). A leader passes here, pays one
+    # user_context, then the full eval runs (deferred as before). Consent (store) is never pre-gated.
+    if not store and not ident.get("cached") and ident.get("has_calling") is None:
+        gate_fut = _EVAL_POOL.submit(enroll.calling_gate_check, res["cookies"], ident,
+                                     request_id=rid, t_start=t0)
+        try:
+            verdict = gate_fut.result(timeout=_GATE_BUDGET_S)
+            if verdict is not None:
+                logger.info("[req %s] first-login calling gate blocked (authorized=false)", rid)
+                return verdict
+        except _futures.TimeoutError:
+            logger.info("[req %s] first-login calling gate deferred after %.0fs (LCR slow → allow)",
+                        rid, _GATE_BUDGET_S)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[req %s] first-login calling gate error (allow): %s", rid, exc)
     t_req = t0 if t0 is not None else time.monotonic()
     t_eval = time.monotonic()
     fut = _EVAL_POOL.submit(enroll.evaluate_and_maybe_store, res["cookies"], ident, store,
