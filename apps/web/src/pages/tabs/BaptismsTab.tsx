@@ -13,7 +13,7 @@ import { parseMemberDate, fmtMonShort, fmtWeekdayShort, dayOnly, daysBetween } f
 import { hexA } from '../../theme/tokens';
 import { Icon, type IconName } from '../../components/Icon';
 import { Avatar, CountBadge, SectionCard } from '../../components/ui';
-import { PageScaffold, SectionTitle, Columns } from '../../components/dashboard';
+import { PageScaffold, SectionTitle, Columns, NoteLine } from '../../components/dashboard';
 import { TabGate } from '../../components/TabGate';
 
 interface Dated {
@@ -240,6 +240,7 @@ function DateRow({ date, people, today, overdue }: { date: Date; people: Dated[]
                 <span className="tiny muted" style={{ display: 'block' }}>
                   {String(p.m['unit_name'] ?? '')}
                 </span>
+                <NoteLine uuid={id} />
               </span>
               <Icon name="chevron_right" size={18} />
             </button>

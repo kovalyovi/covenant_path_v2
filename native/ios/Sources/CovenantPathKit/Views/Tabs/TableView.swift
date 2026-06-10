@@ -6,6 +6,7 @@ import SwiftUI
 /// horizontally-scrolling table (the spec's iOS pattern), 3-state sort on text columns, a value-picker
 /// filter dialog per column, "N members (filtered)" + clear-filters, and row → detail.
 struct TableView: View {
+    @Environment(DashboardStore.self) private var store: DashboardStore?
     let rows: [Member]
 
     enum Kind { case text, gender, yesno, recommend, friends }
@@ -157,8 +158,14 @@ struct TableView: View {
             Text("\(idx + 1)").font(.caption).foregroundStyle(.secondary)
                 .frame(width: rowNumWidth, alignment: .leading).padding(.horizontal, 6)
             ForEach(columns) { col in
-                cell(col.value(m), col.kind)
-                    .frame(width: width(col), alignment: .leading).padding(.horizontal, 6)
+                // The Member cell carries a note marker when leaders have left notes on this person.
+                HStack(spacing: 4) {
+                    cell(col.value(m), col.kind)
+                    if col.title == "Member", let uuid = m.personUUID, store?.notes[uuid] != nil {
+                        Image(systemName: "note.text").font(.caption2).foregroundStyle(Color.accentColor)
+                    }
+                }
+                .frame(width: width(col), alignment: .leading).padding(.horizontal, 6)
             }
         }
         .padding(.vertical, 8)

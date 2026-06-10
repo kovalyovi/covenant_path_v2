@@ -228,12 +228,18 @@ fun DashboardScaffold(
                         if (members.isEmpty() && tab != DashboardTab.Kpis) {
                             EnrollmentEmptyState(state.enrollStatus, brokerAvailable = AppConfig.brokerAvailable, onAuthorize = { openReauth() })
                         } else {
-                            when (tab) {
-                                DashboardTab.Baptisms -> BaptismsScreen(members, state.missionariesByUnit, onOpenMember)
-                                DashboardTab.GoldenHour -> GoldenHourScreen(members, onOpenMember)
-                                DashboardTab.Needs -> NeedsScreen(members, onOpenMember)
-                                DashboardTab.Kpis -> KpisScreen(members, onOpenMember)
-                                DashboardTab.Table -> TableScreen(members, onOpenMember)
+                            // Notes ride a CompositionLocal so every list row (MemberRow, the
+                            // baptisms timeline, the table) can show its note line without props.
+                            androidx.compose.runtime.CompositionLocalProvider(
+                                org.membercovenantpath.viewer.ui.components.LocalMemberNotes provides state.notes,
+                            ) {
+                                when (tab) {
+                                    DashboardTab.Baptisms -> BaptismsScreen(members, state.missionariesByUnit, onOpenMember)
+                                    DashboardTab.GoldenHour -> GoldenHourScreen(members, onOpenMember)
+                                    DashboardTab.Needs -> NeedsScreen(members, onOpenMember)
+                                    DashboardTab.Kpis -> KpisScreen(members, onOpenMember)
+                                    DashboardTab.Table -> TableScreen(members, onOpenMember)
+                                }
                             }
                         }
                     }

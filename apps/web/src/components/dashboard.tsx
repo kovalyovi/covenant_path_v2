@@ -18,6 +18,7 @@ import { GoldenHourChips } from './GoldenHourChips';
 import { Modal } from './Modal';
 import type { Tier } from '../hooks/useTier';
 import { colsFor, useTier } from '../hooks/useTier';
+import { useDashboard } from '../hooks/useDashboard';
 
 // ---- Page scaffold ----------------------------------------------------------------------------
 
@@ -357,6 +358,7 @@ export function MemberRow({ m, chips = false, showUnit = false, showResp = false
             {resp.label}
           </span>
         )}
+        <NoteLine uuid={id} />
         {chips && (
           <span style={{ display: 'block', marginTop: 6 }}>
             <GoldenHourChips member={m} size={22} highlightNext />
@@ -371,6 +373,23 @@ export function MemberRow({ m, chips = false, showUnit = false, showResp = false
         <Icon name="chevron_right" size={18} />
       )}
     </button>
+  );
+}
+
+/** The newest leader note under a list row (+N when there are more) — shared by every member list
+ *  so notes travel with people in Golden Hour, Needs, by-date lists, and the baptisms timeline. */
+export function NoteLine({ uuid }: { uuid: string }) {
+  const { notes } = useDashboard();
+  const n = uuid ? notes[uuid] : undefined;
+  if (!n) return null;
+  return (
+    <span className="row tiny" style={{ gap: 4, marginTop: 4, color: 'var(--on-surface-variant)', minWidth: 0 }}>
+      <Icon name="note" size={13} color="var(--primary)" />
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' }}>
+        {n.latest}
+      </span>
+      {n.count > 1 && <span style={{ flexShrink: 0 }}>+{n.count - 1}</span>}
+    </span>
   );
 }
 

@@ -112,8 +112,15 @@ private fun SignedInNav(
         ) { entry ->
             val uuid = entry.arguments?.getString("uuid")
             val member = state.members.firstOrNull { it.personUuid == uuid }
-            if (member != null) PersonDetailScreen(member = member, onBack = { nav.popBackStack() })
-            else nav.popBackStack()
+            if (member != null) {
+                PersonDetailScreen(
+                    member = member,
+                    onBack = { nav.popBackStack() },
+                    onNotesChanged = dashVm::reloadNotes,
+                )
+            } else {
+                nav.popBackStack()
+            }
         }
         composable(Routes.SETTINGS) {
             SettingsScreen(

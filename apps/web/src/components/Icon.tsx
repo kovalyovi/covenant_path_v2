@@ -77,7 +77,8 @@ export type IconName =
   | 'history_off'
   | 'favorite'
   | 'library'
-  | 'mail';
+  | 'mail'
+  | 'note';
 
 interface Props {
   name: IconName;
@@ -213,6 +214,7 @@ const PATHS: Record<IconName, string> = {
   library:
     '<path fill="currentColor" d="M4 6H2v14a2 2 0 0 0 2 2h14v-2H4V6zm16-4H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm-7 12V6l5 4-5 4z"/>',
   mail: '<path fill="currentColor" d="M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 4-8 5-8-5V6l8 5 8-5v2z"/>',
+  note: '<path fill="currentColor" d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9l7-7V5a2 2 0 0 0-2-2zm-6 14v-4a1 1 0 0 1 1-1h4l-5 5z"/>',
 };
 
 export function Icon({ name, size = 20, color, title, style, className }: Props) {

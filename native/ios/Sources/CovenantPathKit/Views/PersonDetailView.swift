@@ -223,6 +223,7 @@ func mutedText(_ text: String) -> some View {
 struct CommentsSection: View {
     let member: Member
     @Environment(\.appServices) private var services
+    @Environment(DashboardStore.self) private var store: DashboardStore?
 
     @State private var comments: [MemberComment] = []
     @State private var loaded = false
@@ -293,6 +294,7 @@ struct CommentsSection: View {
             try await gateway.addComment(new)
             draft = ""
             comments = (try? await gateway.comments(memberUUID: uuid)) ?? comments
+            await store?.reloadNotes() // list rows show the newest note — keep their index in step
         } catch {
             // surface via the body? keep it simple — leave the draft so they can retry.
         }

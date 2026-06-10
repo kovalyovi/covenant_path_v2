@@ -7,6 +7,7 @@ import io.github.jan.supabase.postgrest.query.Order
 import org.membercovenantpath.viewer.model.Comment
 import org.membercovenantpath.viewer.model.CommentInsert
 import org.membercovenantpath.viewer.model.Member
+import org.membercovenantpath.viewer.model.NoteRow
 
 /**
  * Leader notes on a member, backed by `member_comments` (migration 0017). RLS scopes reads/writes to
@@ -25,6 +26,14 @@ class CommentsRepository(
                 order("created_at", Order.ASCENDING)
             }
             .decodeList<Comment>()
+
+    /** One bulk fetch of a stake's notes for the list-row note lines (RLS-scoped like members). */
+    suspend fun stakeNotes(stakeId: String): List<NoteRow> =
+        client.postgrest.from("member_comments")
+            .select(Columns.raw("member_person_uuid, body, created_at")) {
+                filter { eq("stake_id", stakeId) }
+            }
+            .decodeList<NoteRow>()
 
     /** Add a note; the DB stamps author_name + created_at and RLS enforces author_email. */
     suspend fun add(member: Member, body: String) {

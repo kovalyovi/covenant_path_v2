@@ -53,3 +53,6 @@ Swift Charts).
 
 ## Summary
 **Done: 28 / 29.** **Partial: 1** — item 3 *Passkey* (full native ASAuthorization flow implemented but gated/disabled-with-note until a signed build provides `PASSKEY_RP_ID` + associated-domains; this is the spec's explicitly-allowed partial). No Stubs.
+
+## Addendum (2026-06-10): notes on list rows
+- **List-row note lines** — newest leader note (+N) under each person in Golden Hour / Needs / by-date lists (`MemberRow` + `NoteLine`), the Baptisms timeline rows, and a note marker in the Table's Member cell. Data: one bulk RLS-scoped `member_comments` fetch per stake load (`SupabaseGateway.noteRows` -> `NotesIndex.build`, mirrored unit tests in `LogicTests`); posting a note on detail refreshes the index (`DashboardStore.reloadNotes`). **Pending CI build + simulator verification.**

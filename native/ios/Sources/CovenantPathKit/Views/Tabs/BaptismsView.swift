@@ -122,6 +122,7 @@ struct BaptismsView: View {
     /// One date in the rail: a month/day block on the left, the people planned for that day on the
     /// right (each a NavigationLink to detail). Mirrors `_DateRow`.
     private struct DateRailRow: View {
+        @Environment(DashboardStore.self) private var store: DashboardStore?
         let date: Date
         let people: [Dated]
         let today: Date
@@ -165,6 +166,9 @@ struct BaptismsView: View {
                                     Text(p.member.displayName).fontWeight(.semibold)
                                     Text(p.member.unitName ?? "")
                                         .font(.caption).foregroundStyle(.secondary)
+                                    if let uuid = p.member.personUUID, let note = store?.notes[uuid] {
+                                        NoteLine(note: note)
+                                    }
                                 }
                                 Spacer()
                                 Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)

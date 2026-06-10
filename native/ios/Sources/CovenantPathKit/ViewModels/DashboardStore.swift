@@ -20,6 +20,8 @@ public final class DashboardStore {
     public private(set) var stakes: [Stake] = []
     public private(set) var currentStakeID: String?
     public private(set) var members: [Member] = []
+    /// person_uuid -> newest leader note + count, for the list-row note lines.
+    public private(set) var notes: [String: NoteSummary] = [:]
 
     public private(set) var isAdmin = false
     public private(set) var enrollStatus: EnrollmentStatus?
@@ -149,8 +151,18 @@ public final class DashboardStore {
     private var optimisticSync = false
 
     private func reloadMembers() async throws {
-        guard let id = currentStakeID else { members = []; return }
+        guard let id = currentStakeID else { members = []; notes = [:]; return }
         members = try await repo.members(stakeID: id)
+        await reloadNotes()
+    }
+
+    /// Re-pull the notes index (one bulk RLS-scoped query). Best-effort: a notes hiccup must never
+    /// fail the member load — rows just render without their note line. Also called after posting
+    /// a note on the detail page so list rows show it immediately.
+    public func reloadNotes() async {
+        guard let id = currentStakeID else { notes = [:]; return }
+        let rows = (try? await services.gateway.noteRows(stakeID: id)) ?? []
+        notes = NotesIndex.build(rows)
     }
 
     private func checkAdmin() async {

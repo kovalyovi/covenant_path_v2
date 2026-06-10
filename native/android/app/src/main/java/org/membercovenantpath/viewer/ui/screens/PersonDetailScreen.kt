@@ -79,7 +79,7 @@ private val AmberInfo = Color(0xFFFF8F00) // amber.shade800
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PersonDetailScreen(member: Member, onBack: () -> Unit) {
+fun PersonDetailScreen(member: Member, onBack: () -> Unit, onNotesChanged: () -> Unit = {}) {
     val name = member.name ?: "—"
     val d = member.parsedDetails()
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -136,7 +136,7 @@ fun PersonDetailScreen(member: Member, onBack: () -> Unit) {
             if (d != null) {
                 richSections(d, member)
             }
-            item { CommentsSection(member) }
+            item { CommentsSection(member, onNotesChanged) }
         }
     }
 }
@@ -492,7 +492,7 @@ private fun MutedLine(text: String) {
  * Each note shows author + local timestamp. Mirrors person_detail_page.dart `_CommentsSection`.
  */
 @Composable
-private fun CommentsSection(member: Member) {
+private fun CommentsSection(member: Member, onNotesChanged: () -> Unit = {}) {
     if (member.personUuid.isNullOrEmpty()) return
     val vm: org.membercovenantpath.viewer.viewmodel.CommentsViewModel =
         androidx.lifecycle.viewmodel.compose.viewModel(
@@ -522,7 +522,7 @@ private fun CommentsSection(member: Member) {
                 if (s.posting) {
                     androidx.compose.material3.CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
                 } else {
-                    androidx.compose.material3.FilledIconButton(onClick = vm::post) {
+                    androidx.compose.material3.FilledIconButton(onClick = { vm.post(onPosted = onNotesChanged) }) {
                         Icon(Icons.Filled.Send, contentDescription = "Post note")
                     }
                 }

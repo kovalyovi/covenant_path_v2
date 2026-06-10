@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { supabase } from '../lib/supabase';
 import { MEMBER_COLUMNS, type Member } from '../lib/member';
+import { buildNotesIndex, type NoteRow, type NoteSummary } from '../logic/notes';
 import { broker, type EnrollmentStatus } from '../lib/broker';
 
 const STAKE_KEY = 'current_stake_id';
@@ -29,6 +30,10 @@ interface DashboardState {
   loading: boolean;
   error: string | null;
   members: Member[];
+  /** person_uuid -> newest leader note + count, for the list-row note lines. */
+  notes: Record<string, NoteSummary>;
+  /** Re-pull the notes index (after posting/deleting a note on the detail page). */
+  reloadNotes: () => Promise<void>;
   stakes: StakeRow[];
   currentStakeId: string | null;
   stakeName: string | null;
@@ -83,6 +88,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
+  const [notes, setNotes] = useState<Record<string, NoteSummary>>({});
   const [stakes, setStakes] = useState<StakeRow[]>([]);
   const [currentStakeId, setCurrentStakeId] = useState<string | null>(null);
   const [stakeName, setStakeName] = useState<string | null>(null);
@@ -110,6 +116,23 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     if (e) throw e;
     return (data ?? []) as unknown as Member[];
   }, []);
+
+  const loadNotes = useCallback(async (stakeId: string | null): Promise<Record<string, NoteSummary>> => {
+    // One bulk query per stake (RLS-scoped like members). Best-effort: a notes hiccup must never
+    // fail the member load — rows just render without their note line.
+    try {
+      const base = supabase.from('member_comments').select('member_person_uuid, body, created_at');
+      const scoped = stakeId != null ? base.eq('stake_id', stakeId) : base;
+      const { data } = await scoped;
+      return buildNotesIndex((data ?? []) as NoteRow[]);
+    } catch {
+      return {};
+    }
+  }, []);
+
+  const reloadNotes = useCallback(async () => {
+    setNotes(await loadNotes(currentIdRef.current));
+  }, [loadNotes]);
 
   const applyCurrentStake = useCallback((list: StakeRow[], id: string | null) => {
     if (list.length === 0) return;
@@ -200,9 +223,12 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       setError(null);
       await reloadStakes();
       try {
-        const rows = await loadMembers(currentIdRef.current);
+        const [rows, nts] = await Promise.all([
+          loadMembers(currentIdRef.current), loadNotes(currentIdRef.current),
+        ]);
         if (!active) return;
         setMembers(rows);
+        setNotes(nts);
         // Not awaited — never delays first paint; caches enrollStatus for the Sync-settings sheet (#11).
         void reloadEnrollStatus();
       } catch (e) {
@@ -224,13 +250,16 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     setError(null);
     try {
-      const rows = await loadMembers(currentIdRef.current);
+      const [rows, nts] = await Promise.all([
+        loadMembers(currentIdRef.current), loadNotes(currentIdRef.current),
+      ]);
       setMembers(rows);
+      setNotes(nts);
       if (rows.length === 0) void reloadEnrollStatus();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [loadMembers, reloadEnrollStatus]);
+  }, [loadMembers, loadNotes, reloadEnrollStatus]);
 
   const switchStake = useCallback(
     (id: string) => {
@@ -243,15 +272,16 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         /* ignore */
       }
       setLoading(true);
-      loadMembers(id)
-        .then((rows) => {
+      Promise.all([loadMembers(id), loadNotes(id)])
+        .then(([rows, nts]) => {
           setMembers(rows);
+          setNotes(nts);
           if (rows.length === 0) void reloadEnrollStatus();
         })
         .catch((e) => setError(e instanceof Error ? e.message : String(e)))
         .finally(() => setLoading(false));
     },
-    [applyCurrentStake, loadMembers, reloadEnrollStatus],
+    [applyCurrentStake, loadMembers, loadNotes, reloadEnrollStatus],
   );
 
   const markSyncing = useCallback(() => {
@@ -267,14 +297,14 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<DashboardState>(
     () => ({
-      loading, error, members, stakes, currentStakeId, stakeName, lastSynced, syncing,
-      syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,
+      loading, error, members, notes, reloadNotes, stakes, currentStakeId, stakeName, lastSynced,
+      syncing, syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,
       reloadStakes, reloadEnrollStatus, setEnrollStatus,
       reauthOpen, openReauth, closeReauth,
     }),
     [
-      loading, error, members, stakes, currentStakeId, stakeName, lastSynced, syncing,
-      syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,
+      loading, error, members, notes, reloadNotes, stakes, currentStakeId, stakeName, lastSynced,
+      syncing, syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,
       reloadStakes, reloadEnrollStatus, reauthOpen, openReauth, closeReauth,
     ],
   );

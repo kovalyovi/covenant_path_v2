@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { useDashboard } from '../hooks/useDashboard';
 import type { Member } from '../lib/member';
 import { fmtDateTime } from '../logic/dates';
 import { SectionCard, IconButton } from './ui';
@@ -18,6 +19,7 @@ interface Comment {
 
 export function CommentsSection({ member }: { member: Member }) {
   const toast = useToast();
+  const { reloadNotes } = useDashboard();
   const uuid = member['person_uuid'] != null ? String(member['person_uuid']) : '';
   const [comments, setComments] = useState<Comment[] | null>(null);
   const [text, setText] = useState('');
@@ -56,6 +58,7 @@ export function CommentsSection({ member }: { member: Member }) {
       if (error) throw error;
       setText('');
       await load();
+      void reloadNotes(); // list rows show the newest note — keep their index in step
     } catch (e) {
       toast.show({ message: `Could not post note: ${e instanceof Error ? e.message : e}` });
     } finally {

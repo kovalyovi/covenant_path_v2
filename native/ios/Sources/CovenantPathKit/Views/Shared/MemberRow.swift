@@ -9,6 +9,7 @@ public struct MemberRow: View {
     // #12: on a phone (compact width) the name takes the whole first row and the age drops to the
     // line below; inline next to the name on regular (iPad) width.
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(DashboardStore.self) private var store: DashboardStore?
     let member: Member
     var showChips: Bool = false
     var showUnit: Bool = false
@@ -27,6 +28,10 @@ public struct MemberRow: View {
     private var rawDate: String? { dateField == .baptism ? member.baptismDate : member.baptismGoalDate }
     private var date: Date? { MemberDate.parse(rawDate) }
     private var isBaptism: Bool { dateField == .baptism }
+    private var note: NoteSummary? {
+        guard let uuid = member.personUUID, !uuid.isEmpty else { return nil }
+        return store?.notes[uuid]
+    }
 
     public var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -52,6 +57,9 @@ public struct MemberRow: View {
                 }
                 if showChips || showResponsible {
                     responsibleChip
+                }
+                if let note {
+                    NoteLine(note: note)
                 }
                 if showChips {
                     GoldenHourChips(member: member, size: 22, highlightNext: true)
@@ -90,6 +98,22 @@ public struct MemberRow: View {
         }
         // Long form, e.g. "Tuesday, February 6, 2026" (matches fmtLong).
         return date.formatted(.dateTime.weekday(.wide).month(.wide).day().year())
+    }
+}
+
+/// The newest leader note under a list row (+N when there are more) — shared by every member list
+/// so notes travel with people in Golden Hour, Needs, and the baptisms timeline. Mirrors the web
+/// `NoteLine` (components/dashboard.tsx).
+struct NoteLine: View {
+    let note: NoteSummary
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "note.text").font(.caption2).foregroundStyle(Color.accentColor)
+            Text(note.latest).font(.caption).italic().foregroundStyle(.secondary).lineLimit(1)
+            if note.count > 1 {
+                Text("+\(note.count - 1)").font(.caption).foregroundStyle(.secondary)
+            }
+        }
     }
 }
 #endif

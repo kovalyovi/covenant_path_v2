@@ -11,26 +11,34 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.StickyNote2
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.membercovenantpath.viewer.logic.DateParse
+import org.membercovenantpath.viewer.logic.NoteSummary
 import org.membercovenantpath.viewer.logic.Orgs
 import org.membercovenantpath.viewer.model.Member
 import org.membercovenantpath.viewer.ui.theme.StatusColors
 import org.membercovenantpath.viewer.util.Dates
 import java.time.LocalDate
+
+/** person_uuid -> newest leader note; provided by DashboardScaffold so deep list rows (here, the
+ *  baptisms timeline, the table) can show note lines without threading the map through props. */
+val LocalMemberNotes = compositionLocalOf<Map<String, NoteSummary>> { emptyMap() }
 
 /**
  * One member row. [chips] adds the Golden Hour milestone chips (+ responsibility chip); [showResp]
@@ -107,6 +115,10 @@ fun MemberRow(
                     Text(resp.label, style = subStyle, color = resp.color)
                 }
             }
+            LocalMemberNotes.current[member.personUuid]?.let { note ->
+                Spacer(Modifier.size(4.dp))
+                NoteLine(note)
+            }
             if (chips) {
                 Spacer(Modifier.size(6.dp))
                 GoldenHourChips(member = member, size = 22.dp, highlightNext = true, today = today)
@@ -122,6 +134,35 @@ fun MemberRow(
             )
         } else {
             Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
+        }
+    }
+}
+
+/** The newest leader note under a list row (+N when there are more) — shared by every member list
+ *  so notes travel with people in Golden Hour, Needs, and the baptisms timeline. Mirrors the web
+ *  `NoteLine` (components/dashboard.tsx). */
+@Composable
+fun NoteLine(note: NoteSummary) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            Icons.AutoMirrored.Filled.StickyNote2,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(13.dp),
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(
+            note.latest,
+            style = MaterialTheme.typography.bodySmall,
+            fontStyle = FontStyle.Italic,
+            color = StatusColors.GreyText,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        if (note.count > 1) {
+            Spacer(Modifier.width(4.dp))
+            Text("+${note.count - 1}", style = MaterialTheme.typography.bodySmall, color = StatusColors.GreyText)
         }
     }
 }

@@ -9,6 +9,8 @@ public protocol SupabaseGateway: Sendable {
 
     func comments(memberUUID: String) async throws -> [MemberComment]
     func addComment(_ comment: NewComment) async throws
+    /// One bulk fetch of a stake's notes for the list-row note lines (RLS-scoped like members).
+    func noteRows(stakeID: String) async throws -> [MemberNoteRow]
 
     func units() async throws -> [UnitRow]
     func invitations() async throws -> [Invitation]
@@ -52,6 +54,17 @@ public struct SupabaseGatewayImpl: SupabaseGateway {
 
     public func addComment(_ comment: NewComment) async throws {
         try await client.from("member_comments").insert(comment).execute()
+    }
+
+    public func noteRows(stakeID: String) async throws -> [MemberNoteRow] {
+        guard !stakeID.isEmpty else { return [] }
+        let rows: [MemberNoteRow] = try await client
+            .from("member_comments")
+            .select("member_person_uuid, body, created_at")
+            .eq("stake_id", value: stakeID)
+            .execute()
+            .value
+        return rows
     }
 
     // MARK: - invites

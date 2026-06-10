@@ -11,9 +11,12 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.membercovenantpath.viewer.data.AppPrefs
 import org.membercovenantpath.viewer.data.BrokerClient
+import org.membercovenantpath.viewer.data.CommentsRepository
 import org.membercovenantpath.viewer.data.EnrollmentStatus
 import org.membercovenantpath.viewer.data.MembersRepository
 import org.membercovenantpath.viewer.logic.Freshness
+import org.membercovenantpath.viewer.logic.NoteSummary
+import org.membercovenantpath.viewer.logic.NotesIndex
 import org.membercovenantpath.viewer.model.Member
 import org.membercovenantpath.viewer.model.Missionary
 import org.membercovenantpath.viewer.model.Stake
@@ -31,6 +34,8 @@ data class DashboardUiState(
     val stakes: List<Stake> = emptyList(),
     val currentStakeId: String? = null,
     val members: List<Member> = emptyList(),
+    /** person_uuid -> newest leader note + count, for the list-row note lines. */
+    val notes: Map<String, NoteSummary> = emptyMap(),
     val missionariesByUnit: Map<String, List<Missionary>> = emptyMap(),
     val refreshing: Boolean = false,
     val isAdmin: Boolean = false,
@@ -56,6 +61,7 @@ data class DashboardUiState(
 class DashboardViewModel(
     private val repo: MembersRepository = MembersRepository(),
     private val broker: BrokerClient = BrokerClient(),
+    private val comments: CommentsRepository = CommentsRepository(),
     private val prefs: AppPrefs,
 ) : ViewModel() {
 
@@ -85,6 +91,7 @@ class DashboardViewModel(
                 if (current != null) repo.loadMembers(current) else emptyList()
             }.onSuccess { members ->
                 _state.update { it.copy(members = members, load = LoadState.Ready) }
+                reloadNotes()
                 // #11: prefetch enrollment status in the background (own coroutine) so opening Sync
                 // settings is instant; it's also needed for the empty state.
                 reloadEnrollStatus()
@@ -133,7 +140,10 @@ class DashboardViewModel(
             // sync finished → pull the fresh members
             _state.value.currentStakeId?.let { id ->
                 runCatching { repo.loadMembers(id) }
-                    .onSuccess { m -> _state.update { it.copy(members = m, load = LoadState.Ready) } }
+                    .onSuccess { m ->
+                        _state.update { it.copy(members = m, load = LoadState.Ready) }
+                        reloadNotes()
+                    }
             }
         }
     }
@@ -141,6 +151,18 @@ class DashboardViewModel(
     override fun onCleared() {
         syncPollJob?.cancel()
         super.onCleared()
+    }
+
+    /** Re-pull the notes index (one bulk RLS-scoped query). Best-effort: a notes hiccup must never
+     *  fail the member load — rows just render without their note line. Also called after posting a
+     *  note on the detail page so list rows show it immediately (mirrors web `reloadNotes`). */
+    fun reloadNotes() {
+        val id = _state.value.currentStakeId ?: return
+        viewModelScope.launch {
+            val notes = runCatching { NotesIndex.build(comments.stakeNotes(id)) }
+                .getOrDefault(emptyMap())
+            _state.update { it.copy(notes = notes) }
+        }
     }
 
     /** (Re-)fetch enrollment status — also called after an in-app re-authorization so the
@@ -160,7 +182,10 @@ class DashboardViewModel(
         viewModelScope.launch {
             runCatching { prefs.setCurrentStakeId(id) }
             runCatching { repo.loadMembers(id) }
-                .onSuccess { members -> _state.update { it.copy(members = members, load = LoadState.Ready) } }
+                .onSuccess { members ->
+                    _state.update { it.copy(members = members, load = LoadState.Ready) }
+                    reloadNotes()
+                }
                 .onFailure { e -> _state.update { it.copy(load = LoadState.Error(e.message ?: "Could not load data.")) } }
         }
     }
@@ -177,7 +202,10 @@ class DashboardViewModel(
                 applyStakeMeta()
                 repo.loadMembers(id)
             }
-                .onSuccess { members -> _state.update { it.copy(members = members, refreshing = false, load = LoadState.Ready) } }
+                .onSuccess { members ->
+                    _state.update { it.copy(members = members, refreshing = false, load = LoadState.Ready) }
+                    reloadNotes()
+                }
                 .onFailure { _state.update { it.copy(refreshing = false) } }
         }
     }

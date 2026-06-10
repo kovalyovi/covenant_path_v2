@@ -103,6 +103,7 @@ export function TableTab() {
 
 function TableBody({ members }: { members: Member[] }) {
   const navigate = useNavigate();
+  const { notes } = useDashboard();
   const [sortCol, setSortCol] = useState<number | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
   // per column: the set of values the user UNCHECKED (hidden). Empty/absent = show everything.
@@ -181,9 +182,27 @@ function TableBody({ members }: { members: Member[] }) {
               return (
                 <tr key={r} onClick={() => id && navigate(`/person/${encodeURIComponent(id)}`)}>
                   <td className="muted">{r + 1}</td>
-                  {COLS.map((c) => (
-                    <Cell key={c.key} value={display(m, c.key)} kind={c.kind} />
-                  ))}
+                  {COLS.map((c) =>
+                    c.key === 'name' ? (
+                      /* Member cell carries a note marker (hover = newest note) when leaders have
+                         left notes on this person. */
+                      <td key={c.key}>
+                        <span className="row" style={{ gap: 4, whiteSpace: 'nowrap' }}>
+                          {display(m, c.key)}
+                          {notes[id] && (
+                            <Icon
+                              name="note"
+                              size={13}
+                              color="var(--primary)"
+                              title={notes[id].latest}
+                            />
+                          )}
+                        </span>
+                      </td>
+                    ) : (
+                      <Cell key={c.key} value={display(m, c.key)} kind={c.kind} />
+                    ),
+                  )}
                 </tr>
               );
             })}

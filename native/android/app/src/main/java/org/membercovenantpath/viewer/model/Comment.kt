@@ -14,6 +14,14 @@ data class Comment(
     val who: String get() = (authorName?.takeIf { it.isNotBlank() } ?: authorEmail ?: "").trim()
 }
 
+/** One row of the BULK notes query (stake-wide, for the list-row note lines). */
+@Serializable
+data class NoteRow(
+    @SerialName("member_person_uuid") val memberPersonUuid: String? = null,
+    @SerialName("body") val body: String? = null,
+    @SerialName("created_at") val createdAt: String? = null,
+)
+
 /** Insert shape for a new note (matches person_detail_page.dart `_post`). */
 @Serializable
 data class CommentInsert(

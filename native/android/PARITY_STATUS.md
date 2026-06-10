@@ -59,3 +59,6 @@ Everything else in A–F is **Done**.
   to 1.8.5 so it stays coherent with activity 1.9.x / lifecycle 2.8.x.
 - Pure logic (`logic/Milestones`, `OrgBucket`, `DateParse`, `Kpis`, `Freshness`) is unit-tested
   (`:app:testDebugUnitTest`).
+
+## Addendum (2026-06-10): notes on list rows
+- **List-row note lines** — newest leader note (+N) under each person in Golden Hour / Needs / by-date lists (`MemberRow` + `NoteLine` via `LocalMemberNotes`), the Baptisms timeline rows, and a note marker in the Table's Member cell. Data: one bulk RLS-scoped `member_comments` fetch per stake load (`CommentsRepository.stakeNotes` -> `NotesIndex.build`, unit-tested in `NotesIndexTest`); posting a note on detail refreshes the index (`DashboardViewModel.reloadNotes`). **Pending CI assembleDebug + AVD verification.**

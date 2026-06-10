@@ -227,4 +227,49 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(Elapsed.monthsDaysAgo(future), "")
         XCTAssertEqual(Elapsed.monthsDaysAgo(nil), "")
     }
+
+    // MARK: - notes index (mirrors web src/test/notes.test.ts)
+
+    private func noteRow(_ uuid: String?, _ body: String?, _ at: String?) -> MemberNoteRow {
+        MemberNoteRow(memberPersonUUID: uuid, body: body, createdAt: at)
+    }
+
+    func testNotesIndexKeepsNewestAndCounts() {
+        let idx = NotesIndex.build([
+            noteRow("a", "older", "2026-06-01T10:00:00+00:00"),
+            noteRow("a", "newest", "2026-06-09T10:00:00+00:00"),
+            noteRow("a", "middle", "2026-06-05T10:00:00+00:00"),
+            noteRow("b", "only one", "2026-06-02T10:00:00+00:00"),
+        ])
+        XCTAssertEqual(idx["a"], NoteSummary(count: 3, latest: "newest", latestAt: "2026-06-09T10:00:00+00:00"))
+        XCTAssertEqual(idx["b"], NoteSummary(count: 1, latest: "only one", latestAt: "2026-06-02T10:00:00+00:00"))
+    }
+
+    func testNotesIndexOrderIndependent() {
+        let rows = [
+            noteRow("a", "second", "2026-06-08T10:00:00+00:00"),
+            noteRow("a", "first", "2026-06-07T10:00:00+00:00"),
+        ]
+        XCTAssertEqual(NotesIndex.build(rows)["a"]?.latest, "second")
+        XCTAssertEqual(NotesIndex.build(rows.reversed())["a"]?.latest, "second")
+    }
+
+    func testNotesIndexSkipsBlankAndMissingUUID() {
+        let idx = NotesIndex.build([
+            noteRow("", "no uuid", "2026-06-01T00:00:00Z"),
+            noteRow("a", "   ", "2026-06-01T00:00:00Z"),
+            noteRow("a", nil, "2026-06-01T00:00:00Z"),
+            noteRow(nil, "x", "2026-06-01T00:00:00Z"),
+        ])
+        XCTAssertTrue(idx.isEmpty)
+    }
+
+    func testNotesIndexMissingCreatedAt() {
+        let idx = NotesIndex.build([
+            noteRow("a", "undated", nil),
+            noteRow("a", "dated", "2026-06-01T00:00:00Z"),
+        ])
+        XCTAssertEqual(idx["a"]?.count, 2)
+        XCTAssertEqual(idx["a"]?.latest, "dated")
+    }
 }

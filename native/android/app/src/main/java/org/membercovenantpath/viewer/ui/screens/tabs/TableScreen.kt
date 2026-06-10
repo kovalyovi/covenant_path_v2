@@ -135,7 +135,30 @@ fun TableScreen(members: List<Member>, onOpen: (Member) -> Unit) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Cell("${idx + 1}", NumWidth, color = StatusColors.GreyText)
-                    Columns.forEach { c -> ValueCell(c.value(m), c.kind, c.width) }
+                    Columns.forEach { c ->
+                        // The Member cell carries a note marker when leaders left notes on this person.
+                        if (c.header == "Member" &&
+                            org.membercovenantpath.viewer.ui.components.LocalMemberNotes
+                                .current.containsKey(m.personUuid)
+                        ) {
+                            Row(Modifier.width(c.width).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    c.value(m), fontSize = 12.sp, maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Icon(
+                                    androidx.compose.material.icons.Icons.AutoMirrored.Filled.StickyNote2,
+                                    contentDescription = "Has notes",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(13.dp),
+                                )
+                            }
+                        } else {
+                            ValueCell(c.value(m), c.kind, c.width)
+                        }
+                    }
                 }
             }
         }

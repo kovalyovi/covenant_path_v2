@@ -35,6 +35,9 @@ struct DashboardView: View {
             }
         }
         .tint(tab.accent)
+        // The store rides the environment so deep list rows (MemberRow note lines) and the detail
+        // page's notes section can read/refresh the notes index without threading it through props.
+        .environment(store)
         .task { if store.state == .idle { await store.load() } }
         .task { await maybeSuggestPasskey() }
         .sheet(item: $sheet) { which in

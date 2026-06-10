@@ -43,13 +43,15 @@ class CommentsViewModel(
         }
     }
 
-    fun post() {
+    /** [onPosted] fires after a successful insert — the dashboard refreshes its notes index so
+     *  list rows show the newest note immediately (mirrors web `reloadNotes`). */
+    fun post(onPosted: () -> Unit = {}) {
         val body = _state.value.draft.trim()
         if (body.isEmpty() || member.personUuid.isNullOrEmpty()) return
         viewModelScope.launch {
             _state.update { it.copy(posting = true, error = null) }
             runCatching { repo.add(member, body) }
-                .onSuccess { _state.update { it.copy(posting = false, draft = "") }; load() }
+                .onSuccess { _state.update { it.copy(posting = false, draft = "") }; load(); onPosted() }
                 .onFailure { e -> _state.update { it.copy(posting = false, error = "Could not post note: ${e.message}") } }
         }
     }

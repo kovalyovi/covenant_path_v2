@@ -270,6 +270,10 @@ private fun DateRow(date: LocalDate, people: List<Dated>, overdue: Boolean, toda
                     Column(Modifier.weight(1f)) {
                         Text(p.m.name ?: "—", fontWeight = FontWeight.SemiBold)
                         Text(p.m.unitName ?: "", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        org.membercovenantpath.viewer.ui.components.LocalMemberNotes
+                            .current[p.m.personUuid]?.let { note ->
+                                org.membercovenantpath.viewer.ui.components.NoteLine(note)
+                            }
                     }
                     Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(18.dp))
                 }
