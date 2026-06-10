@@ -643,10 +643,10 @@ class Harness:
         self.jsonl = (OUT / f"requests_{ts}.jsonl").open("a", encoding="utf-8")
         self.rec_path = OUT / f"recommendation_{ts}.json"
         self._lock = threading.Lock()
-        self.client = LcrClient()
-        me = self.client.whoami()
+        # Bootstrap is RETRIED: LCR's own auth/user-context can 502/503 transiently (it did, mid-run),
+        # and a days-long run must not die on the very first call before it ever starts probing.
+        self.client, me, ctx = self._bootstrap()
         logger.info("authenticated as %s", me.preferred_username)
-        ctx = self.client.user_context()
         self.units = args.units or [u.unit_number for u in ctx.child_units if u.unit_number] \
             or [ctx.unit_number]
         logger.info("rate-finding across %d unit(s)", len(self.units))
@@ -669,6 +669,23 @@ class Harness:
             for t in self.targets}
         if args.resume:
             self._resume(args.resume)
+
+    def _bootstrap(self):
+        """Authenticate + read user-context, retried across transient LCR failures (502/503/timeouts)
+        so the run starts even when LCR is mid-wobble. Backs off up to ~10min, re-minting the session
+        each attempt (a fresh LcrClient re-logs in if the cookie lapsed)."""
+        last = None
+        for attempt in range(12):
+            try:
+                client = LcrClient()
+                return client, client.whoami(), client.user_context()
+            except Exception as exc:  # noqa: BLE001
+                last = exc
+                wait = min(60.0, 5.0 * (attempt + 1))
+                logger.warning("bootstrap attempt %d failed (%s) — retrying in %.0fs",
+                               attempt + 1, exc, wait)
+                time.sleep(wait)
+        raise RuntimeError(f"could not authenticate after retries: {last}")
 
     def _resume(self, path_arg: str) -> None:
         """Seed controllers from a prior recommendation.json so tiled (<6h) runs accumulate. Pass a
@@ -694,18 +711,30 @@ class Harness:
 
     def _sample_members(self, per_unit: int) -> list[tuple[str, object]]:
         """Harvest real (person_uuid, legacyCmisId) pairs from one progress-record per unit — these
-        feed the per-member details/profile probes. Bounded so we don't read every unit's whole roster."""
-        out: list[tuple[str, object]] = []
-        for u in self.units:
-            try:
-                rec = self.client.progress_record(u)
-                people = (rec.new_members + rec.returning_members + rec.investigators)
-                ids = [(p.person_uuid, p.cmis_id) for p in people if p.person_uuid][:per_unit]
-                out.extend(ids)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("member harvest failed for unit %s: %s", u, exc)
-        logger.info("harvested %d member id(s) for per-member endpoints", len(out))
-        return out
+        feed the per-member details/profile probes. Bounded so we don't read every unit's whole roster.
+
+        RETRIED: harvest rides on progress_record, which is the FRAGILE often-down cluster — if it's
+        502/503 at startup we'd get zero members and skip ALL per-member endpoints, including the
+        rock-solid /mlt profile POSTs (the most important measurement). So if a pass yields nothing,
+        wait and retry across several minutes before giving up."""
+        for attempt in range(6):
+            out: list[tuple[str, object]] = []
+            for u in self.units:
+                try:
+                    rec = self.client.progress_record(u)
+                    people = (rec.new_members + rec.returning_members + rec.investigators)
+                    out.extend([(p.person_uuid, p.cmis_id) for p in people if p.person_uuid][:per_unit])
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("member harvest failed for unit %s: %s", u, exc)
+            if out:
+                logger.info("harvested %d member id(s) for per-member endpoints", len(out))
+                return out
+            wait = min(120.0, 20.0 * (attempt + 1))
+            logger.warning("harvest got 0 members (one-work cluster down?) — retry %d in %.0fs",
+                           attempt + 1, wait)
+            time.sleep(wait)
+        logger.warning("harvest still empty — per-member endpoints will be skipped this run")
+        return []
 
     def _ctx(self, target: Target) -> dict:
         return {"unit": random.choice(self.units),
