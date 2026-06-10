@@ -87,7 +87,7 @@ jobs:
       # spot; aggregate these artifacts across tiled runs to read the safe per-endpoint pacing.
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: rate-finder-results
           path: tools/output/rate_finder/

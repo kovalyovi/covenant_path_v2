@@ -118,7 +118,7 @@ jobs:
           python -m playwright install --with-deps chromium   # only for rare self-heal
 
       - name: Restore profile cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: tools/output/profile_cache.json
           key: profile-cache-${{ matrix.stake }}-${{ github.run_id }}
@@ -160,7 +160,7 @@ jobs:
 
       - name: Upload run artifacts (logs + summaries, no PII output)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: sync-logs-${{ matrix.stake }}
           path: |
