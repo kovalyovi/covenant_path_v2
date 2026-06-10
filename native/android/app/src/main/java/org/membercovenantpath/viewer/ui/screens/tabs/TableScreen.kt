@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.StickyNote2
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
@@ -149,7 +150,7 @@ fun TableScreen(members: List<Member>, onOpen: (Member) -> Unit) {
                                 )
                                 Spacer(Modifier.width(4.dp))
                                 Icon(
-                                    androidx.compose.material.icons.Icons.AutoMirrored.Filled.StickyNote2,
+                                    Icons.AutoMirrored.Filled.StickyNote2,
                                     contentDescription = "Has notes",
                                     tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(13.dp),
