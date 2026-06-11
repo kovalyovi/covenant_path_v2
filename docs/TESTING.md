@@ -128,16 +128,16 @@ incomplete.**
 | E1 | Reconcile (hard-delete departed) defers during degraded runs (>3 candidates + failed unit) | ✅ live smoke `test_reconcile` |
 | E2 | Field-meta staleness: profile-denied runs preserve good data, mark stale | ✅ `test_field_meta` |
 | E3 | Per-stake scoped dispatch (enroll kickoff + sync-now never fan out) | ✅ offline (dispatch allowlist) + code-asserted inputs |
-| E4 | Daily-sync delay-robust gating (due-by-hour, paused) | ⬜ TODO unit test on prepare step |
-| E5 | `_revoke_if_ineligible` re-verifies callings each sync | ⬜ TODO unit test |
+| E4 | Daily-sync delay-robust gating (due-by-hour, late-cron fires, paused, failed-run-stays-due) | ✅ `tests/test_sync_gating.py` (offline) |
+| E5 | `_revoke_if_ineligible` re-verifies callings each sync (revokes ONLY on a positive no-access read; inconclusive/error never revokes; stewardship safety net) | ✅ `tests/test_sync_gating.py` (offline) |
 
 ### F. Emails (non-spammy invariants)
 
 | # | Scenario | Status |
 |---|---|---|
 | F1 | Enroll confirmation: once per enroll, best-effort | ✅ e2e-mock (notify stubbed; assert single call) |
-| F2 | Stale-credential alert exactly once per failure streak (claim is atomic; oscillation doesn't spam) | ⬜ TODO concurrency test on `claim_stale_notification` |
-| F3 | Invitations: emailed-once flag, revoked skipped, daily cap, dedupe on re-invite | ⬜ TODO unit tests on `send_pending_invitations` |
+| F2 | Stale-credential alert exactly once per failure streak (atomic claim under CONCURRENT syncs; success re-arms the edge) | ✅ `tests/test_credential_and_email_gates.py` (test-project DB) |
+| F3 | Invitations: emailed-once, revoked skipped, daily cap, failed send stays pending for retry | ✅ `tests/test_credential_and_email_gates.py` (test-project DB) |
 | F4 | Digest/weekly/handoff: one per leader per period, phase recorded, owner-preview gating respected | ⬜ TODO unit tests with frozen time |
 | F5 | Admin-invite approval: token-gated, single email, expiry | ⬜ TODO |
 

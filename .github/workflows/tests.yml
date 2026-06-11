@@ -70,6 +70,7 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: python tools/test_suite.py
       - run: python -m backend.test_broker
+      - run: python -m pytest tests/test_sync_gating.py -q
 
   backend-e2e-mock:
     # The real broker + real lcr_client against the fixture mock LCR/Okta + Supabase stub.
@@ -169,4 +170,4 @@ jobs:
           if [ -z "$CP_TEST_SUPABASE_URL" ]; then echo "no test-project secrets — skipping"; exit 0; fi
           SUPABASE_DB_URL="$CP_TEST_SUPABASE_DB_URL" python -m backend.apply
           python -m tests.seed
-          python -m pytest tests/test_rls_matrix.py -q --timeout=300
+          python -m pytest tests/test_rls_matrix.py tests/test_credential_and_email_gates.py -q --timeout=300

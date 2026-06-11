@@ -1,0 +1,160 @@
+"""
+Offline tests for the daily-sync gates (catalog rows E4 + E5) — no network, no DB.
+
+E4: scripts.daily_sync._due_today — the delay-robust "due-by-hour" check that replaced the
+fragile exact-hour match (GitHub cron fires 10-50 min late; a slipped fire must still sync,
+and a stake must sync exactly once per day unless the run failed).
+
+E5: scripts.daily_sync._revoke_if_ineligible — the every-sync re-verification that a stored
+credential's calling STILL grants covenant-path access. Conservative by contract: only a
+POSITIVE read of the runner's callings with zero granting positions may revoke; inconclusive
+reads and scrape errors must never strand a healthy stake.
+
+Run: python -m pytest tests/test_sync_gating.py -q
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+import pytest
+
+import scripts.daily_sync as ds
+
+ET = ZoneInfo("America/New_York")
+
+
+def _et(hour: int, minute: int = 0, day: int = 10) -> datetime:
+    return datetime(2026, 6, day, hour, minute, tzinfo=ET)
+
+
+# --- E4: _due_today ------------------------------------------------------------------------
+
+
+def test_not_due_before_the_configured_hour():
+    assert ds._due_today(_et(6, 59), 7, None) is False
+
+
+def test_due_at_the_hour_when_never_synced():
+    assert ds._due_today(_et(7, 0), 7, None) is True
+
+
+def test_due_on_a_LATE_cron_fire_same_day():
+    # The whole point of the window check: a 7:00 stake picked up by the 9:40 fire still syncs.
+    assert ds._due_today(_et(9, 40), 7, _et(8, 0, day=9)) is True
+
+
+def test_not_due_again_after_syncing_inside_todays_window():
+    assert ds._due_today(_et(10, 0), 7, _et(7, 25)) is False
+
+
+def test_failed_run_stays_due():
+    # A sync that last SUCCEEDED before today's window opened keeps the stake due — retry.
+    assert ds._due_today(_et(12, 0), 7, _et(23, 50, day=9)) is True
+
+
+def test_naive_last_synced_treated_as_et_wall_clock():
+    naive = datetime(2026, 6, 10, 7, 30)  # no tzinfo
+    assert ds._due_today(_et(9, 0), 7, naive) is False
+    naive_yesterday = datetime(2026, 6, 9, 7, 30)
+    assert ds._due_today(_et(9, 0), 7, naive_yesterday) is True
+
+
+def test_late_evening_hour_config():
+    assert ds._due_today(_et(21, 5), 21, _et(7, 0)) is True
+    assert ds._due_today(_et(20, 55), 21, _et(7, 0)) is False
+
+
+# --- E5: _revoke_if_ineligible -------------------------------------------------------------
+
+
+class _Recorder:
+    def __init__(self):
+        self.revoked: list[tuple] = []
+        self.connected = 0
+
+
+@pytest.fixture()
+def patched(monkeypatch):
+    """Stub the LCR scrape + DB seams; the test chooses what the access read returns."""
+    import lcr_client
+    import lcr_client.access as access_mod
+    from backend import credentials as cred_mod
+    from backend import db as db_mod
+
+    rec = _Recorder()
+    holder = {"access": None, "raise": None}
+
+    class _FakeConn:
+        def close(self):
+            pass
+
+    def fake_connect():
+        rec.connected += 1
+        return _FakeConn()
+
+    def fake_access(client):
+        if holder["raise"] is not None:
+            raise holder["raise"]
+        return holder["access"]
+
+    monkeypatch.setattr(lcr_client, "LcrClient", lambda *a, **k: object())
+    monkeypatch.setattr(access_mod, "covenant_path_access", fake_access)
+    monkeypatch.setattr(db_mod, "connect", fake_connect)
+    monkeypatch.setattr(cred_mod, "revoke",
+                        lambda conn, stake_id, reason="": rec.revoked.append((stake_id, reason)))
+    return rec, holder
+
+
+_ST = {"stake_id": "stake-uuid-1", "name": "Testvale North Stake", "unit_number": 999001}
+
+
+def test_still_authorized_leader_is_untouched(patched):
+    rec, holder = patched
+    holder["access"] = {"can_pull_all": True, "features": [],
+                        "runner_positions": [{"name": "Stake President"}]}
+    ds._revoke_if_ineligible(_ST)
+    assert rec.revoked == []
+
+
+def test_feature_rank_counts_as_authorized(patched):
+    rec, holder = patched
+    holder["access"] = {"can_pull_all": False,
+                        "features": [{"feature": "progress-record", "allowed": True}],
+                        "runner_positions": [{"name": "Some Calling"}]}
+    ds._revoke_if_ineligible(_ST)
+    assert rec.revoked == []
+
+
+def test_inconclusive_read_never_revokes(patched):
+    rec, holder = patched
+    holder["access"] = {"can_pull_all": False, "features": [], "runner_positions": []}
+    ds._revoke_if_ineligible(_ST)  # empty positions = couldn't determine -> keep the stake alive
+    assert rec.revoked == []
+
+
+def test_scrape_error_never_revokes(patched):
+    rec, holder = patched
+    holder["raise"] = RuntimeError("LCR 502")
+    ds._revoke_if_ineligible(_ST)  # must swallow, not raise, not revoke
+    assert rec.revoked == []
+
+
+def test_positively_ineligible_runner_is_revoked_and_run_stops(patched):
+    rec, holder = patched
+    holder["access"] = {"can_pull_all": False, "features": [],
+                        "runner_positions": [{"name": "Primary Pianist"}]}
+    with pytest.raises(RuntimeError, match="no longer has covenant-path access"):
+        ds._revoke_if_ineligible(_ST)
+    assert rec.revoked and rec.revoked[0][0] == "stake-uuid-1"
+
+
+def test_always_allowed_stewardship_calling_survives_an_empty_matrix(patched):
+    # A stake clerk whose LCR access-table read came back empty must NOT be revoked: the
+    # stake-stewardship safety net (backend.roles._calling_always_allowed) keeps them eligible.
+    rec, holder = patched
+    holder["access"] = {"can_pull_all": False, "features": [],
+                        "runner_positions": [{"name": "Stake Clerk"}]}
+    ds._revoke_if_ineligible(_ST)
+    assert rec.revoked == []
