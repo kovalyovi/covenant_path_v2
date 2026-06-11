@@ -110,6 +110,11 @@ def create_lcr_app(state: MockChurchState) -> FastAPI:
     async def other_access_table(request: Request):
         if _session_user(request) is None:
             return _login_redirect()
+        # slow_access: the access SCRAPE outlasts the broker's eval budget (B6 deferred-eval
+        # scenario) while the identity/user-context legs stay fast — set sleep_seconds small
+        # (a few seconds), unlike identity_timeout's caller-killing 70s default.
+        if state.scenario == "slow_access":
+            await asyncio.sleep(state.sleep_seconds)
         return HTMLResponse(access_table_html())
 
     @app.post("/mlt/orgs")

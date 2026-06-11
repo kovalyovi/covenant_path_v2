@@ -88,7 +88,7 @@ incomplete.**
 | B3 | can_enroll offer for a credential-less stake (post-login offer, consent moved off login form) | ✅ offline + e2e-mock + Playwright `login-enroll-offer` |
 | B4 | can_improve takeover offer (higher access replaces incomplete credential; lower never clobbers healthy higher) | ✅ offline (`onboarding.should_take_over`) · 🔶 e2e-mock persona pair |
 | B5 | Consented enroll that stored NOTHING says so (dialog stays open with server error; no fake success toast) | ✅ Playwright `reauth-dialog` (web logic shipped eb7107f) |
-| B6 | Enroll eval deferred past budget → offers surface via enrollment-status | ⬜ TODO e2e-mock (slow-eval scenario) |
+| B6 | Slow access scrape → login answers within budget with enroll `{"deferred": true}`; the background eval still completes (audit lands) | ✅ `tests/e2e/test_deferred_report_offboard.py` (short-budget broker + `slow_access` scenario) |
 | B7 | Stale credential (sync failed) → provider banner "Re-authorize"; non-provider "take it over" variant | ✅ Playwright `banners-empty-states` |
 | B8 | Credential longevity: no refresh token ⇒ cookie-lifetime-bound; ops view shows self-renewing flag; stale alert fires ONCE per failure streak | ✅ partial (0041 view) · ⬜ TODO longevity probe + alert-dedupe concurrency test |
 | B9 | Revoke: provider-only, idempotent ("already_revoked"), admin override path | ✅ live smoke + e2e-mock |
@@ -119,7 +119,7 @@ incomplete.**
 | D4 | Notes (member_comments) scoped by RLS; visible to same-scope leaders | ✅ Playwright `person-views` (render+post) · 🔶 matrix (cross-scope denial) |
 | D5 | Member object variants render everywhere: full / all-null / empty-lists / investigator+goal-date / mid-milestones (no crashes, correct chips) | ✅ Playwright `person-views` fixtures |
 | D6 | Admin-only tables (login_audit, access_audit) invisible to non-admins | ✅ live smoke `test_login_audit`/`test_admins` |
-| D7 | Report endpoint RLS-scoped to caller | ⬜ TODO e2e-mock (reports.build_report against stub) |
+| D7 | /report scoped to the caller's roles (stake-wide = all units; ward leader = their unit only, no leakage; no-role = empty "none" scope) | ✅ `tests/e2e/test_deferred_report_offboard.py` |
 
 ### E. Sync & data integrity (backend jobs)
 
@@ -138,7 +138,7 @@ incomplete.**
 | F1 | Enroll confirmation: once per enroll, best-effort | ✅ e2e-mock (notify stubbed; assert single call) |
 | F2 | Stale-credential alert exactly once per failure streak (atomic claim under CONCURRENT syncs; success re-arms the edge) | ✅ `tests/test_credential_and_email_gates.py` (test-project DB) |
 | F3 | Invitations: emailed-once, revoked skipped, daily cap, failed send stays pending for retry | ✅ `tests/test_credential_and_email_gates.py` (test-project DB) |
-| F4 | Digest/weekly/handoff: one per leader per period, phase recorded, owner-preview gating respected | ⬜ TODO unit tests with frozen time |
+| F4 | Digest once per leader per run + never for an empty scope; handoff fires once per (person, phase), unsent transitions not burned; weekly respects the owner-preview gate | ✅ `tests/test_digest_and_handoff_gates.py` (test-project DB) |
 | F5 | Admin-invite approval: token-gated, single email, expiry | ⬜ TODO |
 
 ### G. Onboarding / offboarding a stake
@@ -146,7 +146,7 @@ incomplete.**
 | # | Scenario | Status |
 |---|---|---|
 | G1 | New-stake first enroll: stake row created, kickoff scoped, "setting up your stake" state, roles provisioned by first sync | ✅ e2e-mock (enroll+kickoff stubs) · 🔶 matrix (post-sync visibility) |
-| G2 | Offboard tiers: revoke (sync stops, data stays) → wipe (data gone, repopulates) → remove (everything gone, irreversible) | ✅ partial (wipe) · ⬜ TODO remove-stake e2e-mock |
+| G2 | Offboard tiers: wipe (members gone + freshness reset; roles + credential survive) → remove (credential/members/roles/diagnostics/stake erased, admin-gated 403 for others, idempotent) | ✅ `tests/e2e/test_deferred_report_offboard.py` + offline wipe test |
 | G3 | Power users of an offboarded stake see empty app, never errors | 🔶 matrix |
 
 ## When something breaks in prod

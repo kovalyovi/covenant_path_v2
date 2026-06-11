@@ -19,7 +19,7 @@ import secrets
 import threading
 from collections import Counter
 
-SCENARIOS = ("healthy", "lcr_5xx", "identity_timeout", "sso_reject")
+SCENARIOS = ("healthy", "lcr_5xx", "identity_timeout", "sso_reject", "slow_access")
 
 
 class MockChurchState:

@@ -170,4 +170,4 @@ jobs:
           if [ -z "$CP_TEST_SUPABASE_URL" ]; then echo "no test-project secrets — skipping"; exit 0; fi
           SUPABASE_DB_URL="$CP_TEST_SUPABASE_DB_URL" python -m backend.apply
           python -m tests.seed
-          python -m pytest tests/test_rls_matrix.py tests/test_credential_and_email_gates.py -q --timeout=300
+          python -m pytest tests/test_rls_matrix.py tests/test_credential_and_email_gates.py tests/test_digest_and_handoff_gates.py -q --timeout=300

@@ -157,6 +157,18 @@ def create_app(store: Store | None = None) -> FastAPI:
         stake_id = db.rpc_enroll_stake_credential(body)
         return JSONResponse(stake_id)  # PostgREST returns the scalar as a JSON string
 
+    @app.post("/rest/v1/rpc/wipe_stake_members")
+    async def rpc_wipe(request: Request):
+        body = await request.json()
+        n = db.rpc_wipe_stake_members(body.get("p_stake_id"))
+        return JSONResponse(n)  # the SQL function returns the deleted-row count
+
+    @app.post("/rest/v1/rpc/remove_stake")
+    async def rpc_remove(request: Request):
+        body = await request.json()
+        db.rpc_remove_stake(body.get("p_stake_id"))
+        return JSONResponse(None)  # void function
+
     @app.post("/rest/v1/rpc/{name}")
     async def rpc_other(name: str):
         return JSONResponse({"message": f"rpc {name} not implemented in stub"},

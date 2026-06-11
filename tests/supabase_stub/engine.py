@@ -227,6 +227,31 @@ class Store:
             self.tables[table] = kept
             return len(before) - len(kept)
 
+    # ---- the 0039 unenroll-tier RPCs ------------------------------------------------------
+    def rpc_wipe_stake_members(self, stake_id: str) -> int:
+        """Replicates wipe_stake_members(p_stake_id): delete the stake's MEMBER rows only and
+        reset its freshness (sync_state='idle', last_synced_at=null); roles + credential stay."""
+        with self.lock:
+            before = self.tables.get("members", [])
+            kept = [r for r in before if _as_str(r.get("stake_id")) != _as_str(stake_id)]
+            self.tables["members"] = kept
+            for s in self.tables.get("stakes", []):
+                if _as_str(s.get("id")) == _as_str(stake_id):
+                    s["sync_state"] = "idle"
+                    s["last_synced_at"] = None
+            return len(before) - len(kept)
+
+    def rpc_remove_stake(self, stake_id: str) -> None:
+        """Replicates remove_stake(p_stake_id): full offboard — credential + members + roles +
+        diagnostics + the stake row. Idempotent like the SQL (deleting nothing is fine)."""
+        with self.lock:
+            for table, col in (("stake_credentials", "stake_id"), ("members", "stake_id"),
+                               ("user_roles", "stake_id"), ("sync_diagnostics", "stake_id"),
+                               ("stakes", "id")):
+                rows = self.tables.get(table, [])
+                self.tables[table] = [r for r in rows
+                                      if _as_str(r.get(col)) != _as_str(stake_id)]
+
     # ---- the 0041 enroll RPC ------------------------------------------------------------
     def rpc_enroll_stake_credential(self, body: dict) -> str:
         """Replicates backend/migrations/0041_credential_cadence.sql:
