@@ -27,8 +27,12 @@ SERVICE_KEY = os.environ.get("CP_TEST_SUPABASE_SERVICE_ROLE_KEY") or ""
 ANON_KEY = os.environ.get("CP_TEST_SUPABASE_ANON_KEY") or ""
 PROD_URL = (os.environ.get("SUPABASE_URL") or "").rstrip("/")
 
+# bool(...) is load-bearing: with SUPABASE_URL unset the or-chain yields '' (a STRING), and
+# pytest evaluates a STRING skipif condition as an expression -> eval('') -> SyntaxError at
+# setup of every test (passed locally only because prod SUPABASE_URL happened to be exported;
+# failed in CI where it deliberately isn't).
 pytestmark = pytest.mark.skipif(
-    not URL or not SERVICE_KEY or (PROD_URL and URL == PROD_URL),
+    bool(not URL or not SERVICE_KEY or (PROD_URL and URL == PROD_URL)),
     reason="Phase-B lane disabled: set CP_TEST_SUPABASE_URL + "
            "CP_TEST_SUPABASE_SERVICE_ROLE_KEY to a dedicated TEST project "
            "(refused when it equals SUPABASE_URL).",
