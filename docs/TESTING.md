@@ -125,6 +125,7 @@ incomplete.**
 | D5 | Member object variants render everywhere: full / all-null / empty-lists / investigator+goal-date / mid-milestones (no crashes, correct chips) | ✅ Playwright `person-views` fixtures |
 | D6 | Admin-only tables (login_audit, access_audit) invisible to non-admins | ✅ live smoke `test_login_audit`/`test_admins` |
 | D7 | /report scoped to the caller's roles (stake-wide = all units; ward leader = their unit only, no leakage; no-role = empty "none" scope) | ✅ `tests/e2e/test_deferred_report_offboard.py` |
+| D8 | Ops console polish: section order System → Diagnostics → Admins → Enrolled stakes → Recent logins → Endpoint health → Actions; Endpoint health card truncates to 10 rows + "View all" → paginated `/admin/endpoints`; login emails masked (first char + ≤4 `*`, domain visible) with a per-row eye toggle on both the console card and `/admin/logins` | ✅ web vitest `mask.test.ts` (mask rule) · typecheck/build/e2e · native = Admins reorder only, flagged for CI |
 
 ### E. Sync & data integrity (backend jobs)
 

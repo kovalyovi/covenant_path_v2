@@ -71,7 +71,7 @@
 | **Admin & power-user actions not in an audit table** | `invite_admin` / `invite_power_user` / `revoke_*` only `logger.info` | Route them into `access_audit` with `source='power_user'/'manual'` (table already has the column) |
 | **No alerting on sync failure** | A stake silently stops syncing; logged but nobody's paged | Add a digest/notify when a stake's `last_synced_at` goes stale or `failed_units` is non-empty |
 | **Per-query data access not logged** | Can't replay *exactly* which rows a user fetched | Intentional — RLS guarantees scope; row-level read logging would be heavy/noisy. Rely on `role_scope` instead |
-| **Native/React admin "Recent logins" view** | The audit panel was built in the **now-deprecated Flutter** console; the maintained surfaces (React `apps/web` + native) don't surface it yet — admins must query Supabase directly | Port the panel to `apps/web` + native admin screens (more pressing now Flutter is frozen) |
+| **Native admin "Recent logins" view** | React `apps/web` has the panel (console card + paginated `/admin/logins`, emails masked with an eye-to-reveal toggle); native iOS/Android still don't surface it — there, admins must query Supabase directly | Port the panel to the native admin screens |
 | **Axiom retention is 30 days (free tier)** | Long-term trend loss | The Supabase audit tables are the durable record; Axiom is for live ops |
 
 ---

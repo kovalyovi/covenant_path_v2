@@ -1,8 +1,9 @@
 // Admin · Ops console — React port of admin_page.dart. One place to monitor and operate the
 // platform, gated server-side by app_admins (the broker checks with the service-role key). Panels
 // load independently so a slow/failed section (e.g. GitHub Actions) only errors in its own card.
-// Panels: system health, data freshness, maintenance (dispatch a rescrape), diagnostics, enrolled
-// stakes (cross-stake ops + per-stake sync/revoke), recent Actions runs, changelog, admin management.
+// Panels, in order: system health, data freshness, maintenance (dispatch a rescrape), diagnostics,
+// admin management, enrolled stakes (cross-stake ops + per-stake sync/revoke), recent logins,
+// endpoint health trend, recent Actions runs, changelog, calling overrides.
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -15,7 +16,7 @@ import { IconButton, Button } from '../components/ui';
 import { CardSkeleton } from '../components/Skeletons';
 import { Modal } from '../components/Modal';
 import { useToast } from '../components/Toast';
-import { ViewAllLink } from './AdminListPage';
+import { MaskedEmail, ViewAllLink } from './AdminListPage';
 
 type Json = Record<string, unknown>;
 
@@ -179,8 +180,17 @@ export function AdminPage() {
           <Panel key={`diag-${nonce}`} title="Diagnostics" load={() => admin.diagnostics()}>
             {(s) => <DiagnosticsCard diag={s} onCopy={(t) => navigator.clipboard.writeText(t)} toast={toast} />}
           </Panel>
-          <Panel key={`ephealth-${nonce}`} title="Endpoint health (trend)" load={() => admin.endpointHealth(14)}>
-            {(s) => <EndpointHealthCard data={s} />}
+          <Panel
+            key={`admins-${nonce}`}
+            title="Admins"
+            load={async () => {
+              const { data } = await supabase.from('app_admins').select('email, invited_by_email');
+              return { admins: (data ?? []) as Json[] };
+            }}
+          >
+            {(s) => (
+              <AdminsCard admins={(s['admins'] as Json[]) ?? []} busy={busy} onInvite={inviteAdmin} onRevoke={revokeAdmin} />
+            )}
           </Panel>
           <Panel key={`stakes-${nonce}`} title="Enrolled stakes" load={() => admin.enrolledStakes()}>
             {(s) => (
@@ -192,31 +202,6 @@ export function AdminPage() {
                 onWipe={wipeStakeData}
                 onRemove={removeStake}
               />
-            )}
-          </Panel>
-          <Panel
-            key={`actions-${nonce}`}
-            title="GitHub Actions"
-            load={() => admin.actions()}
-            errorHint="Set GITHUB_TOKEN on the broker (Actions: read & write, Contents: read) to enable runs + the changelog. The rest of the console still works."
-          >
-            {(a) => (
-              <>
-                <RunsCard actions={a} busy={busy} onRerun={rerun} />
-                <ChangelogCard actions={a} />
-              </>
-            )}
-          </Panel>
-          <Panel
-            key={`admins-${nonce}`}
-            title="Admins"
-            load={async () => {
-              const { data } = await supabase.from('app_admins').select('email, invited_by_email');
-              return { admins: (data ?? []) as Json[] };
-            }}
-          >
-            {(s) => (
-              <AdminsCard admins={(s['admins'] as Json[]) ?? []} busy={busy} onInvite={inviteAdmin} onRevoke={revokeAdmin} />
             )}
           </Panel>
           <Panel
@@ -233,6 +218,22 @@ export function AdminPage() {
             errorHint="login_audit is admin-only (RLS) — rows appear once the broker records logins after its next deploy."
           >
             {(s) => <LoginAuditCard logins={(s['logins'] as Json[]) ?? []} />}
+          </Panel>
+          <Panel key={`ephealth-${nonce}`} title="Endpoint health (trend)" load={() => admin.endpointHealth(14)}>
+            {(s) => <EndpointHealthCard data={s} />}
+          </Panel>
+          <Panel
+            key={`actions-${nonce}`}
+            title="GitHub Actions"
+            load={() => admin.actions()}
+            errorHint="Set GITHUB_TOKEN on the broker (Actions: read & write, Contents: read) to enable runs + the changelog. The rest of the console still works."
+          >
+            {(a) => (
+              <>
+                <RunsCard actions={a} busy={busy} onRerun={rerun} />
+                <ChangelogCard actions={a} />
+              </>
+            )}
           </Panel>
           <Panel
             key={`overrides-${nonce}`}
@@ -377,7 +378,7 @@ function LoginAuditCard({ logins: all }: { logins: Json[] }) {
         return (
           <div key={i} style={{ padding: '6px 0', borderBottom: '1px solid rgba(128,128,128,0.2)' }}>
             <div className="row">
-              <strong style={{ flex: 1 }}>{String(r['email'] ?? '(unknown email)')}</strong>
+              <MaskedEmail email={r['email']} />
               <span style={{ color: color(outcome), fontWeight: 600 }}>{outcome || '—'}</span>
             </div>
             {r['stake_name'] ? <div className="small muted">{String(r['stake_name'])}</div> : null}
@@ -652,18 +653,27 @@ function EndpointHealthCard({ data }: { data: Json }) {
   if (eps.length === 0) {
     return <Card title="Endpoint health (trend)">No sync/probe telemetry in the last {days} days yet.</Card>;
   }
+  const shown = eps.slice(0, 10); // top of the list only — the full, paginated set lives at /admin/endpoints
   const hours = Object.keys(byHour).sort((a, b) => Number(a) - Number(b));
   const verdictColor = (v: string) =>
     v === 'hot' ? statusColors.danger : v === 'watch' ? statusColors.warning : statusColors.success;
   const hourColor = (pct: number) =>
     pct >= 10 ? statusColors.danger : pct >= 2 ? statusColors.warning : statusColors.success;
   return (
-    <Card title="Endpoint health (trend)" trailing={<span className="small muted">{runs} runs · {days}d</span>}>
+    <Card
+      title="Endpoint health (trend)"
+      trailing={
+        <span className="row" style={{ gap: 10 }}>
+          <span className="small muted">{runs} runs · {days}d</span>
+          {eps.length > 10 && <ViewAllLink to="/admin/endpoints" n={eps.length} />}
+        </span>
+      }
+    >
       <p className="small muted" style={{ marginTop: 0 }}>
         Passive read from telemetry the sync/probe already record — zero added load on LCR. error% is at the
         sync&apos;s current pace; for the safe ceiling, run the rate finder (tools/rate_finder.py).
       </p>
-      {eps.map((ep, i) => {
+      {shown.map((ep, i) => {
         const errPct = Number(ep['error_pct'] ?? 0);
         const verdict = String(ep['verdict'] ?? 'healthy');
         return (

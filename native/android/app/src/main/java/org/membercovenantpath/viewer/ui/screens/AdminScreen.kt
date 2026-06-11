@@ -108,6 +108,14 @@ fun AdminScreen(onBack: () -> Unit) {
             LazyColumn(Modifier.fillMaxWidth(), contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp)) {
                 item { PanelSection("System", s.summary) { SystemPanels(it, vm) } }
                 item { PanelSection("Diagnostics", s.diagnostics) { DiagnosticsCard(it) } }
+                // Section order mirrors the web ops console: Admins at #3, then Enrolled stakes.
+                item {
+                    when (val p = s.admins) {
+                        is Panel.Loading -> SectionCard("Admins…") { CardSkeleton(lines = 3) }
+                        is Panel.Error -> SectionCard("Admins") { Text("Couldn't load: ${p.message}", style = MaterialTheme.typography.bodySmall) }
+                        is Panel.Ready -> AdminsCard(p.data, currentEmail = vm.currentEmail, onInvite = { inviteOpen = true }, onRevoke = vm::revokeAdmin)
+                    }
+                }
                 item {
                     PanelSection("Enrolled stakes", s.stakes) {
                         EnrolledStakesCard(
@@ -124,13 +132,6 @@ fun AdminScreen(onBack: () -> Unit) {
                             RunsCard(it, busy = s.busy, onRerun = vm::rerun, openUrl = { url -> openUrl(context, url) })
                             ChangelogCard(it, openUrl = { url -> openUrl(context, url) })
                         }
-                    }
-                }
-                item {
-                    when (val p = s.admins) {
-                        is Panel.Loading -> SectionCard("Admins…") { CardSkeleton(lines = 3) }
-                        is Panel.Error -> SectionCard("Admins") { Text("Couldn't load: ${p.message}", style = MaterialTheme.typography.bodySmall) }
-                        is Panel.Ready -> AdminsCard(p.data, currentEmail = vm.currentEmail, onInvite = { inviteOpen = true }, onRevoke = vm::revokeAdmin)
                     }
                 }
                 item { Spacer(Modifier.size(24.dp)) }

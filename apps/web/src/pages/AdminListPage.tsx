@@ -1,7 +1,7 @@
-// Admin · full-list detail views (#7): /admin/runs · /admin/changelog · /admin/logins. The ops
-// console front page shows only the top few rows of each long section; these routes hold the FULL
-// history with client-side pagination. Server-gated like the console (broker require_admin; the
-// logins query is admin-only RLS).
+// Admin · full-list detail views (#7): /admin/runs · /admin/changelog · /admin/logins ·
+// /admin/endpoints. The ops console front page shows only the top few rows of each long section;
+// these routes hold the FULL history with client-side pagination. Server-gated like the console
+// (broker require_admin; the logins query is admin-only RLS).
 
 import { useEffect, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
@@ -9,6 +9,7 @@ import { supabase } from '../lib/supabase';
 import { admin } from '../lib/admin';
 import { status as statusColors } from '../theme/tokens';
 import { agoOrNever, dur } from '../logic/dates';
+import { maskEmail } from '../logic/mask';
 import { Icon } from '../components/Icon';
 import { IconButton, Button } from '../components/ui';
 import { CardSkeleton } from '../components/Skeletons';
@@ -21,6 +22,7 @@ const SECTIONS: Record<string, { title: string; hint: string }> = {
   runs: { title: 'Actions runs', hint: 'Every recent GitHub Actions run (newest first).' },
   changelog: { title: 'Changelog', hint: 'Recent commits to main (newest first).' },
   logins: { title: 'Login history', hint: 'Every recorded sign-in: who, outcome, callings, scope.' },
+  endpoints: { title: 'Endpoint health', hint: 'Per-endpoint trend from the telemetry the sync/probe already record (last 14 days), worst first.' },
 };
 
 export function AdminListPage() {
@@ -44,6 +46,9 @@ export function AdminListPage() {
         } else if (section === 'changelog') {
           const a = await admin.actions(1, 100);
           setRows(((a['commits'] as Json[]) ?? []));
+        } else if (section === 'endpoints') {
+          const d = await admin.endpointHealth(14);
+          setRows(((d['endpoints'] as Json[]) ?? []));
         } else {
           const { data, error: e } = await supabase
             .from('login_audit')
@@ -88,6 +93,8 @@ export function AdminListPage() {
               <RunTile key={i} r={r} />
             ) : section === 'changelog' ? (
               <CommitTile key={i} c={r} />
+            ) : section === 'endpoints' ? (
+              <EndpointTile key={i} ep={r} />
             ) : (
               <LoginTile key={i} r={r} />
             ),
@@ -177,6 +184,25 @@ function CommitTile({ c }: { c: Json }) {
   );
 }
 
+/** Login email, masked by default (shoulder-surfing protection — the data is admin-only either
+ * way) with an eye toggle to reveal the full address. Shared by the console card and this page. */
+export function MaskedEmail({ email }: { email: unknown }) {
+  const [show, setShow] = useState(false);
+  if (email == null) return <strong style={{ flex: 1 }}>(unknown email)</strong>;
+  const full = String(email);
+  return (
+    <strong className="row" style={{ flex: 1, gap: 2, alignItems: 'center', minWidth: 0 }}>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{show ? full : maskEmail(full)}</span>
+      <IconButton
+        icon={show ? 'visibility_off' : 'visibility'}
+        label={show ? 'Hide email' : 'Show full email'}
+        size={16}
+        onClick={() => setShow((s) => !s)}
+      />
+    </strong>
+  );
+}
+
 function LoginTile({ r }: { r: Json }) {
   const outcome = String(r['outcome'] ?? r['authorized'] ?? '');
   const good = outcome === 'allowed' || outcome === 'enrolled';
@@ -186,13 +212,31 @@ function LoginTile({ r }: { r: Json }) {
   return (
     <div style={{ padding: '6px 0', borderBottom: '1px solid var(--outline-variant)' }}>
       <div className="row">
-        <strong style={{ flex: 1 }}>{String(r['email'] ?? '(unknown email)')}</strong>
+        <MaskedEmail email={r['email']} />
         <span style={{ color: good ? statusColors.successFg : statusColors.warning, fontWeight: 600 }}>{outcome || '—'}</span>
       </div>
       {r['stake_name'] ? <div className="small muted">{String(r['stake_name'])}</div> : null}
       {callings ? <div className="small muted">Callings: {callings}</div> : null}
       {scope ? <div className="small muted">Sees: {scope}</div> : null}
       <div className="small muted">{at.slice(0, 16).replace('T', ' ')}</div>
+    </div>
+  );
+}
+
+/** One grouped endpoint row — mirrors the console card's row (calls · avg ms · err% + verdict chip). */
+function EndpointTile({ ep }: { ep: Json }) {
+  const errPct = Number(ep['error_pct'] ?? 0);
+  const verdict = String(ep['verdict'] ?? 'healthy');
+  const c = verdict === 'hot' ? statusColors.danger : verdict === 'watch' ? statusColors.warning : statusColors.success;
+  return (
+    <div className="row" style={{ padding: '6px 0', alignItems: 'center', borderBottom: '1px solid var(--outline-variant)' }}>
+      <code style={{ flex: 1, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis' }}>{String(ep['endpoint'])}</code>
+      <span className="small" style={{ marginLeft: 8, color: errPct > 0 ? statusColors.danger : undefined }}>
+        {String(ep['calls'])} calls · {String(ep['avg_ms'])}ms avg{errPct > 0 ? ` · ${errPct}% err` : ''}
+      </span>
+      <span className="chip" style={{ marginLeft: 8, padding: '1px 8px', fontSize: 11, borderColor: c, color: c }}>
+        {verdict}
+      </span>
     </div>
   );
 }

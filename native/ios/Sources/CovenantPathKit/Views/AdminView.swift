@@ -2,8 +2,8 @@
 import SwiftUI
 
 /// Admin · Ops console (port of `admin_page.dart`): independent panels for system health, data
-/// freshness, maintenance dispatch, tools/links, diagnostics, enrolled stakes (per-stake ops),
-/// GitHub Actions runs + changelog, and admin management. Each panel loads on its own; the broker
+/// freshness, maintenance dispatch, tools/links, diagnostics, admin management, enrolled stakes
+/// (per-stake ops), and GitHub Actions runs + changelog. Each panel loads on its own; the broker
 /// gates everything to app_admins server-side.
 struct AdminView: View {
     @Environment(\.dismiss) private var dismiss
@@ -61,10 +61,11 @@ struct AdminView: View {
                 maintenanceCard(store)
                 linksCard(store)
                 diagnosticsCard(store)
+                // Section order mirrors the web ops console: Admins at #3, then Enrolled stakes.
+                adminsCard(store)
                 enrolledStakesCard(store)
                 runsCard(store)
                 changelogCard(store)
-                adminsCard(store)
             }
             .padding(12)
         }

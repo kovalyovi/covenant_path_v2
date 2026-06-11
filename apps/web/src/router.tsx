@@ -87,7 +87,7 @@ export const router = createBrowserRouter([
       { path: 'settings', element: <SettingsPage /> },
       { path: 'invite', element: <InvitePage /> },
       { path: 'admin', element: <LazyRoute><AdminPage /></LazyRoute> },
-      // Full-history ops views (#7): /admin/runs · /admin/changelog · /admin/logins (paginated).
+      // Full-history ops views (#7): /admin/runs · /admin/changelog · /admin/logins · /admin/endpoints (paginated).
       { path: 'admin/:section', element: <LazyRoute><AdminListPage /></LazyRoute> },
     ],
   },

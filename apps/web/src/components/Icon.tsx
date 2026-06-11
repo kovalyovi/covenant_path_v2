@@ -79,7 +79,9 @@ export type IconName =
   | 'library'
   | 'mail'
   | 'note'
-  | 'account_balance';
+  | 'account_balance'
+  | 'visibility'
+  | 'visibility_off';
 
 interface Props {
   name: IconName;
@@ -218,6 +220,10 @@ const PATHS: Record<IconName, string> = {
   note: '<path fill="currentColor" d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9l7-7V5a2 2 0 0 0-2-2zm-6 14v-4a1 1 0 0 1 1-1h4l-5 5z"/>',
   account_balance:
     '<path fill="currentColor" d="M4 10h3v7H4v-7zm6.5 0h3v7h-3v-7zM2 19h20v3H2v-3zm15-9h3v7h-3v-7zm-5-9L2 6v2h20V6L12 1z"/>',
+  visibility:
+    '<path fill="currentColor" d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/>',
+  visibility_off:
+    '<path fill="currentColor" d="M12 7a5 5 0 0 1 5 5c0 .65-.13 1.26-.36 1.83l2.92 2.92A11.82 11.82 0 0 0 23 12c-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46A11.8 11.8 0 0 0 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55a3 3 0 0 0 3.57 3.57l1.55 1.55A4.98 4.98 0 0 1 7 12c0-.79.18-1.53.53-2.2zm4.31-.78 3.15 3.14L15 12a3 3 0 0 0-3-3l-.16.02z"/>',
 };
 
 export function Icon({ name, size = 20, color, title, style, className }: Props) {
