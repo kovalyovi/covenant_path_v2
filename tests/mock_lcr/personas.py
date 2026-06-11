@@ -32,6 +32,13 @@ PHONE_AUTH_ID = "aut-mock-phone-0001"
 PHONE_ENROLLMENT_ID = "pae-mock-phone-0001"
 MFA_CODE = "123456"
 
+# FULLSTACK-LANE ALIGNMENT: the no-MFA personas' /api/auth/me emails EQUAL the seeded
+# rls.* accounts in tests/seed.py (rls.president / rls.bishop / rls.norole @example.org).
+# A Church login through the REAL broker mints a Supabase session for the auth/me email —
+# against the real TEST project that session must land on an existing RLS scope
+# (user_roles row), or the browser e2e (apps/web/e2e/fullstack) would always see zero rows.
+# Change them together or the fullstack lane breaks.
+
 
 @dataclass(frozen=True)
 class Persona:
@@ -53,15 +60,15 @@ class Persona:
 
 PERSONAS: dict[str, Persona] = {p.username: p for p in [
     Persona("president.complete", "pw-president", "Avery Example", "Avery", "Example",
-            "avery.example@example.org", "1000000001",
+            "rls.president@example.org", "1000000001",
             "11111111-1111-4111-8111-111111111111", None,
             1, "Stake President", STAKE_UNIT, STAKE_NAME, is_stake=True),
     Persona("wardleader.partial", "pw-ward", "Blair Sample", "Blair", "Sample",
-            "blair.sample@example.org", "1000000002",
+            "rls.bishop@example.org", "1000000002",
             "22222222-2222-4222-8222-222222222222", None,
             4, "Bishop", WARD1_UNIT, WARD1_NAME),
     Persona("member.nocalling", "pw-member", "Casey Specimen", "Casey", "Specimen",
-            "casey.specimen@example.org", "1000000003",
+            "rls.norole@example.org", "1000000003",
             "33333333-3333-4333-8333-333333333333", None,
             None, None, WARD1_UNIT, WARD1_NAME),
     Persona("member.mfa", "pw-mfa", "Drew Placeholder", "Drew", "Placeholder",

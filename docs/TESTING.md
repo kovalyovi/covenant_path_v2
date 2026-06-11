@@ -28,7 +28,7 @@ suites whenever their code is touched.
 | **Web e2e (UI lane)** | Playwright against the real app with broker/Supabase mocked at the network edge | `npm run e2e` (apps/web) | none | push (web) + nightly |
 | Live smoke (prod) | The existing live suites against production Supabase | `python -m backend.test_rls` · `test_power_users` · `test_admins` · `test_login_audit` · `test_reconcile` · `test_calling_overrides` | prod secrets | nightly + dispatch only |
 | **RLS matrix (test project)** | Migrations + seeded personas + the role×table visibility matrix against the **dedicated test Supabase project** | `python -m tests.seed && python -m pytest tests/test_rls_matrix.py` | `CP_TEST_SUPABASE_*` | nightly + dispatch (skips until the project exists) |
-| Fullstack e2e (Phase B) | Playwright `fullstack` project: real broker + mock LCR + test Supabase, browser-driven | `E2E_FULLSTACK=1 npx playwright test --project=fullstack` | `CP_TEST_SUPABASE_*` | dispatch (Phase B) |
+| **Fullstack e2e (LIVE)** | Playwright `fullstack` project: real browser → real broker → mock LCR → the TEST project (RLS live). The config boots the whole stack itself (`tests/fullstack_stack.py` + vite) | `E2E_FULLSTACK=1 npx playwright test --project=fullstack` (apps/web; needs `.env` CP_TEST_* + seeded project) | `CP_TEST_SUPABASE_*` | local / dispatch |
 | Native | iOS/Android build + manual AVD pass | CI `build-native-*.yml`; AVD per `native/PARITY.md` | none | push (native paths) |
 
 ## Test environment
@@ -84,7 +84,7 @@ incomplete.**
 | # | Scenario | Status |
 |---|---|---|
 | B1 | Consented enroll stores credential (eval → scrape → RPC) — **the 2026-06-10 NameError regression** | ✅ offline `test_broker::test_full_eval_enroll_reaches_scrape_and_stores` + e2e-mock |
-| B2 | Re-enroll after REVOKE → row un-revoked, failure state cleared | ✅ e2e-mock (seeded revoked row) + offline RPC-semantics stub |
+| B2 | Re-enroll after REVOKE → row un-revoked, failure state cleared | ✅ e2e-mock (seeded revoked row) + offline RPC-semantics stub + **fullstack browser loop** (`apps/web/e2e/fullstack`) |
 | B3 | can_enroll offer for a credential-less stake (post-login offer, consent moved off login form) | ✅ offline + e2e-mock + Playwright `login-enroll-offer` |
 | B4 | can_improve takeover offer (higher access replaces incomplete credential; lower never clobbers healthy higher) | ✅ offline (`onboarding.should_take_over`) · 🔶 e2e-mock persona pair |
 | B5 | Consented enroll that stored NOTHING says so (dialog stays open with server error; no fake success toast) | ✅ Playwright `reauth-dialog` (web logic shipped eb7107f) |
@@ -107,6 +107,7 @@ incomplete.**
 | C5 | Wipe data ≠ revoke (members deleted; credential + roles stay; repopulates) | ✅ offline `test_provider_wipe_data` |
 | C6 | Drive connect/disconnect/needs-reconnect states; per-stake sheet | ✅ Playwright `sync-settings` (status rendering) · 🔶 fullstack OAuth loop |
 | C7 | Sheet sharing = computed recipients EXACTLY (leaders+missionaries in scope), `reconcile_viewers` notifies only NEW viewers, released leaders removed next sync | ⬜ TODO mock-Drive assertions + read-only live audit tool (`tools/verify_sheet_sharing.py`) |
+| C8 | The REVOKER sees the revoked state immediately (banner + settings refresh, no page reload) | ✅ fullstack lane (caught the missing `reloadEnrollStatus` after revoke, fixed 2026-06-11) |
 
 ### D. Data visibility (RLS) & person views
 

@@ -101,6 +101,9 @@ export function DashboardShell() {
     try {
       await broker.revoke(stakeId);
       d.setEnrollStatus(null);
+      // Refetch so the REVOKER sees the revoked state immediately (banner + settings) — nulling
+      // alone left the UI unchanged until a full reload (caught by the fullstack e2e lane).
+      void d.reloadEnrollStatus();
       toast.show({ message: 'Sync access revoked. Data will not update until re-enrolled.' });
     } catch (e) {
       toast.show({ message: `Could not revoke: ${e instanceof Error ? e.message : e}` });
