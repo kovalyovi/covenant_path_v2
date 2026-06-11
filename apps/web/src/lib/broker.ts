@@ -200,7 +200,7 @@ export class BrokerClient {
     // (no usable credential yet) legitimately takes 30-60s — a 30s abort made the client give up
     // while the broker succeeded, so the enroll offer never appeared and the retry re-ran the whole
     // Okta login (the father's three 'allowed', zero 'enrolled' loop). Give those calls 95s.
-    const attemptTimeout = /\/auth\/(password|mfa\/verify|session)$/.test(path) ? 95_000 : 30_000;
+    const attemptTimeout = /\/auth\/(password|mfa\/verify|session|otp\/verify)$/.test(path) ? 95_000 : 30_000;
     let _retries = 0;
     let resp: Response | null = null;
     let lastErr: unknown;
@@ -247,7 +247,7 @@ export class BrokerClient {
    *  /log endpoint (→ Axiom), so the client-EXPERIENCED latency is easy to harvest and compare with
    *  the broker's server-side `login.complete`. Fire-and-forget; never blocks login. */
   private logTiming(path: string, t0: number, retries: number, serverMs?: number): void {
-    if (!/\/auth\/(password|mfa\/verify|email\/verify)/.test(path)) return;
+    if (!/\/auth\/(password|mfa\/verify|email\/verify|otp\/verify)/.test(path)) return;
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
     const ms = Math.round(now - t0);
     console.info(`[login-timing] ${path} ${ms}ms (cold-start retries: ${retries}, server: ${serverMs ?? '?'}ms)`);

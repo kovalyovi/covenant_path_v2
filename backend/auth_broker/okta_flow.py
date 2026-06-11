@@ -309,9 +309,9 @@ def _identity(session: requests.Session, login_id: str) -> dict:
     return ident
 
 
-def _drive_to_password(session: requests.Session, identifier: str, password: str, login_id: str) -> tuple[dict, str]:
-    """interact -> introspect -> identify -> (select password) -> answer password.
-    Returns (payload, pkce_verifier) so the caller can exchange the interaction_code for tokens."""
+def _interact_introspect(session: requests.Session, login_id: str) -> tuple[dict, str]:
+    """interact -> introspect: open a fresh IDX transaction (shared by the password and the
+    passwordless flows). Returns (first payload, pkce_verifier)."""
     verifier, challenge = _pkce()
     logger.info("[auth %s] interact", login_id)
     r = session.post(f"{ISSUER}/v1/interact", data={
@@ -327,6 +327,13 @@ def _drive_to_password(session: requests.Session, identifier: str, password: str
     logger.info("[auth %s] introspect", login_id)
     payload = _idx_post(session, INTROSPECT_URL, {"interactionHandle": r.json()["interaction_handle"]})
     logger.info("[auth %s] introspect -> %s", login_id, _idx_summary(payload))
+    return payload, verifier
+
+
+def _drive_to_password(session: requests.Session, identifier: str, password: str, login_id: str) -> tuple[dict, str]:
+    """interact -> introspect -> identify -> (select password) -> answer password.
+    Returns (payload, pkce_verifier) so the caller can exchange the interaction_code for tokens."""
+    payload, verifier = _interact_introspect(session, login_id)
 
     identified = selected = answered_password = False
     for _ in range(8):
@@ -729,188 +736,97 @@ def verify_captured_session(cookies: list[dict]) -> dict:
                         "signing in again.", root_cause=str(exc)) from exc
 
 
-# --- Email-first OTP authentication (no password required) ---
+# --- passwordless email-code login (OTP as the PRIMARY factor) ----------------------------------
+# Whether a Church Account may sign in with an EMAILED CODE instead of its password is the Okta
+# org's policy, per account: identify (no password sent) either offers an okta_email authenticator
+# on the primary select menu (passwordless enabled), or only Password (the default in every flow
+# captured so far). otp_start finds out honestly — it answers "code_sent" only after Okta ACCEPTED
+# the factor select (the select is what sends the email); a password-first account gets an
+# actionable error, never a phantom "code sent". Pending state lives in the same _PENDING store as
+# the password+MFA flow (keyed additionally by identifier), so otp_verify IS verify_mfa — the same
+# declared-field code answer, friendly failure classification, wrong-code retry, and identity tail.
 
-_OTP_SESSIONS: dict[str, dict] = {}  # email -> {session, payload, verifier, ts}
-_OTP_TTL = 600  # 10 minutes
+_OTP_BY_IDENTIFIER: dict[str, str] = {}  # normalized identifier -> login_id in _PENDING
 
-def otp_start(email: str, enroll: bool = False) -> dict:
-    """Initiate Church account authentication via email OTP. Returns available factors or error.
-    Accepts either an email address or username; Okta will authenticate whichever works."""
-    from lcr_client.okta_login import new_session
-    from backend import observability as obs
+_OTP_UNAVAILABLE_MSG = (
+    "This Church Account can't sign in with an emailed code — Okta asks for its password first. "
+    "Use the Church username option instead; if your account has MFA, an emailed code can still "
+    "be your second step.")
 
-    email = (email or "").strip().lower()
-    if not email:
-        raise AuthError("An email address or username is required.")
 
+def otp_start(identifier: str) -> dict:
+    """Begin a PASSWORDLESS login: identify -> find okta_email on the PRIMARY factor menu ->
+    select it (the select is what makes Okta send the email). Returns {"status": "code_sent",
+    "sent_to": label}. Raises AuthError(kind=otp_unavailable) when the account's policy is
+    password-first (the Church default) — the client shows why instead of a code field."""
+    _prune()
+    # Mappings whose pending login was TTL-pruned are dead — drop them so the map stays bounded.
+    for k in [k for k, v in _OTP_BY_IDENTIFIER.items() if v not in _PENDING]:
+        _OTP_BY_IDENTIFIER.pop(k, None)
+    ident = (identifier or "").strip().lower()
+    if not ident:
+        raise AuthError("Enter your Church Account email or username first.", kind="otp_bad_request")
     login_id = _new_login_id()
-    cid = obs.new_correlation_id()
     session = new_session()
-    t0 = time.time()
-
     try:
-        # Use email as the identifier (most Okta orgs support email login)
-        with obs.span("login.otp_identify", correlation_id=cid, endpoint="okta"):
-            payload, verifier = _drive_to_factor_select(session, email, login_id)
-    except AuthError as e:
-        logger.warning("[auth %s] otp identify failed: %s", login_id, str(e))
-        raise AuthError(str(e)) from e
-    except Exception as e:  # noqa: BLE001
-        logger.exception("[auth %s] otp identify error", login_id)
-        dump_debug("broker_otp_error", login_id=login_id, error=str(e))
-        raise AuthError(f"OTP authentication failed: {str(e)[:200]}") from e
-
-    # Extract available factors from the select-authenticator-authenticate remediation
-    rems = _remediations(payload)
-    select_auth_rem = rems.get("select-authenticator-authenticate", {})
-    auth_types = _authenticator_types(payload)
-    factors = _factors(select_auth_rem, auth_types)
-
-    # Store session for verify step
-    _OTP_SESSIONS[email] = {"session": session, "payload": payload, "verifier": verifier,
-                            "login_id": login_id, "cid": cid, "t0": t0, "ts": time.time()}
-
-    return {"ok": True, "factors": factors}
-
-
-def _drive_to_factor_select(session: requests.Session, email: str, login_id: str) -> tuple:
-    """Identify via email and drive the IDX flow until a factor-selection state."""
-    from lcr_client.okta_login import (
-        _idx_post, _remediations, _follow, INTROSPECT_URL, CLIENT_ID, SCOPE,
-        REDIRECT_URI, ISSUER)
-    import secrets
-
-    logger.info("[auth %s] otp interact + identify", login_id)
-    verifier, challenge = _pkce()
-
-    # Start a new IDX transaction (like the password flow does)
-    interact_resp = session.post(
-        f"{ISSUER}/v1/interact",
-        data={"client_id": CLIENT_ID, "scope": SCOPE,
-              "redirect_uri": REDIRECT_URI, "response_type": "code",
-              "state": secrets.token_hex(16), "code_challenge": challenge,
-              "code_challenge_method": "S256"},
-        timeout=60)
-    if interact_resp.status_code >= 400:
-        raise AuthError(f"Okta interact failed: {interact_resp.status_code}")
-
-    interaction_handle = interact_resp.json()["interaction_handle"]
-
-    # Introspect to get initial state
-    payload = _idx_post(session, INTROSPECT_URL, {"interactionHandle": interaction_handle})
-    state_handle = payload.get("stateHandle")
-
-    for attempt in range(8):
-        rems = _remediations(payload)
-        for r in rems.values():
-            r["_stateHandle"] = state_handle
-
-        if "identify" in rems:
-            logger.info("[auth %s] otp identify (identifier=%s)", login_id, email)
-            payload = _follow(session, rems["identify"], {"identifier": email, "rememberMe": False})
-            state_handle = payload.get("stateHandle")
-            continue
-
-        if "select-authenticator-authenticate" in rems:
-            logger.info("[auth %s] otp: factor selection available", login_id)
-            return payload, verifier
-
-        # Unexpected state
-        logger.warning("[auth %s] otp unexpected state: %s", login_id, sorted(rems.keys()))
-        raise AuthError(f"Unexpected OTP flow state: {sorted(rems.keys())}")
-
-    raise AuthError("OTP flow did not reach factor selection within step budget")
-
-
-def otp_verify(email: str, code: str, enroll: bool = False,
-               want_refresh_token: bool = True, allow_cached_identity: bool = False) -> dict:
-    """Verify OTP code and complete authentication."""
-    from lcr_client.okta_login import _follow, _authenticator_types
-    from backend import observability as obs
-
-    email = (email or "").strip().lower()
-    code = (code or "").strip()
-
-    if not code:
-        raise AuthError("A verification code is required.")
-
-    stored = _OTP_SESSIONS.get(email)
-    if not stored:
-        raise AuthError("The OTP session has expired. Please request a new code.")
-
-    # Prune old sessions
-    now = time.time()
-    cutoff = now - _OTP_TTL
-    for k in [k for k, v in _OTP_SESSIONS.items() if v.get("ts", 0) < cutoff]:
-        _OTP_SESSIONS.pop(k, None)
-
-    if not stored or stored["ts"] < cutoff:
-        raise AuthError("The OTP session has expired. Please request a new code.")
-
-    session = stored["session"]
-    payload = stored["payload"]
-    login_id = stored["login_id"]
-    cid = stored["cid"]
-    t0 = stored["t0"]
-
-    try:
-        # Select email/OTP factor (prefer email, then google_otp, then first available)
-        auth_types = _authenticator_types(payload)
-        factors = _factors(payload.get("currentAuthenticatorEnroll", {}))
-        if not factors:
-            factors = _factors(payload.get("currentAuthenticator", {}))
-
-        email_factor = next((f for f in factors if "email" in f.get("type", "").lower()), None)
-        otp_factor = next((f for f in factors if "otp" in f.get("type", "").lower()), None)
-        selected = email_factor or otp_factor or (factors[0] if factors else None)
-
-        if not selected:
-            raise AuthError("No OTP factors are available for your account.")
-
-        with obs.span("login.otp_select", correlation_id=cid):
-            logger.info("[auth %s] otp select factor: %s", login_id, selected.get("label"))
-            payload = _follow(session, payload.get("currentAuthenticator", {}),
-                             {"authenticator": selected.get("_auth", {"id": selected["id"]})})
-
-        # Answer with the code
-        state = _code_input(payload)
-        if not state:
-            raise AuthError("The OTP factor does not support code entry.")
-
-        with obs.span("login.otp_answer", correlation_id=cid):
-            logger.info("[auth %s] otp answer code", login_id)
-            payload = _follow(session, state, {"credentials": {"passcode": code}})
-
-        if "successWithInteractionCode" not in payload:
-            _OTP_SESSIONS[email] = {"session": session, "payload": payload, "verifier": stored["verifier"],
-                                    "login_id": login_id, "cid": cid, "t0": t0, "ts": time.time()}
-            msgs = _idx_messages(payload)
-            raise AuthError(_user_message(msgs) or "That code didn't work. Please try again.")
-
-        # Success: complete the authentication
-        username = email  # use email as the username for caching/logging
-        ident = _finish_success(session, payload, stored["verifier"], login_id, cid, t0,
-                               username, want_refresh_token, allow_cached_identity)
-        cookies = serialize_cookies(session)
-        _OTP_SESSIONS.pop(email, None)
-        return {"status": "success", "identity": ident, "cookies": cookies}
-
+        payload, verifier = _drive_to_identify(session, ident, login_id)
     except AuthError:
         raise
-    except Exception as e:  # noqa: BLE001
-        logger.exception("[auth %s] otp verify error", login_id)
-        dump_debug("broker_otp_verify_error", login_id=login_id, error=str(e))
-        raise AuthError("Code verification failed. Please try again.") from e
+    except Exception as exc:  # noqa: BLE001
+        dump_debug("broker_otp_identify_error", login_id=login_id, error=str(exc))
+        raise friendly_auth_error(exc) from exc
+    rems = _remediations(payload)
+    sel = rems.get("select-authenticator-authenticate")
+    factors = _factors(sel, _authenticator_types(payload)) if sel else []
+    supported, _dropped = _split_supported(factors)
+    email_factor = next((f for f in supported if f.get("type") == "okta_email"), None)
+    logger.info("[auth %s] otp primary menu -> %s", login_id, _idx_summary(payload))
+    if email_factor is None:
+        offered = sorted({f.get("type") or f.get("method") or "?" for f in factors})
+        raise AuthError(_OTP_UNAVAILABLE_MSG, kind="otp_unavailable",
+                        root_cause=f"primary factors offered: {','.join(offered) or 'password-only'}",
+                        username=ident, factor_type="okta_email")
+    _store_pending(login_id, session, payload, verifier, factors, ident)
+    select_factor(login_id, email_factor["id"])  # raises friendly if Okta rejects the send
+    old = _OTP_BY_IDENTIFIER.get(ident)
+    if old and old != login_id:
+        _PENDING.pop(old, None)  # a resend replaces the older challenge — the freshest code wins
+    _OTP_BY_IDENTIFIER[ident] = login_id
+    return {"status": "code_sent", "sent_to": email_factor.get("label") or "your email"}
 
 
-def _user_message(messages: list[str]) -> str | None:
-    """Extract the most relevant user-facing message from IDX responses."""
-    for msg in messages:
-        msg_lower = msg.lower()
-        if "incorrect" in msg_lower or "invalid" in msg_lower or "doesn't match" in msg_lower:
-            return msg
-    return messages[0] if messages else None
+def _drive_to_identify(session: requests.Session, identifier: str, login_id: str) -> tuple[dict, str]:
+    """interact -> introspect -> identify, NO password: stops at whatever Okta offers next (the
+    primary authenticator menu, or a password challenge). Returns (payload, pkce_verifier)."""
+    payload, verifier = _interact_introspect(session, login_id)
+    for _ in range(4):
+        rems = _remediations(payload)
+        sh = payload.get("stateHandle")
+        for rr in rems.values():
+            rr["_stateHandle"] = sh
+        if "identify" not in rems:
+            break
+        logger.info("[auth %s] otp identify", login_id)
+        # rememberMe=True for the same reason as the password flow: the Okta session's own
+        # lifetime is the only lever on how long a stored credential keeps re-minting.
+        payload = _follow(session, rems["identify"], {"identifier": identifier, "rememberMe": True})
+    return payload, verifier
+
+
+def otp_verify(identifier: str, code: str, *, want_refresh_token: bool = True,
+               allow_cached_identity: bool = False) -> dict:
+    """Finish a passwordless login. The pending state IS an MFA-style code challenge, so this
+    delegates to verify_mfa — a wrong code keeps the pending alive for a retry (exactly like MFA),
+    and success runs the same identity tail (cache fast-lane / token exchange / LCR identity)."""
+    ident = (identifier or "").strip().lower()
+    login_id = _OTP_BY_IDENTIFIER.get(ident, "")
+    if not login_id or login_id not in _PENDING:
+        _OTP_BY_IDENTIFIER.pop(ident, None)
+        raise AuthError(_EXPIRED_MSG, kind="mfa_expired", username=ident)
+    res = verify_mfa(login_id, code, want_refresh_token=want_refresh_token,
+                     allow_cached_identity=allow_cached_identity)
+    _OTP_BY_IDENTIFIER.pop(ident, None)
+    return res
 
 # (The background cache refresh lives in enroll.refresh_cached_identity — it also re-reads the
 # UNIT via user_context, which a /api/auth/me-only refresher here couldn't.)

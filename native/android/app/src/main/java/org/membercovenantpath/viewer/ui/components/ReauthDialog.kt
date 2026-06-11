@@ -9,6 +9,9 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -35,6 +38,11 @@ private const val NO_ACCESS_MSG =
     "This account doesn't have access to Covenant Path. Access is granted by your calling — " +
         "if you should have access, ask your stake leadership."
 
+/** How the leader authenticates for the re-authorization: classic password, or a passwordless
+ *  emailed code (only works when the account's Okta policy offers email as a primary factor —
+ *  otherwise the broker answers with an actionable error). */
+private enum class ReauthMode { Password, Otp }
+
 /**
  * In-app Church re-authorization (port of web `ReauthDialog` — feedback: "hit re-authorize and was
  * pushed back to the login screen — should be an extra modal"). Opens over the dashboard, runs the
@@ -49,9 +57,13 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
     val authRepo = remember { AuthRepository() }
     val scope = rememberCoroutineScope()
 
+    var mode by remember { mutableStateOf(ReauthMode.Password) }
     var username by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var mfaCode by remember { mutableStateOf("") }
+    var otpCode by remember { mutableStateOf("") }
+    var otpSent by remember { mutableStateOf(false) }
     var loginId by remember { mutableStateOf<String?>(null) }
     var factors by remember { mutableStateOf<List<BrokerFactor>>(emptyList()) }
     var factorSent by remember { mutableStateOf<BrokerFactor?>(null) }
@@ -139,12 +151,51 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
         }
     }
 
+    fun startOtp() = step {
+        // enroll=true: this IS the consent. The broker answers only after Okta actually sent
+        // the email (or with an honest error when the account is password-first).
+        broker.otpStart(email.trim(), enroll = true)
+        otpSent = true
+        otpCode = ""
+        resendIn = 30
+    }
+
+    fun verifyOtp() = step {
+        try {
+            val r = broker.otpVerify(email.trim(), otpCode.trim(), enroll = true)
+            finish(r)
+        } catch (e: Throwable) {
+            otpCode = "" // a rejected code must be retyped fresh
+            throw e
+        }
+    }
+
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
         title = { Text("Re-authorize daily sync") },
         text = {
             Column {
                 when {
+                    otpSent -> {
+                        Text("A code was just sent to your email. Enter it here.")
+                        Spacer(Modifier.size(8.dp))
+                        OutlinedTextField(
+                            otpCode, { otpCode = it.filter(Char::isDigit).take(8) },
+                            label = { Text("Verification code") },
+                            singleLine = true,
+                            enabled = !busy,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        TextButton(
+                            onClick = { startOtp() },
+                            enabled = !busy && resendIn <= 0,
+                        ) { Text(if (resendIn > 0) "Send a new code (${resendIn}s)" else "Send a new code") }
+                        TextButton(
+                            onClick = { otpSent = false; otpCode = ""; resendIn = 0 },
+                            enabled = !busy,
+                        ) { Text("Use a different email") }
+                    }
                     factorSent != null -> {
                         Text("A code was just sent via ${factorSent?.label}. Wait for the new one to arrive, then enter it here.")
                         Spacer(Modifier.size(8.dp))
@@ -181,23 +232,49 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
                             style = MaterialTheme.typography.bodySmall,
                         )
                         Spacer(Modifier.size(8.dp))
-                        OutlinedTextField(
-                            username, { username = it },
-                            label = { Text("Church username") },
-                            singleLine = true,
-                            enabled = !busy,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                            SegmentedButton(
+                                selected = mode == ReauthMode.Password,
+                                onClick = { mode = ReauthMode.Password },
+                                enabled = !busy,
+                                shape = SegmentedButtonDefaults.itemShape(0, 2),
+                            ) { Text("Church username") }
+                            SegmentedButton(
+                                selected = mode == ReauthMode.Otp,
+                                onClick = { mode = ReauthMode.Otp },
+                                enabled = !busy,
+                                shape = SegmentedButtonDefaults.itemShape(1, 2),
+                            ) { Text("Email code") }
+                        }
                         Spacer(Modifier.size(8.dp))
-                        OutlinedTextField(
-                            password, { password = it },
-                            label = { Text("Password") },
-                            singleLine = true,
-                            enabled = !busy,
-                            visualTransformation = PasswordVisualTransformation(),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        if (mode == ReauthMode.Password) {
+                            OutlinedTextField(
+                                username, { username = it },
+                                label = { Text("Church username") },
+                                singleLine = true,
+                                enabled = !busy,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(Modifier.size(8.dp))
+                            OutlinedTextField(
+                                password, { password = it },
+                                label = { Text("Password") },
+                                singleLine = true,
+                                enabled = !busy,
+                                visualTransformation = PasswordVisualTransformation(),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        } else {
+                            OutlinedTextField(
+                                email, { email = it },
+                                label = { Text("Church email") },
+                                singleLine = true,
+                                enabled = !busy,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                     }
                 }
                 if (busy && status != null) {
@@ -212,12 +289,20 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
         },
         confirmButton = {
             when {
+                otpSent -> TextButton(onClick = { verifyOtp() }, enabled = !busy && otpCode.length >= 6) {
+                    Text("Verify & authorize")
+                }
                 factorSent != null -> TextButton(onClick = { verify() }, enabled = !busy && mfaCode.length >= 6) {
                     Text("Verify & authorize")
                 }
-                loginId == null -> TextButton(onClick = { signIn() }, enabled = !busy && username.isNotBlank() && password.isNotEmpty()) {
-                    Text("Authorize")
-                }
+                loginId == null && mode == ReauthMode.Password -> TextButton(
+                    onClick = { signIn() },
+                    enabled = !busy && username.isNotBlank() && password.isNotEmpty(),
+                ) { Text("Authorize") }
+                loginId == null && mode == ReauthMode.Otp -> TextButton(
+                    onClick = { startOtp() },
+                    enabled = !busy && email.isNotBlank(),
+                ) { Text("Send code") }
                 else -> Unit // factor-pick step: the factors themselves are the actions
             }
         },

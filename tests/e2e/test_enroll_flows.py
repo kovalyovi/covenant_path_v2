@@ -1,16 +1,16 @@
 """Enrollment scenarios: consented store (g), re-enroll over a REVOKED credential — the
-2026-06-10 regression (h) — the plain-login can_enroll offer (i), and email-OTP enroll (j).
-Asserts against the stub's stake_credentials rows, i.e. the 0041 RPC semantics end to end."""
+2026-06-10 regression (h) — and the plain-login can_enroll offer (i). Asserts against the
+stub's stake_credentials rows, i.e. the 0041 RPC semantics end to end.
+(Passwordless email-code enrollment lives in test_otp_flows.py.)"""
 
 from __future__ import annotations
 
 from tests.e2e.seed_helpers import (
     PARTIAL_COVERAGE, STAKE_ID, WARD_LEADER, credential_row, stake_row,
 )
-from tests.mock_lcr.personas import MFA_CODE, PERSONAS, STAKE_NAME, STAKE_UNIT
+from tests.mock_lcr.personas import PERSONAS, STAKE_NAME, STAKE_UNIT
 
 PRESIDENT = PERSONAS["president.complete"]
-MFA_MEMBER = PERSONAS["member.mfa"]  # Has MFA configured, needed for OTP enrollment
 
 
 def test_enroll_with_consent_stores_credential_and_kicks_audit(stack):
@@ -80,14 +80,3 @@ def test_plain_login_offers_can_enroll_when_stake_has_no_credential(stack):
     assert enroll["can_enroll"] is True, "no usable credential -> offer to set up sync"
     assert enroll["stored"] is False
     assert stack.stub_rows("stake_credentials") == [], "a plain login must never store"
-
-
-def test_otp_start_endpoint_accepts_enroll_flag(stack):
-    """Smoke test: OTP endpoints are callable with enroll parameter. Full flow tested in integration."""
-    # Just verify the endpoints accept the right parameters and don't 404
-    res = stack.otp_start("test.user", enroll=True)
-    # 401 (auth failed) is expected since test.user doesn't exist; 404 would mean endpoint is missing
-    assert res.status_code != 404, "otp_start endpoint should exist"
-
-    res = stack.otp_verify("test.user", "123456", enroll=True)
-    assert res.status_code != 404, "otp_verify endpoint should exist"

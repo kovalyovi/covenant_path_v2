@@ -111,12 +111,16 @@ class IdxResponses:
             ]},
         }
 
-    def select_mfa(self, sh: str, include_webauthn: bool = False) -> dict:
+    def select_mfa(self, sh: str, include_webauthn: bool = False,
+                   include_password: bool = False) -> dict:
         """MFA shape A: a 2nd-factor menu (Email + Phone) + authenticators.value[{id,key}].
         The phone option requires the FULL authenticator object on select (id + enrollmentId
         + methodType) — exactly the Okta behavior the broker's _authenticator_object exists for.
         include_webauthn reproduces the 2026-06-11 menu: a security key the broker can NEVER
-        finish listed alongside the code factors (it must be filtered, not offered)."""
+        finish listed alongside the code factors (it must be filtered, not offered).
+        include_password models a passwordless-enabled account's PRIMARY menu (straight after
+        identify): Password listed alongside Email — otp_start must pick Email and the password
+        lane must still work by picking Password."""
         options = [
             {"label": "Email", "value": {"form": {"value": [
                 {"name": "id", "required": True,
@@ -149,6 +153,14 @@ class IdxResponses:
             authenticators.insert(0, {"id": WEBAUTHN_AUTH_ID, "key": "webauthn",
                                       "type": "security_key",
                                       "displayName": "Security Key or Biometric Authenticator"})
+        if include_password:
+            options.insert(0, {"label": "Password", "value": {"form": {"value": [
+                {"name": "id", "required": True,
+                 "value": PASSWORD_AUTH_ID, "mutable": False},
+                {"name": "methodType", "required": False,
+                 "value": "password", "mutable": False}]}}})
+            authenticators.insert(0, {"id": PASSWORD_AUTH_ID, "key": "okta_password",
+                                      "type": "password", "displayName": "Password"})
         return {
             "version": "1.0.0",
             "stateHandle": sh,
@@ -296,6 +308,13 @@ def create_identity_app(state: MockChurchState) -> FastAPI:
         username = (body.get("identifier") or "").strip()
         txn["username"] = username
         persona = PERSONAS.get(username)
+        if persona is not None and persona.passwordless:
+            # Passwordless-enabled account: the PRIMARY menu (straight after identify) offers
+            # Email alongside Password — selecting Email sends a code with NO password ever
+            # answered (otp_start's lane); selecting Password keeps the classic lane working.
+            txn["step"] = "mfa-select"
+            txn["mfa_shape"] = "A"
+            return idx.select_mfa(sh, include_password=True)
         if persona is not None and persona.mfa:
             # MFA accounts go through the authenticator menu first (Password is the option),
             # like the live flow; the password challenge follows the select.
@@ -324,6 +343,11 @@ def create_identity_app(state: MockChurchState) -> FastAPI:
             txn["step"] = "password"
             return idx.password_challenge(sh)
         if txn["step"] == "mfa-select":
+            if aid == PASSWORD_AUTH_ID:
+                # A passwordless persona's primary menu also lists Password — picking it puts
+                # the classic password lane back in play (same account, either method works).
+                txn["step"] = "password"
+                return idx.password_challenge(sh)
             if aid == PHONE_AUTH_ID and not auth.get("enrollmentId"):
                 # The real-Okta silent failure: a phone select without the full authenticator
                 # object is ACCEPTED but no code is ever sent — modeled as a 200 with no

@@ -190,6 +190,19 @@ class BrokerClient(private val auth: AuthRepository = AuthRepository()) {
             put("login_id", JsonPrimitive(loginId)); put("code", JsonPrimitive(code)); put("enroll", JsonPrimitive(enroll))
         })
 
+    /** Passwordless Church sign-in: the broker asks Okta to email a code (no password). Throws a
+     *  friendly BrokerException when the account's Okta policy is password-first (the default). */
+    suspend fun otpStart(email: String, enroll: Boolean = false) {
+        postJsonRetry("/auth/otp/start", buildJsonObject {
+            put("email", JsonPrimitive(email)); put("enroll", JsonPrimitive(enroll))
+        })
+    }
+
+    suspend fun otpVerify(email: String, code: String, enroll: Boolean = false): BrokerResult =
+        post("/auth/otp/verify", buildJsonObject {
+            put("email", JsonPrimitive(email)); put("code", JsonPrimitive(code)); put("enroll", JsonPrimitive(enroll))
+        })
+
     /** Email-OTP relay (networks that can't reach Supabase directly): broker emails the code. */
     suspend fun emailStart(email: String) {
         postJsonRetry("/auth/email/start", buildJsonObject { put("email", JsonPrimitive(email)) })

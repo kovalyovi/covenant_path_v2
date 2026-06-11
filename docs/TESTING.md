@@ -83,6 +83,7 @@ incomplete.**
 | A15 | Passkey register + passwordless login ceremony (CDP virtual authenticator; attestation row in the real `webauthn_credentials`; RLS session minted) | ✅ fullstack `apps/web/e2e/fullstack/passkey.spec.ts` (caught the `_rest` duplicate-headers 500 that broke BOTH prod ceremonies, fixed 2026-06-11) |
 | A16 | Email/auth_id RLS spoof probe: two auth users sharing an email see only their own scope | 🔶 `tests/test_rls_matrix.py` |
 | A17 | Unauthorized stranger from a NEW stake (valid Church account): LCR up → calling gate or empty-scope; LCR down → outage message (never data) | ✅ e2e-mock (A4+A8) · 🔶 matrix (zero-row visibility) |
+| A21 | **Passwordless email-code login (OTP as the PRIMARY factor)** — `/auth/otp/start` answers `code_sent` ONLY after Okta accepted the email-factor select (probe-verified live: the real Okta offers `okta_email` on the primary menu, `tools/otp_probe.py` 2026-06-11); password-first account → honest 401 "use your password" + `otp_start_failed` audit (never a phantom "code sent" — the original bug); wrong code → friendly retry, pending survives; verify runs the same identity tail as MFA; the same account's password lane keeps working | ✅ e2e-mock `tests/e2e/test_otp_flows.py` (fails pre-fix: verify died on ImportError) |
 
 ### B. Enrollment & credential lifecycle
 
@@ -100,6 +101,7 @@ incomplete.**
 | B10 | Enrollment-status state machine none/active/stale/revoked incl. `is_provider`, no-role fallbacks | ✅ e2e-mock |
 | B11 | Provider binding on enroll (0029 trigger): enroller immediately sees their whole stake | 🔶 matrix (seeded enroll → visibility) |
 | B12 | Calling change: released leader loses access by next sync/login (cache heals via background refresh); newly-called heals the other way | ✅ offline (cache-refresh tests) · 🔶 matrix (provision_roles re-run flips visibility) |
+| B13 | Passwordless OTP enroll (re-auth dialog "Email code" mode, all 3 surfaces): consented `otp/verify` stores the credential (same 0041 RPC semantics as B1) + audits `enrolled`; a plain OTP login never stores | ✅ e2e-mock `test_otp_flows.py` (full flow + no-store) · 🔶 native UI via CI builds + AVD spot-check |
 
 ### C. Sync settings, schedule, Drive
 

@@ -512,39 +512,52 @@ def auth_session(req: SessionReq) -> dict:
     return _complete_login(res, req.enroll, rid, t0)
 
 
-# --- Church account OTP via Okta (email-based authentication) ----------------
+# --- passwordless Church login (emailed code as the PRIMARY factor) ----------
 
 @app.post("/auth/otp/start")
 def auth_otp_start(req: OtpStartReq) -> dict:
-    """Initiate Church account sign-in via email OTP (sent by Church's Okta)."""
+    """Begin a passwordless (emailed-code) Church login. Answers code_sent only after Okta
+    accepted the email-factor select; a password-first account (the Church default) gets a
+    401 with an honest, actionable message instead."""
     rid = _rid()
-    logger.info("[req %s] /auth/otp/start email=%s enroll=%s", rid, req.email, req.enroll)
+    t0 = time.monotonic()
+    logger.info("[req %s] /auth/otp/start", rid)  # the identifier is PII — never logged
     try:
-        result = okta_flow.otp_start(req.email, req.enroll)
-        return result
+        return okta_flow.otp_start(req.email)
     except okta_flow.AuthError as e:
+        _audit_okta_event(getattr(e, "username", "") or req.email, "otp_start_failed",
+                          getattr(e, "root_cause", "") or str(e), rid,
+                          duration_ms=int((time.monotonic() - t0) * 1000),
+                          phase=_mfa_phase(e))
         raise HTTPException(status_code=401, detail=str(e))
-    except Exception as e:  # noqa: BLE001
-        logger.exception("[req %s] otp start error", rid)
-        raise HTTPException(status_code=400, detail="OTP sign-in failed")
 
 
 @app.post("/auth/otp/verify")
 def auth_otp_verify(req: OtpVerifyReq) -> dict:
-    """Verify Church account OTP code and mint a Supabase session."""
+    """Verify the emailed code and finish the login — the same completion (Supabase mint +
+    login eval, in parallel) as the password/MFA paths."""
     rid = _rid()
-    logger.info("[req %s] /auth/otp/verify email=%s enroll=%s", rid, req.email, req.enroll)
-    t0 = time.time()
+    t0 = time.monotonic()
+    logger.info("[req %s] /auth/otp/verify", rid)
     try:
-        result = okta_flow.otp_verify(req.email, req.code, req.enroll)
-        return _complete_login(result, req.enroll, rid, t0)
-    except okta_flow.AuthError as e:
-        raise HTTPException(status_code=401, detail=str(e))
-    except okta_flow.IdentityError as e:
+        res = okta_flow.otp_verify(req.email, req.code.strip(),
+                                   want_refresh_token=req.enroll,
+                                   allow_cached_identity=not req.enroll)
+    except okta_flow.IdentityError as e:  # must precede AuthError (its subclass)
+        logger.warning("[req %s] LCR identity failed after OTP OK (%s): %s",
+                       rid, getattr(e, "root_cause", "?"), e)
+        _audit_okta_event(getattr(e, "username", ""), "lcr_identity_failed",
+                          getattr(e, "root_cause", "") or str(e), rid,
+                          duration_ms=int((time.monotonic() - t0) * 1000),
+                          phase=f"identity:{getattr(e, 'kind', 'other')}")
         raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:  # noqa: BLE001
-        logger.exception("[req %s] otp verify error", rid)
-        raise HTTPException(status_code=400, detail="Code verification failed")
+    except okta_flow.AuthError as e:
+        _audit_okta_event(getattr(e, "username", "") or req.email, "mfa_failed",
+                          getattr(e, "root_cause", "") or str(e), rid,
+                          duration_ms=int((time.monotonic() - t0) * 1000),
+                          phase=_mfa_phase(e))
+        raise HTTPException(status_code=401, detail=str(e))
+    return _complete_login(res, req.enroll, rid, t0)
 
 
 # --- email-OTP relay (sign in when the browser can't reach Supabase directly) ---

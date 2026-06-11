@@ -57,6 +57,10 @@ class Persona:
     unit_number: int
     unit_name: str
     is_stake: bool = False
+    # Okta org policy per account: True = the PRIMARY authenticator menu offers Email alongside
+    # Password (passwordless sign-in enabled), so the broker's otp_start can send a code with no
+    # password. False (the Church default — every captured flow) = password-first.
+    passwordless: bool = False
 
 
 # Persona.mfa values: None | "shape_a" | "shape_b" | "shape_a_webauthn" (the 2026-06-11 menu —
@@ -86,6 +90,12 @@ PERSONAS: dict[str, Persona] = {p.username: p for p in [
             "finley.archetype@example.org", "1000000006",
             "66666666-6666-4666-8666-666666666666", "shape_a_webauthn",
             57, "Ward Clerk", WARD2_UNIT, WARD2_NAME),
+    # Passwordless-enabled stake leader: identify offers Email on the PRIMARY menu (no password
+    # needed) — the persona the broker's otp_start/otp_verify full flow is proven against.
+    Persona("leader.passwordless", "pw-passwordless", "Harper Sampleton", "Harper", "Sampleton",
+            "harper.passwordless@example.org", "1000000007",
+            "77777777-7777-4777-8777-777777777777", None,
+            1, "Stake President", STAKE_UNIT, STAKE_NAME, is_stake=True, passwordless=True),
 ]}
 
 LOCKED_USERNAME = "user.locked"
