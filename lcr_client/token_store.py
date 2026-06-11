@@ -115,6 +115,36 @@ def get_grant(stake_unit: int | str) -> dict | None:
     return _read_all().get(str(stake_unit))
 
 
+def save_membertools_token(stake_unit: int | str, refresh_token: str, minted_at: str | None = None) -> None:
+    """Persist a stake's Member Tools 45-day refresh token (encrypted at rest, alongside the delegated
+    grant) so the daily sync can renew an access token off it with no Okta session. `minted_at` anchors
+    the 45-day clock (preserve the ORIGINAL mint date across refreshes — rotation is off)."""
+    grants = _read_all()
+    g = grants.setdefault(str(stake_unit), {"stake_unit": stake_unit})
+    mt = g.setdefault("membertools", {})
+    mt["refresh_token"] = refresh_token
+    mt["minted_at"] = mt.get("minted_at") or minted_at or _now()  # never reset the 45-day anchor
+    mt["updated_at"] = _now()
+    _write_all(grants)
+    logger.info("saved Member Tools refresh token for stake %s", stake_unit)
+
+
+def get_membertools_token(stake_unit: int | str) -> dict | None:
+    """{refresh_token, minted_at, updated_at} for a stake, or None."""
+    g = _read_all().get(str(stake_unit))
+    mt = (g or {}).get("membertools")
+    return mt if (mt and mt.get("refresh_token")) else None
+
+
+def clear_membertools_token(stake_unit: int | str) -> None:
+    """Drop a dead (45-day-expired) Member Tools token so the next live session re-mints it."""
+    grants = _read_all()
+    g = grants.get(str(stake_unit))
+    if g and g.get("membertools"):
+        g.pop("membertools", None)
+        _write_all(grants)
+
+
 def append_audit(stake_unit: int | str, event: str, detail: Any = None) -> None:
     grants = _read_all()
     g = grants.get(str(stake_unit))

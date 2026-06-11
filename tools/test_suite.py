@@ -179,6 +179,29 @@ def test_membertools_adapter():
     return "membertools adapter: uuid mapping, progress fields, lessons, weeks, kind, de-dup ok"
 
 
+def test_membertools_token_store():
+    """save/get/clear the Member Tools refresh token, with the 45-day mint-date anchor PRESERVED
+    across refreshes (rotation is off — resetting it would falsely extend the deadline)."""
+    from lcr_client import token_store as ts
+    store: dict = {}
+    saved = (ts._read_all, ts._write_all)
+    try:
+        ts._read_all = lambda: {k: dict(v) for k, v in store.items()}
+        ts._write_all = lambda d: (store.clear(), store.update(d))
+        ts.save_membertools_token(503991, "RT1", minted_at="2026-06-01T00:00:00")
+        got = ts.get_membertools_token(503991)
+        assert got["refresh_token"] == "RT1" and got["minted_at"] == "2026-06-01T00:00:00"
+        # a refresh stores a (possibly new) token but must NOT move the 45-day anchor
+        ts.save_membertools_token(503991, "RT2", minted_at="2026-06-30T00:00:00")
+        got2 = ts.get_membertools_token(503991)
+        assert got2["refresh_token"] == "RT2" and got2["minted_at"] == "2026-06-01T00:00:00", got2
+        ts.clear_membertools_token(503991)
+        assert ts.get_membertools_token(503991) is None
+    finally:
+        ts._read_all, ts._write_all = saved
+    return "membertools token store: save/get/clear + 45-day anchor preserved"
+
+
 def test_membertools_build_report():
     """build_membertools_report: bulk fetch (mocked) → adapt → /mlt profile merge fills the reliable
     fields (patriarchal_blessing etc.) via _apply_profile. The fragile cluster is never touched."""
@@ -740,7 +763,7 @@ def main() -> int:
     offline = [test_token_store_roundtrip, test_token_store_key_mismatch,
                test_report_degradation_helpers, test_stale_first_unit_ordering,
                test_membertools_auth, test_membertools_adapter, test_membertools_build_report,
-               test_calling_union_and_neutralize,
+               test_membertools_token_store, test_calling_union_and_neutralize,
                test_http_util_transient_classification, test_http_util_retry_and_breaker,
                test_profile_action_retries_transient_500,
                test_okta_building_blocks, test_access_humanize,

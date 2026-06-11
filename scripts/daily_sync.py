@@ -69,9 +69,44 @@ def _sync_one(args) -> dict:
             logger.warning("could not mark sync running: %s", exc)
     access = covenant_path_access(client)
     cache = ProfileCache(max_age_days=args.cache_max_age_days, enabled=not args.no_cache)
-    rows = build_stake_report(client, with_profile=args.with_profile, access=access,
-                              cache=cache, verbose=args.verbose,
-                              only_unit=getattr(args, "unit", None), unit_order=unit_order)
+    # PRIMARY: the RELIABLE Member Tools bulk API (one /api/v5/sync replaces the fragile one-work
+    # fan-out). Token: a stored 45-day refresh token, else a silent mint off the live Okta session (CI
+    # logs in fresh, so the session is live). Any failure → FALL BACK to the old one-work path, so we
+    # never regress. A full-unit refetch (only_unit) still uses the per-unit path. (docs/SYNC_PACING_PLAN)
+    rows = None
+    cp_source = None
+    if not getattr(args, "unit", None) and not getattr(args, "no_membertools", False):
+        try:
+            from lcr_client import membertools, token_store
+            from covenant_path.report import build_membertools_report
+            ctx_mt = client.user_context()
+            stored = token_store.get_membertools_token(ctx_mt.unit_number) or {}
+            access_token = None
+            if stored.get("refresh_token"):
+                try:
+                    access_token = membertools.refresh(stored["refresh_token"]).get("access_token")
+                except membertools.RefreshTokenExpired:
+                    token_store.clear_membertools_token(ctx_mt.unit_number)  # 45-day wall → re-mint
+            if not access_token:
+                tok = membertools.mint_from_okta_session(client.session.session)
+                access_token = tok.get("access_token")
+                if tok.get("refresh_token"):
+                    token_store.save_membertools_token(ctx_mt.unit_number, tok["refresh_token"])
+            rows, mt_stats = build_membertools_report(
+                client, access_token=access_token, with_profile=args.with_profile,
+                access=access, cache=cache, verbose=args.verbose)
+            access.setdefault("_run_stats", {}).update(mt_stats)
+            cp_source = "membertools"
+            logger.info("covenant-path via Member Tools (/api/v5/sync): %d members", len(rows))
+        except Exception as exc:  # noqa: BLE001 — never let the new path break the sync
+            logger.warning("Member Tools path unavailable — falling back to one-work: %s", exc)
+            rows = None
+    if rows is None:
+        rows = build_stake_report(client, with_profile=args.with_profile, access=access,
+                                  cache=cache, verbose=args.verbose,
+                                  only_unit=getattr(args, "unit", None), unit_order=unit_order)
+        cp_source = cp_source or "one-work"
+    access.setdefault("_run_stats", {})["covenant_path_source"] = cp_source
     dicts = [asdict(r) for r in rows]
     export(rows, access=access, with_profile=args.with_profile)
     failed_units = set(access.get("_run_stats", {}).get("failed_units", []))
@@ -764,6 +799,8 @@ def main() -> int:
                     help="also fetch member avatars into Supabase Storage (requires --supabase)")
     ap.add_argument("--spreadsheet-id", default=TEST_SPREADSHEET_ID)
     ap.add_argument("--no-cache", action="store_true")
+    ap.add_argument("--no-membertools", action="store_true",
+                    help="skip the Member Tools bulk API; force the legacy one-work fan-out")
     ap.add_argument("--cache-max-age-days", type=float, default=7.0)
     ap.add_argument("--email", action="store_true",
                     help="after sync, send pending power-user invitations + daily digests (Resend)")
