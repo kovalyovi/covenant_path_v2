@@ -112,8 +112,8 @@ incomplete.**
 
 | # | Scenario | Status |
 |---|---|---|
-| D1 | Stake leader sees all units; ward leader only theirs; no-role sees zero; anon sees zero | ✅ live smoke `test_rls` · 🔶 matrix (seeded, repeatable) |
-| D2 | Power user: exact scope clone (stake- and ward-level), recursive, escalation-safe, revoke removes | ✅ live smoke `test_power_users` · 🔶 matrix |
+| D1 | Stake leader sees all units; ward leader only theirs; no-role sees zero; anon sees zero | ✅ live smoke `test_rls` + seeded matrix `tests/test_rls_matrix.py` (7/7 vs the test project, 2026-06-11) |
+| D2 | Power user: exact scope clone (stake- and ward-level), recursive, escalation-safe, revoke removes | ✅ live smoke `test_power_users` + seeded matrix (clone scope) |
 | D3 | Multi-stake email collision: same email roles in 2 stakes → union scope, no bleed | 🔶 matrix |
 | D4 | Notes (member_comments) scoped by RLS; visible to same-scope leaders | ✅ Playwright `person-views` (render+post) · 🔶 matrix (cross-scope denial) |
 | D5 | Member object variants render everywhere: full / all-null / empty-lists / investigator+goal-date / mid-milestones (no crashes, correct chips) | ✅ Playwright `person-views` fixtures |
