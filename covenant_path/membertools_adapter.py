@@ -27,13 +27,22 @@ def _person_uuid(p: dict) -> str | None:
 
 
 def _readable_name(names: Any) -> str | None:
-    """A display name out of a Member Tools `names` value (dict or list of dicts), tolerant of drift."""
+    """A display name out of a Member Tools `names` value, tolerant of drift. The LIVE shape is
+    {"listed": "Surname, Given"} (verified); older/flat captures use displayName/listPreferred/etc."""
+    if isinstance(names, str):
+        return names or None
     if isinstance(names, list):
         names = names[0] if names else None
     if isinstance(names, dict):
-        for k in ("listPreferred", "listPreferredLocal", "preferredName", "displayName", "fullName"):
-            if names.get(k):
-                return str(names[k])
+        for k in ("listed", "spoken", "listPreferred", "listPreferredLocal", "preferredName",
+                  "displayName", "fullName"):
+            v = names.get(k)
+            if isinstance(v, str) and v:
+                return v
+            if isinstance(v, dict):  # nested name object
+                inner = _readable_name(v)
+                if inner:
+                    return inner
         given = names.get("given") or names.get("givenPreferred") or names.get("givenName")
         family = names.get("family") or names.get("familyPreferred") or names.get("surname")
         if family or given:
@@ -43,6 +52,11 @@ def _readable_name(names: Any) -> str | None:
 
 def _name(p: dict) -> str | None:
     return p.get("displayName") or _readable_name(p.get("names"))
+
+
+def _friend_uuids(p: dict) -> list[str]:
+    """Friends are stored as uuid REFERENCES ({id, memberUuid}), not inline names."""
+    return [u for u in (f.get("memberUuid") or f.get("id") for f in (p.get("friends") or [])) if u]
 
 
 def _sex(p: dict) -> str | None:
@@ -73,18 +87,17 @@ def _weeks_since_attendance(sacrament: list | None) -> int | None:
     return max(0, (date.today() - max(dates)).days // 7)
 
 
-def _details_subtree(p: dict) -> dict:
+def _details_subtree(p: dict, name_by_uuid: dict[str, str]) -> dict:
     """The rich progress-only subtree for the member view, in our canonical `details` shape — sourced
     from Member Tools instead of the one-work details endpoint. Profile-sourced sub-keys (callings,
-    ministering, templeOrdinances) are left for the /mlt merge; here we fill the PROGRESS sub-keys."""
+    ministering, templeOrdinances) are left for the /mlt merge; here we fill the PROGRESS sub-keys.
+    Friend names are resolved from `name_by_uuid` (friends are stored as uuid refs)."""
     sacrament = [
         {"label": s.get("date"), "attended": bool(s.get("attended")), "date": s.get("date")}
         for s in (p.get("sacramentAttendance") or [])
     ]
-    friends = [
-        {"name": _name(f) or f.get("name"), "unit": None, "inStake": None}
-        for f in (p.get("friends") or []) if (_name(f) or f.get("name"))
-    ]
+    friends = [{"name": name_by_uuid.get(u), "uuid": u, "unit": None, "inStake": None}
+               for u in _friend_uuids(p)]
     lessons = [
         {
             "name": tr.get("title"),
@@ -130,13 +143,14 @@ def unit_names(payload: dict) -> dict[int, str]:
     return out
 
 
-def adapt_person(p: dict, kind: str, unit_name_by_number: dict[int, str]) -> CovenantPathMember:
+def adapt_person(p: dict, kind: str, unit_name_by_number: dict[int, str],
+                 name_by_uuid: dict[str, str]) -> CovenantPathMember:
     """One Member Tools covenant-path person → CovenantPathMember. Covenant-path PROGRESS fields are
     filled from the bulk payload; PROFILE fields use the NEEDS_PROFILE sentinel so the /mlt merge (in
     covenant_path.report) fills them from the reliable cluster — preserving the existing behaviour."""
     unum = p.get("unitNumber")
-    friends_list = p.get("friends") or []
-    friend_names = [n for n in (_name(f) or f.get("name") for f in friends_list) if n]
+    friend_uuids = _friend_uuids(p)
+    friend_names = [name_by_uuid[u] for u in friend_uuids if name_by_uuid.get(u)]
     return CovenantPathMember(
         name=_name(p),
         unit=unit_name_by_number.get(int(unum)) if unum is not None else None,
@@ -147,11 +161,11 @@ def adapt_person(p: dict, kind: str, unit_name_by_number: dict[int, str]) -> Cov
         # covenant-path PROGRESS (from Member Tools — the data we're rescuing from the fragile cluster)
         baptism_date=p.get("confirmationDate") or NEEDS_PROFILE,
         baptism_goal_date=p.get("baptismGoalDate"),
-        friends="Yes" if friend_names else "No",
-        friends_count=len(friend_names),
+        friends="Yes" if friend_uuids else "No",   # friends are uuid refs — count the array, not names
+        friends_count=len(friend_uuids),
         friends_summary=", ".join(friend_names) or None,
         weeks_since_last_attendance=_weeks_since_attendance(p.get("sacramentAttendance")),
-        details=_details_subtree(p),
+        details=_details_subtree(p, name_by_uuid),
         # PROFILE-sourced fields — left for the /mlt merge (reliable cluster), exactly as before.
         birth_date=None,
         aaronic_priesthood=NEEDS_PROFILE,
@@ -179,6 +193,7 @@ def adapt_sync(payload: dict, include_returning: bool = True) -> list[CovenantPa
     profile fields await the /mlt merge). De-dupes by person_uuid (members can appear under multiple
     arrays); a real person_uuid is required (else the DB upsert key is meaningless)."""
     units = unit_names(payload)
+    name_by_uuid = _name_index(payload)
     out: list[CovenantPathMember] = []
     seen: set[str] = set()
     for arr, kind in _ARRAYS.items():
@@ -189,5 +204,24 @@ def adapt_sync(payload: dict, include_returning: bool = True) -> list[CovenantPa
             if not uuid or uuid in seen:
                 continue
             seen.add(uuid)
-            out.append(adapt_person(p, kind, units))
+            out.append(adapt_person(p, kind, units, name_by_uuid))
     return out
+
+
+def _name_index(payload: dict) -> dict[str, str]:
+    """uuid → display name, from the covenant persons + every household member — so friend uuid refs
+    (and any other cross-reference) resolve to a readable name."""
+    idx: dict[str, str] = {}
+    for arr in _ARRAYS:
+        for p in (payload.get(arr) or []):
+            u, nm = _person_uuid(p), _name(p)
+            if u and nm:
+                idx[u] = nm
+    for hh in (payload.get("households") or []):
+        for m in (hh.get("members") or []):
+            if isinstance(m, dict):
+                u = m.get("uuid") or m.get("memberUuid") or m.get("id")
+                nm = _name(m)
+                if u and nm:
+                    idx[u] = nm
+    return idx

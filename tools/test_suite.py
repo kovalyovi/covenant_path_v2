@@ -132,10 +132,14 @@ def test_membertools_adapter():
     payload = {
         "units": [{"unitNumber": 100, "name": "Alpha Ward",
                    "childUnits": [{"unitNumber": 101, "name": "Beta Branch"}]}],
+        # friends are uuid REFERENCES; names resolve from the household roster (the real shapes)
+        "households": [{"members": [{"uuid": "FRIEND-A", "names": {"listed": "Apple, Ann"}},
+                                    {"uuid": "FRIEND-B", "names": {"listed": "Berry, Bob"}}]}],
         "covenantPathInvestigators": [{
             "id": "INV-UUID", "unitNumber": 101, "sex": "FEMALE", "baptismGoalDate": "2026-07-01",
-            "firstTaught": "2026-05-01", "nextAppointment": "2026-06-20",
-            "friends": [{"name": "Pat Friend"}, {"names": {"given": "Sam", "family": "Helper"}}],
+            "names": {"listed": "Investigator, Ivy"}, "firstTaught": "2026-05-01",
+            "nextAppointment": "2026-06-20",
+            "friends": [{"memberUuid": "FRIEND-A"}, {"id": "FRIEND-B"}],
             "sacramentAttendance": [{"date": attended, "attended": True},
                                     {"date": "2026-04-01", "attended": False}],
             "teachingRecords": [{"title": "Restoration",
@@ -144,8 +148,8 @@ def test_membertools_adapter():
         }],
         "covenantPathMembers": [{
             "id": "MEMBER-INTERNAL-ID", "memberUuid": "MEMBER-PERSON-UUID", "unitNumber": 100,
-            "sex": "MALE", "confirmationDate": "2026-03-15", "friends": [],
-            "sacramentAttendance": [], "teachingRecords": [],
+            "names": {"listed": "Member, Max"}, "sex": "MALE", "confirmationDate": "2026-03-15",
+            "friends": [], "sacramentAttendance": [], "teachingRecords": [],
         }],
         # a duplicate of the member under returning — must de-dupe by person_uuid
         "covenantPathReturningMembers": [{"id": "X", "memberUuid": "MEMBER-PERSON-UUID", "unitNumber": 100}],
@@ -155,8 +159,10 @@ def test_membertools_adapter():
 
     inv = rows["INV-UUID"]
     assert inv.kind == "investigator" and inv.unit == "Beta Branch" and inv.sex == "F"
+    assert inv.name == "Investigator, Ivy", inv.name  # names.listed
     assert inv.baptism_goal_date == "2026-07-01"
-    assert inv.friends == "Yes" and inv.friends_count == 2
+    assert inv.friends == "Yes" and inv.friends_count == 2  # two uuid refs
+    assert inv.friends_summary == "Apple, Ann, Berry, Bob", inv.friends_summary  # resolved from households
     assert inv.weeks_since_last_attendance == 2, inv.weeks_since_last_attendance
     assert inv.details["lessons"][0]["name"] == "Restoration"
     assert inv.details["lessons"][0]["principles"][0]["memberPresent"] is True
@@ -166,6 +172,7 @@ def test_membertools_adapter():
 
     mem = rows["MEMBER-PERSON-UUID"]
     assert mem.kind == "new_member" and mem.unit == "Alpha Ward" and mem.sex == "M"
+    assert mem.name == "Member, Max"
     assert mem.baptism_date == "2026-03-15"  # confirmationDate = the precise baptism date
     assert mem.friends == "No" and mem.friends_count == 0
     assert mem.weeks_since_last_attendance is None  # no attended record
@@ -181,8 +188,8 @@ def test_membertools_build_report():
         "units": [{"unitNumber": 100, "name": "Ward A"}],
         "covenantPathMembers": [{
             "id": "iid", "memberUuid": "PU-1", "unitNumber": 100, "sex": "MALE",
-            "confirmationDate": "2026-03-15", "friends": [{"name": "F"}],
-            "sacramentAttendance": [], "teachingRecords": [],
+            "names": {"listed": "Member, Max"}, "confirmationDate": "2026-03-15",
+            "friends": [{"memberUuid": "PU-2"}], "sacramentAttendance": [], "teachingRecords": [],
         }],
     }
     saved_fetch, saved_prof = mt.fetch_sync, report.profile_fields

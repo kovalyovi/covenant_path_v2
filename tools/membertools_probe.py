@@ -181,6 +181,55 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"\n(person_uuid cross-check skipped: {exc})")
 
+    # nested shape dump for names/friends (KEYS only, no values) so the adapter maps them right
+    try:
+        samp = (data.get("covenantPathMembers") or data.get("covenantPathInvestigators") or [{}])[0]
+        nm = samp.get("names")
+        print("\n=== names shape ===", type(nm).__name__,
+              sorted(nm[0].keys()) if isinstance(nm, list) and nm and isinstance(nm[0], dict)
+              else sorted(nm.keys()) if isinstance(nm, dict) else nm)
+        # find a person WITH friends to see the friend-object keys
+        for arr in ("covenantPathInvestigators", "covenantPathMembers"):
+            for pp in (data.get(arr) or []):
+                if pp.get("friends"):
+                    print("=== friend obj keys ===", sorted(pp["friends"][0].keys()))
+                    fn = pp["friends"][0].get("names")
+                    print("=== friend.names shape ===", type(fn).__name__,
+                          sorted(fn.keys()) if isinstance(fn, dict) else fn)
+                    break
+            else:
+                continue
+            break
+    except Exception as exc:  # noqa: BLE001
+        print("nested dump err:", exc)
+
+    # ADAPTER verification on the REAL payload: run adapt_sync and report per-field FILL RATES (counts
+    # only, no PII) — confirms the adapter extracts our covenant-path fields correctly from live data.
+    try:
+        from covenant_path.membertools_adapter import adapt_sync
+        from covenant_path.report import NEEDS_PROFILE
+        members = adapt_sync(data)
+        n = len(members)
+        def filled(attr, sentinel_ok=True):
+            c = 0
+            for m in members:
+                v = getattr(m, attr)
+                if v not in (None, "", NEEDS_PROFILE) and not (isinstance(v, str) and v == "No"):
+                    c += 1
+            return c
+        print(f"\n=== ADAPTER on real payload: {n} covenant-path members ===")
+        print(f"  person_uuid set : {sum(1 for m in members if m.person_uuid)}/{n}")
+        print(f"  name            : {sum(1 for m in members if m.name)}/{n}")
+        print(f"  unit mapped     : {sum(1 for m in members if m.unit)}/{n}")
+        print(f"  baptism_date    : {sum(1 for m in members if m.baptism_date not in (None, NEEDS_PROFILE))}/{n}")
+        print(f"  baptism_goal    : {sum(1 for m in members if m.baptism_goal_date)}/{n}")
+        print(f"  weeks_since_att : {sum(1 for m in members if m.weeks_since_last_attendance is not None)}/{n}")
+        print(f"  friends=Yes     : {sum(1 for m in members if m.friends == 'Yes')}/{n}")
+        print(f"  has lessons     : {sum(1 for m in members if (m.details or {}).get('lessons'))}/{n}")
+        print(f"  kinds           : {dict((k, sum(1 for m in members if m.kind==k)) for k in ('investigator','new_member','returning'))}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"\n(adapter verification skipped: {exc})")
+
     out = Path(__file__).resolve().parent / "output" / "membertools_sync_shape.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     shape = {"top_level": top,
