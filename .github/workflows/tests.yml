@@ -148,6 +148,43 @@ jobs:
           python -m backend.test_reconcile
           python -m backend.test_calling_overrides
 
+  fullstack-e2e:
+    # Real browser → real broker → mock LCR → the TEST Supabase project (RLS live), incl. the
+    # passkey ceremony. Nightly/dispatch only, and AFTER the matrix job: both write to the shared
+    # test project (seeding vs the enroll/revoke loop), so they must never race.
+    if: github.event_name != 'push'
+    needs: rls-matrix-testproject
+    runs-on: ubuntu-latest
+    concurrency:
+      group: testproject-writers
+      cancel-in-progress: false
+    env:
+      CP_TEST_SUPABASE_URL: ${{ secrets.CP_TEST_SUPABASE_URL }}
+      CP_TEST_SUPABASE_ANON_KEY: ${{ secrets.CP_TEST_SUPABASE_ANON_KEY }}
+      CP_TEST_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CP_TEST_SUPABASE_SERVICE_ROLE_KEY }}
+      E2E_FULLSTACK: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: apps/web/package-lock.json }
+      - run: pip install -r requirements.txt
+      - run: pip install -r requirements-dev.txt
+      - name: fullstack browser lane (skips cleanly until the test project exists)
+        run: |
+          if [ -z "$CP_TEST_SUPABASE_URL" ]; then echo "no test-project secrets — skipping"; exit 0; fi
+          cd apps/web
+          npm ci
+          npx playwright install --with-deps chromium
+          npx playwright test --project=fullstack
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fullstack-playwright-report
+          path: apps/web/playwright-report/
+          retention-days: 7
+
   rls-matrix-testproject:
     # Phase B: seeded persona matrix against the DEDICATED TEST Supabase project.
     # Runs only when the CP_TEST_SUPABASE_* secrets exist (set them after creating the project).
