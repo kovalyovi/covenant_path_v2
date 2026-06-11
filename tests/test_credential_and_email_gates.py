@@ -215,3 +215,64 @@ def test_failed_send_stays_pending_for_retry(temp_stake, recorded_mailer, parked
     holder["ok"] = True  # transport back
     assert mailer.send_pending_invitations(conn) == 1
     assert sent.count("gate-test-retry@example.org") == 2  # one failed try + one success
+
+
+# --- B8: pre-emptive aging-credential alert (claim_age_notification, migration 0047) ----------
+
+
+def _age_credential(conn, stake_id: str, days: int, **cols) -> None:
+    """Backdate the credential's updated_at (and set extra columns) to simulate aging."""
+    sets = ["updated_at = now() - make_interval(days => %s)"]
+    args: list = [days]
+    for col, val in cols.items():
+        sets.append(f"{col} = %s")
+        args.append(val)
+    args.append(stake_id)
+    with conn.cursor() as cur:
+        cur.execute(f"update stake_credentials set {', '.join(sets)} where stake_id = %s", args)
+    conn.commit()
+
+
+def test_age_alert_fires_once_per_credential_generation(temp_stake):
+    from backend import credentials
+    conn, stake_id = temp_stake
+
+    # Fresh credential -> too young, no nudge.
+    assert credentials.claim_age_notification(conn, stake_id, 21) is False
+
+    # 30 days old, no refresh token -> exactly ONE nudge for this generation.
+    _age_credential(conn, stake_id, 30, has_refresh_token=False)
+    assert credentials.claim_age_notification(conn, stake_id, 21) is True
+    assert credentials.claim_age_notification(conn, stake_id, 21) is False, (
+        "the aging nudge must fire once per stored session, not every sync")
+
+    # A RE-ENROLL bumps updated_at -> young again now, and once it ages the alert RE-ARMS
+    # (age_notified_at < updated_at) without any explicit reset.
+    with conn.cursor() as cur:
+        cur.execute("update stake_credentials set updated_at = now() where stake_id = %s",
+                    (stake_id,))
+    conn.commit()
+    assert credentials.claim_age_notification(conn, stake_id, 21) is False  # fresh session
+    # Generation 2 ages in turn: alerted 60d ago (gen 1), re-enrolled 30d ago, old again NOW —
+    # age_notified_at < updated_at re-arms the nudge with no explicit reset anywhere.
+    with conn.cursor() as cur:
+        cur.execute("update stake_credentials set "
+                    "updated_at = now() - make_interval(days => 30), "
+                    "age_notified_at = now() - make_interval(days => 60) where stake_id = %s",
+                    (stake_id,))
+    conn.commit()
+    assert credentials.claim_age_notification(conn, stake_id, 21) is True
+    assert credentials.claim_age_notification(conn, stake_id, 21) is False
+
+
+def test_age_alert_skips_self_renewing_and_revoked_credentials(temp_stake):
+    from backend import credentials
+    conn, stake_id = temp_stake
+
+    # Old but SELF-RENEWING (has a refresh token) -> never nudged.
+    _age_credential(conn, stake_id, 40, has_refresh_token=True)
+    assert credentials.claim_age_notification(conn, stake_id, 21) is False
+
+    # Old and REVOKED -> the revoked banner owns that story; no aging nudge on top.
+    _age_credential(conn, stake_id, 40, has_refresh_token=False, revoked=True)
+    assert credentials.claim_age_notification(conn, stake_id, 21) is False

@@ -53,6 +53,8 @@ export default defineConfig({
   // expect timeout absorbs that without papering over real hangs.
   timeout: 60_000,
   expect: { timeout: 15_000 },
+  // Fullstack specs share one test project + one credential slot — never run them in parallel.
+  workers: FULLSTACK ? 1 : undefined,
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : [['list']],
   use: {
     baseURL: `http://localhost:${PORT}`,

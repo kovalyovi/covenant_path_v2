@@ -360,6 +360,7 @@ def _mint_and_sync(args, st: dict) -> None:
     _revoke_if_ineligible(st)
     res = _sync_one(args)
     _mark_succeeded(st["stake_id"])  # healthy sync → clear any prior failing/stale state (alert edge)
+    _maybe_age_alert(st)             # B8: nudge the provider BEFORE an aging session dies
     print(f"[+] {st['name']} ({st['unit_number']}): {res['members']} members synced")
 
 
@@ -571,6 +572,48 @@ def _mark_succeeded(stake_id) -> None:
             conn.close()
     except Exception as exc:  # noqa: BLE001
         logger.debug("mark_succeeded skipped: %s", exc)
+
+
+def _maybe_age_alert(st: dict) -> None:
+    """B8 credential longevity: a session WITHOUT a refresh token cannot self-renew — it dies with
+    its Okta session, and until now the provider only heard AFTER the sync started failing. After a
+    HEALTHY sync (so we know it still works), nudge the provider once per credential generation when
+    the session is older than CP_CREDENTIAL_AGE_ALERT_DAYS (default 21; 0 disables) so they
+    re-authorize at their convenience instead of discovering a dead sync. Fully guarded — alerting
+    must never affect the run."""
+    try:
+        days = int(os.environ.get("CP_CREDENTIAL_AGE_ALERT_DAYS", "21"))
+    except ValueError:
+        days = 21
+    if days <= 0:
+        return
+    try:
+        from backend import credentials, db, mailer
+        conn = db.connect()
+        try:
+            if not credentials.claim_age_notification(conn, st["stake_id"], days):
+                return
+            provider = credentials.provider_email(conn, st["stake_id"])
+            sender = mailer.stake_from(conn, st["stake_id"])
+        finally:
+            conn.close()
+        if not provider:
+            return
+        name = st.get("name") or st.get("unit_number")
+        mailer.send_email(
+            provider,
+            f"Covenant Path — re-authorize the {name} sync when convenient",
+            (f"<p>The daily sync for <b>{name}</b> is still working, but the Church session backing "
+             f"it is over <b>{days} days</b> old and can't renew itself — at some point it will "
+             f"expire and the sync will pause.</p>"
+             f"<p>To avoid an interruption, open the app → <b>Sync settings → Re-authorize daily "
+             f"sync</b> and sign in once. It takes under a minute, and you'll get this nudge at most "
+             f"once per stored session.</p>"),
+            sender)
+        logger.info("aging-credential nudge sent for %s (older than %dd, no refresh token)",
+                    name, days)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("age alert skipped: %s", exc)
 
 
 def _alert_sync_failure(unit, reason: str) -> None:

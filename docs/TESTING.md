@@ -75,7 +75,7 @@ incomplete.**
 | A12 | Cached-identity fast lane: repeat login ~zero LCR (`timing.lane == "cached"`) | ✅ e2e-mock (hit counters) |
 | A13 | Broker cold start → "Waking up…" status, login still completes | ✅ Playwright `login-messages` + existing `broker.test.ts` |
 | A14 | Email-OTP login (direct + relay; cooldown) | ✅ offline (`test_email_relay_validation`) · 🔶 fullstack browser pass |
-| A15 | Passkey register + login ceremony | ⬜ Phase B (fullstack; WebAuthn virtual authenticator) |
+| A15 | Passkey register + passwordless login ceremony (CDP virtual authenticator; attestation row in the real `webauthn_credentials`; RLS session minted) | ✅ fullstack `apps/web/e2e/fullstack/passkey.spec.ts` (caught the `_rest` duplicate-headers 500 that broke BOTH prod ceremonies, fixed 2026-06-11) |
 | A16 | Email/auth_id RLS spoof probe: two auth users sharing an email see only their own scope | 🔶 `tests/test_rls_matrix.py` |
 | A17 | Unauthorized stranger from a NEW stake (valid Church account): LCR up → calling gate or empty-scope; LCR down → outage message (never data) | ✅ e2e-mock (A4+A8) · 🔶 matrix (zero-row visibility) |
 
@@ -90,7 +90,7 @@ incomplete.**
 | B5 | Consented enroll that stored NOTHING says so (dialog stays open with server error; no fake success toast) | ✅ Playwright `reauth-dialog` (web logic shipped eb7107f) |
 | B6 | Slow access scrape → login answers within budget with enroll `{"deferred": true}`; the background eval still completes (audit lands) | ✅ `tests/e2e/test_deferred_report_offboard.py` (short-budget broker + `slow_access` scenario) |
 | B7 | Stale credential (sync failed) → provider banner "Re-authorize"; non-provider "take it over" variant | ✅ Playwright `banners-empty-states` |
-| B8 | Credential longevity: no refresh token ⇒ cookie-lifetime-bound; ops view shows self-renewing flag; stale alert fires ONCE per failure streak | ✅ partial (0041 view) · ⬜ TODO longevity probe + alert-dedupe concurrency test |
+| B8 | Credential longevity: no refresh token ⇒ cookie-lifetime-bound. PRE-EMPTIVE aging nudge after a healthy sync (`CP_CREDENTIAL_AGE_ALERT_DAYS`, default 21, 0 disables; once per credential generation — re-enroll re-arms via `age_notified_at < updated_at`, migration 0047); stale alert fires once per failure streak | ✅ feature (`_maybe_age_alert`) + `tests/test_credential_and_email_gates.py` (B8 section) + F2 concurrency |
 | B9 | Revoke: provider-only, idempotent ("already_revoked"), admin override path | ✅ live smoke + e2e-mock |
 | B10 | Enrollment-status state machine none/active/stale/revoked incl. `is_provider`, no-role fallbacks | ✅ e2e-mock |
 | B11 | Provider binding on enroll (0029 trigger): enroller immediately sees their whole stake | 🔶 matrix (seeded enroll → visibility) |
@@ -106,7 +106,7 @@ incomplete.**
 | C4 | Schedule: ET-hour set / pause / resume; off-hour cron no-op; mid-day change takes effect same day | ✅ partial (broker get/set) · ⬜ TODO prepare-step gating unit test |
 | C5 | Wipe data ≠ revoke (members deleted; credential + roles stay; repopulates) | ✅ offline `test_provider_wipe_data` |
 | C6 | Drive connect/disconnect/needs-reconnect states; per-stake sheet | ✅ Playwright `sync-settings` (status rendering) · 🔶 fullstack OAuth loop |
-| C7 | Sheet sharing = computed recipients EXACTLY (leaders+missionaries in scope), `reconcile_viewers` notifies only NEW viewers, released leaders removed next sync | ⬜ TODO mock-Drive assertions + read-only live audit tool (`tools/verify_sheet_sharing.py`) |
+| C7 | Sheet sharing = computed recipients EXACTLY (policy callings + missionaries; ward clerks/teachers never auto-shared; stake sees all wards; released leaders drop out); `reconcile_viewers` notifies ONLY newly-added viewers and never removes the owner/SA | ✅ `tests/test_sheet_sharing.py` (offline, mocked Drive) + read-only live audit `python tools/verify_sheet_sharing.py` (lists permissions only — zero shares/notifications) |
 | C8 | The REVOKER sees the revoked state immediately (banner + settings refresh, no page reload) | ✅ fullstack lane (caught the missing `reloadEnrollStatus` after revoke, fixed 2026-06-11) |
 
 ### D. Data visibility (RLS) & person views

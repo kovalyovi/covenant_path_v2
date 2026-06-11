@@ -55,8 +55,13 @@ def _handle() -> str:
 
 
 def _rest(method: str, path: str, **kw):
+    # Merge caller headers INTO the service headers — register_complete/login_complete pass their
+    # own `headers=` kwarg, which collided with this signature's hardcoded one and 500'd BOTH
+    # passkey ceremonies in production (TypeError: multiple values for 'headers'; caught by the
+    # A15 fullstack e2e, 2026-06-11).
+    headers = {**admin._sb_headers(), **(kw.pop("headers", None) or {})}
     return requests.request(method, f"{admin.SUPABASE_URL}/rest/v1/{path}",
-                            headers=admin._sb_headers(), timeout=15, **kw)
+                            headers=headers, timeout=15, **kw)
 
 
 def _creds_for_email(email: str) -> list[dict]:

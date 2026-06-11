@@ -138,6 +138,10 @@ def main() -> int:
         "LOGIN_EVAL_BUDGET_SECONDS": "30",   # evals answer synchronously (mock LCR is fast)
         "LOGIN_GATE_BUDGET_SECONDS": "20",
         "CP_TOKEN_KEY": Fernet.generate_key().decode("ascii"),
+        # A15 passkey ceremony: the web app runs on localhost:5198 (vite, playwright.config.ts),
+        # so the WebAuthn RP id/origin must match it — never the production defaults.
+        "WEBAUTHN_RP_ID": "localhost",
+        "WEBAUTHN_ORIGINS": "http://localhost:5198",
         "PYTHONUNBUFFERED": "1",
     })
     log_path = REPO / "tools" / "output" / "fullstack_broker.log"  # tools/output is gitignored

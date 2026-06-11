@@ -156,6 +156,25 @@ def claim_stale_notification(conn, stake_id: str) -> bool:
     return claimed
 
 
+def claim_age_notification(conn, stake_id: str, min_age_days: int) -> bool:
+    """Atomically claim the ONE pre-emptive aging alert per credential GENERATION (migration 0047,
+    B8): fires only when the stored session is older than `min_age_days`, cannot self-renew (no
+    refresh token), isn't revoked, and hasn't been age-notified since it was last (re)stored —
+    every (re-)enroll bumps updated_at, so `age_notified_at < updated_at` re-arms automatically."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """update stake_credentials set age_notified_at = now()
+               where stake_id = %s
+                 and not revoked
+                 and coalesce(has_refresh_token, false) = false
+                 and updated_at < now() - make_interval(days => %s)
+                 and (age_notified_at is null or age_notified_at < updated_at)""",
+            (stake_id, min_age_days))
+        claimed = cur.rowcount > 0
+    conn.commit()
+    return claimed
+
+
 def provider_email(conn, stake_id: str) -> str | None:
     """The email of the leader whose session backs this stake (for the stale-credential alert)."""
     with conn.cursor() as cur:

@@ -70,7 +70,7 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: python tools/test_suite.py
       - run: python -m backend.test_broker
-      - run: python -m pytest tests/test_sync_gating.py -q
+      - run: python -m pytest tests/test_sync_gating.py tests/test_sheet_sharing.py -q
 
   backend-e2e-mock:
     # The real broker + real lcr_client against the fixture mock LCR/Okta + Supabase stub.
