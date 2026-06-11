@@ -735,13 +735,14 @@ _OTP_SESSIONS: dict[str, dict] = {}  # email -> {session, payload, verifier, ts}
 _OTP_TTL = 600  # 10 minutes
 
 def otp_start(email: str, enroll: bool = False) -> dict:
-    """Initiate Church account authentication via email OTP. Returns available factors or error."""
+    """Initiate Church account authentication via email OTP. Returns available factors or error.
+    Accepts either an email address or username; Okta will authenticate whichever works."""
     from lcr_client.okta_login import new_session
     from backend import observability as obs
 
     email = (email or "").strip().lower()
-    if not email or "@" not in email:
-        raise AuthError("A valid email address is required.")
+    if not email:
+        raise AuthError("An email address or username is required.")
 
     login_id = _new_login_id()
     cid = obs.new_correlation_id()
@@ -754,17 +755,17 @@ def otp_start(email: str, enroll: bool = False) -> dict:
             payload, verifier = _drive_to_factor_select(session, email, login_id)
     except AuthError as e:
         logger.warning("[auth %s] otp identify failed: %s", login_id, str(e))
-        raise
+        raise AuthError(str(e)) from e
     except Exception as e:  # noqa: BLE001
         logger.exception("[auth %s] otp identify error", login_id)
         dump_debug("broker_otp_error", login_id=login_id, error=str(e))
-        raise AuthError("Email authentication failed. Please try signing in with your username "
-                       "and password instead.") from e
+        raise AuthError(f"OTP authentication failed: {str(e)[:200]}") from e
 
-    # Extract available factors
-    factors = _factors(payload.get("currentAuthenticatorEnroll", {}) or {})
-    if not factors:
-        factors = _factors(payload.get("currentAuthenticator", {}) or {})
+    # Extract available factors from the select-authenticator-authenticate remediation
+    rems = _remediations(payload)
+    select_auth_rem = rems.get("select-authenticator-authenticate", {})
+    auth_types = _authenticator_types(payload)
+    factors = _factors(select_auth_rem, auth_types)
 
     # Store session for verify step
     _OTP_SESSIONS[email] = {"session": session, "payload": payload, "verifier": verifier,
@@ -776,20 +777,37 @@ def otp_start(email: str, enroll: bool = False) -> dict:
 def _drive_to_factor_select(session: requests.Session, email: str, login_id: str) -> tuple:
     """Identify via email and drive the IDX flow until a factor-selection state."""
     from lcr_client.okta_login import (
-        _idx_post, _remediations, _follow, INTROSPECT_URL, _authenticator_types)
+        _idx_post, _remediations, _follow, INTROSPECT_URL, CLIENT_ID, SCOPE,
+        REDIRECT_URI, ISSUER)
+    import secrets
 
-    logger.info("[auth %s] otp idp/idx/introspect", login_id)
+    logger.info("[auth %s] otp interact + identify", login_id)
     verifier, challenge = _pkce()
-    payload = _idx_post(session, INTROSPECT_URL, {})
 
+    # Start a new IDX transaction (like the password flow does)
+    interact_resp = session.post(
+        f"{ISSUER}/v1/interact",
+        data={"client_id": CLIENT_ID, "scope": SCOPE,
+              "redirect_uri": REDIRECT_URI, "response_type": "code",
+              "state": secrets.token_hex(16), "code_challenge": challenge,
+              "code_challenge_method": "S256"},
+        timeout=60)
+    if interact_resp.status_code >= 400:
+        raise AuthError(f"Okta interact failed: {interact_resp.status_code}")
+
+    interaction_handle = interact_resp.json()["interaction_handle"]
+
+    # Introspect to get initial state
+    payload = _idx_post(session, INTROSPECT_URL, {"interactionHandle": interaction_handle})
     state_handle = payload.get("stateHandle")
+
     for attempt in range(8):
         rems = _remediations(payload)
         for r in rems.values():
             r["_stateHandle"] = state_handle
 
         if "identify" in rems:
-            logger.info("[auth %s] otp identify (email=%s)", login_id, email)
+            logger.info("[auth %s] otp identify (identifier=%s)", login_id, email)
             payload = _follow(session, rems["identify"], {"identifier": email, "rememberMe": False})
             state_handle = payload.get("stateHandle")
             continue

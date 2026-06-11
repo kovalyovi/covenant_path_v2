@@ -129,6 +129,15 @@ class Stack:
                               json={"login_id": login_id, "code": code, "enroll": enroll},
                               timeout=120)
 
+    def otp_start(self, email: str, enroll: bool = False) -> requests.Response:
+        return self.http.post(f"{self.broker_base}/auth/otp/start",
+                              json={"email": email, "enroll": enroll}, timeout=60)
+
+    def otp_verify(self, email: str, code: str, enroll: bool = False) -> requests.Response:
+        return self.http.post(f"{self.broker_base}/auth/otp/verify",
+                              json={"email": email, "code": code, "enroll": enroll},
+                              timeout=120)
+
     def user_token(self, email: str) -> str:
         """A stub-minted Supabase user session token (generate_link -> verify, like a client)."""
         link = self.http.post(f"{self.stub_base}/auth/v1/admin/generate_link",

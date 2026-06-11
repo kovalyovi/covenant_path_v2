@@ -96,7 +96,7 @@ def fetch_logs(service_id: str, owner_id: str, start: datetime, end: datetime,
         if text:
             params["text"] = text
         data = _get("/logs", params)
-        logs = data.get("logs", []) if isinstance(data, dict) else data
+        logs = (data.get("logs") or []) if isinstance(data, dict) else (data or [])
         out.extend(logs)
         if not (isinstance(data, dict) and data.get("hasMore")):
             break
