@@ -459,6 +459,16 @@ def _print_access_preflight(access: dict, with_profile: bool) -> None:
               "fields (baptism, recommend, patriarchal, ministering) may come back blocked.")
 
 
+def order_units_stale_first(units: list, unit_order: list[int]) -> list:
+    """Reorder `units` (objects with `.unit_number`) so the OLDEST-data units come first, per
+    `unit_order` (the caller's oldest-data-first unit-number list). Units NOT in `unit_order` (never
+    synced) sort to the very front (rank -1); ties keep their original relative order (stable). The
+    sync then refreshes the most-stale wards first, so a mid-run LCR outage leaves the least-stale
+    units unfinished (they keep last-good + retry next run)."""
+    rank = {n: i for i, n in enumerate(unit_order)}
+    return sorted(units, key=lambda u: rank.get(u.unit_number, -1))
+
+
 def build_stake_report(
     client: LcrClient,
     include_returning: bool = False,
@@ -468,6 +478,7 @@ def build_stake_report(
     access: dict | None = None,
     cache: ProfileCache | None = None,
     only_unit: int | None = None,
+    unit_order: list[int] | None = None,
 ) -> list[CovenantPathMember]:
     if access is None:
         access = covenant_path_access(client)
@@ -483,6 +494,8 @@ def build_stake_report(
     units = [u for u in ctx.child_units if u.unit_number and u.type in ("WARD", "BRANCH")]
     if only_unit:  # OPS per-unit refetch (#19): re-pull just one ward/branch
         units = [u for u in units if u.unit_number == only_unit]
+    elif unit_order:
+        units = order_units_stale_first(units, unit_order)
     results: list[CovenantPathMember] = []
     seen_uuids: set[str] = set()
 

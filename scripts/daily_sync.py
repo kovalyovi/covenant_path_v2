@@ -50,6 +50,9 @@ def _sync_one(args) -> dict:
     client = LcrClient()
     # Mark the stake "running" before the long scrape so the app can show a syncing banner
     # (and a brand-new stake gets a row immediately). Best-effort — never block the sync.
+    # Also compute the STALE-FIRST unit order (oldest data first) so the report refreshes the
+    # most-stale wards first — a mid-run one-work outage then leaves the LEAST-stale units unfinished.
+    unit_order: list[int] | None = None
     if args.supabase:
         try:
             from backend import db as _db
@@ -57,6 +60,10 @@ def _sync_one(args) -> dict:
             _c = _db.connect()
             _sid = _db.upsert_stake(_c, ctx.unit_number, ctx.unit_name)
             _db.set_sync_state(_c, _sid, "running")
+            try:
+                unit_order = _db.stale_first_units(_c, _sid) or None
+            except Exception as exc:  # noqa: BLE001 — ordering is best-effort, never block the sync
+                logger.warning("stale-first ordering skipped: %s", exc)
             _c.close()
         except Exception as exc:  # noqa: BLE001
             logger.warning("could not mark sync running: %s", exc)
@@ -64,7 +71,7 @@ def _sync_one(args) -> dict:
     cache = ProfileCache(max_age_days=args.cache_max_age_days, enabled=not args.no_cache)
     rows = build_stake_report(client, with_profile=args.with_profile, access=access,
                               cache=cache, verbose=args.verbose,
-                              only_unit=getattr(args, "unit", None))
+                              only_unit=getattr(args, "unit", None), unit_order=unit_order)
     dicts = [asdict(r) for r in rows]
     export(rows, access=access, with_profile=args.with_profile)
     failed_units = set(access.get("_run_stats", {}).get("failed_units", []))

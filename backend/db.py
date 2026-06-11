@@ -155,6 +155,24 @@ def prune_units(conn, stake_id: str, keep_unit_numbers: list[int]) -> int:
     return removed
 
 
+def stale_first_units(conn, stake_id: str) -> list[int]:
+    """This stake's unit numbers ordered OLDEST-DATA-FIRST: units with no members yet (never synced)
+    come first, then by their oldest member's `updated_at`. The sync refreshes the most-stale wards
+    first, so when LCR's fragile one-work cluster degrades mid-run the units left unfinished are the
+    LEAST stale (they simply keep their last-good rows and retry next run). Empty when nothing's synced
+    yet (the report then uses LCR's natural order)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """select u.unit_number, min(m.updated_at) as oldest
+                 from units u
+                 left join members m on m.unit_id = u.id
+                where u.stake_id = %s and u.unit_number is not null
+             group by u.unit_number
+             order by oldest asc nulls first""",
+            (stake_id,))
+        return [int(r[0]) for r in cur.fetchall() if r[0] is not None]
+
+
 def upsert_members(conn, stake_id: str, members: list[dict],
                    unit_id_by_number: dict[int, str],
                    unit_id_by_name: dict[str, str] | None = None) -> int:

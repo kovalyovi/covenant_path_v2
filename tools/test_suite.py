@@ -121,6 +121,20 @@ def test_report_degradation_helpers():
     return "feature gate + blocked-marking + coverage ok"
 
 
+def test_stale_first_unit_ordering():
+    """build_stake_report's stale-first reorder: oldest-data units first, never-synced to the front,
+    stable for ties — so a mid-run one-work outage leaves the LEAST-stale units unfinished."""
+    from covenant_path.report import order_units_stale_first
+    from types import SimpleNamespace as U
+    units = [U(unit_number=1), U(unit_number=2), U(unit_number=3), U(unit_number=4)]
+    # caller says 3 is stalest, then 1, then 2; unit 4 was never synced (not in the list).
+    out = [u.unit_number for u in order_units_stale_first(units, [3, 1, 2])]
+    assert out == [4, 3, 1, 2], out  # 4 (never-synced) first, then the oldest-data order
+    # empty order is a no-op (keeps LCR's natural order)
+    assert [u.unit_number for u in order_units_stale_first(units, [])] == [1, 2, 3, 4]
+    return "stale-first ordering: never-synced first, then oldest-data; empty=no-op"
+
+
 def test_calling_union_and_neutralize():
     """Calling: the per-member profile (individualCallings) UNIONs with the org-aggregate — a profile
     'Yes' upgrades, a profile 'No' never downgrades a real org 'Yes' (the Terry Stoner sub-org-calling
@@ -564,7 +578,8 @@ def main() -> int:
 
     print("== OFFLINE tests ==")
     offline = [test_token_store_roundtrip, test_token_store_key_mismatch,
-               test_report_degradation_helpers, test_calling_union_and_neutralize,
+               test_report_degradation_helpers, test_stale_first_unit_ordering,
+               test_calling_union_and_neutralize,
                test_http_util_transient_classification, test_http_util_retry_and_breaker,
                test_profile_action_retries_transient_500,
                test_okta_building_blocks, test_access_humanize,
