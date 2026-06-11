@@ -63,6 +63,17 @@ class MfaReq(BaseModel):
     enroll: bool = False
 
 
+class OtpStartReq(BaseModel):
+    email: str
+    enroll: bool = False
+
+
+class OtpVerifyReq(BaseModel):
+    email: str
+    code: str
+    enroll: bool = False
+
+
 class SessionReq(BaseModel):
     cookies: list[dict]
     enroll: bool = False
@@ -499,6 +510,41 @@ def auth_session(req: SessionReq) -> dict:
     except okta_flow.AuthError as e:
         raise HTTPException(status_code=401, detail=str(e))
     return _complete_login(res, req.enroll, rid, t0)
+
+
+# --- Church account OTP via Okta (email-based authentication) ----------------
+
+@app.post("/auth/otp/start")
+def auth_otp_start(req: OtpStartReq) -> dict:
+    """Initiate Church account sign-in via email OTP (sent by Church's Okta)."""
+    rid = _rid()
+    logger.info("[req %s] /auth/otp/start email=%s enroll=%s", rid, req.email, req.enroll)
+    try:
+        result = okta_flow.otp_start(req.email, req.enroll)
+        return result
+    except okta_flow.AuthError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("[req %s] otp start error", rid)
+        raise HTTPException(status_code=400, detail="OTP sign-in failed")
+
+
+@app.post("/auth/otp/verify")
+def auth_otp_verify(req: OtpVerifyReq) -> dict:
+    """Verify Church account OTP code and mint a Supabase session."""
+    rid = _rid()
+    logger.info("[req %s] /auth/otp/verify email=%s enroll=%s", rid, req.email, req.enroll)
+    t0 = time.time()
+    try:
+        result = okta_flow.otp_verify(req.email, req.code, req.enroll)
+        return _complete_login(result, req.enroll, rid, t0)
+    except okta_flow.AuthError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except okta_flow.IdentityError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("[req %s] otp verify error", rid)
+        raise HTTPException(status_code=400, detail="Code verification failed")
 
 
 # --- email-OTP relay (sign in when the browser can't reach Supabase directly) ---

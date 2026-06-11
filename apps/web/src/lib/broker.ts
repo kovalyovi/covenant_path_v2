@@ -311,6 +311,15 @@ export class BrokerClient {
     return this.post('/auth/mfa/verify', { login_id: loginId, code, enroll });
   }
 
+  /** Church account sign-in via email OTP (Church's Okta sends the code, not Supabase). */
+  otpStart(email: string, enroll = false): Promise<void> {
+    return this.postJson('/auth/otp/start', { email, enroll }).then(() => {});
+  }
+
+  otpVerify(email: string, code: string, enroll = false): Promise<BrokerResult> {
+    return this.post('/auth/otp/verify', { email, code, enroll });
+  }
+
   /** Email-OTP relay (for networks that can't reach Supabase directly). */
   async emailStart(email: string): Promise<void> {
     await this.postJson('/auth/email/start', { email });

@@ -11,20 +11,26 @@ import { kNoAccessMessage } from '../lib/disclaimer';
 import { useDashboard } from '../hooks/useDashboard';
 import { useToast } from './Toast';
 import { Modal } from './Modal';
-import { Button } from './ui';
+import { Button, Segmented } from './ui';
+
+type ReauthMode = 'password' | 'otp';
 
 export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const d = useDashboard();
   const toast = useToast();
+  const [mode, setMode] = useState<ReauthMode>('password');
   const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [mfaCode, setMfaCode] = useState('');
+  const [otpCode, setOtpCode] = useState('');
   const [loginId, setLoginId] = useState<string | null>(null);
   const [factors, setFactors] = useState<BrokerFactor[]>([]);
   const [factorSent, setFactorSent] = useState<BrokerFactor | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [otpSent, setOtpSent] = useState(false);
   // Same MFA-input hygiene as LoginPage (2026-06-11): codes never survive a factor switch or a
   // failed verify, and resend cools down so the member waits for the FRESH code.
   const [resendIn, setResendIn] = useState(0);
@@ -39,6 +45,8 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
     setFactors([]);
     setFactorSent(null);
     setMfaCode('');
+    setOtpCode('');
+    setOtpSent(false);
     setResendIn(0);
     setError(null);
     setStatus(null);
@@ -107,6 +115,25 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
       await finish(r);
     });
 
+  const startOtp = () =>
+    run(async () => {
+      await broker.otpStart(email.trim(), true); // enroll=true
+      setOtpSent(true);
+      setOtpCode('');
+      setResendIn(30);
+    });
+
+  const verifyOtp = () =>
+    run(async () => {
+      try {
+        const r = await broker.otpVerify(email.trim(), otpCode.trim(), true);
+        await finish(r);
+      } catch (e) {
+        setOtpCode(''); // a rejected code must be retyped fresh
+        throw e;
+      }
+    });
+
   const pickFactor = (f: BrokerFactor) =>
     run(async () => {
       await broker.selectFactor(loginId!, f.id);
@@ -142,19 +169,55 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
           <Button onClick={() => { resetAll(); onClose(); }} disabled={busy}>
             Cancel
           </Button>
-          {factorSent ? (
+          {otpSent ? (
+            <Button variant="filled" onClick={verifyOtp} disabled={busy || otpCode.length < 6} loading={busy}>
+              Verify & authorize
+            </Button>
+          ) : factorSent ? (
             <Button variant="filled" onClick={verify} disabled={busy || mfaCode.length < 6} loading={busy}>
               Verify & authorize
             </Button>
-          ) : loginId == null ? (
+          ) : loginId == null && mode === 'password' ? (
             <Button variant="filled" onClick={signIn} disabled={busy || !username.trim() || !password} loading={busy}>
               Authorize
+            </Button>
+          ) : loginId == null && mode === 'otp' ? (
+            <Button variant="filled" onClick={startOtp} disabled={busy || !email.trim()} loading={busy}>
+              Send code
             </Button>
           ) : null}
         </>
       }
     >
-      {factorSent ? (
+      {otpSent ? (
+        <>
+          <p>A code was just sent to your email. Enter it here.</p>
+          <label className="field">
+            <span>Verification code</span>
+            <input
+              className="input"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={otpCode}
+              onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
+            />
+          </label>
+          <Button
+            onClick={startOtp}
+            disabled={busy || resendIn > 0}
+            type="button"
+          >
+            {resendIn > 0 ? `Send a new code (${resendIn}s)` : 'Send a new code'}
+          </Button>
+          <Button
+            onClick={() => { setOtpSent(false); setOtpCode(''); setResendIn(0); }}
+            disabled={busy}
+            type="button"
+          >
+            Use a different email
+          </Button>
+        </>
+      ) : factorSent ? (
         <>
           <p>
             A code was just sent via {factorSent.label}. Wait for the new one to arrive, then
@@ -196,30 +259,61 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
             Sign in with your Church account (same as LCR) to re-authorize the daily sync. The session
             is stored encrypted — never your password — and is revocable anytime.
           </p>
-          <label className="field" style={{ marginBottom: 8 }}>
-            <span>Church username</span>
-            <input
-              className="input"
-              name="church-username"
-              autoComplete="username"
-              autoCapitalize="none"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
+          <div style={{ marginBottom: 16 }}>
+            <Segmented
+              value={mode}
+              onChange={setMode}
+              disabled={busy}
+              options={[
+                { label: 'Church username', value: 'password' },
+                { label: 'Email code', value: 'otp' },
+              ]}
             />
-          </label>
-          <label className="field">
-            <span>Password</span>
-            <input
-              className="input"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !busy && username.trim() && password) signIn();
-              }}
-            />
-          </label>
+          </div>
+          {mode === 'password' ? (
+            <>
+              <label className="field" style={{ marginBottom: 8 }}>
+                <span>Church username</span>
+                <input
+                  className="input"
+                  name="church-username"
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Password</span>
+                <input
+                  className="input"
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !busy && username.trim() && password) signIn();
+                  }}
+                />
+              </label>
+            </>
+          ) : (
+            <>
+              <label className="field">
+                <span>Church email</span>
+                <input
+                  className="input"
+                  type="email"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !busy && email.trim()) startOtp();
+                  }}
+                />
+              </label>
+            </>
+          )}
         </>
       )}
       {busy && status && <p style={{ color: 'var(--primary)' }} role="status">{status}</p>}

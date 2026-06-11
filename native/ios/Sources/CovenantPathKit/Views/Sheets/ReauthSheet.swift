@@ -13,12 +13,18 @@ struct ReauthSheet: View {
     let store: DashboardStore
     let onToast: (String) -> Void
 
+    enum Mode { case password, otp }
+
+    @State private var mode: Mode = .password
     @State private var username = ""
+    @State private var email = ""
     @State private var password = ""
     @State private var mfaCode = ""
+    @State private var otpCode = ""
     @State private var loginID: String?
     @State private var factors: [BrokerFactor] = []
     @State private var factorSent: BrokerFactor?
+    @State private var otpSent = false
     @State private var busy = false
     @State private var status: String?
     @State private var error: String?
@@ -59,7 +65,28 @@ struct ReauthSheet: View {
 
     @ViewBuilder
     private var stepContent: some View {
-        if let factorSent {
+        if otpSent {
+            Text("A code was just sent to your email. Enter it here.")
+                .font(.callout)
+            TextField("Verification code", text: $otpCode)
+                .textContentType(.oneTimeCode).keyboardType(.numberPad)
+                .textFieldStyle(.roundedBorder)
+                .onChange(of: otpCode) { _, value in
+                    let digits = String(value.filter(\.isNumber).prefix(8))
+                    if digits != value { otpCode = digits }
+                }
+            primaryButton("Verify & authorize", disabled: otpCode.count < 6) { try await verifyOtp() }
+            Button(resendIn > 0 ? "Send a new code (\(resendIn)s)" : "Send a new code") {
+                run { try await startOtp() }
+            }
+            .disabled(busy || resendIn > 0)
+            Button("Use a different email") {
+                otpSent = false
+                otpCode = ""
+                resendIn = 0
+            }
+            .disabled(busy)
+        } else if let factorSent {
             Text("A code was just sent via \(factorSent.label). Wait for the new one to arrive, then enter it here.")
                 .font(.callout)
             TextField("Verification code", text: $mfaCode)
@@ -90,15 +117,33 @@ struct ReauthSheet: View {
             Text("Sign in with your Church account (same as LCR) to re-authorize the daily sync. "
                  + "The session is stored encrypted — never your password — and is revocable anytime.")
                 .font(.callout).foregroundStyle(.secondary)
-            TextField("Church username", text: $username)
-                .textContentType(.username).textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .textFieldStyle(.roundedBorder)
-            SecureField("Password", text: $password)
-                .textContentType(.password)
-                .submitLabel(.go).onSubmit { if !busy, !username.trimmed.isEmpty, !password.isEmpty { run { try await signIn() } } }
-                .textFieldStyle(.roundedBorder)
-            primaryButton("Authorize", disabled: username.trimmed.isEmpty || password.isEmpty) { try await signIn() }
+            Picker("Sign-in method", selection: $mode) {
+                Text("Church username").tag(Mode.password)
+                Text("Email code").tag(Mode.otp)
+            }
+            .pickerStyle(.segmented)
+            .disabled(busy)
+            .padding(.bottom, 8)
+            if case .password = mode {
+                TextField("Church username", text: $username)
+                    .textContentType(.username).textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+                SecureField("Password", text: $password)
+                    .textContentType(.password)
+                    .submitLabel(.go).onSubmit { if !busy, !username.trimmed.isEmpty, !password.isEmpty { run { try await signIn() } } }
+                    .textFieldStyle(.roundedBorder)
+                primaryButton("Authorize", disabled: username.trimmed.isEmpty || password.isEmpty) { try await signIn() }
+            } else if case .otp = mode {
+                TextField("Church email", text: $email)
+                    .textContentType(.emailAddress)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.emailAddress)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { if !busy, !email.trimmed.isEmpty { run { try await startOtp() } } }
+                primaryButton("Send code", disabled: email.trimmed.isEmpty) { try await startOtp() }
+            }
         }
     }
 
@@ -137,6 +182,25 @@ struct ReauthSheet: View {
             return
         }
         try await finish(r)
+    }
+
+    private func startOtp() async throws {
+        guard let broker else { throw BrokerError("Church login is not configured (BROKER_URL).") }
+        try await broker.otpStart(email.trimmed, enroll: true)
+        otpSent = true
+        otpCode = ""
+        startResendCooldown()
+    }
+
+    private func verifyOtp() async throws {
+        guard let broker else { return }
+        do {
+            let r = try await broker.otpVerify(email.trimmed, otpCode.trimmed, enroll: true)
+            try await finish(r)
+        } catch {
+            otpCode = "" // a rejected code must be retyped fresh, not resubmitted stale
+            throw error
+        }
     }
 
     private func pickFactor(_ f: BrokerFactor) async throws {

@@ -728,5 +728,171 @@ def verify_captured_session(cookies: list[dict]) -> dict:
         raise AuthError("We couldn't verify the sign-in session from the app — please try "
                         "signing in again.", root_cause=str(exc)) from exc
 
+
+# --- Email-first OTP authentication (no password required) ---
+
+_OTP_SESSIONS: dict[str, dict] = {}  # email -> {session, payload, verifier, ts}
+_OTP_TTL = 600  # 10 minutes
+
+def otp_start(email: str, enroll: bool = False) -> dict:
+    """Initiate Church account authentication via email OTP. Returns available factors or error."""
+    from lcr_client.okta_login import new_session
+    from backend import observability as obs
+
+    email = (email or "").strip().lower()
+    if not email or "@" not in email:
+        raise AuthError("A valid email address is required.")
+
+    login_id = _new_login_id()
+    cid = obs.new_correlation_id()
+    session = new_session()
+    t0 = time.time()
+
+    try:
+        # Use email as the identifier (most Okta orgs support email login)
+        with obs.span("login.otp_identify", correlation_id=cid, endpoint="okta"):
+            payload, verifier = _drive_to_factor_select(session, email, login_id)
+    except AuthError as e:
+        logger.warning("[auth %s] otp identify failed: %s", login_id, str(e))
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.exception("[auth %s] otp identify error", login_id)
+        dump_debug("broker_otp_error", login_id=login_id, error=str(e))
+        raise AuthError("Email authentication failed. Please try signing in with your username "
+                       "and password instead.") from e
+
+    # Extract available factors
+    factors = _factors(payload.get("currentAuthenticatorEnroll", {}) or {})
+    if not factors:
+        factors = _factors(payload.get("currentAuthenticator", {}) or {})
+
+    # Store session for verify step
+    _OTP_SESSIONS[email] = {"session": session, "payload": payload, "verifier": verifier,
+                            "login_id": login_id, "cid": cid, "t0": t0, "ts": time.time()}
+
+    return {"ok": True, "factors": factors}
+
+
+def _drive_to_factor_select(session: requests.Session, email: str, login_id: str) -> tuple:
+    """Identify via email and drive the IDX flow until a factor-selection state."""
+    from lcr_client.okta_login import (
+        _idx_post, _remediations, _follow, INTROSPECT_URL, _authenticator_types)
+
+    logger.info("[auth %s] otp idp/idx/introspect", login_id)
+    verifier, challenge = _pkce()
+    payload = _idx_post(session, INTROSPECT_URL, {})
+
+    state_handle = payload.get("stateHandle")
+    for attempt in range(8):
+        rems = _remediations(payload)
+        for r in rems.values():
+            r["_stateHandle"] = state_handle
+
+        if "identify" in rems:
+            logger.info("[auth %s] otp identify (email=%s)", login_id, email)
+            payload = _follow(session, rems["identify"], {"identifier": email, "rememberMe": False})
+            state_handle = payload.get("stateHandle")
+            continue
+
+        if "select-authenticator-authenticate" in rems:
+            logger.info("[auth %s] otp: factor selection available", login_id)
+            return payload, verifier
+
+        # Unexpected state
+        logger.warning("[auth %s] otp unexpected state: %s", login_id, sorted(rems.keys()))
+        raise AuthError(f"Unexpected OTP flow state: {sorted(rems.keys())}")
+
+    raise AuthError("OTP flow did not reach factor selection within step budget")
+
+
+def otp_verify(email: str, code: str, enroll: bool = False,
+               want_refresh_token: bool = True, allow_cached_identity: bool = False) -> dict:
+    """Verify OTP code and complete authentication."""
+    from lcr_client.okta_login import _follow, _authenticator_types
+    from backend import observability as obs
+
+    email = (email or "").strip().lower()
+    code = (code or "").strip()
+
+    if not code:
+        raise AuthError("A verification code is required.")
+
+    stored = _OTP_SESSIONS.get(email)
+    if not stored:
+        raise AuthError("The OTP session has expired. Please request a new code.")
+
+    # Prune old sessions
+    now = time.time()
+    cutoff = now - _OTP_TTL
+    for k in [k for k, v in _OTP_SESSIONS.items() if v.get("ts", 0) < cutoff]:
+        _OTP_SESSIONS.pop(k, None)
+
+    if not stored or stored["ts"] < cutoff:
+        raise AuthError("The OTP session has expired. Please request a new code.")
+
+    session = stored["session"]
+    payload = stored["payload"]
+    login_id = stored["login_id"]
+    cid = stored["cid"]
+    t0 = stored["t0"]
+
+    try:
+        # Select email/OTP factor (prefer email, then google_otp, then first available)
+        auth_types = _authenticator_types(payload)
+        factors = _factors(payload.get("currentAuthenticatorEnroll", {}))
+        if not factors:
+            factors = _factors(payload.get("currentAuthenticator", {}))
+
+        email_factor = next((f for f in factors if "email" in f.get("type", "").lower()), None)
+        otp_factor = next((f for f in factors if "otp" in f.get("type", "").lower()), None)
+        selected = email_factor or otp_factor or (factors[0] if factors else None)
+
+        if not selected:
+            raise AuthError("No OTP factors are available for your account.")
+
+        with obs.span("login.otp_select", correlation_id=cid):
+            logger.info("[auth %s] otp select factor: %s", login_id, selected.get("label"))
+            payload = _follow(session, payload.get("currentAuthenticator", {}),
+                             {"authenticator": selected.get("_auth", {"id": selected["id"]})})
+
+        # Answer with the code
+        state = _code_input(payload)
+        if not state:
+            raise AuthError("The OTP factor does not support code entry.")
+
+        with obs.span("login.otp_answer", correlation_id=cid):
+            logger.info("[auth %s] otp answer code", login_id)
+            payload = _follow(session, state, {"credentials": {"passcode": code}})
+
+        if "successWithInteractionCode" not in payload:
+            _OTP_SESSIONS[email] = {"session": session, "payload": payload, "verifier": stored["verifier"],
+                                    "login_id": login_id, "cid": cid, "t0": t0, "ts": time.time()}
+            msgs = _idx_messages(payload)
+            raise AuthError(_user_message(msgs) or "That code didn't work. Please try again.")
+
+        # Success: complete the authentication
+        username = email  # use email as the username for caching/logging
+        ident = _finish_success(session, payload, stored["verifier"], login_id, cid, t0,
+                               username, want_refresh_token, allow_cached_identity)
+        cookies = serialize_cookies(session)
+        _OTP_SESSIONS.pop(email, None)
+        return {"status": "success", "identity": ident, "cookies": cookies}
+
+    except AuthError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.exception("[auth %s] otp verify error", login_id)
+        dump_debug("broker_otp_verify_error", login_id=login_id, error=str(e))
+        raise AuthError("Code verification failed. Please try again.") from e
+
+
+def _user_message(messages: list[str]) -> str | None:
+    """Extract the most relevant user-facing message from IDX responses."""
+    for msg in messages:
+        msg_lower = msg.lower()
+        if "incorrect" in msg_lower or "invalid" in msg_lower or "doesn't match" in msg_lower:
+            return msg
+    return messages[0] if messages else None
+
 # (The background cache refresh lives in enroll.refresh_cached_identity — it also re-reads the
 # UNIT via user_context, which a /api/auth/me-only refresher here couldn't.)

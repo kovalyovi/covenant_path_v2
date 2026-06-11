@@ -249,6 +249,16 @@ public final class BrokerService: @unchecked Sendable {
         return result(from: d)
     }
 
+    /// Church account sign-in via email OTP (sent by Church's Okta, not Supabase).
+    public func otpStart(_ email: String, enroll: Bool = false) async throws {
+        _ = try await postJSON("/auth/otp/start", ["email": email, "enroll": enroll])
+    }
+
+    public func otpVerify(_ email: String, _ code: String, enroll: Bool = false) async throws -> BrokerResult {
+        let d = try await postJSON("/auth/otp/verify", ["email": email, "code": code, "enroll": enroll])
+        return result(from: d)
+    }
+
     // MARK: - email relay (port of emailStart/emailVerify)
 
     public func emailStart(_ email: String) async throws {
