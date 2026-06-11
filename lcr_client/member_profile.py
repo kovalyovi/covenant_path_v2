@@ -23,6 +23,7 @@ import re
 from urllib.parse import quote
 
 from lcr_client import action_config
+from lcr_client.hosts import LCR_BASE
 from lcr_client.logging_setup import dump_debug, get_logger
 
 logger = get_logger()
@@ -32,7 +33,7 @@ logger = get_logger()
 PROFILE_ACTION_ID = action_config.DEFAULTS["record"]
 RECOMMEND_ACTION_ID = action_config.DEFAULTS["recommend"]
 MINISTERING_ACTION_ID = action_config.DEFAULTS["ministering"]
-PROFILE_URL = "https://lcr.churchofjesuschrist.org/mlt/records/member-profile/{uuid}?lang=eng"
+PROFILE_URL = LCR_BASE + "/mlt/records/member-profile/{uuid}?lang=eng"
 
 _ROW_RE = re.compile(r"^[0-9a-f]+:(.*)$")
 _HEAL_ATTEMPTED = False
@@ -167,7 +168,7 @@ def call_action(session, person_uuid: str, action_id: str, args: list) -> list:
         "Content-Type": "text/plain;charset=UTF-8",
         "Next-Action": action_id,
         "Next-Router-State-Tree": _state_tree(person_uuid),
-        "Origin": "https://lcr.churchofjesuschrist.org",
+        "Origin": LCR_BASE,
         "Referer": url,
     }
     body = json.dumps(args, separators=(",", ":"))

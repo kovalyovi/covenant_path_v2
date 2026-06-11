@@ -26,7 +26,7 @@ from lcr_client.models import (
     UserContext,
 )
 
-LCR = "https://lcr.churchofjesuschrist.org"
+from lcr_client.hosts import LCR_BASE as LCR
 
 
 class LcrClient:

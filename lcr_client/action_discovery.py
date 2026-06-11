@@ -20,11 +20,12 @@ import sys
 from pathlib import Path
 
 from lcr_client import action_config
+from lcr_client.hosts import LCR_BASE
 from lcr_client.logging_setup import get_logger
 from lcr_client.member_profile import _find, flight_objects
 
 logger = get_logger()
-BASE = "https://lcr.churchofjesuschrist.org"
+BASE = LCR_BASE
 STATE = Path(__file__).resolve().parent.parent / "tools" / "output" / "storage_state.json"
 PROFILE_CACHE = Path(__file__).resolve().parent.parent / "tools" / "output" / "profile_cache.json"
 

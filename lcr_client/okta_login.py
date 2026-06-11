@@ -43,14 +43,17 @@ from typing import Any
 
 import requests
 
+from lcr_client.hosts import (
+    IDENTITY_BASE, LCR_BASE, is_church_cookie_domain, is_identity_host,
+)
 from lcr_client.logging_setup import dump_debug, get_logger
 
 logger = get_logger()
 
-ORG = "https://id.churchofjesuschrist.org"
+ORG = IDENTITY_BASE
 ISSUER = f"{ORG}/oauth2/default"
 INTROSPECT_URL = f"{ORG}/idp/idx/introspect"
-LCR = "https://lcr.churchofjesuschrist.org"
+LCR = LCR_BASE
 
 # Public SPA client config (captured from the live login flow; not secret).
 CLIENT_ID = "0oajwqqtpz7f8r1OD357"
@@ -199,8 +202,7 @@ def _establish_lcr_session(session: requests.Session, timeout: int = 60) -> None
     logger.info("lcr /api/auth/login (SSO via existing Okta session)")
     resp = session.get(f"{LCR}/api/auth/login", params={"returnTo": "/"},
                        allow_redirects=True, timeout=timeout)
-    host = requests.utils.urlparse(resp.url).hostname or ""
-    if host.startswith("id."):
+    if is_identity_host(resp.url):
         dump_debug("lcr_sso_failed", final_url=resp.url, status=resp.status_code)
         raise LoginError(
             "SSO did not complete — landed back on Okta. The Okta session cookie "
@@ -211,7 +213,7 @@ def _establish_lcr_session(session: requests.Session, timeout: int = 60) -> None
 def _write_storage_state(session: requests.Session, path: Path) -> int:
     cookies = []
     for c in session.cookies:
-        if "churchofjesuschrist.org" not in (c.domain or ""):
+        if not is_church_cookie_domain(c.domain):
             continue
         cookies.append({
             "name": c.name,
@@ -351,15 +353,14 @@ def try_silent_sso(session: requests.Session, id_token: str) -> bool:
         if resp1.status_code not in (301, 302, 303, 307, 308):
             return False
         okta_url = resp1.headers.get("Location", "")
-        if not okta_url or "id.churchofjesuschrist.org" not in okta_url:
+        if not okta_url or not is_identity_host(okta_url):
             return False
         parsed = urlparse(okta_url)
         params = {k: v[0] for k, v in parse_qs(parsed.query, keep_blank_values=True).items()}
         params.update({"prompt": "none", "id_token_hint": id_token})
         new_url = urlunparse(parsed._replace(query=urlencode(params)))
         resp2 = session.get(new_url, allow_redirects=True, timeout=60)
-        final_host = urlparse(resp2.url).hostname or ""
-        if final_host.startswith("id."):
+        if is_identity_host(resp2.url):
             return False  # still on Okta — SSO didn't complete
         logger.info("silent SSO succeeded via id_token_hint")
         return True

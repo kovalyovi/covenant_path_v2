@@ -515,6 +515,46 @@ def covenant_path_access_safe(client):
     return covenant_path_access(client)
 
 
+def test_hosts_test_mode_guard():
+    """SECURITY: lcr_client.hosts honors CP_TEST_LCR_BASE/CP_TEST_IDENTITY_BASE ONLY under
+    CP_TEST_MODE=1 — a stray override on a real deployment must never redirect logins. Resolved at
+    import time, so each case runs in a fresh interpreter."""
+    import os
+    import subprocess
+
+    def probe(extra_env: dict) -> dict:
+        code = (
+            "import json; from lcr_client import hosts; "
+            "print(json.dumps({'lcr': hosts.LCR_BASE, 'idp': hosts.IDENTITY_BASE, "
+            "'is_id': hosts.is_identity_host('http://localhost:9101/x'), "
+            "'cookie': hosts.is_church_cookie_domain('localhost')}))"
+        )
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("CP_TEST_MODE", "CP_TEST_LCR_BASE", "CP_TEST_IDENTITY_BASE")}
+        env.update(extra_env)
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                             env=env, cwd=str(Path(__file__).resolve().parent.parent))
+        assert out.returncode == 0, out.stderr[-300:]
+        return json.loads(out.stdout.strip().splitlines()[-1])
+
+    prod = "https://lcr.churchofjesuschrist.org"
+    # 1. Overrides set but NO CP_TEST_MODE -> ignored (the property that protects production).
+    r = probe({"CP_TEST_LCR_BASE": "http://evil.example",
+               "CP_TEST_IDENTITY_BASE": "http://evil.example"})
+    assert r["lcr"] == prod, f"override leaked without CP_TEST_MODE: {r['lcr']}"
+    assert r["is_id"] is False and r["cookie"] is False
+    # 2. CP_TEST_MODE=1 -> overrides apply; identity-host + cookie checks follow the mock hosts.
+    r2 = probe({"CP_TEST_MODE": "1", "CP_TEST_LCR_BASE": "http://localhost:9100",
+                "CP_TEST_IDENTITY_BASE": "http://localhost:9101"})
+    assert r2["lcr"] == "http://localhost:9100" and r2["idp"] == "http://localhost:9101"
+    assert r2["is_id"] is True, "mock identity host not recognized"
+    assert r2["cookie"] is True, "mock cookie domain not accepted"
+    # 3. CP_TEST_MODE=1 with no overrides -> still production defaults.
+    r3 = probe({"CP_TEST_MODE": "1"})
+    assert r3["lcr"] == prod
+    return "override gated by CP_TEST_MODE"
+
+
 # --- runner ------------------------------------------------------------------
 
 def main() -> int:
@@ -530,7 +570,8 @@ def main() -> int:
                test_okta_building_blocks, test_access_humanize,
                test_name_cache_roundtrip, test_clean_missing_filters_unnamed,
                test_leadership_harvest, test_profile_cache, test_sheets_preserve_failed_units,
-               test_missionary_roster_parse, test_email_relay_validation, test_google_oauth_state]
+               test_missionary_roster_parse, test_email_relay_validation, test_google_oauth_state,
+               test_hosts_test_mode_guard]
     for t in offline:
         check(t.__name__, t)
 

@@ -21,12 +21,13 @@ import json
 from urllib.parse import quote
 
 from lcr_client import action_config
+from lcr_client.hosts import LCR_BASE
 from lcr_client.logging_setup import get_logger
 from lcr_client.member_profile import _find, flight_objects
 
 logger = get_logger()
 
-MISSIONARY_URL = "https://lcr.churchofjesuschrist.org/mlt/orgs/missionary?lang=eng"
+MISSIONARY_URL = f"{LCR_BASE}/mlt/orgs/missionary?lang=eng"
 
 
 def _state_tree() -> str:
@@ -49,8 +50,8 @@ def fetch_unit_missionaries(session, unit_number: int, mission_id: int | None = 
         "Content-Type": "text/plain;charset=UTF-8",
         "Next-Action": action_id,
         "Next-Router-State-Tree": _state_tree(),
-        "Origin": "https://lcr.churchofjesuschrist.org",
-        "Referer": "https://lcr.churchofjesuschrist.org/",
+        "Origin": LCR_BASE,
+        "Referer": f"{LCR_BASE}/",
     }
     resp = session.session.post(
         MISSIONARY_URL,

@@ -24,10 +24,10 @@ import sys
 import requests
 
 from backend import db
+from lcr_client.hosts import LCR_BASE as LCR
 from lcr_client.logging_setup import get_logger
 
 logger = get_logger()
-LCR = "https://lcr.churchofjesuschrist.org"
 BUCKET = "member-photos"
 SIZE = 96                      # px (square-ish thumbnail)
 SIGNED_TTL = 60 * 60 * 24 * 365  # 1 year

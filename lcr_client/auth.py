@@ -134,8 +134,8 @@ class LcrSession:
 
         def _do():
             resp = self.session.get(url, params=params, timeout=60)
-            host = requests.utils.urlparse(resp.url).hostname or ""
-            if resp.status_code in (401, 403) or host.startswith("id."):
+            from lcr_client.hosts import is_identity_host
+            if resp.status_code in (401, 403) or is_identity_host(resp.url):
                 raise AuthExpiredError(
                     "LCR redirected to login (session expired) while fetching a page."
                 )
@@ -161,9 +161,9 @@ class LcrSession:
                 f"LCR returned {resp.status_code}. Session expired — "
                 "re-run `python tools/lcr_crawler.py`."
             )
-        host = requests.utils.urlparse(resp.url).hostname or ""
+        from lcr_client.hosts import is_identity_host
         ctype = resp.headers.get("content-type", "")
-        if host.startswith("id.") or (
+        if is_identity_host(resp.url) or (
             "application/json" not in ctype and "text/html" in ctype
         ):
             raise AuthExpiredError(

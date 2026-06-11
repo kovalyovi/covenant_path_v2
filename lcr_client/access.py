@@ -29,12 +29,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from lcr_client.hosts import LCR_BASE
 from lcr_client.logging_setup import get_logger
 
 logger = get_logger()
 
-ACCESS_TABLE_URL = "https://lcr.churchofjesuschrist.org/other/access-table"
-USER_CONTEXT_URL = "https://lcr.churchofjesuschrist.org/api/user-context"
+ACCESS_TABLE_URL = f"{LCR_BASE}/other/access-table"
+USER_CONTEXT_URL = f"{LCR_BASE}/api/user-context"
 _NEXT_DATA_RE = re.compile(
     r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.S
 )

@@ -22,12 +22,13 @@ import json
 from urllib.parse import quote
 
 from lcr_client import access, action_config
+from lcr_client.hosts import LCR_BASE
 from lcr_client.logging_setup import get_logger
 from lcr_client.member_profile import flight_objects
 
 logger = get_logger()
 
-ORGS_URL = ("https://lcr.churchofjesuschrist.org/mlt/orgs"
+ORGS_URL = (f"{LCR_BASE}/mlt/orgs"
             "?unitTypeId=7,8&list=true&leadership=true&lang=eng")
 # App-Router state tree for the /mlt/orgs page (captured live).
 _ORGS_STATE = ["", {"children": ["orgs", {"children": ["__PAGE__", {}, None, None]},
@@ -46,7 +47,7 @@ def fetch_leadership(session) -> list:
         "Next-Router-State-Tree": _state_tree(),
         "Accept": "text/x-component",
         "Content-Type": "text/plain;charset=UTF-8",
-        "Origin": "https://lcr.churchofjesuschrist.org",
+        "Origin": LCR_BASE,
         "Referer": ORGS_URL,
     }
     resp = session.session.post(ORGS_URL, headers=headers, data='["eng"]',
