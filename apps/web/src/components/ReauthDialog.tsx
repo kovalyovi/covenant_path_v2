@@ -306,10 +306,18 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
             <>
               <label className="field">
                 <span>Church email</span>
+                {/* Distinct name + email semantics so the password manager offers the EMAIL address —
+                    not the saved LCR username from the Church-username form (feedback #3, mirrors
+                    LoginPage). Without these the field autofilled the username and React's state
+                    stayed empty, so "Send code" hit /auth/otp/start with a BLANK identifier
+                    (audit: otp_start_failed "Enter your Church Account email…") — no code ever sent. */}
                 <input
                   className="input"
                   type="email"
+                  name="email"
+                  inputMode="email"
                   autoComplete="email"
+                  autoCapitalize="none"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   onKeyDown={(e) => {

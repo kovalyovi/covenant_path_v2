@@ -65,6 +65,31 @@ test.describe('reauth dialog', () => {
     await expect(page.getByText('Daily sync authorized — your stake will refresh within minutes.')).not.toBeVisible();
   });
 
+  test('Email-code mode: the field has email semantics and Send code POSTs the typed email', async ({ page }) => {
+    // Regression (2026-06-11): the Church-email field lacked name/inputMode/email semantics, so phone
+    // password managers autofilled the LCR USERNAME and React's state stayed empty — "Send code" hit
+    // /auth/otp/start with a BLANK identifier and no code was ever sent.
+    const { broker } = await openReauth(page, {
+      'POST /auth/otp/start': { json: { status: 'code_sent', sent_to: 'your email' } },
+    });
+    const dialog = reauthDialog(page);
+    await dialog.getByRole('button', { name: 'Email code' }).click();
+
+    const emailField = dialog.getByLabel('Church email');
+    await expect(emailField).toHaveAttribute('type', 'email');
+    await expect(emailField).toHaveAttribute('name', 'email');     // distinct from the username field
+    await expect(emailField).toHaveAttribute('inputmode', 'email'); // so managers offer the EMAIL
+
+    await emailField.fill('leader@example.com');
+    await dialog.getByRole('button', { name: 'Send code', exact: true }).click();
+
+    // Wait for the sent-state transition (proves otpStart resolved) BEFORE asserting the recorded call.
+    await expect(dialog.getByText(/A code was just sent/)).toBeVisible();
+    const starts = broker.callsTo('/auth/otp/start');
+    expect(starts).toHaveLength(1);
+    expect(starts[0].body).toMatchObject({ email: 'leader@example.com', enroll: true }); // NOT blank
+  });
+
   test('the MFA path inside the dialog completes the enroll', async ({ page }) => {
     const { broker } = await openReauth(page, {
       'POST /auth/password': { json: brokerMfa() },
