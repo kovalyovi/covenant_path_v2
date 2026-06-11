@@ -157,10 +157,11 @@ interface SegmentedProps<T extends string> {
   value: T;
   onChange: (v: T) => void;
   ariaLabel: string;
+  disabled?: boolean;
 }
 
 /** A segmented (single-select) control. Mirrors Flutter's SegmentedButton. */
-export function Segmented<T extends string>({ options, value, onChange, ariaLabel }: SegmentedProps<T>) {
+export function Segmented<T extends string>({ options, value, onChange, ariaLabel, disabled }: SegmentedProps<T>) {
   return (
     <div className="segmented" role="group" aria-label={ariaLabel}>
       {options.map((o) => (
@@ -169,6 +170,7 @@ export function Segmented<T extends string>({ options, value, onChange, ariaLabe
           type="button"
           className="segmented__btn"
           aria-pressed={value === o.value}
+          disabled={disabled}
           onClick={() => onChange(o.value)}
         >
           {o.icon && <Icon name={o.icon} size={16} />}

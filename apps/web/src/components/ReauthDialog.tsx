@@ -260,7 +260,8 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
             is stored encrypted — never your password — and is revocable anytime.
           </p>
           <div style={{ marginBottom: 16 }}>
-            <Segmented
+            <Segmented<ReauthMode>
+              ariaLabel="Sign-in method"
               value={mode}
               onChange={setMode}
               disabled={busy}
