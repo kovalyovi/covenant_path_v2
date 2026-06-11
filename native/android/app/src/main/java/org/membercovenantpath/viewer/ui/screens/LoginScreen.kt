@@ -52,6 +52,9 @@ import org.membercovenantpath.viewer.viewmodel.LoginMode
 fun LoginScreen(vm: AuthViewModel) {
     val s by vm.login.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    // Mid-MFA the screen shows ONE flow: the mode switch and passkey button hide (a member stuck
+    // on the code screen reached for the passkey button — a silent dead-end, 2026-06-11).
+    val inMfa = s.mode == LoginMode.Church && s.loginId != null
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
@@ -61,7 +64,7 @@ fun LoginScreen(vm: AuthViewModel) {
             Text("Covenant Path", style = MaterialTheme.typography.headlineSmall)
             Spacer(Modifier.size(16.dp))
 
-            if (s.brokerAvailable) {
+            if (s.brokerAvailable && !inMfa) {
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                     SegmentedButton(
                         selected = s.mode == LoginMode.Church,
@@ -81,7 +84,7 @@ fun LoginScreen(vm: AuthViewModel) {
 
             if (s.mode == LoginMode.Church) ChurchFields(vm, s) else EmailFields(vm, s)
 
-            if (s.passkeyAvailable) {
+            if (s.passkeyAvailable && !inMfa) {
                 Spacer(Modifier.size(16.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     HorizontalDivider(Modifier.weight(1f))
@@ -141,9 +144,13 @@ private fun spinnerOr(busy: Boolean, label: String) {
 @Composable
 private fun ChurchFields(vm: AuthViewModel, s: org.membercovenantpath.viewer.viewmodel.LoginUiState) {
     when {
-        // Step 3: enter the MFA code.
+        // Step 3: enter the MFA code (digits only, gated on a complete code — fat-finger and
+        // stale submits 401 and restart the dance; 2026-06-11).
         s.factorSent != null -> {
-            Text("Enter the code sent via ${s.factorSent.label}.", modifier = Modifier.fillMaxWidth())
+            Text(
+                "A code was just sent via ${s.factorSent.label}. Wait for the new one to arrive, then enter it here.",
+                modifier = Modifier.fillMaxWidth(),
+            )
             Spacer(Modifier.size(12.dp))
             OutlinedTextField(
                 value = s.mfaCode, onValueChange = vm::onMfaCode, label = { Text("Verification code") },
@@ -152,8 +159,16 @@ private fun ChurchFields(vm: AuthViewModel, s: org.membercovenantpath.viewer.vie
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.size(16.dp))
-            Button(onClick = vm::verifyMfa, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) { spinnerOr(s.busy, "Verify & sign in") }
+            Button(
+                onClick = vm::verifyMfa,
+                enabled = !s.busy && s.mfaCode.length >= 6,
+                modifier = Modifier.fillMaxWidth(),
+            ) { spinnerOr(s.busy, "Verify & sign in") }
+            TextButton(onClick = { vm.selectFactor(s.factorSent) }, enabled = !s.busy && s.resendInSec <= 0) {
+                Text(if (s.resendInSec > 0) "Send a new code (${s.resendInSec}s)" else "Send a new code")
+            }
             TextButton(onClick = vm::backToFactors, enabled = !s.busy) { Text("Choose a different method") }
+            TextButton(onClick = vm::backToPassword, enabled = !s.busy) { Text("Start over") }
         }
         // Step 2: pick an MFA factor.
         s.loginId != null -> {
@@ -162,7 +177,7 @@ private fun ChurchFields(vm: AuthViewModel, s: org.membercovenantpath.viewer.vie
             s.factors.forEach { f ->
                 OutlinedButton(onClick = { vm.selectFactor(f) }, enabled = !s.busy, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) { Text(f.label) }
             }
-            TextButton(onClick = vm::backToPassword, enabled = !s.busy) { Text("Back") }
+            TextButton(onClick = vm::backToPassword, enabled = !s.busy) { Text("Start over") }
         }
         // Step 1: username + password.
         else -> {

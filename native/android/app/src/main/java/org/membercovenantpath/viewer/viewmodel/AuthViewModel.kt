@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.jan.supabase.auth.status.SessionStatus
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -45,6 +47,9 @@ data class LoginUiState(
     val factors: List<BrokerFactor> = emptyList(),
     val factorSent: BrokerFactor? = null,
     val mfaCode: String = "",
+    // "Send a new code" cooldown (seconds) — nudges the member to wait for the FRESH code instead
+    // of typing one from an earlier text/screen (the 2026-06-11 stranded-at-MFA failure).
+    val resendInSec: Int = 0,
 
     // Email code
     val email: String = "",
@@ -97,17 +102,35 @@ class AuthViewModel(
     fun setMode(m: LoginMode) = _login.update { reset(it.copy(mode = m)) }
     fun onUsername(v: String) = _login.update { it.copy(username = v, error = null) }
     fun onPassword(v: String) = _login.update { it.copy(password = v, error = null) }
-    fun onMfaCode(v: String) = _login.update { it.copy(mfaCode = v, error = null) }
+    // Codes are bare digits; people paste "123 456" / "123-456" from a text.
+    fun onMfaCode(v: String) = _login.update { it.copy(mfaCode = v.filter(Char::isDigit).take(8), error = null) }
     fun onEmail(v: String) = _login.update { it.copy(email = v, error = null) }
     fun onEmailCode(v: String) = _login.update { it.copy(emailCode = v, error = null) }
 
-    private fun reset(base: LoginUiState) = base.copy(
-        loginId = null, factors = emptyList(), factorSent = null, mfaCode = "",
-        emailCodeSent = false, emailCode = "", error = null, status = null,
-    )
+    private fun reset(base: LoginUiState): LoginUiState {
+        resendJob?.cancel()
+        return base.copy(
+            loginId = null, factors = emptyList(), factorSent = null, mfaCode = "", resendInSec = 0,
+            emailCodeSent = false, emailCode = "", error = null, status = null,
+        )
+    }
 
-    fun backToFactors() = _login.update { it.copy(factorSent = null, error = null) }
+    // Input typed for the OLD factor must never ride into a new challenge (2026-06-11).
+    fun backToFactors() = _login.update { it.copy(factorSent = null, mfaCode = "", error = null) }
     fun backToPassword() = _login.update { reset(it) }
+
+    private var resendJob: Job? = null
+
+    private fun startResendCooldown() {
+        resendJob?.cancel()
+        _login.update { it.copy(resendInSec = 30) }
+        resendJob = viewModelScope.launch {
+            while (_login.value.resendInSec > 0) {
+                delay(1_000)
+                _login.update { it.copy(resendInSec = (it.resendInSec - 1).coerceAtLeast(0)) }
+            }
+        }
+    }
     fun useDifferentEmail() = _login.update { it.copy(emailCodeSent = false, emailCode = "", error = null) }
     fun setRelay(on: Boolean) = _login.update { it.copy(useRelay = on, emailCodeSent = false, emailCode = "", error = null) }
 
@@ -187,12 +210,19 @@ class AuthViewModel(
     fun selectFactor(f: BrokerFactor) = run { selectFactorNow(f) }
     private suspend fun selectFactorNow(f: BrokerFactor) {
         broker.selectFactor(_login.value.loginId!!, f.id)
-        _login.update { it.copy(factorSent = f) }
+        // Fresh challenge → fresh input; the cooldown nudges waiting for the NEW code.
+        _login.update { it.copy(factorSent = f, mfaCode = "") }
+        startResendCooldown()
     }
 
     fun verifyMfa() = run {
-        val r = broker.verifyMfa(_login.value.loginId!!, _login.value.mfaCode.trim(), enroll = _login.value.authorizeSync)
-        finishChurch(r)
+        try {
+            val r = broker.verifyMfa(_login.value.loginId!!, _login.value.mfaCode.trim(), enroll = _login.value.authorizeSync)
+            finishChurch(r)
+        } catch (e: Throwable) {
+            _login.update { it.copy(mfaCode = "") } // a rejected code must be retyped fresh
+            throw e
+        }
     }
 
     // ---- Email code ----

@@ -370,14 +370,16 @@ def auth_sync_now(authorization: str = Header(default="")) -> dict:
             "last_synced_at": status.get("last_synced_at")}
 
 
-def _audit_okta_failure(who: str, stage: str, error: str, rid: str,
-                        duration_ms: int | None = None, phase: str | None = None) -> None:
-    """Make OKTA-STAGE failures visible in the admin console: a wrong password / failed MFA never
+def _audit_okta_event(who: str, stage: str, error: str, rid: str,
+                      duration_ms: int | None = None, phase: str | None = None) -> None:
+    """Make OKTA-STAGE events visible in the admin console: a wrong password / failed MFA never
     reaches the login eval, so login_audit had NO row for them — a member 'stuck at login' was
     invisible (the av_kov case: zero server-side evidence of his attempts). Best-effort write with
-    outcome='okta_failed'/'mfa_failed'; `who` is the Church USERNAME (identity hint, admin-only RLS).
-    For identity failures, `error` should be the ROOT CAUSE (e.g. 'auth/me 502') and `phase`
-    'identity:<kind>' — the 2026-06-10 LCR outage was undiagnosable from the friendly message."""
+    outcome='okta_failed'/'mfa_failed'/'mfa_pending'/...; `who` is the Church USERNAME (identity
+    hint, admin-only RLS). For identity failures, `error` should be the ROOT CAUSE (e.g. 'auth/me
+    502') and `phase` 'identity:<kind>' — the 2026-06-10 LCR outage was undiagnosable from the
+    friendly message. Truncation is generous (2000): the 300-char cut chopped the 2026-06-11 MFA
+    failure mid-payload."""
     try:
         import requests as _rq
         url = os.environ.get("SUPABASE_URL", "").rstrip("/")
@@ -388,11 +390,19 @@ def _audit_okta_failure(who: str, stage: str, error: str, rid: str,
                  headers={"apikey": key, "Authorization": f"Bearer {key}",
                           "Content-Type": "application/json", "Prefer": "return=minimal"},
                  json={"email": (who or "").lower()[:120], "outcome": stage,
-                       "error": (error or "")[:300], "request_id": rid,
+                       "error": (error or "")[:2000], "request_id": rid,
                        "duration_ms": duration_ms, "phase": phase},
                  timeout=10)
     except Exception:  # noqa: BLE001 — observability must never affect the login path
         pass
+
+
+def _mfa_phase(e: okta_flow.AuthError) -> str:
+    """phase string for MFA-stage audit rows: okta:<kind>[:<factor_type>] — names BOTH what went
+    wrong and which factor type was in play (diagnosing 2026-06-11 needed Render logs for that)."""
+    kind = getattr(e, "kind", "other") or "other"
+    ftype = getattr(e, "factor_type", "") or ""
+    return f"okta:{kind}:{ftype}" if ftype else f"okta:{kind}"
 
 
 @app.post("/auth/password")
@@ -409,21 +419,29 @@ def auth_password(req: PasswordReq) -> dict:
     except okta_flow.IdentityError as e:
         logger.warning("[req %s] LCR identity failed after password OK (%s): %s",
                        rid, getattr(e, "root_cause", "?"), e)
-        _audit_okta_failure(req.username, "lcr_identity_failed",
-                            getattr(e, "root_cause", "") or str(e), rid,
-                            duration_ms=int((time.monotonic() - t0) * 1000),
-                            phase=f"identity:{getattr(e, 'kind', 'other')}")
+        _audit_okta_event(req.username, "lcr_identity_failed",
+                          getattr(e, "root_cause", "") or str(e), rid,
+                          duration_ms=int((time.monotonic() - t0) * 1000),
+                          phase=f"identity:{getattr(e, 'kind', 'other')}")
         raise HTTPException(status_code=503, detail=str(e))
     except okta_flow.AuthError as e:
         logger.warning("[req %s] auth failed: %s", rid, e)
         # Audit the RAW cause (root_cause), not the friendly message the user saw — a
         # "wrong password" and a real Okta outage must stay distinguishable after the fact.
-        _audit_okta_failure(req.username, "okta_failed",
-                            getattr(e, "root_cause", "") or str(e), rid,
-                            duration_ms=int((time.monotonic() - t0) * 1000),
-                            phase=f"okta:{getattr(e, 'kind', 'other')}")
+        _audit_okta_event(req.username, "okta_failed",
+                          getattr(e, "root_cause", "") or str(e), rid,
+                          duration_ms=int((time.monotonic() - t0) * 1000),
+                          phase=_mfa_phase(e))
         raise HTTPException(status_code=401, detail=str(e))
     if res["status"] == "mfa_required":
+        # Audit the mfa_required hand-off (off the response path): an attempt abandoned at the
+        # code screen used to leave ZERO rows — the 2026-06-11 dig had to reconstruct the factor
+        # menu from Render stdout. The row names the offered + dropped factor types.
+        offered = ",".join(res.get("factor_types", []))
+        dropped = ",".join(res.get("dropped_factor_types", []))
+        note = f"factors offered: {offered}" + (f"; dropped: {dropped}" if dropped else "")
+        _FAST_POOL.submit(_audit_okta_event, req.username, "mfa_pending", note, rid,
+                          int((time.monotonic() - t0) * 1000), "okta:mfa_pending")
         return {"status": "mfa_required", "login_id": res["login_id"], "factors": res["factors"]}
     return _complete_login(res, req.enroll, rid, t0)
 
@@ -431,10 +449,16 @@ def auth_password(req: PasswordReq) -> dict:
 @app.post("/auth/mfa/select")
 def auth_mfa_select(req: FactorReq) -> dict:
     rid = _rid()
+    t0 = time.monotonic()
     logger.info("[req %s] /auth/mfa/select login=%s", rid, req.login_id)
     try:
         return okta_flow.select_factor(req.login_id, req.factor_id)
     except okta_flow.AuthError as e:
+        # These were never audited — attempts that died choosing/sending a factor were invisible.
+        _audit_okta_event(getattr(e, "username", ""), "mfa_select_failed",
+                          getattr(e, "root_cause", "") or str(e), rid,
+                          duration_ms=int((time.monotonic() - t0) * 1000),
+                          phase=_mfa_phase(e))
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -450,15 +474,16 @@ def auth_mfa_verify(req: MfaReq) -> dict:
     except okta_flow.IdentityError as e:
         logger.warning("[req %s] LCR identity failed after MFA OK (%s): %s",
                        rid, getattr(e, "root_cause", "?"), e)
-        _audit_okta_failure("", "lcr_identity_failed",
-                            getattr(e, "root_cause", "") or str(e), rid,
-                            duration_ms=int((time.monotonic() - t0) * 1000),
-                            phase=f"identity:{getattr(e, 'kind', 'other')}")
+        _audit_okta_event(getattr(e, "username", ""), "lcr_identity_failed",
+                          getattr(e, "root_cause", "") or str(e), rid,
+                          duration_ms=int((time.monotonic() - t0) * 1000),
+                          phase=f"identity:{getattr(e, 'kind', 'other')}")
         raise HTTPException(status_code=503, detail=str(e))
     except okta_flow.AuthError as e:
-        _audit_okta_failure("", "mfa_failed", getattr(e, "root_cause", "") or str(e), rid,
-                            duration_ms=int((time.monotonic() - t0) * 1000),
-                            phase=f"okta:{getattr(e, 'kind', 'other')}")
+        _audit_okta_event(getattr(e, "username", ""), "mfa_failed",
+                          getattr(e, "root_cause", "") or str(e), rid,
+                          duration_ms=int((time.monotonic() - t0) * 1000),
+                          phase=_mfa_phase(e))
         raise HTTPException(status_code=401, detail=str(e))
     return _complete_login(res, req.enroll, rid, t0)
 

@@ -408,6 +408,324 @@ def test_mfa_single_factor_select_noop() -> None:
         okta_flow._PENDING.pop(lid, None)
 
 
+# ---------- 2026-06-11 MFA hardening (the Ricky Bloomfield failure class) ----------
+# A high counselor dead-ended at MFA: webauthn was offered (we can never finish it), the wrong-code
+# 401 carried its message at the FIELD level (we only read top-level), and the user saw raw IDX
+# JSON. Every test here FAILED against the pre-fix code.
+
+def _shape_a_payload(*auths: tuple[str, str, list]) -> dict:
+    """A minimal post-password IDX state offering the given (id, key, extra form fields) factors."""
+    options = []
+    for fid, _key, extra in auths:
+        form = [{"name": "id", "value": fid}] + extra
+        options.append({"label": fid, "value": {"form": {"value": form}}})
+    return {
+        "stateHandle": "sh0",
+        "authenticators": {"value": [{"id": fid, "key": key} for fid, key, _ in auths]},
+        "remediation": {"value": [
+            {"name": "select-authenticator-authenticate", "href": "https://x/idx/select",
+             "value": [{"name": "authenticator", "options": options}]}]},
+    }
+
+
+def test_mfa_factor_filtering_webauthn() -> None:
+    # start_login must not OFFER a factor the flow can't finish — webauthn on the menu is a
+    # guaranteed dead-end (it's what stranded the 2026-06-11 member for 28 seconds).
+    old_drive = okta_flow._drive_to_password
+    payload = _shape_a_payload(
+        ("wk1", "webauthn", [{"name": "methodType", "value": "webauthn"}]),
+        ("ph1", "phone_number", [{"name": "enrollmentId", "value": "e1"},
+                                 {"name": "methodType", "value": "sms"}]))
+    okta_flow._drive_to_password = lambda s, u, p, lid: (payload, "ver")
+    try:
+        res = okta_flow.start_login("rickyb", "pw", want_refresh_token=False)
+        check("filter: still mfa_required", res.get("status") == "mfa_required")
+        check("filter: webauthn dropped from the menu",
+              [f["id"] for f in res["factors"]] == ["ph1"])
+        check("filter: dropped types reported for the audit row",
+              res.get("dropped_factor_types") == ["webauthn"])
+        okta_flow._PENDING.pop(res.get("login_id"), None)
+    finally:
+        okta_flow._drive_to_password = old_drive
+
+
+def test_mfa_all_factors_unsupported_friendly() -> None:
+    # An account with ONLY unsupported factors gets an actionable message, not a code screen.
+    old_drive = okta_flow._drive_to_password
+    payload = _shape_a_payload(
+        ("wk1", "webauthn", [{"name": "methodType", "value": "webauthn"}]))
+    okta_flow._drive_to_password = lambda s, u, p, lid: (payload, "ver")
+    try:
+        okta_flow.start_login("rickyb", "pw", want_refresh_token=False)
+        check("all-unsupported -> AuthError", False)
+    except okta_flow.AuthError as e:
+        check("all-unsupported -> AuthError", True)
+        check("all-unsupported kind", getattr(e, "kind", "") == "mfa_unsupported")
+        check("all-unsupported names the fix (add a method at churchofjesuschrist.org)",
+              "churchofjesuschrist.org" in str(e))
+        check("all-unsupported carries the username for audit",
+              getattr(e, "username", "") == "rickyb")
+    finally:
+        okta_flow._drive_to_password = old_drive
+
+
+def test_okta_verify_nested_method_prefers_totp() -> None:
+    # Okta Verify lists methodType options (push first). Picking push starts a challenge with no
+    # code to type; the resolver must prefer totp. (Pre-fix: first option won.)
+    opt = {"label": "Okta Verify", "value": {"form": {"value": [
+        {"name": "id", "value": "ov1"},
+        {"name": "methodType", "options": [
+            {"label": "Get a push notification", "value": "push"},
+            {"label": "Enter a code", "value": "totp"}]},
+    ]}}}
+    obj = okta_flow._authenticator_object(opt)
+    check("okta_verify resolves methodType=totp over push", obj.get("methodType") == "totp")
+    # Phone keeps its sms preference (regression guard for the Jun-9 fix).
+    check("phone still resolves sms first", okta_flow._authenticator_object(
+        {"label": "Phone", "value": {"form": {"value": [
+            {"name": "id", "value": "ph1"},
+            {"name": "methodType", "options": [{"label": "Voice", "value": "voice"},
+                                               {"label": "SMS", "value": "sms"}]}]}}}
+    ).get("methodType") == "sms")
+
+
+def _webauthn_challenge_rem() -> dict:
+    return {"name": "challenge-authenticator", "href": "https://x/idx/challenge",
+            "value": [{"name": "credentials", "form": {"value": [
+                {"name": "authenticatorData"}, {"name": "clientData"},
+                {"name": "signatureData"}]}}]}
+
+
+def test_select_factor_refuses_non_code_challenge() -> None:
+    # Defense in depth behind the menu filter: if a select lands on a challenge with no typed-code
+    # field, refuse NOW (pre-fix: returned code_sent and stranded the member on a code screen).
+    lid = "test-non-code"
+    okta_flow._PENDING[lid] = {
+        "session": None, "verifier": "", "username": "rickyb",
+        "factors": [{"id": "wk1", "label": "Security Key", "method": "webauthn",
+                     "type": "webauthn", "_auth": {"id": "wk1"}}],
+        "payload": {"stateHandle": "sh", "remediation": {"value": [
+            {"name": "select-authenticator-authenticate", "href": "https://x/idx/select",
+             "value": []}]}},
+        "ts": time.time(),
+    }
+    saved = okta_flow._follow
+    okta_flow._follow = lambda *_a, **_k: {
+        "stateHandle": "sh2", "remediation": {"value": [_webauthn_challenge_rem()]}}
+    try:
+        okta_flow.select_factor(lid, "wk1")
+        check("non-code challenge -> AuthError", False)
+    except okta_flow.AuthError as e:
+        check("non-code challenge -> AuthError", True)
+        check("non-code challenge kind mfa_unsupported", getattr(e, "kind", "") == "mfa_unsupported")
+        check("non-code challenge message is friendly (no raw JSON)", "{" not in str(e))
+    finally:
+        okta_flow._follow = saved
+        okta_flow._PENDING.pop(lid, None)
+
+
+def _code_challenge_rem(field: str = "passcode") -> dict:
+    return {"name": "challenge-authenticator", "href": "https://x/idx/challenge",
+            "value": [{"name": "credentials", "form": {"value": [{"name": field}]}}]}
+
+
+def _pending_at_challenge(lid: str, field: str = "passcode", ftype: str = "phone_number") -> None:
+    okta_flow._PENDING[lid] = {
+        "session": None, "verifier": "", "username": "rickyb", "selected_type": ftype,
+        "payload": {"stateHandle": "sh-OLD",
+                    "remediation": {"value": [_code_challenge_rem(field)]}},
+        "ts": time.time(),
+    }
+
+
+def test_verify_answers_with_declared_field() -> None:
+    # The answer body must use the field THIS challenge declares — Okta Verify's TOTP form says
+    # `totp`, and the pre-fix hardcoded `passcode` 401s instantly (the 2026-06-11 failure class).
+    lid = "test-totp-field"
+    _pending_at_challenge(lid, field="totp", ftype="okta_verify")
+    captured: dict = {}
+
+    def fake_follow(_s, _rem, body, **_k):
+        captured.update(body)
+        return {"stateHandle": "sh2", "remediation": {"value": []}}  # non-success, no messages
+
+    saved = okta_flow._follow
+    okta_flow._follow = fake_follow
+    try:
+        okta_flow.verify_mfa(lid, "123456")
+        check("totp verify reaches the classifier", False)
+    except okta_flow.AuthError:
+        check("totp verify reaches the classifier", True)
+    check("verify answers with credentials.totp (not passcode)",
+          captured.get("credentials") == {"totp": "123456"})
+    okta_flow._PENDING.pop(lid, None)
+    okta_flow._follow = saved
+
+
+def test_verify_normalizes_code() -> None:
+    # People paste "123 456" / "123-456"; Okta wants bare digits.
+    lid = "test-normalize"
+    _pending_at_challenge(lid)
+    captured: dict = {}
+
+    def fake_follow(_s, _rem, body, **_k):
+        captured.update(body)
+        return {"stateHandle": "sh2", "remediation": {"value": []}}
+
+    saved = okta_flow._follow
+    okta_flow._follow = fake_follow
+    try:
+        okta_flow.verify_mfa(lid, " 123 4-56 ")
+    except okta_flow.AuthError:
+        pass
+    check("verify strips spaces/hyphens from the code",
+          captured.get("credentials") == {"passcode": "123456"})
+    okta_flow._PENDING.pop(lid, None)
+    okta_flow._follow = saved
+
+
+def test_verify_wrong_code_friendly_and_state_refresh() -> None:
+    # The exact 2026-06-11 shape: Okta answers 401, the "Invalid code" message nested at the FIELD
+    # level, no top-level messages. Pre-fix: the user saw raw JSON AND a retry reused the stale
+    # stateHandle. Now: friendly mfa_bad_code, pending state refreshed from the failure payload.
+    from lcr_client.okta_login import LoginError
+    lid = "test-wrong-code"
+    _pending_at_challenge(lid)
+    err_payload = {
+        "stateHandle": "sh-NEW",
+        "remediation": {"value": [{
+            "name": "challenge-authenticator", "href": "https://x/idx/challenge",
+            "value": [{"name": "credentials", "form": {"value": [{
+                "name": "passcode",
+                "messages": {"value": [{"message": "Invalid code. Try again.",
+                                        "class": "ERROR"}]}}]}}]}]},
+    }
+
+    def fake_follow(_s, _rem, _body, **_k):
+        raise LoginError("IDX step answer failed: HTTP 401", payload=err_payload)
+
+    saved = okta_flow._follow
+    okta_flow._follow = fake_follow
+    try:
+        okta_flow.verify_mfa(lid, "999999")
+        check("wrong code -> AuthError", False)
+    except okta_flow.AuthError as e:
+        check("wrong code -> AuthError", True)
+        check("wrong code classified mfa_bad_code (field-level message read)",
+              getattr(e, "kind", "") == "mfa_bad_code")
+        check("wrong code message is friendly (no raw JSON)", "{" not in str(e))
+        check("wrong code keeps attribution", getattr(e, "username", "") == "rickyb"
+              and getattr(e, "factor_type", "") == "phone_number")
+    check("pending state refreshed from the 401 payload (retry-safe)",
+          okta_flow._PENDING[lid]["payload"].get("stateHandle") == "sh-NEW")
+    okta_flow._PENDING.pop(lid, None)
+    okta_flow._follow = saved
+
+
+def test_verify_no_message_still_friendly() -> None:
+    # A 4xx with NO message anywhere must still produce a friendly retry message — the raw-JSON
+    # wall is what made a recoverable wrong code look fatal.
+    from lcr_client.okta_login import LoginError
+    lid = "test-no-msg"
+    _pending_at_challenge(lid)
+    saved = okta_flow._follow
+
+    def fake_follow(_s, _rem, _body, **_k):
+        raise LoginError("IDX step answer failed: HTTP 400",
+                         payload={"stateHandle": "sh-NEW", "remediation": {"value": []}})
+
+    okta_flow._follow = fake_follow
+    try:
+        okta_flow.verify_mfa(lid, "111111")
+        check("no-message 4xx -> AuthError", False)
+    except okta_flow.AuthError as e:
+        check("no-message 4xx -> AuthError", True)
+        check("no-message 4xx friendly (no raw JSON, no 'IDX')",
+              "{" not in str(e) and "IDX" not in str(e))
+        check("no-message 4xx keeps the raw root_cause for audit",
+              "IDX step answer failed" in getattr(e, "root_cause", ""))
+    okta_flow._PENDING.pop(lid, None)
+    okta_flow._follow = saved
+
+
+def test_mfa_expired_messages_friendly() -> None:
+    # Unknown/pruned login_id: both steps answer with a start-over message, sentence-cased.
+    for fn, args in ((okta_flow.verify_mfa, ("gone", "000000")),
+                     (okta_flow.select_factor, ("gone", "f"))):
+        try:
+            fn(*args)
+            check(f"{fn.__name__} expired -> AuthError", False)
+        except okta_flow.AuthError as e:
+            check(f"{fn.__name__} expired -> AuthError",
+                  getattr(e, "kind", "") == "mfa_expired" and "start over" in str(e))
+
+
+def test_nested_idx_messages_and_mask() -> None:
+    from lcr_client.okta_login import _idx_messages, _mask_payload
+    payload = {
+        "stateHandle": "02.id.SECRET",
+        "messages": {"value": [{"message": "Top-level note."}]},
+        "remediation": {"value": [{"value": [{"name": "credentials", "form": {"value": [
+            {"name": "passcode",
+             "messages": {"value": [{"message": "Invalid code. Try again."}]}}]}}]}]},
+    }
+    check("idx_messages collects nested field-level messages",
+          _idx_messages(payload) == "Top-level note.; Invalid code. Try again.")
+    check("idx_messages returns empty (not raw JSON) when none",
+          _idx_messages({"stateHandle": "x", "remediation": {"value": []}}) == "")
+    masked = _mask_payload(payload)
+    check("mask hides stateHandle", masked["stateHandle"] == "**masked**"
+          and "SECRET" not in repr(masked))
+    check("mask preserves the rest", "Invalid code" in repr(masked))
+
+
+def test_mfa_pending_and_select_failures_audited() -> None:
+    # Endpoint-level: an mfa_required hand-off writes an mfa_pending row (factor menu included),
+    # and a failed select writes mfa_select_failed with username + factor type. Pre-fix: neither
+    # left ANY server-side trace (the 2026-06-11 dig needed Render stdout).
+    rows: list[tuple] = []
+    old_audit, old_start, old_select = appmod._audit_okta_event, okta_flow.start_login, okta_flow.select_factor
+    old_pool = appmod._FAST_POOL
+
+    class _SyncPool:
+        def submit(self, fn, *a, **k):
+            fn(*a, **k)
+
+    appmod._audit_okta_event = lambda who, stage, error, rid, duration_ms=None, phase=None: \
+        rows.append((who, stage, error, phase))
+    appmod._FAST_POOL = _SyncPool()
+    okta_flow.start_login = lambda *a, **k: {
+        "status": "mfa_required", "login_id": "L1",
+        "factors": [{"id": "ph1", "label": "Phone", "method": "sms"}],
+        "factor_types": ["phone_number"], "dropped_factor_types": ["webauthn"]}
+    try:
+        r = client.post("/auth/password", json={"username": "rickyb", "password": "pw"})
+        check("mfa_required response unchanged for clients",
+              r.status_code == 200 and r.json().get("status") == "mfa_required")
+        pend_rows = [x for x in rows if x[1] == "mfa_pending"]
+        check("mfa_pending audited with username", pend_rows and pend_rows[0][0] == "rickyb")
+        check("mfa_pending names offered + dropped factors",
+              pend_rows and "phone_number" in pend_rows[0][2] and "webauthn" in pend_rows[0][2])
+
+        def _boom(_lid, _fid):
+            raise okta_flow.AuthError("That verification method isn't supported in this app yet "
+                                      "— please choose a different one.", kind="mfa_unsupported",
+                                      username="rickyb", factor_type="webauthn")
+        okta_flow.select_factor = _boom
+        r = client.post("/auth/mfa/select", json={"login_id": "L1", "factor_id": "wk1"})
+        check("select failure -> 400 with friendly detail",
+              r.status_code == 400 and "isn't supported" in r.json().get("detail", ""))
+        sel_rows = [x for x in rows if x[1] == "mfa_select_failed"]
+        check("select failure audited with username + factor type",
+              sel_rows and sel_rows[0][0] == "rickyb"
+              and sel_rows[0][3] == "okta:mfa_unsupported:webauthn")
+    finally:
+        appmod._audit_okta_event = old_audit
+        appmod._FAST_POOL = old_pool
+        okta_flow.start_login = old_start
+        okta_flow.select_factor = old_select
+
+
 def test_provider_wipe_data() -> None:
     # /auth/wipe-data: the provider self-service tier of the admin wipe. Same RPC
     # (wipe_stake_members), but gated to the credential's principal_email — mirrors
@@ -1015,14 +1333,14 @@ def test_identity_failure_kind_message_and_audit() -> None:
 
     old_drive, old_identity = okta_flow._drive_to_password, okta_flow._identity
     old_get = okta_flow.identity_cache.get
-    old_audit = appmod._audit_okta_failure
+    old_audit = appmod._audit_okta_event
     audited: dict = {}
     okta_flow._drive_to_password = (
         lambda s, u, p, lid: ({"successWithInteractionCode": {"value": []}}, "ver"))
     okta_flow.identity_cache.get = lambda u: None
     okta_flow._identity = (lambda s, lid: (_ for _ in ()).throw(
         LoginError("verification /api/auth/me failed: 502 text/plain")))
-    appmod._audit_okta_failure = (
+    appmod._audit_okta_event = (
         lambda who, stage, error, rid, duration_ms=None, phase=None:
         audited.update(who=who, stage=stage, error=error, duration_ms=duration_ms, phase=phase))
     okta_flow._note_lcr_identity(True, "")  # reset outage state
@@ -1039,7 +1357,7 @@ def test_identity_failure_kind_message_and_audit() -> None:
     finally:
         okta_flow._drive_to_password, okta_flow._identity = old_drive, old_identity
         okta_flow.identity_cache.get = old_get
-        appmod._audit_okta_failure = old_audit
+        appmod._audit_okta_event = old_audit
         okta_flow._note_lcr_identity(True, "")
 
 
@@ -1189,14 +1507,14 @@ def test_password_endpoint_friendly_bad_creds() -> None:
     and the audit row records the RAW cause + okta:<kind> phase."""
     from lcr_client.okta_login import LoginError
     audited: dict = {}
-    old_start, old_audit = okta_flow.start_login, appmod._audit_okta_failure
+    old_start, old_audit = okta_flow.start_login, appmod._audit_okta_event
 
     def boom(username, password, **kw):
         raise okta_flow.friendly_auth_error(
             LoginError("IDX step answer failed: Authentication failed"))
 
     okta_flow.start_login = boom
-    appmod._audit_okta_failure = (
+    appmod._audit_okta_event = (
         lambda who, stage, error, rid, **kw: audited.update({"stage": stage, "error": error, **kw}))
     try:
         r = client.post("/auth/password", json={"username": "u", "password": "p"})
@@ -1207,7 +1525,7 @@ def test_password_endpoint_friendly_bad_creds() -> None:
         check("audit phase carries the kind", audited.get("phase") == "okta:bad_credentials")
         check("audit duration recorded", isinstance(audited.get("duration_ms"), int))
     finally:
-        okta_flow.start_login, appmod._audit_okta_failure = old_start, old_audit
+        okta_flow.start_login, appmod._audit_okta_event = old_start, old_audit
 
 
 def test_sync_now_blocked_when_revoked() -> None:
@@ -1263,6 +1581,17 @@ def main() -> int:
     test_select_factor_no_challenge_raises()
     test_idx_summary_pii_safe()
     test_mfa_single_factor_select_noop()
+    test_mfa_factor_filtering_webauthn()
+    test_mfa_all_factors_unsupported_friendly()
+    test_okta_verify_nested_method_prefers_totp()
+    test_select_factor_refuses_non_code_challenge()
+    test_verify_answers_with_declared_field()
+    test_verify_normalizes_code()
+    test_verify_wrong_code_friendly_and_state_refresh()
+    test_verify_no_message_still_friendly()
+    test_mfa_expired_messages_friendly()
+    test_nested_idx_messages_and_mask()
+    test_mfa_pending_and_select_failures_audited()
     test_provider_wipe_data()
     test_full_eval_enroll_reaches_scrape_and_stores()
     test_full_eval_new_stake_offers_enroll()

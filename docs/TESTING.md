@@ -39,7 +39,9 @@ suites whenever their code is touched.
 - **Mock personas** (username / password → behavior): `president.complete`/`pw-president`
   (no-MFA stake president, full access), `wardleader.partial`/`pw-ward` (partial coverage),
   `member.nocalling`/`pw-member` (valid login, no calling — the gate case), `member.mfa`/`pw-mfa`
-  (MFA shape A, code `123456`), `member.mfab`/`pw-mfab` (shape B), `user.locked` (locked account),
+  (MFA shape A, code `123456`), `member.mfab`/`pw-mfab` (shape B), `member.mfaw`/`pw-mfaw`
+  (shape A + a webauthn security key on the menu; wrong code answers the PROD field-level 401 —
+  the 2026-06-11 incident), `user.locked` (locked account),
   anything else → "Authentication failed". Failure injection: `POST /__test/control`
   (`lcr_5xx` / `identity_timeout` / `sso_reject` / `healthy`).
 - **Dedicated TEST Supabase project** (Phase B, owner action): create a SECOND free Supabase
@@ -72,6 +74,9 @@ incomplete.**
 | A9 | No-calling block message = `kNoAccessMessage`, stays on login, no session | ✅ Playwright `login-messages` |
 | A10 | MFA shape A: factor list → select → code → success; wrong code → friendly retry, state preserved | ✅ e2e-mock + Playwright `login-mfa` |
 | A11 | MFA shape B (auto-sent single factor) | ✅ e2e-mock |
+| A18 | **2026-06-11 MFA hardening** — unsupported factors (webauthn/push) FILTERED from the menu; all-unsupported → actionable "add a method at churchofjesuschrist.org"; answer body uses the challenge's declared field (`totp` vs `passcode`); field-level "Invalid code" 401 (no top-level messages) → friendly retry, NEVER raw IDX JSON; pending state refreshed from the failure payload (retry-safe); code normalized (spaces/hyphens) | ✅ offline `test_broker` (regression suite, fails pre-fix) + e2e-mock `test_mfa_webauthn_filtered_and_field_level_invalid_code` |
+| A19 | MFA audit completeness: `mfa_pending` row on hand-off (offered + dropped factor types), `mfa_select_failed` audited, `mfa_failed` carries username + factor type in phase (`okta:mfa_bad_code:phone_number`) | ✅ offline `test_broker::test_mfa_pending_and_select_failures_audited` + e2e-mock |
+| A20 | MFA UI hygiene (all 3 surfaces): code input clears on factor switch + failed verify; digits-only, Verify gated on ≥6; "Send a new code" with 30s cooldown; "Start over" escape; mode switch + passkey button hidden mid-MFA | ✅ Playwright `login-mfa` + `reauth-dialog` (web) · 🔶 native via CI builds + AVD spot-check (PARITY.md 2026-06-11) |
 | A12 | Cached-identity fast lane: repeat login ~zero LCR (`timing.lane == "cached"`) | ✅ e2e-mock (hit counters) |
 | A13 | Broker cold start → "Waking up…" status, login still completes | ✅ Playwright `login-messages` + existing `broker.test.ts` |
 | A14 | Email-OTP login (direct + relay; cooldown) | ✅ offline (`test_email_relay_validation`) · 🔶 fullstack browser pass |

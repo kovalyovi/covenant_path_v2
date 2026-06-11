@@ -42,12 +42,34 @@ export class PasskeyClient {
     return data;
   }
 
+  /** The browser ceremony throws DOMExceptions whose texts are written for developers
+   *  ("The operation either timed out or was not allowed…") — map them to what the member can
+   *  act on. A cancelled/no-passkey prompt previously surfaced raw (or, worse, silently). */
+  private static friendlyCeremonyError(e: unknown, verb: string): BrokerError {
+    const name = (e as { name?: string })?.name ?? '';
+    if (name === 'NotAllowedError' || name === 'AbortError') {
+      return new BrokerError(
+        `Passkey ${verb} was cancelled or no passkey is set up on this device. ` +
+          'You can sign in another way, or add a passkey later from Settings.',
+      );
+    }
+    if (name === 'InvalidStateError') {
+      return new BrokerError('A passkey for this account already exists on this device.');
+    }
+    return new BrokerError(`Passkey ${verb} failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
   /** Passwordless login: returns a verifiable Supabase session ({email, otp}) to verifyOtp. */
   async login(): Promise<BrokerResult> {
     const b = bridge();
     if (!b) throw new BrokerError('Passkeys are not available in this browser.');
     const begin = await this.post('/webauthn/login/begin', {});
-    const credJson = await b.get(JSON.stringify(begin['options']));
+    let credJson: string;
+    try {
+      credJson = await b.get(JSON.stringify(begin['options']));
+    } catch (e) {
+      throw PasskeyClient.friendlyCeremonyError(e, 'sign-in');
+    }
     const done = await this.post('/webauthn/login/complete', {
       handle: begin['handle'],
       credential: JSON.parse(credJson),
@@ -65,7 +87,12 @@ export class PasskeyClient {
     const b = bridge();
     if (!b) throw new BrokerError('Passkeys are not available in this browser.');
     const begin = await this.post('/webauthn/register/begin', {}, true);
-    const credJson = await b.create(JSON.stringify(begin['options']));
+    let credJson: string;
+    try {
+      credJson = await b.create(JSON.stringify(begin['options']));
+    } catch (e) {
+      throw PasskeyClient.friendlyCeremonyError(e, 'setup');
+    }
     await this.post('/webauthn/register/complete', {
       handle: begin['handle'],
       credential: JSON.parse(credJson),

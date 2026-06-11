@@ -58,6 +58,15 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    // Same MFA-input hygiene as LoginScreen (2026-06-11): codes never survive a factor switch or
+    // a failed verify, and resend cools down so the member waits for the FRESH code.
+    var resendIn by remember { mutableStateOf(0) }
+    LaunchedEffect(factorSent, resendIn > 0) {
+        while (resendIn > 0) {
+            delay(1_000)
+            resendIn -= 1
+        }
+    }
 
     // The broker's access evaluation runs server-side on enroll (legitimately 30–60s) — surface the
     // web's progress note after 5s of busy.
@@ -104,6 +113,8 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
             if (r.factors.size == 1) {
                 broker.selectFactor(r.loginId!!, r.factors.first().id)
                 factorSent = r.factors.first()
+                mfaCode = ""
+                resendIn = 30
             }
             return@step
         }
@@ -112,12 +123,20 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
 
     fun pickFactor(f: BrokerFactor) = step {
         broker.selectFactor(loginId!!, f.id)
+        // Fresh challenge → fresh input; the cooldown nudges waiting for the NEW code.
         factorSent = f
+        mfaCode = ""
+        resendIn = 30
     }
 
     fun verify() = step {
-        val r = broker.verifyMfa(loginId!!, mfaCode.trim(), enroll = true)
-        finish(r)
+        try {
+            val r = broker.verifyMfa(loginId!!, mfaCode.trim(), enroll = true)
+            finish(r)
+        } catch (e: Throwable) {
+            mfaCode = "" // a rejected code must be retyped fresh
+            throw e
+        }
     }
 
     AlertDialog(
@@ -127,16 +146,24 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
             Column {
                 when {
                     factorSent != null -> {
-                        Text("Enter the code sent via ${factorSent?.label}.")
+                        Text("A code was just sent via ${factorSent?.label}. Wait for the new one to arrive, then enter it here.")
                         Spacer(Modifier.size(8.dp))
                         OutlinedTextField(
-                            mfaCode, { mfaCode = it },
+                            mfaCode, { mfaCode = it.filter(Char::isDigit).take(8) },
                             label = { Text("Verification code") },
                             singleLine = true,
                             enabled = !busy,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             modifier = Modifier.fillMaxWidth(),
                         )
+                        TextButton(
+                            onClick = { factorSent?.let { pickFactor(it) } },
+                            enabled = !busy && resendIn <= 0,
+                        ) { Text(if (resendIn > 0) "Send a new code (${resendIn}s)" else "Send a new code") }
+                        TextButton(
+                            onClick = { factorSent = null; mfaCode = "" },
+                            enabled = !busy,
+                        ) { Text("Choose a different method") }
                     }
                     loginId != null -> {
                         Text("Choose how to receive your verification code:")
@@ -185,7 +212,7 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
         },
         confirmButton = {
             when {
-                factorSent != null -> TextButton(onClick = { verify() }, enabled = !busy && mfaCode.isNotBlank()) {
+                factorSent != null -> TextButton(onClick = { verify() }, enabled = !busy && mfaCode.length >= 6) {
                     Text("Verify & authorize")
                 }
                 loginId == null -> TextButton(onClick = { signIn() }, enabled = !busy && username.isNotBlank() && password.isNotEmpty()) {

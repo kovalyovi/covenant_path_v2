@@ -32,6 +32,15 @@ export function LoginPage() {
   const [loginId, setLoginId] = useState<string | null>(null);
   const [factors, setFactors] = useState<BrokerFactor[]>([]);
   const [factorSent, setFactorSent] = useState<BrokerFactor | null>(null);
+  // "Send a new code" cooldown (seconds). Counting down nudges the member to wait for the FRESH
+  // code instead of typing one from an earlier text/screen — a stale code submitted 6s after the
+  // send is exactly what stranded a stake leader at MFA (2026-06-11).
+  const [resendIn, setResendIn] = useState(0);
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const t = window.setTimeout(() => setResendIn((s) => s - 1), 1000);
+    return () => window.clearTimeout(t);
+  }, [resendIn]);
   // Explicit, default-OFF authorization — signing in alone never captures the leader's session.
   const [authorizeSync, setAuthorizeSync] = useState(false);
 
@@ -58,10 +67,16 @@ export function LoginPage() {
     setFactors([]);
     setFactorSent(null);
     setMfaCode('');
+    setResendIn(0);
     setEmailCodeSent(false);
     setEmailCode('');
     setError(null);
   }
+
+  // Mid-MFA the page shows ONE flow: the mode switch and the passkey button hide. A member stuck
+  // on the code screen reached for "Sign in with a passkey" (2026-06-11, proven in broker logs) —
+  // a silent dead-end that mixed two unrelated WebAuthn ceremonies.
+  const inMfa = mode === 'church' && loginId != null;
 
   // Hard cap on any sign-in step + staged progress so a slow broker is VISIBLE, not a silent hang
   // (the ">1 minute, is it broken?" report). The fetch may still resolve server-side; the UI recovers.
@@ -148,13 +163,22 @@ export function LoginPage() {
     run(async () => {
       await broker.selectFactor(loginId!, f.id);
       setFactorSent(f);
+      // A switched/re-sent factor invalidates whatever was typed for the previous one — leftover
+      // input silently submitted against the new challenge is the 2026-06-11 failure.
+      setMfaCode('');
+      setResendIn(30);
     });
 
   const verifyMfa = () =>
     run(async () => {
       const t0 = performance.now();
-      const r = await broker.verifyMfa(loginId!, mfaCode.trim(), authorizeSync);
-      await finishChurch(r);
+      try {
+        const r = await broker.verifyMfa(loginId!, mfaCode.trim(), authorizeSync);
+        await finishChurch(r);
+      } catch (e) {
+        setMfaCode(''); // a rejected code must be retyped fresh, not resubmitted stale
+        throw e;
+      }
       broker.logEvent('client.login.total', { ms: Math.round(performance.now() - t0), method: 'church-mfa' });
     });
 
@@ -256,7 +280,7 @@ export function LoginPage() {
       >
         <h1 style={{ fontSize: '1.4rem' }}>Covenant Path</h1>
 
-        {brokerAvailable && (
+        {brokerAvailable && !inMfa && (
           <Segmented<Mode>
             ariaLabel="Sign-in method"
             value={mode}
@@ -281,6 +305,7 @@ export function LoginPage() {
             loginId={loginId}
             factors={factors}
             factorSent={factorSent}
+            resendIn={resendIn}
             setUsername={setUsername}
             setPassword={setPassword}
             setMfaCode={setMfaCode}
@@ -288,7 +313,10 @@ export function LoginPage() {
             onSelectFactor={selectFactor}
             onVerify={verifyMfa}
             onBack={() => reset()}
-            onChooseDifferent={() => setFactorSent(null)}
+            onChooseDifferent={() => {
+              setFactorSent(null);
+              setMfaCode(''); // input typed for the OLD factor must never ride into the new one
+            }}
           />
         ) : (
           <EmailFields
@@ -318,7 +346,7 @@ export function LoginPage() {
           />
         )}
 
-        {passkeyAvailable && (
+        {passkeyAvailable && !inMfa && (
           <>
             <div className="divider-or">or</div>
             <Button variant="outlined" icon="fingerprint" onClick={passkeySignIn} disabled={busy} type="button">
@@ -346,6 +374,7 @@ interface ChurchProps {
   loginId: string | null;
   factors: BrokerFactor[];
   factorSent: BrokerFactor | null;
+  resendIn: number;
   setUsername: (v: string) => void;
   setPassword: (v: string) => void;
   setMfaCode: (v: string) => void;
@@ -359,24 +388,49 @@ interface ChurchProps {
 function ChurchFields(p: ChurchProps) {
   // Step 3: enter the MFA code that was sent.
   if (p.factorSent) {
+    // Okta verification codes are 6 digits; gating Verify on a complete code blocks the
+    // fat-finger/stale submits that 401 and restart the dance.
+    const codeReady = p.mfaCode.length >= 6;
     return (
       <>
-        <p>Enter the code sent via {p.factorSent.label}.</p>
+        <p>
+          A code was just sent via {p.factorSent.label}. Wait for the new one to arrive, then
+          enter it here.
+        </p>
         <label className="field">
           <span>Verification code</span>
           <input
             className="input"
             inputMode="numeric"
             value={p.mfaCode}
-            onChange={(e) => p.setMfaCode(e.target.value)}
+            onChange={(e) => p.setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
             autoComplete="one-time-code"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && codeReady && !p.busy) p.onVerify();
+            }}
           />
         </label>
-        <Button variant="filled" onClick={p.onVerify} disabled={p.busy} loading={p.busy} type="button">
+        <Button
+          variant="filled"
+          onClick={p.onVerify}
+          disabled={p.busy || !codeReady}
+          loading={p.busy}
+          type="button"
+        >
           Verify & sign in
+        </Button>
+        <Button
+          onClick={() => p.onSelectFactor(p.factorSent!)}
+          disabled={p.busy || p.resendIn > 0}
+          type="button"
+        >
+          {p.resendIn > 0 ? `Send a new code (${p.resendIn}s)` : 'Send a new code'}
         </Button>
         <Button onClick={p.onChooseDifferent} disabled={p.busy} type="button">
           Choose a different method
+        </Button>
+        <Button onClick={p.onBack} disabled={p.busy} type="button">
+          Start over
         </Button>
       </>
     );
@@ -392,7 +446,7 @@ function ChurchFields(p: ChurchProps) {
           </Button>
         ))}
         <Button onClick={p.onBack} disabled={p.busy} type="button">
-          Back
+          Start over
         </Button>
       </>
     );

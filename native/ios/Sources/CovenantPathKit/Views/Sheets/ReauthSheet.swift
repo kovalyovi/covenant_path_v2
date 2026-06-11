@@ -22,6 +22,10 @@ struct ReauthSheet: View {
     @State private var busy = false
     @State private var status: String?
     @State private var error: String?
+    // Same MFA-input hygiene as LoginView (2026-06-11): codes never survive a factor switch or a
+    // failed verify, and resend cools down so the member waits for the FRESH code.
+    @State private var resendIn = 0
+    @State private var resendTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -56,11 +60,25 @@ struct ReauthSheet: View {
     @ViewBuilder
     private var stepContent: some View {
         if let factorSent {
-            Text("Enter the code sent via \(factorSent.label).").font(.callout)
+            Text("A code was just sent via \(factorSent.label). Wait for the new one to arrive, then enter it here.")
+                .font(.callout)
             TextField("Verification code", text: $mfaCode)
                 .textContentType(.oneTimeCode).keyboardType(.numberPad)
                 .textFieldStyle(.roundedBorder)
-            primaryButton("Verify & authorize", disabled: mfaCode.trimmed.isEmpty) { try await verify() }
+                .onChange(of: mfaCode) { _, value in
+                    let digits = String(value.filter(\.isNumber).prefix(8))
+                    if digits != value { mfaCode = digits }
+                }
+            primaryButton("Verify & authorize", disabled: mfaCode.count < 6) { try await verify() }
+            Button(resendIn > 0 ? "Send a new code (\(resendIn)s)" : "Send a new code") {
+                run { try await pickFactor(factorSent) }
+            }
+            .disabled(busy || resendIn > 0)
+            Button("Choose a different method") {
+                self.factorSent = nil
+                mfaCode = ""
+            }
+            .disabled(busy)
         } else if loginID != nil {
             Text("Choose how to receive your verification code:").font(.callout)
             ForEach(factors) { f in
@@ -113,6 +131,8 @@ struct ReauthSheet: View {
             if r.factors.count == 1, let id = r.loginID {
                 try await broker.selectFactor(loginID: id, factorID: r.factors[0].id)
                 factorSent = r.factors[0]
+                mfaCode = ""
+                startResendCooldown()
             }
             return
         }
@@ -123,12 +143,31 @@ struct ReauthSheet: View {
         guard let broker, let loginID else { return }
         try await broker.selectFactor(loginID: loginID, factorID: f.id)
         factorSent = f
+        mfaCode = ""
+        startResendCooldown()
     }
 
     private func verify() async throws {
         guard let broker, let loginID else { return }
-        let r = try await broker.verifyMfa(loginID: loginID, code: mfaCode.trimmed, enroll: true)
-        try await finish(r)
+        do {
+            let r = try await broker.verifyMfa(loginID: loginID, code: mfaCode.trimmed, enroll: true)
+            try await finish(r)
+        } catch {
+            mfaCode = "" // a rejected code must be retyped fresh, not resubmitted stale
+            throw error
+        }
+    }
+
+    private func startResendCooldown() {
+        resendTask?.cancel()
+        resendIn = 30
+        resendTask = Task { @MainActor in
+            while resendIn > 0 && !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if Task.isCancelled { return }
+                resendIn -= 1
+            }
+        }
     }
 
     private func finish(_ r: BrokerResult) async throws {

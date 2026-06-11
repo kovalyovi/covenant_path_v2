@@ -76,7 +76,13 @@ DEFAULT_STORAGE_STATE = (
 
 
 class LoginError(RuntimeError):
-    """Raised when the headless Okta/LCR login cannot complete."""
+    """Raised when the headless Okta/LCR login cannot complete. `payload` carries the parsed IDX
+    response of the failing step (or {}): callers classify the failure from its nested messages and
+    refresh their stateHandle from it — a retry after a 4xx must not reuse the pre-failure state."""
+
+    def __init__(self, message: str, *, payload: dict | None = None):
+        super().__init__(message)
+        self.payload = payload or {}
 
 
 def _b64url(raw: bytes) -> str:
@@ -89,10 +95,45 @@ def _pkce() -> tuple[str, str]:
     return verifier, challenge
 
 
+def _collect_messages(node, out: list[str]) -> None:
+    """Walk an IDX payload for EVERY `messages` block — Okta attaches errors at the field level
+    (inside remediation forms / currentAuthenticatorEnrollment), not just top-level. A wrong MFA
+    code answers 401 with 'Invalid code. Try again.' nested in the passcode FIELD; the old
+    top-level-only read missed it and a member saw a raw-JSON wall instead (2026-06-11)."""
+    if isinstance(node, dict):
+        msgs = node.get("messages")
+        if isinstance(msgs, dict):
+            for m in msgs.get("value", []):
+                text = m.get("message") if isinstance(m, dict) else None
+                if text:
+                    out.append(text)
+        for key, val in node.items():
+            if key != "messages":
+                _collect_messages(val, out)
+    elif isinstance(node, list):
+        for val in node:
+            _collect_messages(val, out)
+
+
 def _idx_messages(payload: dict) -> str:
-    """Pull human-readable error text out of an IDX response (no secrets)."""
-    msgs = payload.get("messages", {}).get("value", []) if isinstance(payload, dict) else []
-    return "; ".join(m.get("message", "") for m in msgs) or json.dumps(payload)[:300]
+    """All human-readable error text in an IDX response (top-level AND nested), deduped, in
+    document order. Returns "" when Okta attached no message — NEVER raw payload JSON: these
+    strings end up in user-facing errors, and the raw fallback is what put an IDX dump on a
+    member's screen. Diagnostics ride the masked dump_debug record instead."""
+    out: list[str] = []
+    _collect_messages(payload if isinstance(payload, dict) else {}, out)
+    return "; ".join(dict.fromkeys(out))
+
+
+def _mask_payload(node):
+    """Deep-copy an IDX payload with continuation secrets masked (stateHandle/interactionHandle
+    allow resuming the transaction) — makes failure payloads safe to dump for diagnosis."""
+    if isinstance(node, dict):
+        return {k: ("**masked**" if k in ("stateHandle", "interactionHandle") and isinstance(v, str)
+                    else _mask_payload(v)) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_mask_payload(v) for v in node]
+    return node
 
 
 def _idx_post(session: requests.Session, url: str, body: dict, *, redact: bool = False) -> dict:
@@ -102,12 +143,17 @@ def _idx_post(session: requests.Session, url: str, body: dict, *, redact: bool =
     except ValueError:
         payload = {}
     if resp.status_code >= 400:
-        # Never echo `body` here — it may carry the passcode.
+        # Never echo `body` here — it may carry the passcode. The RESPONSE payload carries no
+        # request secrets, so it is always dumped (stateHandle masked) — `redact` only protects
+        # the request. (The 2026-06-11 MFA failure was undiagnosable because redact skipped the
+        # dump and the only evidence was a 300-char truncation.)
+        msg = _idx_messages(payload)
         logger.error("IDX %s -> %s: %s", url.rsplit("/", 1)[-1], resp.status_code,
-                     _idx_messages(payload))
-        if not redact:
-            dump_debug("idx_error", url=url, status=resp.status_code, body=payload)
-        raise LoginError(f"IDX step {url.rsplit('/', 1)[-1]} failed: {_idx_messages(payload)}")
+                     msg or "(no message in payload)")
+        dump_debug("idx_error", url=url, status=resp.status_code, body=_mask_payload(payload))
+        raise LoginError(
+            f"IDX step {url.rsplit('/', 1)[-1]} failed: {msg or f'HTTP {resp.status_code}'}",
+            payload=payload)
     return payload
 
 

@@ -29,7 +29,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from tests.mock_lcr.personas import (
     EMAIL_AUTH_ID, LOCKED_USERNAME, MFA_CODE, PASSWORD_AUTH_ID, PERSONAS,
-    PHONE_AUTH_ID, PHONE_ENROLLMENT_ID,
+    PHONE_AUTH_ID, PHONE_ENROLLMENT_ID, WEBAUTHN_AUTH_ID,
 )
 from tests.mock_lcr.state import MockChurchState
 
@@ -111,41 +111,55 @@ class IdxResponses:
             ]},
         }
 
-    def select_mfa(self, sh: str) -> dict:
+    def select_mfa(self, sh: str, include_webauthn: bool = False) -> dict:
         """MFA shape A: a 2nd-factor menu (Email + Phone) + authenticators.value[{id,key}].
         The phone option requires the FULL authenticator object on select (id + enrollmentId
-        + methodType) — exactly the Okta behavior the broker's _authenticator_object exists for."""
+        + methodType) — exactly the Okta behavior the broker's _authenticator_object exists for.
+        include_webauthn reproduces the 2026-06-11 menu: a security key the broker can NEVER
+        finish listed alongside the code factors (it must be filtered, not offered)."""
+        options = [
+            {"label": "Email", "value": {"form": {"value": [
+                {"name": "id", "required": True,
+                 "value": EMAIL_AUTH_ID, "mutable": False},
+                {"name": "methodType", "required": False,
+                 "value": "email", "mutable": False}]}}},
+            {"label": "Phone", "value": {"form": {"value": [
+                {"name": "id", "required": True,
+                 "value": PHONE_AUTH_ID, "mutable": False},
+                {"name": "enrollmentId", "required": True,
+                 "value": PHONE_ENROLLMENT_ID, "mutable": False},
+                {"name": "methodType", "type": "string",
+                 "required": False, "options": [
+                     {"label": "SMS", "value": "sms"},
+                     {"label": "Voice call", "value": "voice"}]}]}}},
+        ]
+        authenticators = [
+            {"id": EMAIL_AUTH_ID, "key": "okta_email", "type": "email",
+             "displayName": "Email"},
+            {"id": PHONE_AUTH_ID, "key": "phone_number", "type": "phone",
+             "displayName": "Phone"},
+        ]
+        if include_webauthn:
+            options.insert(0, {"label": "Security Key or Biometric Authenticator",
+                               "value": {"form": {"value": [
+                                   {"name": "id", "required": True,
+                                    "value": WEBAUTHN_AUTH_ID, "mutable": False},
+                                   {"name": "methodType", "required": False,
+                                    "value": "webauthn", "mutable": False}]}}})
+            authenticators.insert(0, {"id": WEBAUTHN_AUTH_ID, "key": "webauthn",
+                                      "type": "security_key",
+                                      "displayName": "Security Key or Biometric Authenticator"})
         return {
             "version": "1.0.0",
             "stateHandle": sh,
             "remediation": {"type": "array", "value": [
                 _remediation("select-authenticator-authenticate",
                              f"{self.base}/idp/idx/challenge", [
-                                 {"name": "authenticator", "type": "object", "options": [
-                                     {"label": "Email", "value": {"form": {"value": [
-                                         {"name": "id", "required": True,
-                                          "value": EMAIL_AUTH_ID, "mutable": False},
-                                         {"name": "methodType", "required": False,
-                                          "value": "email", "mutable": False}]}}},
-                                     {"label": "Phone", "value": {"form": {"value": [
-                                         {"name": "id", "required": True,
-                                          "value": PHONE_AUTH_ID, "mutable": False},
-                                         {"name": "enrollmentId", "required": True,
-                                          "value": PHONE_ENROLLMENT_ID, "mutable": False},
-                                         {"name": "methodType", "type": "string",
-                                          "required": False, "options": [
-                                              {"label": "SMS", "value": "sms"},
-                                              {"label": "Voice call", "value": "voice"}]}]}}},
-                                 ]},
+                                 {"name": "authenticator", "type": "object", "options": options},
                                  _state_field(sh),
                              ]),
             ]},
-            "authenticators": {"type": "array", "value": [
-                {"id": EMAIL_AUTH_ID, "key": "okta_email", "type": "email",
-                 "displayName": "Email"},
-                {"id": PHONE_AUTH_ID, "key": "phone_number", "type": "phone",
-                 "displayName": "Phone"},
-            ]},
+            "authenticators": {"type": "array", "value": authenticators},
         }
 
     def mfa_code_challenge(self, sh: str, factor_key: str = "okta_email") -> dict:
@@ -166,6 +180,35 @@ class IdxResponses:
                 "key": factor_key, "id": fid,
                 "displayName": "Email" if factor_key == "okta_email" else "Phone"}},
         }
+
+    def webauthn_challenge(self, sh: str) -> dict:
+        """A security-key challenge: credentials form with NO typed-code field. The broker's
+        select_factor must refuse this instead of claiming code_sent (2026-06-11)."""
+        return {
+            "version": "1.0.0",
+            "stateHandle": sh,
+            "remediation": {"type": "array", "value": [
+                _remediation("challenge-authenticator", f"{self.base}/idp/idx/challenge/answer", [
+                    {"name": "credentials", "type": "object", "form": {"value": [
+                        {"name": "authenticatorData"}, {"name": "clientData"},
+                        {"name": "signatureData"}]}},
+                    _state_field(sh),
+                ]),
+            ]},
+            "currentAuthenticator": {"type": "object", "value": {
+                "type": "security_key", "key": "webauthn", "id": WEBAUTHN_AUTH_ID,
+                "displayName": "Security Key or Biometric Authenticator"}},
+        }
+
+    def invalid_code_401_body(self, sh: str, factor_key: str) -> dict:
+        """The PROD wrong-code shape (2026-06-11, request 3cb989c0): HTTP 401 with NO top-level
+        messages — 'Invalid Passcode/Answer' rides the passcode FIELD inside the still-pending
+        challenge remediation. Top-level-only message readers see nothing and fall back to raw
+        JSON; the recursive reader finds it."""
+        body = self.mfa_code_challenge(sh, factor_key)
+        passcode_field = body["remediation"]["value"][0]["value"][0]["form"]["value"][0]
+        passcode_field["messages"] = _messages("Invalid Passcode/Answer")
+        return body
 
     def success(self, sh: str, username: str) -> dict:
         code = self.state.issue_interaction_code(username)
@@ -288,6 +331,10 @@ def create_identity_app(state: MockChurchState) -> FastAPI:
                 return {"version": "1.0.0", "stateHandle": sh,
                         "remediation": {"type": "array", "value": []},
                         "messages": _messages("Unable to send the code.")}
+            if aid == WEBAUTHN_AUTH_ID:
+                # Selecting the security key yields a non-code challenge (the broker must
+                # refuse it rather than show a code field; defense behind the menu filter).
+                return idx.webauthn_challenge(sh)
             if aid not in (EMAIL_AUTH_ID, PHONE_AUTH_ID):
                 return JSONResponse({"stateHandle": sh,
                                      "messages": _messages("Authenticator not available.")},
@@ -325,19 +372,28 @@ def create_identity_app(state: MockChurchState) -> FastAPI:
                     {"stateHandle": sh, "version": "1.0.0",
                      "messages": _messages("Authentication failed")},
                     status_code=401)
-            if persona.mfa == "shape_a":
+            if persona.mfa in ("shape_a", "shape_a_webauthn"):
                 txn["step"] = "mfa-select"
-                return idx.select_mfa(sh)
+                txn["mfa_shape"] = "A"
+                return idx.select_mfa(sh, include_webauthn=persona.mfa == "shape_a_webauthn")
             if persona.mfa == "shape_b":
                 # Shape B: Okta auto-sent a code and goes straight to the challenge.
                 txn["step"] = "mfa-answer"
                 txn["factor"] = "okta_email"
+                txn["mfa_shape"] = "B"
                 return idx.mfa_code_challenge(sh, "okta_email")
             return _success_response(idx, state, sh, username)
 
         if txn["step"] == "mfa-answer":
             if passcode != MFA_CODE:
                 # Transaction stays alive at the same step — a corrected code must still work.
+                # Shape A answers with the PROD field-level 401 (no top-level messages — the
+                # 2026-06-11 shape); shape B keeps the top-level variant so both paths through
+                # the broker's message extraction stay covered.
+                if txn.get("mfa_shape") == "A":
+                    return JSONResponse(
+                        idx.invalid_code_401_body(sh, txn.get("factor") or "okta_email"),
+                        status_code=401)
                 return JSONResponse(
                     {"stateHandle": sh, "version": "1.0.0",
                      "messages": _messages("Invalid Passcode/Answer")},

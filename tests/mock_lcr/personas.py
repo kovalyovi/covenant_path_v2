@@ -30,6 +30,7 @@ PASSWORD_AUTH_ID = "aut-mock-password-0001"
 EMAIL_AUTH_ID = "aut-mock-email-0001"
 PHONE_AUTH_ID = "aut-mock-phone-0001"
 PHONE_ENROLLMENT_ID = "pae-mock-phone-0001"
+WEBAUTHN_AUTH_ID = "aut-mock-webauthn-0001"
 MFA_CODE = "123456"
 
 # FULLSTACK-LANE ALIGNMENT: the no-MFA personas' /api/auth/me emails EQUAL the seeded
@@ -58,6 +59,8 @@ class Persona:
     is_stake: bool = False
 
 
+# Persona.mfa values: None | "shape_a" | "shape_b" | "shape_a_webauthn" (the 2026-06-11 menu —
+# a security key ALONGSIDE code factors; the broker must offer only the code factors).
 PERSONAS: dict[str, Persona] = {p.username: p for p in [
     Persona("president.complete", "pw-president", "Avery Example", "Avery", "Example",
             "rls.president@example.org", "1000000001",
@@ -78,6 +81,10 @@ PERSONAS: dict[str, Persona] = {p.username: p for p in [
     Persona("member.mfab", "pw-mfab", "Ellis Fixture", "Ellis", "Fixture",
             "ellis.fixture@example.org", "1000000005",
             "55555555-5555-4555-8555-555555555555", "shape_b",
+            57, "Ward Clerk", WARD2_UNIT, WARD2_NAME),
+    Persona("member.mfaw", "pw-mfaw", "Finley Archetype", "Finley", "Archetype",
+            "finley.archetype@example.org", "1000000006",
+            "66666666-6666-4666-8666-666666666666", "shape_a_webauthn",
             57, "Ward Clerk", WARD2_UNIT, WARD2_NAME),
 ]}
 

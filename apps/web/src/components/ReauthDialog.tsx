@@ -4,7 +4,7 @@
 // fresh credential (0038 refresh rules) and we just reload enrollment status + toast. Used by the
 // stale/revoked banner, the EmptyState set-up-sync CTA, and Sync settings.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { broker, BrokerError, mfaRequired, type BrokerFactor, type BrokerResult } from '../lib/broker';
 import { kNoAccessMessage } from '../lib/disclaimer';
@@ -25,12 +25,21 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Same MFA-input hygiene as LoginPage (2026-06-11): codes never survive a factor switch or a
+  // failed verify, and resend cools down so the member waits for the FRESH code.
+  const [resendIn, setResendIn] = useState(0);
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const t = window.setTimeout(() => setResendIn((s) => s - 1), 1000);
+    return () => window.clearTimeout(t);
+  }, [resendIn]);
 
   function resetAll() {
     setLoginId(null);
     setFactors([]);
     setFactorSent(null);
     setMfaCode('');
+    setResendIn(0);
     setError(null);
     setStatus(null);
   }
@@ -90,6 +99,8 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
         if (r.factors.length === 1) {
           await broker.selectFactor(r.loginId!, r.factors[0].id);
           setFactorSent(r.factors[0]);
+          setMfaCode('');
+          setResendIn(30);
         }
         return;
       }
@@ -100,12 +111,19 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
     run(async () => {
       await broker.selectFactor(loginId!, f.id);
       setFactorSent(f);
+      setMfaCode('');
+      setResendIn(30);
     });
 
   const verify = () =>
     run(async () => {
-      const r = await broker.verifyMfa(loginId!, mfaCode.trim(), true);
-      await finish(r);
+      try {
+        const r = await broker.verifyMfa(loginId!, mfaCode.trim(), true);
+        await finish(r);
+      } catch (e) {
+        setMfaCode(''); // a rejected code must be retyped fresh
+        throw e;
+      }
     });
 
   return (
@@ -125,7 +143,7 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
             Cancel
           </Button>
           {factorSent ? (
-            <Button variant="filled" onClick={verify} disabled={busy || !mfaCode.trim()} loading={busy}>
+            <Button variant="filled" onClick={verify} disabled={busy || mfaCode.length < 6} loading={busy}>
               Verify & authorize
             </Button>
           ) : loginId == null ? (
@@ -138,7 +156,10 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
     >
       {factorSent ? (
         <>
-          <p>Enter the code sent via {factorSent.label}.</p>
+          <p>
+            A code was just sent via {factorSent.label}. Wait for the new one to arrive, then
+            enter it here.
+          </p>
           <label className="field">
             <span>Verification code</span>
             <input
@@ -146,9 +167,19 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
               inputMode="numeric"
               autoComplete="one-time-code"
               value={mfaCode}
-              onChange={(e) => setMfaCode(e.target.value)}
+              onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
             />
           </label>
+          <Button
+            onClick={() => pickFactor(factorSent)}
+            disabled={busy || resendIn > 0}
+            type="button"
+          >
+            {resendIn > 0 ? `Send a new code (${resendIn}s)` : 'Send a new code'}
+          </Button>
+          <Button onClick={() => { setFactorSent(null); setMfaCode(''); }} disabled={busy} type="button">
+            Choose a different method
+          </Button>
         </>
       ) : loginId != null ? (
         <>

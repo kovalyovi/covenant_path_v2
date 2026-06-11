@@ -79,7 +79,9 @@ test.describe('reauth dialog', () => {
     // Factor picker renders INSIDE the dialog.
     await expect(dialog.getByText('Choose how to receive your verification code:')).toBeVisible();
     await dialog.getByRole('button', { name: MFA_FACTORS[0].label }).click();
-    await expect(dialog.getByText(`Enter the code sent via ${MFA_FACTORS[0].label}.`)).toBeVisible();
+    await expect(
+      dialog.getByText(new RegExp(`A code was just sent via ${MFA_FACTORS[0].label}`)),
+    ).toBeVisible();
 
     await dialog.getByLabel('Verification code').fill('123456');
     await dialog.getByRole('button', { name: 'Verify & authorize' }).click();

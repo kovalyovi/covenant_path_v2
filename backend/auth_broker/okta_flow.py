@@ -16,6 +16,7 @@ State between steps is held in-memory keyed by login_id (TTL); fine for a single
 
 from __future__ import annotations
 
+import re
 import secrets
 import time
 
@@ -41,10 +42,16 @@ class AuthError(RuntimeError):
     member saw "IDX step answer failed: Authentication failed" instead of "wrong password" because
     the raw text doubled as the user message."""
 
-    def __init__(self, message: str, *, kind: str = "other", root_cause: str = ""):
+    def __init__(self, message: str, *, kind: str = "other", root_cause: str = "",
+                 username: str = "", factor_type: str = ""):
         super().__init__(message)
         self.kind = kind
         self.root_cause = root_cause or message
+        # Attribution for login_audit: MFA-stage endpoints only know a login_id, so the audit rows
+        # had who="" — a member stuck at MFA was unattributable (the Ricky Bloomfield dig needed
+        # timestamp archaeology). The flow attaches what it knows from the pending state.
+        self.username = username
+        self.factor_type = factor_type
 
 
 class IdentityError(AuthError):
@@ -74,7 +81,7 @@ def friendly_auth_error(exc: Exception) -> AuthError:
             "This Church Account is temporarily locked (too many attempts). Unlock it at "
             "churchofjesuschrist.org, then sign in here again.",
             kind="account_locked", root_cause=raw)
-    return AuthError(f"login failed: {raw}", root_cause=raw)
+    return AuthError(f"Sign-in failed: {raw}", root_cause=raw)
 
 
 # In-process LCR outage tracker (single broker instance, best-effort): consecutive identity-leg
@@ -142,8 +149,10 @@ def _authenticator_object(opt: dict) -> dict:
     we must send EVERY form field (id, methodType, enrollmentId, …) — not just `id`. A phone factor
     in particular needs `enrollmentId` (and methodType sms/voice) alongside `id`, or Okta accepts the
     /challenge POST but never actually sends the SMS (the silent failure that strands a stake member
-    on the code screen with no code arriving). Nested choices (phone: sms vs voice) default to the
-    first option. Values are opaque ids/method-types — never the phone number or email itself."""
+    on the code screen with no code arriving). Nested choices resolve by PREFERENCE, not first-option:
+    our UI is code-entry, so for methodType we pick `totp` (Okta Verify: a push challenge can't be
+    answered with a typed code) then `sms`, falling back to the first option (phone: sms vs voice).
+    Values are opaque ids/method-types — never the phone number or email itself."""
     form = opt.get("value", {}).get("form", {}).get("value", [])
     obj: dict = {}
     for f in form:
@@ -153,9 +162,13 @@ def _authenticator_object(opt: dict) -> dict:
         if "value" in f:
             obj[name] = f["value"]
         elif f.get("options"):
-            nested = f["options"][0] if f["options"] else None
-            if isinstance(nested, dict) and "value" in nested:
-                obj[name] = nested["value"]
+            choices = [o.get("value") for o in f["options"]
+                       if isinstance(o, dict) and "value" in o]
+            if not choices:
+                continue
+            preferred = next((want for want in ("totp", "sms") if want in choices), None) \
+                if name == "methodType" else None
+            obj[name] = preferred if preferred is not None else choices[0]
     return obj
 
 
@@ -187,6 +200,70 @@ def _factors(remediation: dict, types: dict[str, str] | None = None) -> list[dic
 def _public_factors(factors: list[dict]) -> list[dict]:
     """Strip the internal `_auth`/`type` before returning factors to the client (unchanged wire shape)."""
     return [{"id": f["id"], "label": f["label"], "method": f["method"]} for f in factors]
+
+
+# Factor types our resumable code-entry flow can actually FINISH. webauthn is structurally
+# impossible through the broker (the credential is origin-bound to churchofjesuschrist.org — a
+# challenge we start can never be answered by our app), and an Okta Verify PUSH has no code to
+# type. Offering them strands the member on a code screen (2026-06-11: a high counselor picked
+# "Security Key or Biometric Authenticator" and dead-ended).
+_CODE_FACTOR_TYPES = {"okta_email", "phone_number", "google_otp", "okta_verify"}
+_UNSUPPORTED_METHODS = {"webauthn", "push", "signed_nonce"}
+_UNSUPPORTED_LABEL_HINTS = ("security key", "biometric", "passkey")
+
+
+def _factor_supported(factor: dict) -> bool:
+    """True when our select→type-a-code flow can complete this factor. Unknown types stay OFFERED
+    (an unfamiliar menu entry beats locking a leader out; verify now fails friendly) — only
+    positively-known-impossible factors are dropped."""
+    ftype = (factor.get("type") or "").lower()
+    method = (factor.get("method") or "").lower()
+    label = (factor.get("label") or "").lower()
+    if method in _UNSUPPORTED_METHODS or ftype == "webauthn":
+        return False
+    if ftype == "okta_verify" and method != "totp":
+        return False  # push-only Okta Verify enrollment — nothing to type
+    if ftype in _CODE_FACTOR_TYPES:
+        return True
+    if ftype == "security_question":
+        return False  # needs a question/answer UI we don't render
+    return not any(hint in label for hint in _UNSUPPORTED_LABEL_HINTS)
+
+
+def _split_supported(factors: list[dict]) -> tuple[list[dict], list[str]]:
+    """(supported factors, PII-safe type names of the dropped ones)."""
+    kept = [f for f in factors if _factor_supported(f)]
+    dropped = sorted({(f["type"] or f["method"] or "?") for f in factors if not _factor_supported(f)})
+    return kept, dropped
+
+
+_NO_SUPPORTED_FACTORS_MSG = (
+    "Your Church Account's verification methods (such as a security key or push approval) "
+    "aren't supported here yet. Add a Text message, Email, or Authenticator-app method at "
+    "churchofjesuschrist.org under Security, then sign in here again.")
+
+
+def _challenge_code_field(remediation: dict) -> str | None:
+    """The name of the typed-code field a challenge-authenticator expects (`passcode` for
+    email/SMS/Google Authenticator, `totp` for Okta Verify), or None when the challenge takes no
+    typed code at all (webauthn assertion, push poll). Read from the remediation's own form —
+    hardcoding `passcode` is what 401'd an Okta Verify answer. Handles both the direct-form and
+    the options[] credential shapes."""
+    for field in remediation.get("value", []):
+        if field.get("name") != "credentials":
+            continue
+        names = [f.get("name") for f in field.get("form", {}).get("value", [])]
+        for want in ("passcode", "totp"):
+            if want in names:
+                return want
+        for opt in field.get("options", []):
+            opt_names = [f.get("name")
+                         for f in opt.get("value", {}).get("form", {}).get("value", [])]
+            for want in ("passcode", "totp"):
+                if want in opt_names:
+                    return want
+        return None  # a credentials form exists but has no typed-code field
+    return "passcode"  # no credentials form visible (minimal/odd payload) — assume the default
 
 
 def _idx_summary(payload: dict) -> dict:
@@ -245,7 +322,8 @@ def _drive_to_password(session: requests.Session, identifier: str, password: str
         timeout=60)
     if r.status_code >= 400:
         dump_debug("broker_interact_error", login_id=login_id, status=r.status_code)
-        raise AuthError(f"interact failed ({r.status_code})")
+        raise AuthError("The Church sign-in service didn't respond — please try again in a "
+                        "moment.", root_cause=f"interact failed ({r.status_code})")
     logger.info("[auth %s] introspect", login_id)
     payload = _idx_post(session, INTROSPECT_URL, {"interactionHandle": r.json()["interaction_handle"]})
     logger.info("[auth %s] introspect -> %s", login_id, _idx_summary(payload))
@@ -385,7 +463,8 @@ def _finish_success(session: requests.Session, payload: dict, verifier: str, log
             msg = ("Your password was accepted, but the Church directory (LCR) didn't answer when "
                    "we asked who you are — it may be slow or briefly down. Please try again in a "
                    "minute.")
-        raise IdentityError(msg + _outage_suffix(), kind=kind, root_cause=root) from exc
+        raise IdentityError(msg + _outage_suffix(), kind=kind, root_cause=root,
+                            username=username) from exc
     _note_lcr_identity(True, username)
     ident["login_username"] = username
     if rt:
@@ -427,24 +506,47 @@ def start_login(username: str, password: str, *, want_refresh_token: bool = True
 
     rems = _remediations(payload)
     types = _authenticator_types(payload)
-    # MFA shape A: Okta offers a list of 2nd-factor authenticators to choose from.
+    # MFA shape A: Okta offers a list of 2nd-factor authenticators to choose from. Only factors our
+    # code-entry flow can FINISH are offered (a webauthn/push entry on the menu is a guaranteed
+    # dead-end — see _factor_supported); the dropped types are logged + carried in the result so
+    # the audit row names exactly what an affected account had.
     if "select-authenticator-authenticate" in rems and _factors(rems["select-authenticator-authenticate"], types):
-        factors = _factors(rems["select-authenticator-authenticate"], types)
+        all_factors = _factors(rems["select-authenticator-authenticate"], types)
+        factors, dropped = _split_supported(all_factors)
+        offered_types = [f["type"] or f["method"] or "?" for f in factors]
+        logger.info("[auth %s] MFA required (shape A); factor_types=%s dropped=%s", login_id,
+                    offered_types, dropped)
+        if not factors:
+            dump_debug("broker_mfa_unsupported", login_id=login_id, dropped=dropped,
+                       summary=_idx_summary(payload))
+            raise AuthError(_NO_SUPPORTED_FACTORS_MSG, kind="mfa_unsupported",
+                            root_cause=f"only unsupported MFA factors enrolled: {dropped}",
+                            username=username)
         _store_pending(login_id, session, payload, verifier, factors, username)
-        # Log the factor TYPES offered (PII-safe) — so if a member's only factor is one we mishandle
-        # (e.g. webauthn/security key), the logs show exactly what was on the menu.
-        logger.info("[auth %s] MFA required (shape A); factor_types=%s", login_id,
-                    [f["type"] or f["method"] or "?" for f in factors])
-        return {"status": "mfa_required", "login_id": login_id, "factors": _public_factors(factors)}
+        return {"status": "mfa_required", "login_id": login_id,
+                "factors": _public_factors(factors),
+                "factor_types": offered_types, "dropped_factor_types": dropped}
     # MFA shape B: single-factor — Okta went straight to the code challenge (often after auto-sending
     # an email/SMS code). Surface a generic factor so the app shows the code field; select_factor is a
     # no-op (the code is already pending) and verify_mfa submits it. (Previously this raised "stuck".)
+    # A challenge that takes no typed code (webauthn/push) is refused up front instead of presenting
+    # a code field that can never succeed.
     if "challenge-authenticator" in rems:
+        if _challenge_code_field(rems["challenge-authenticator"]) is None:
+            ch_types = sorted(set(types.values()))
+            logger.warning("[auth %s] shape-B challenge takes no typed code; types=%s",
+                           login_id, ch_types)
+            dump_debug("broker_mfa_unsupported", login_id=login_id, shape="B", types=ch_types,
+                       summary=_idx_summary(payload))
+            raise AuthError(_NO_SUPPORTED_FACTORS_MSG, kind="mfa_unsupported",
+                            root_cause=f"shape-B non-code challenge: {ch_types}",
+                            username=username)
         _store_pending(login_id, session, payload, verifier, [], username)
         logger.info("[auth %s] MFA required (shape B); single-factor code challenge, types=%s",
                     login_id, sorted(set(types.values())))
         return {"status": "mfa_required", "login_id": login_id,
-                "factors": [{"id": "pending", "label": "your verification method", "method": "otp"}]}
+                "factors": [{"id": "pending", "label": "your verification method", "method": "otp"}],
+                "factor_types": sorted(set(types.values()))}
     # Unexpected — log the full PII-safe shape so the next stuck login is diagnosable. Common causes:
     # the account's only factor needs enrollment (`enroll-authenticator` / `select-authenticator-enroll`),
     # or a remediation we don't drive yet. The IDX `messages` (if any) usually name the real reason.
@@ -452,15 +554,22 @@ def start_login(username: str, password: str, *, want_refresh_token: bool = True
     msg = _idx_messages(payload)
     logger.warning("[auth %s] login stuck after password -> %s", login_id, summary)
     dump_debug("broker_login_stuck", login_id=login_id, summary=summary, messages=msg)
-    raise AuthError(msg or "login could not complete (check username/password)")
+    raise AuthError(msg or "We couldn't complete the sign-in. Please check your username and "
+                           "password and try again.", username=username)
+
+
+_EXPIRED_MSG = ("This sign-in attempt expired. Please start over — and enter the code within "
+                "a few minutes of receiving it.")
 
 
 def select_factor(login_id: str, factor_id: str) -> dict:
-    """Choose an MFA factor — sends the code (email/SMS/voice) or readies the prompt (TOTP)."""
+    """Choose an MFA factor — sends the code (email/SMS/voice) or readies the prompt (TOTP).
+    Re-selecting the same factor re-sends the code (the client's "Send a new code")."""
     pend = _PENDING.get(login_id)
     if not pend:
-        raise AuthError("login session expired — start over")
+        raise AuthError(_EXPIRED_MSG, kind="mfa_expired")
     session, payload = pend["session"], pend["payload"]
+    username = pend.get("username") or ""
     rems = _remediations(payload)
     sel = rems.get("select-authenticator-authenticate")
     if not sel:
@@ -468,7 +577,8 @@ def select_factor(login_id: str, factor_id: str) -> dict:
         # select, so the app's auto-send step is a no-op and we go straight to entering the code.
         if "challenge-authenticator" in rems:
             return {"status": "code_sent"}
-        raise AuthError("no factor selection available")
+        raise AuthError("We couldn't send a verification code — please start signing in again.",
+                        kind="mfa_no_selection", username=username)
     sel["_stateHandle"] = payload.get("stateHandle")
     # Send the FULL authenticator object (id + methodType + enrollmentId + nested choices) captured at
     # start_login, NOT just {id}. For phone (SMS/voice) factors the `enrollmentId`/`methodType` are
@@ -478,7 +588,18 @@ def select_factor(login_id: str, factor_id: str) -> dict:
     auth_obj = (factor or {}).get("_auth") or {"id": factor_id}
     ftype = (factor or {}).get("type") or "?"
     logger.info("[auth %s] select MFA factor type=%s fields=%s", login_id, ftype, sorted(auth_obj))
-    new_payload = _follow(session, sel, {"authenticator": auth_obj})
+    try:
+        new_payload = _follow(session, sel, {"authenticator": auth_obj})
+    except Exception as exc:  # noqa: BLE001 — Okta rejected the select itself
+        err_payload = getattr(exc, "payload", None) or {}
+        if err_payload.get("stateHandle") and err_payload.get("remediation"):
+            pend["payload"] = err_payload
+            pend["ts"] = time.time()
+        msg = _idx_messages(err_payload)
+        dump_debug("broker_select_error", login_id=login_id, factor_type=ftype, error=str(exc))
+        raise AuthError(msg or "We couldn't start that verification method — please try a "
+                               "different one.", kind="mfa_select_failed", root_cause=str(exc),
+                        username=username, factor_type=ftype) from exc
     logger.info("[auth %s] post-select -> %s", login_id, _idx_summary(new_payload))
     # If Okta returned no challenge and no success, the select didn't take (e.g. an unsupported factor,
     # or a phone send that needed a field we lacked). Surface the IDX message so it's not a blank wall.
@@ -490,42 +611,99 @@ def select_factor(login_id: str, factor_id: str) -> dict:
                        login_id, ftype, _idx_summary(new_payload))
         dump_debug("broker_select_no_challenge", login_id=login_id, factor_type=ftype,
                    summary=_idx_summary(new_payload), messages=msg)
-        raise AuthError(msg or f"couldn't start the {ftype} verification — try a different method")
+        raise AuthError(msg or "We couldn't start that verification method — please try a "
+                               "different one.", kind="mfa_select_failed",
+                        username=username, factor_type=ftype)
+    # A challenge that takes no typed code (webauthn assertion / push approval) would strand the
+    # member on a code screen — refuse it now, while they can still pick another method. Defense in
+    # depth behind the start_login menu filter (covers unknown factor types we chose to keep).
+    ch = new_rems.get("challenge-authenticator")
+    if ch is not None and _challenge_code_field(ch) is None:
+        logger.warning("[auth %s] selected factor %s yields a non-code challenge", login_id, ftype)
+        dump_debug("broker_select_non_code", login_id=login_id, factor_type=ftype,
+                   summary=_idx_summary(new_payload))
+        raise AuthError("That verification method isn't supported in this app yet — please "
+                        "choose a different one.", kind="mfa_unsupported",
+                        username=username, factor_type=ftype)
     pend["payload"] = new_payload
+    pend["selected_type"] = ftype
     pend["ts"] = time.time()
     return {"status": "code_sent"}
 
 
+def _classify_mfa_failure(raw: str, messages: str, *, username: str, factor_type: str) -> AuthError:
+    """Map a failed MFA answer to a friendly, ACTIONABLE error. Works from the IDX messages
+    (now extracted from nested/field-level blocks too — a wrong code answers 401 with the message
+    inside the passcode FIELD); the raw text rides along as root_cause for login_audit. The
+    fallback is a generic friendly retry message, never the raw payload (a member saw a raw IDX
+    JSON wall on 2026-06-11 and reasonably gave up)."""
+    low = (messages or raw).lower()
+    if "invalid code" in low or "invalid passcode" in low or "incorrect" in low:
+        return AuthError("That code wasn't accepted — it may be mistyped or expired. Request a "
+                         "new code and enter it as soon as it arrives.", kind="mfa_bad_code",
+                         root_cause=messages or raw, username=username, factor_type=factor_type)
+    if "locked" in low or "too many" in low:
+        return AuthError("Too many attempts — this Church Account is temporarily locked. Unlock "
+                         "it at churchofjesuschrist.org, then sign in here again.",
+                         kind="mfa_locked", root_cause=messages or raw,
+                         username=username, factor_type=factor_type)
+    if "expired" in low:
+        return AuthError(_EXPIRED_MSG, kind="mfa_expired", root_cause=messages or raw,
+                         username=username, factor_type=factor_type)
+    return AuthError(messages or "We couldn't verify that code. Request a new code and try "
+                                 "again.", kind="mfa_other", root_cause=raw,
+                     username=username, factor_type=factor_type)
+
+
 def verify_mfa(login_id: str, code: str, *, want_refresh_token: bool = True,
                allow_cached_identity: bool = False) -> dict:
-    """Submit the MFA code and finish login (same fast-lane/full-path tail as start_login)."""
+    """Submit the MFA code and finish login (same fast-lane/full-path tail as start_login).
+    The pending login SURVIVES a failed verify (state refreshed from the failure payload), so a
+    member can retry or request a new code without redoing the password."""
     pend = _PENDING.get(login_id)
     if not pend:
-        raise AuthError("login session expired — start over")
+        raise AuthError(_EXPIRED_MSG, kind="mfa_expired")
     session, payload = pend["session"], pend["payload"]
     verifier = pend.get("verifier", "")
+    username = pend.get("username") or ""
+    ftype = pend.get("selected_type") or ""
     rems = _remediations(payload)
     ch = rems.get("challenge-authenticator")
     if not ch:
-        raise AuthError("no MFA challenge pending — select a factor first")
+        raise AuthError("Please choose a verification method first.", kind="mfa_no_challenge",
+                        username=username)
     ch["_stateHandle"] = payload.get("stateHandle")
-    logger.info("[auth %s] verify MFA code", login_id)
+    # People paste/type codes with spaces or hyphens ("123 456"); Okta wants bare digits.
+    code = re.sub(r"[\s\-]", "", code or "")
+    if not code:
+        raise AuthError("Enter the verification code first.", kind="mfa_bad_code",
+                        username=username, factor_type=ftype)
+    # Answer with the field THIS challenge declares (passcode vs totp) — Okta Verify's TOTP
+    # rejects {"passcode": ...} outright (the 2026-06-11 class of failure, hardcoded until now).
+    field = _challenge_code_field(ch) or "passcode"
+    logger.info("[auth %s] verify MFA code (field=%s type=%s)", login_id, field, ftype or "?")
     try:
-        payload = _follow(session, ch, {"credentials": {"passcode": code}}, redact=True)
+        payload = _follow(session, ch, {"credentials": {field: code}}, redact=True)
     except Exception as exc:  # noqa: BLE001
-        dump_debug("broker_mfa_error", login_id=login_id, error=str(exc))
-        low = str(exc).lower()
-        if "invalid passcode" in low or "invalid code" in low:
-            raise AuthError("That code wasn't accepted — it may have expired. Request a new "
-                            "code and try again.", kind="mfa_bad_code",
-                            root_cause=str(exc)) from exc
-        raise AuthError(f"MFA verification failed: {exc}", root_cause=str(exc)) from exc
+        err_payload = getattr(exc, "payload", None) or {}
+        # Refresh the pending state from the FAILURE payload — Okta may rotate the stateHandle on
+        # a rejected answer, and a retry against the stale one fails regardless of the code.
+        if err_payload.get("stateHandle") and err_payload.get("remediation"):
+            pend["payload"] = err_payload
+            pend["ts"] = time.time()
+        messages = _idx_messages(err_payload)
+        dump_debug("broker_mfa_error", login_id=login_id, factor_type=ftype, error=str(exc),
+                   messages=messages,
+                   summary=_idx_summary(err_payload) if err_payload else None)
+        raise _classify_mfa_failure(str(exc), messages, username=username,
+                                    factor_type=ftype) from exc
     logger.info("[auth %s] post-verify -> %s", login_id, _idx_summary(payload))
     if "successWithInteractionCode" not in payload:
         # Keep the (refreshed) state so a wrong-code retry uses the latest stateHandle, not a stale one.
         pend["payload"] = payload
         pend["ts"] = time.time()
-        raise AuthError(_idx_messages(payload) or "incorrect code")
+        raise _classify_mfa_failure("MFA answer accepted but login did not complete",
+                                    _idx_messages(payload), username=username, factor_type=ftype)
     from backend import observability as obs
     cid = obs.new_correlation_id()
     # t0 = now: times only this completion leg (the gap since start_login is human typing time).
@@ -547,7 +725,8 @@ def verify_captured_session(cookies: list[dict]) -> dict:
                 "cookies": serialize_cookies(session)}
     except Exception as exc:  # noqa: BLE001
         dump_debug("broker_session_verify_error", login_id=login_id, error=str(exc))
-        raise AuthError(f"could not verify captured session: {exc}") from exc
+        raise AuthError("We couldn't verify the sign-in session from the app — please try "
+                        "signing in again.", root_cause=str(exc)) from exc
 
 # (The background cache refresh lives in enroll.refresh_cached_identity — it also re-reads the
 # UNIT via user_context, which a /api/auth/me-only refresher here couldn't.)

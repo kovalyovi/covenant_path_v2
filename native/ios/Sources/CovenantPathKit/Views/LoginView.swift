@@ -13,16 +13,27 @@ struct LoginView: View {
     @State private var mfaCode = ""
     @State private var email = ""
     @State private var emailCode = ""
+    // "Send a new code" cooldown — nudges the member to wait for the FRESH code instead of typing
+    // one from an earlier text/screen (a stale code submitted seconds after the send is exactly
+    // what stranded a stake leader at MFA, 2026-06-11).
+    @State private var resendIn = 0
+    @State private var resendTask: Task<Void, Never>?
     @FocusState private var focused: Field?
 
     enum Field { case username, password, mfa, email, code }
+
+    /// Mid-MFA the screen shows ONE flow: the mode picker and passkey button hide (a member stuck
+    /// on the code screen reached for the passkey button — a silent dead-end, 2026-06-11).
+    private var inMfa: Bool {
+        session.mode == .church && session.brokerAvailable && session.loginID != nil
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Covenant Path").font(.largeTitle.bold())
 
-                if session.brokerAvailable {
+                if session.brokerAvailable && !inMfa {
                     Picker("Mode", selection: modeBinding) {
                         ForEach(SessionStore.Mode.allCases, id: \.self) { m in
                             Text(m.label).tag(m)
@@ -38,7 +49,7 @@ struct LoginView: View {
                     emailFields
                 }
 
-                if session.passkeyAvailable {
+                if session.passkeyAvailable && !inMfa {
                     HStack {
                         VStack { Divider() }
                         Text("or").font(.footnote).foregroundStyle(.secondary)
@@ -52,7 +63,7 @@ struct LoginView: View {
                     }
                     .buttonStyle(.bordered)
                     .disabled(session.isBusy)
-                } else if session.brokerAvailable {
+                } else if session.brokerAvailable && !inMfa {
                     // Documented partial: native passkeys need an associated-domains entitlement +
                     // a configured RP id. Until then, the button is shown disabled with a note.
                     VStack(alignment: .leading, spacing: 4) {
@@ -79,6 +90,17 @@ struct LoginView: View {
             .frame(maxWidth: .infinity)
         }
         .scrollDismissesKeyboard(.interactively)
+        // Input typed for the OLD factor must never ride into a new challenge (2026-06-11); a
+        // fresh send also (re)starts the resend cooldown. Covers auto-select and manual picks.
+        .onChange(of: session.factorSent?.id) { _, newValue in
+            mfaCode = ""
+            if newValue != nil {
+                startResendCooldown()
+            } else {
+                resendTask?.cancel()
+                resendIn = 0
+            }
+        }
         // #8: post-login offer to set up / improve daily sync (consent moved off the login form).
         .alert(session.enrollOffer?.improving == true ? "Improve your stake's sync?" : "Set up daily sync?",
                isPresented: enrollOfferBinding, presenting: session.enrollOffer) { _ in
@@ -110,15 +132,32 @@ struct LoginView: View {
 
     @ViewBuilder
     private var churchFields: some View {
-        if session.factorSent != nil {
-            // Step 3: enter the MFA code.
-            Text("Enter the code sent via \(session.factorSent?.label ?? "your method").").font(.callout)
+        if let factor = session.factorSent {
+            // Step 3: enter the MFA code (digits only, gated on a complete code — fat-finger and
+            // stale submits 401 and restart the dance).
+            Text("A code was just sent via \(factor.label). Wait for the new one to arrive, then enter it here.")
+                .font(.callout)
             TextField("Verification code", text: $mfaCode)
                 .textContentType(.oneTimeCode).keyboardType(.numberPad)
                 .focused($focused, equals: .mfa)
                 .textFieldStyle(.roundedBorder)
-            primaryButton("Verify & sign in") { await session.verifyMfa(code: mfaCode) }
+                .onChange(of: mfaCode) { _, value in
+                    let digits = String(value.filter(\.isNumber).prefix(8))
+                    if digits != value { mfaCode = digits }
+                }
+            primaryButton("Verify & sign in", disabledWhen: mfaCode.count < 6) {
+                await session.verifyMfa(code: mfaCode)
+                if session.errorMessage != nil { mfaCode = "" } // a rejected code must be retyped fresh
+            }
+            Button(resendIn > 0 ? "Send a new code (\(resendIn)s)" : "Send a new code") {
+                Task {
+                    await session.selectFactor(factor)
+                    startResendCooldown()
+                }
+            }
+            .disabled(session.isBusy || resendIn > 0)
             Button("Choose a different method") { session.backFromMfa() }.disabled(session.isBusy)
+            Button("Start over") { session.backToChurchStart() }.disabled(session.isBusy)
         } else if session.loginID != nil {
             // Step 2: pick a factor.
             Text("Choose how to receive your verification code:").font(.callout)
@@ -127,7 +166,7 @@ struct LoginView: View {
                     .buttonStyle(.bordered).frame(maxWidth: .infinity)
                     .disabled(session.isBusy)
             }
-            Button("Back") { session.backToChurchStart() }.disabled(session.isBusy)
+            Button("Start over") { session.backToChurchStart() }.disabled(session.isBusy)
         } else {
             // Step 1: username + password.
             Text("Sign in with your Church account (same as LCR).").font(.callout)
@@ -192,10 +231,25 @@ struct LoginView: View {
         }
     }
 
+    // MARK: - resend cooldown
+
+    private func startResendCooldown() {
+        resendTask?.cancel()
+        resendIn = 30
+        resendTask = Task { @MainActor in
+            while resendIn > 0 && !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if Task.isCancelled { return }
+                resendIn -= 1
+            }
+        }
+    }
+
     // MARK: - shared button
 
     @ViewBuilder
-    private func primaryButton(_ title: String, action: @escaping () async -> Void) -> some View {
+    private func primaryButton(_ title: String, disabledWhen: Bool = false,
+                               action: @escaping () async -> Void) -> some View {
         Button {
             focused = nil
             Task { await action() }
@@ -207,7 +261,7 @@ struct LoginView: View {
             }
         }
         .buttonStyle(.borderedProminent)
-        .disabled(session.isBusy)
+        .disabled(session.isBusy || disabledWhen)
     }
 }
 #endif
