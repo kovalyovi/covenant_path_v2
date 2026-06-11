@@ -91,6 +91,8 @@ def test_mfa_webauthn_filtered_and_field_level_invalid_code(stack):
     detail = wrong.json()["detail"]
     assert "code wasn't accepted" in detail
     assert "{" not in detail and "IDX" not in detail  # the raw-JSON wall is gone
+    # factor-aware guidance: a rejected PHONE code names the right source (the wrong-source trap)
+    assert "newest text" in detail and "authenticator app" in detail
 
     audits = stack.audit_rows(outcome="mfa_failed", email=MFA_W.username)
     assert audits and audits[-1]["phase"] == "okta:mfa_bad_code:phone_number"

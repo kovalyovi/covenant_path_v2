@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { broker, BrokerError, mfaRequired, type BrokerFactor, type BrokerResult } from '../lib/broker';
+import { mfaPrompt } from '../lib/mfaCopy';
 import { kNoAccessMessage } from '../lib/disclaimer';
 import { useDashboard } from '../hooks/useDashboard';
 import { useToast } from './Toast';
@@ -219,10 +220,12 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
         </>
       ) : factorSent ? (
         <>
-          <p>
-            A code was just sent via {factorSent.label}. Wait for the new one to arrive, then
-            enter it here.
-          </p>
+          <p>{mfaPrompt(factorSent).prompt}</p>
+          {mfaPrompt(factorSent).warning && (
+            <p className="tiny" style={{ color: 'var(--primary)' }}>
+              {mfaPrompt(factorSent).warning}
+            </p>
+          )}
           <label className="field">
             <span>Verification code</span>
             <input
@@ -240,6 +243,7 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
           >
             {resendIn > 0 ? `Send a new code (${resendIn}s)` : 'Send a new code'}
           </Button>
+          {mfaPrompt(factorSent).noCodeHint && <p className="tiny">{mfaPrompt(factorSent).noCodeHint}</p>}
           <Button onClick={() => { setFactorSent(null); setMfaCode(''); }} disabled={busy} type="button">
             Choose a different method
           </Button>

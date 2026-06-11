@@ -9,7 +9,9 @@ import {
   openLogin, submitChurchLogin, expectOnDashboard, brokerLogin, brokerMfa, MFA_FACTORS,
 } from './support';
 
-const codeSentText = (label: string) => new RegExp(`A code was just sent via ${label}`);
+// The sms fixture factor gets the source-naming copy (2026-06-11): the prompt names the masked
+// destination and the screen warns off authenticator-app codes.
+const codeSentText = (label: string) => new RegExp(`A new code was just sent via ${label}`);
 
 test.describe('login MFA', () => {
   test('two factors show a picker; choosing one reveals the code field', async ({ page }) => {
@@ -27,6 +29,9 @@ test.describe('login MFA', () => {
     await sms.click();
 
     await expect(page.getByText(codeSentText(MFA_FACTORS[0].label))).toBeVisible();
+    // The text challenge names the wrong-source trap and the stale-number escape hatch.
+    await expect(page.getByText("Don't enter a code from an authenticator app")).toBeVisible();
+    await expect(page.getByText(/The number on file may be out of date/)).toBeVisible();
     await expect(page.getByLabel('Verification code')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Verify & sign in' })).toBeVisible();
 

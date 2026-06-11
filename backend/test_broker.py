@@ -648,6 +648,24 @@ def test_verify_no_message_still_friendly() -> None:
     okta_flow._follow = saved
 
 
+def test_mfa_bad_code_factor_guidance() -> None:
+    # A rejected code names the right SOURCE per factor — the 2026-06-11 trap was a right-looking
+    # code from the wrong source (authenticator-app code typed into a text challenge).
+    e = okta_flow._classify_mfa_failure("x", "Invalid code. Try again.",
+                                        username="u", factor_type="phone_number")
+    check("phone bad-code hint names the newest text", "newest text" in str(e))
+    check("phone bad-code hint warns off authenticator apps", "authenticator app" in str(e))
+    e = okta_flow._classify_mfa_failure("x", "Invalid code.", username="u",
+                                        factor_type="google_otp")
+    check("google_otp hint points at the app's current code",
+          "currently showing in your authenticator app" in str(e))
+    e = okta_flow._classify_mfa_failure("x", "Invalid code.", username="u",
+                                        factor_type="okta_email")
+    check("email hint points at the newest email", "newest email" in str(e))
+    e = okta_flow._classify_mfa_failure("x", "Invalid code.", username="u", factor_type="")
+    check("unknown factor keeps the generic retry hint", "Request a new code" in str(e))
+
+
 def test_mfa_expired_messages_friendly() -> None:
     # Unknown/pruned login_id: both steps answer with a start-over message, sentence-cased.
     for fn, args in ((okta_flow.verify_mfa, ("gone", "000000")),
@@ -1589,6 +1607,7 @@ def main() -> int:
     test_verify_normalizes_code()
     test_verify_wrong_code_friendly_and_state_refresh()
     test_verify_no_message_still_friendly()
+    test_mfa_bad_code_factor_guidance()
     test_mfa_expired_messages_friendly()
     test_nested_idx_messages_and_mask()
     test_mfa_pending_and_select_failures_audited()

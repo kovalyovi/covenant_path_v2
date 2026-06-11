@@ -80,7 +80,7 @@ test.describe('reauth dialog', () => {
     await expect(dialog.getByText('Choose how to receive your verification code:')).toBeVisible();
     await dialog.getByRole('button', { name: MFA_FACTORS[0].label }).click();
     await expect(
-      dialog.getByText(new RegExp(`A code was just sent via ${MFA_FACTORS[0].label}`)),
+      dialog.getByText(new RegExp(`A new code was just sent via ${MFA_FACTORS[0].label}`)),
     ).toBeVisible();
 
     await dialog.getByLabel('Verification code').fill('123456');

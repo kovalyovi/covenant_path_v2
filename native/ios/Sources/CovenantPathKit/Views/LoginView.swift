@@ -134,9 +134,13 @@ struct LoginView: View {
     private var churchFields: some View {
         if let factor = session.factorSent {
             // Step 3: enter the MFA code (digits only, gated on a complete code — fat-finger and
-            // stale submits 401 and restart the dance).
-            Text("A code was just sent via \(factor.label). Wait for the new one to arrive, then enter it here.")
-                .font(.callout)
+            // stale submits 401 and restart the dance). The prompt names the code's SOURCE — a
+            // right-looking code from the wrong source is the multi-method trap (2026-06-11).
+            let tips = mfaPrompt(for: factor)
+            Text(tips.prompt).font(.callout)
+            if let warning = tips.warning {
+                Text(warning).font(.caption).foregroundStyle(.tint)
+            }
             TextField("Verification code", text: $mfaCode)
                 .textContentType(.oneTimeCode).keyboardType(.numberPad)
                 .focused($focused, equals: .mfa)
@@ -156,6 +160,9 @@ struct LoginView: View {
                 }
             }
             .disabled(session.isBusy || resendIn > 0)
+            if let hint = tips.noCodeHint {
+                Text(hint).font(.caption).foregroundStyle(.secondary)
+            }
             Button("Choose a different method") { session.backFromMfa() }.disabled(session.isBusy)
             Button("Start over") { session.backToChurchStart() }.disabled(session.isBusy)
         } else if session.loginID != nil {

@@ -39,6 +39,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.membercovenantpath.viewer.logic.mfaPrompt
 import org.membercovenantpath.viewer.viewmodel.AuthViewModel
 import org.membercovenantpath.viewer.viewmodel.LoginMode
 
@@ -145,12 +146,16 @@ private fun spinnerOr(busy: Boolean, label: String) {
 private fun ChurchFields(vm: AuthViewModel, s: org.membercovenantpath.viewer.viewmodel.LoginUiState) {
     when {
         // Step 3: enter the MFA code (digits only, gated on a complete code — fat-finger and
-        // stale submits 401 and restart the dance; 2026-06-11).
+        // stale submits 401 and restart the dance; 2026-06-11). The prompt names the code's
+        // SOURCE — a right-looking code from the wrong source is the multi-method trap.
         s.factorSent != null -> {
-            Text(
-                "A code was just sent via ${s.factorSent.label}. Wait for the new one to arrive, then enter it here.",
-                modifier = Modifier.fillMaxWidth(),
-            )
+            val tips = mfaPrompt(s.factorSent)
+            Text(tips.prompt, modifier = Modifier.fillMaxWidth())
+            tips.warning?.let {
+                Spacer(Modifier.size(4.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall,
+                     color = MaterialTheme.colorScheme.primary, modifier = Modifier.fillMaxWidth())
+            }
             Spacer(Modifier.size(12.dp))
             OutlinedTextField(
                 value = s.mfaCode, onValueChange = vm::onMfaCode, label = { Text("Verification code") },
@@ -166,6 +171,10 @@ private fun ChurchFields(vm: AuthViewModel, s: org.membercovenantpath.viewer.vie
             ) { spinnerOr(s.busy, "Verify & sign in") }
             TextButton(onClick = { vm.selectFactor(s.factorSent) }, enabled = !s.busy && s.resendInSec <= 0) {
                 Text(if (s.resendInSec > 0) "Send a new code (${s.resendInSec}s)" else "Send a new code")
+            }
+            tips.noCodeHint?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall,
+                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.fillMaxWidth())
             }
             TextButton(onClick = vm::backToFactors, enabled = !s.busy) { Text("Choose a different method") }
             TextButton(onClick = vm::backToPassword, enabled = !s.busy) { Text("Start over") }

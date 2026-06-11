@@ -594,7 +594,10 @@ def select_factor(login_id: str, factor_id: str) -> dict:
     factor = next((f for f in pend.get("factors", []) if f["id"] == factor_id), None)
     auth_obj = (factor or {}).get("_auth") or {"id": factor_id}
     ftype = (factor or {}).get("type") or "?"
-    logger.info("[auth %s] select MFA factor type=%s fields=%s", login_id, ftype, sorted(auth_obj))
+    # The label is Okta's own masked destination ("+1 XXX-XX34") — logging it lets a "no text ever
+    # arrives" report be checked against a stale enrolled number without asking the member.
+    logger.info("[auth %s] select MFA factor type=%s label=%r fields=%s",
+                login_id, ftype, (factor or {}).get("label") or "?", sorted(auth_obj))
     try:
         new_payload = _follow(session, sel, {"authenticator": auth_obj})
     except Exception as exc:  # noqa: BLE001 — Okta rejected the select itself
@@ -638,6 +641,19 @@ def select_factor(login_id: str, factor_id: str) -> dict:
     return {"status": "code_sent"}
 
 
+# Per-factor guidance for a rejected code: with several methods enrolled, the most common failure
+# is a RIGHT-LOOKING code from the WRONG source — an authenticator-app code typed into a text
+# challenge, or an earlier text's code (the 2026-06-11 case: two failures, each ~5s after the SMS
+# send; the identical timing SUCCEEDED for an account whose only code source was the fresh text).
+_BAD_CODE_HINTS = {
+    "phone_number": "Use the 6-digit code from the newest text we just sent — not a code from an "
+                    "authenticator app or an earlier text. Tap 'Send a new code' for a fresh one.",
+    "google_otp": "Use the code currently showing in your authenticator app.",
+    "okta_verify": "Use the code currently showing in your Okta Verify app.",
+    "okta_email": "Use the code from the newest email — it can take a minute to arrive.",
+}
+
+
 def _classify_mfa_failure(raw: str, messages: str, *, username: str, factor_type: str) -> AuthError:
     """Map a failed MFA answer to a friendly, ACTIONABLE error. Works from the IDX messages
     (now extracted from nested/field-level blocks too — a wrong code answers 401 with the message
@@ -646,8 +662,10 @@ def _classify_mfa_failure(raw: str, messages: str, *, username: str, factor_type
     JSON wall on 2026-06-11 and reasonably gave up)."""
     low = (messages or raw).lower()
     if "invalid code" in low or "invalid passcode" in low or "incorrect" in low:
-        return AuthError("That code wasn't accepted — it may be mistyped or expired. Request a "
-                         "new code and enter it as soon as it arrives.", kind="mfa_bad_code",
+        hint = _BAD_CODE_HINTS.get(factor_type,
+                                   "Request a new code and enter it as soon as it arrives.")
+        return AuthError(f"That code wasn't accepted — it may be mistyped or expired. {hint}",
+                         kind="mfa_bad_code",
                          root_cause=messages or raw, username=username, factor_type=factor_type)
     if "locked" in low or "too many" in low:
         return AuthError("Too many attempts — this Church Account is temporarily locked. Unlock "

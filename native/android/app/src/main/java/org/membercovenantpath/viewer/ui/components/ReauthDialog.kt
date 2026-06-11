@@ -32,6 +32,7 @@ import org.membercovenantpath.viewer.data.BrokerClient
 import org.membercovenantpath.viewer.data.BrokerException
 import org.membercovenantpath.viewer.data.BrokerFactor
 import org.membercovenantpath.viewer.data.BrokerResult
+import org.membercovenantpath.viewer.logic.mfaPrompt
 
 // N2: shown when the Church login succeeds but the calling has no covenant-path access.
 private const val NO_ACCESS_MSG =
@@ -197,7 +198,15 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
                         ) { Text("Use a different email") }
                     }
                     factorSent != null -> {
-                        Text("A code was just sent via ${factorSent?.label}. Wait for the new one to arrive, then enter it here.")
+                        // Names the code's SOURCE (texted number vs authenticator app) — the
+                        // wrong-source code is the multi-method trap (2026-06-11).
+                        val tips = mfaPrompt(factorSent!!)
+                        Text(tips.prompt)
+                        tips.warning?.let {
+                            Spacer(Modifier.size(4.dp))
+                            Text(it, style = MaterialTheme.typography.bodySmall,
+                                 color = MaterialTheme.colorScheme.primary)
+                        }
                         Spacer(Modifier.size(8.dp))
                         OutlinedTextField(
                             mfaCode, { mfaCode = it.filter(Char::isDigit).take(8) },
@@ -211,6 +220,10 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
                             onClick = { factorSent?.let { pickFactor(it) } },
                             enabled = !busy && resendIn <= 0,
                         ) { Text(if (resendIn > 0) "Send a new code (${resendIn}s)" else "Send a new code") }
+                        tips.noCodeHint?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall,
+                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                         TextButton(
                             onClick = { factorSent = null; mfaCode = "" },
                             enabled = !busy,

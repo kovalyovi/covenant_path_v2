@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { broker, BrokerError, mfaRequired, type BrokerFactor, type BrokerResult } from '../lib/broker';
+import { mfaPrompt } from '../lib/mfaCopy';
 import { passkey } from '../lib/passkey';
 import { kNoAccessMessage } from '../lib/disclaimer';
 import { Button, Segmented } from '../components/ui';
@@ -391,12 +392,17 @@ function ChurchFields(p: ChurchProps) {
     // Okta verification codes are 6 digits; gating Verify on a complete code blocks the
     // fat-finger/stale submits that 401 and restart the dance.
     const codeReady = p.mfaCode.length >= 6;
+    // Name the SOURCE of the code (texted to the masked number / authenticator app) — a
+    // right-looking code from the wrong source is the common multi-method failure (2026-06-11).
+    const tips = mfaPrompt(p.factorSent);
     return (
       <>
-        <p>
-          A code was just sent via {p.factorSent.label}. Wait for the new one to arrive, then
-          enter it here.
-        </p>
+        <p>{tips.prompt}</p>
+        {tips.warning && (
+          <p className="tiny" style={{ color: 'var(--primary)' }}>
+            {tips.warning}
+          </p>
+        )}
         <label className="field">
           <span>Verification code</span>
           <input
@@ -426,6 +432,7 @@ function ChurchFields(p: ChurchProps) {
         >
           {p.resendIn > 0 ? `Send a new code (${p.resendIn}s)` : 'Send a new code'}
         </Button>
+        {tips.noCodeHint && <p className="tiny">{tips.noCodeHint}</p>}
         <Button onClick={p.onChooseDifferent} disabled={p.busy} type="button">
           Choose a different method
         </Button>

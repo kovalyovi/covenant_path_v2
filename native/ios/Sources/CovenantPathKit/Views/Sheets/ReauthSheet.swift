@@ -87,8 +87,13 @@ struct ReauthSheet: View {
             }
             .disabled(busy)
         } else if let factorSent {
-            Text("A code was just sent via \(factorSent.label). Wait for the new one to arrive, then enter it here.")
-                .font(.callout)
+            // The prompt names the code's SOURCE (texted to the masked number vs authenticator
+            // app) — a right-looking code from the wrong source is the multi-method trap.
+            let tips = mfaPrompt(for: factorSent)
+            Text(tips.prompt).font(.callout)
+            if let warning = tips.warning {
+                Text(warning).font(.caption).foregroundStyle(.tint)
+            }
             TextField("Verification code", text: $mfaCode)
                 .textContentType(.oneTimeCode).keyboardType(.numberPad)
                 .textFieldStyle(.roundedBorder)
@@ -101,6 +106,9 @@ struct ReauthSheet: View {
                 run { try await pickFactor(factorSent) }
             }
             .disabled(busy || resendIn > 0)
+            if let hint = tips.noCodeHint {
+                Text(hint).font(.caption).foregroundStyle(.secondary)
+            }
             Button("Choose a different method") {
                 self.factorSent = nil
                 mfaCode = ""
