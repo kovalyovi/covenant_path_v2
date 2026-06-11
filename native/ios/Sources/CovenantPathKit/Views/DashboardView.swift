@@ -205,7 +205,7 @@ struct DashboardView: View {
     private func sheetView(_ which: ActiveSheet) -> some View {
         switch which {
         case .syncSettings:
-            SyncSettingsSheet(store: store, onToast: showToast)
+            SyncSettingsSheet(store: store, onToast: showToast, onReauth: { openReauth() })
         case .report:
             ReportSheet(onToast: showToast)
         case .invite:

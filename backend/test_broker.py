@@ -668,7 +668,7 @@ def test_calling_gate_check_sync() -> None:
     try:
         enroll._user_context_with_establish = lambda c: (
             _types.SimpleNamespace(active_position=None, positions=[], child_units=[],
-                                   unit_number=1102966, unit_name="Green Level Ward"), c)
+                                   unit_number=1102966, unit_name="Green Level Ward"), c, None)
         out = enroll.calling_gate_check(cookies, {"email": "m@e.org"}, request_id="r")
         check("sync gate blocks no-calling", out is not None and out.get("authorized") is False)
         check("sync gate caches has_calling False", cached.get("has_calling") is False)
@@ -677,7 +677,7 @@ def test_calling_gate_check_sync() -> None:
         cached.clear()
         enroll._user_context_with_establish = lambda c: (
             _types.SimpleNamespace(active_position="Bishop", positions=[{"name": "Bishop"}],
-                                   child_units=[], unit_number=503991, unit_name="Test Stake"), c)
+                                   child_units=[], unit_number=503991, unit_name="Test Stake"), c, None)
         out2 = enroll.calling_gate_check(cookies, {"email": "l@e.org"})
         check("sync gate passes leader (None)", out2 is None)
         check("sync gate caches has_calling True", cached.get("has_calling") is True)
@@ -1062,6 +1062,172 @@ def test_lcr_outage_tracker_and_health() -> None:
     check("health: lcr ok again", client.get("/health").json().get("lcr") == "ok")
 
 
+def _full_eval_env(ctx, *, on_access=None, on_rpc=None):
+    """Patch enroll for a FULL-EVAL test (past the gate, through the access scrape, to the enroll
+    RPC) with no network. Returns restore_fn. The scrape + RPC seams are observable via the
+    on_access/on_rpc callbacks."""
+    import types as _types
+    from lcr_client import access as access_mod
+    from backend import credentials as cred_mod
+    from backend.auth_broker import identity_cache
+
+    class _Resp:
+        status_code = 200
+        text = "ok"
+
+        def json(self):
+            return []
+
+    def fake_post(url, **kw):
+        if on_rpc:
+            on_rpc(url, kw.get("json") or {})
+        return _Resp()
+
+    def fake_access(client):
+        if on_access:
+            on_access(client)
+        return {"can_pull_all": True, "features": [], "missing": [],
+                "runner_positions": [{"name": "Stake President", "id": 17}]}
+
+    old = (enroll.SUPABASE_URL, enroll.SERVICE_KEY, enroll._stored_credential_summary,
+           enroll._client_from_cookies, enroll._audit_login, enroll._bind_identity_email,
+           enroll._kickoff_initial_sync, enroll._notify_enrolled, enroll.requests.post,
+           identity_cache.set_unit, access_mod.covenant_path_access, cred_mod._encrypt_envelope)
+    enroll.SUPABASE_URL, enroll.SERVICE_KEY = "https://example.invalid", "key"
+    enroll._stored_credential_summary = lambda unit: None  # no usable credential → full path
+    enroll._client_from_cookies = lambda cookies: _types.SimpleNamespace(user_context=lambda: ctx)
+    enroll._audit_login = lambda *a, **k: None
+    enroll._bind_identity_email = lambda identity: None
+    enroll._kickoff_initial_sync = lambda unit: False
+    enroll._notify_enrolled = lambda *a, **k: None
+    enroll.requests.post = fake_post
+    identity_cache.set_unit = lambda *a, **k: None
+    access_mod.covenant_path_access = fake_access
+    cred_mod._encrypt_envelope = lambda raw: "enc-blob"
+
+    def _restore():
+        (enroll.SUPABASE_URL, enroll.SERVICE_KEY, enroll._stored_credential_summary,
+         enroll._client_from_cookies, enroll._audit_login, enroll._bind_identity_email,
+         enroll._kickoff_initial_sync, enroll._notify_enrolled, enroll.requests.post,
+         identity_cache.set_unit, access_mod.covenant_path_access,
+         cred_mod._encrypt_envelope) = old
+
+    return _restore
+
+
+def test_full_eval_enroll_reaches_scrape_and_stores() -> None:
+    """REGRESSION (2026-06-10): extracting _user_context_with_establish dropped the `client` the
+    access scrape still referenced — evaluate_and_maybe_store(store=True) died with
+    NameError("name 'client' is not defined") on EVERY consented enroll/re-enroll (the "sign-in
+    worked, but the daily sync could not be set up" report). Drive the eval past the gate, through
+    the scrape, to the enroll RPC."""
+    import types as _types
+    ctx = _types.SimpleNamespace(active_position="Stake President",
+                                 positions=[{"name": "Stake President", "id": 1}],
+                                 child_units=[], unit_number=503991, unit_name="Test Stake")
+    seen: dict = {}
+    restore = _full_eval_env(
+        ctx,
+        on_access=lambda client: seen.update(client=client),
+        on_rpc=lambda url, body: seen.update(url=url, body=body))
+    try:
+        out = enroll.evaluate_and_maybe_store(
+            [{"name": "sid", "value": "x", "domain": "d", "path": "/"}],
+            {"email": "president@example.org", "name": "Pres"}, True, request_id="rid-enroll")
+        check("enroll: authorized", out.get("authorized") is True)
+        check("enroll: stored", out.get("stored") is True)
+        check("enroll: scrape got a real client (the NameError seam)",
+              seen.get("client") is not None)
+        check("enroll: RPC called", "enroll_stake_credential" in str(seen.get("url")))
+        check("enroll: RPC carries the unit", seen.get("body", {}).get("p_unit_number") == 503991)
+        check("enroll: RPC granting role ids from scrape",
+              seen.get("body", {}).get("p_granting_role_ids") == [17])
+    finally:
+        restore()
+
+
+def test_full_eval_new_stake_offers_enroll() -> None:
+    """Same regression, store=False flavor: a leader whose stake has NO usable credential must get
+    authorized + can_enroll (the post-login "set up daily sync" offer). The NameError silently
+    killed the offer — new stakes could never onboard."""
+    import types as _types
+    ctx = _types.SimpleNamespace(active_position="Stake President",
+                                 positions=[{"name": "Stake President", "id": 1}],
+                                 child_units=[], unit_number=503991, unit_name="Test Stake")
+    rpc_calls: list = []
+    restore = _full_eval_env(ctx, on_rpc=lambda url, body: rpc_calls.append(url))
+    try:
+        out = enroll.evaluate_and_maybe_store(
+            [{"name": "sid", "value": "x", "domain": "d", "path": "/"}],
+            {"email": "president@example.org"}, False, request_id="rid-offer")
+        check("offer: authorized", out.get("authorized") is True)
+        check("offer: can_enroll", out.get("can_enroll") is True)
+        check("offer: nothing stored", out.get("stored") is False)
+        check("offer: no RPC without consent", rpc_calls == [])
+    finally:
+        restore()
+
+
+def test_friendly_okta_errors() -> None:
+    """Bad credentials must read like "wrong username/password", not the raw
+    "IDX step answer failed: Authentication failed" — while login_audit keeps the raw cause."""
+    from lcr_client.okta_login import LoginError
+    e = okta_flow.friendly_auth_error(LoginError("IDX step answer failed: Authentication failed"))
+    check("bad creds: friendly text", "incorrect" in str(e).lower() and "IDX" not in str(e))
+    check("bad creds: kind", getattr(e, "kind", "") == "bad_credentials")
+    check("bad creds: raw kept as root_cause", "Authentication failed" in e.root_cause)
+    e2 = okta_flow.friendly_auth_error(LoginError("IDX step answer failed: Your account is locked."))
+    check("locked: classified", getattr(e2, "kind", "") == "account_locked")
+    check("locked: friendly names the unlock path", "churchofjesuschrist.org" in str(e2))
+    e3 = okta_flow.friendly_auth_error(RuntimeError("weird transport thing"))
+    check("unknown: keeps the raw text", "weird transport thing" in str(e3))
+    check("unknown: kind other", getattr(e3, "kind", "") == "other")
+
+
+def test_password_endpoint_friendly_bad_creds() -> None:
+    """End-to-end through the API: a bad-credential login answers 401 with the FRIENDLY detail,
+    and the audit row records the RAW cause + okta:<kind> phase."""
+    from lcr_client.okta_login import LoginError
+    audited: dict = {}
+    old_start, old_audit = okta_flow.start_login, appmod._audit_okta_failure
+
+    def boom(username, password, **kw):
+        raise okta_flow.friendly_auth_error(
+            LoginError("IDX step answer failed: Authentication failed"))
+
+    okta_flow.start_login = boom
+    appmod._audit_okta_failure = (
+        lambda who, stage, error, rid, **kw: audited.update({"stage": stage, "error": error, **kw}))
+    try:
+        r = client.post("/auth/password", json={"username": "u", "password": "p"})
+        check("bad creds → 401", r.status_code == 401)
+        d = str(r.json().get("detail", ""))
+        check("bad creds detail is friendly", "incorrect" in d.lower() and "IDX" not in d)
+        check("audit keeps the raw cause", "Authentication failed" in audited.get("error", ""))
+        check("audit phase carries the kind", audited.get("phase") == "okta:bad_credentials")
+        check("audit duration recorded", isinstance(audited.get("duration_ms"), int))
+    finally:
+        okta_flow.start_login, appmod._audit_okta_failure = old_start, old_audit
+
+
+def test_sync_now_blocked_when_revoked() -> None:
+    """A revoked credential cannot "Sync now": the endpoint answers 409 with a re-authorize hint
+    instead of dispatching a run that would silently skip the stake (the settings sheet hides the
+    button; this is the server gate behind it)."""
+    old_verify, old_status = admin.verify_user, admin.enrollment_status
+    admin.verify_user = lambda authorization: "prov@example.org"
+    admin.enrollment_status = lambda email, auth_id: {
+        "unit_number": 503991,
+        "credential": {"state": "revoked", "is_provider": True, "complete": True}}
+    try:
+        r = client.post("/auth/sync-now", headers={"Authorization": "Bearer x"})
+        check("sync-now on revoked → 409", r.status_code == 409)
+        check("sync-now revoked points to re-auth",
+              "re-authorize" in str(r.json().get("detail", "")).lower())
+    finally:
+        admin.verify_user, admin.enrollment_status = old_verify, old_status
+
+
 def main() -> int:
     print("broker tests")
     test_fast_lane_eval_zero_lcr()
@@ -1098,6 +1264,11 @@ def main() -> int:
     test_idx_summary_pii_safe()
     test_mfa_single_factor_select_noop()
     test_provider_wipe_data()
+    test_full_eval_enroll_reaches_scrape_and_stores()
+    test_full_eval_new_stake_offers_enroll()
+    test_friendly_okta_errors()
+    test_password_endpoint_friendly_bad_creds()
+    test_sync_now_blocked_when_revoked()
     test_admin_requires_auth()
     test_admin_actions_graceful_without_github()
     test_dispatch_allowlist()

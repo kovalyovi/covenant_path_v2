@@ -259,6 +259,7 @@ fun DashboardScaffold(
             loading = syncLoading,
             onSyncNow = { syncNow() },
             onRevoke = { revokeConfirm = true },
+            onReauth = { if (AppConfig.brokerAvailable) showReauth = true },
             onDismiss = { showSync = false },
         )
     }

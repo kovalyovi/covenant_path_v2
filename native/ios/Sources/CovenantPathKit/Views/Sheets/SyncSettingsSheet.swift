@@ -10,6 +10,8 @@ struct SyncSettingsSheet: View {
     @Environment(\.appServices) private var services
     let store: DashboardStore
     let onToast: (String) -> Void
+    /// Opens the Church re-authorization sheet (set up / re-enroll / take over the sync).
+    let onReauth: () -> Void
 
     @State private var status: EnrollmentStatus?
     @State private var loaded = false
@@ -43,6 +45,9 @@ struct SyncSettingsSheet: View {
     private func content(_ s: EnrollmentStatus) -> some View {
         let cred = s.credential
         let isProvider = cred.isProvider
+        // A revoked/stale credential needs RE-AUTHORIZATION (any authorized leader may provide it);
+        // it can't "Sync now", and a revoked one can't be re-revoked (web-parity, 2026-06-10).
+        let needsReauth = cred.isRevoked || cred.state == "stale"
 
         InfoRow(label: "Stake", value: s.stakeName ?? "—")
         // Stable LCR stake ID — stakes get renamed, so the ID reliably identifies the stake (#9).
@@ -59,18 +64,41 @@ struct SyncSettingsSheet: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             } icon: { Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange) }
+
+            Button {
+                dismiss()
+                onReauth()
+            } label: {
+                Label("Set up daily sync", systemImage: "key.fill").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent).padding(.top, 12)
         } else {
-            InfoRow(label: "Status", value: cred.isRevoked ? "Revoked" : "Active",
-                    color: cred.isRevoked ? .orange : StatusColor.done)
+            InfoRow(label: "Status",
+                    value: cred.isRevoked ? "Revoked"
+                         : cred.state == "stale" ? "Needs re-authorization" : "Active",
+                    color: (cred.isRevoked || cred.state == "stale") ? .orange : StatusColor.done)
             if let p = cred.principalName { InfoRow(label: "Provided by", value: p) }
             if let e = cred.enrolledAt { InfoRow(label: "Enrolled", value: Freshness.exact(e)) }
             InfoRow(label: "Coverage", value: cred.complete ? "Complete" : "Partial")
+            if cred.state == "stale", let err = cred.lastError {
+                Text("Last sync error: \(err)").font(.caption2).foregroundStyle(.secondary)
+            }
         }
 
         Text("Credentials are encrypted and stored server-side. Your password is never stored.")
             .font(.caption).foregroundStyle(.secondary).padding(.top, 8)
 
-        if isProvider {
+        if needsReauth {
+            Button {
+                dismiss()
+                onReauth()
+            } label: {
+                Label("Re-authorize daily sync", systemImage: "key.fill").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent).padding(.top, 16)
+        }
+
+        if isProvider, cred.state == "active" {
             Button {
                 Task {
                     dismiss()
@@ -81,14 +109,18 @@ struct SyncSettingsSheet: View {
                 Label("Sync my stake now", systemImage: "arrow.triangle.2.circlepath").frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent).padding(.top, 16)
+        }
 
+        if isProvider, !cred.isRevoked, !cred.isNone {
             Button(role: .destructive) {
                 Task { await revoke(stakeID: s.stakeID) }
             } label: {
                 Label("Revoke my sync access", systemImage: "link.badge.plus").frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered).padding(.top, 8)
+        }
 
+        if isProvider {
             ScheduleSection(broker: broker, onToast: onToast)
         }
 

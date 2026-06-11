@@ -13,6 +13,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddToDrive
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -63,6 +64,8 @@ fun SyncSettingsSheet(
     loading: Boolean,
     onSyncNow: () -> Unit,
     onRevoke: () -> Unit,
+    /** Opens the Church re-authorization dialog (set up / re-enroll / take over the sync). */
+    onReauth: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -71,6 +74,9 @@ fun SyncSettingsSheet(
     val drive by vm.drive.collectAsStateWithLifecycle()
     val cred = status?.credential
     val isProvider = cred?.isProvider == true
+    // A revoked/stale credential needs RE-AUTHORIZATION (any authorized leader may provide it);
+    // it can't "Sync now", and a revoked one can't be re-revoked (web-parity, 2026-06-10).
+    val needsReauth = cred != null && (cred.isRevoked || cred.isStale)
 
     LaunchedEffect(isProvider) {
         if (isProvider) vm.loadSchedule()
@@ -109,26 +115,53 @@ fun SyncSettingsSheet(
                         Text("Sign in with your Church account to enable daily updates.", style = MaterialTheme.typography.bodySmall)
                     }
                 }
+                Spacer(Modifier.size(12.dp))
+                FilledTonalButton(onClick = { onDismiss(); onReauth() }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.Key, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("  Set up daily sync")
+                }
             } else {
-                KeyRow("Status", if (cred.isRevoked) "Revoked" else "Active", if (cred.isRevoked) Color(0xFFEF6C00) else Color(0xFF2E7D32))
+                KeyRow(
+                    "Status",
+                    when {
+                        cred.isRevoked -> "Revoked"
+                        cred.isStale -> "Needs re-authorization"
+                        else -> "Active"
+                    },
+                    if (cred.isRevoked || cred.isStale) Color(0xFFEF6C00) else Color(0xFF2E7D32))
                 cred.principalName?.let { KeyRow("Provided by", it) }
                 cred.enrolledAt?.let { KeyRow("Enrolled", Freshness.exactLocal(it)) }
                 KeyRow("Coverage", if (cred.complete) "Complete" else "Partial")
+                if (cred.isStale && cred.lastError != null) {
+                    Text("Last sync error: ${cred.lastError}", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
             Spacer(Modifier.size(8.dp))
             Text("Credentials are encrypted and stored server-side. Your password is never stored.", style = MaterialTheme.typography.bodySmall)
 
-            if (isProvider) {
+            if (needsReauth) {
+                Spacer(Modifier.size(16.dp))
+                FilledTonalButton(onClick = { onDismiss(); onReauth() }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.Key, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("  Re-authorize daily sync")
+                }
+            }
+            if (isProvider && cred?.isActive == true) {
                 Spacer(Modifier.size(16.dp))
                 FilledTonalButton(onClick = { onDismiss(); onSyncNow() }, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Filled.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text("  Sync my stake now")
                 }
+            }
+            if (isProvider && cred != null && !cred.isRevoked && !cred.isNone) {
                 Spacer(Modifier.size(8.dp))
                 OutlinedButton(onClick = { onDismiss(); onRevoke() }, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Filled.LinkOff, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text("  Revoke my sync access")
                 }
+            }
+            if (isProvider) {
                 ScheduleSection(schedule, vm)
             }
             GoogleDriveSection(drive, vm, onOpenUrl = { url ->

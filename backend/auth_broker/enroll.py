@@ -80,19 +80,22 @@ def _first_usable_credential(embed) -> dict | None:
 
 def _user_context_with_establish(cookies: list[dict]):
     """`user_context()` from captured cookies; if the cookies carry only an Okta session (no LCR SSO
-    yet — the cached fast-lane shape), establish LCR and retry once. Returns (ctx, cookies) with the
-    possibly-refreshed cookie list. Shared by the full eval and the synchronous first-login gate so
-    the establish-retry lives in one place."""
+    yet — the cached fast-lane shape), establish LCR and retry once. Returns (ctx, cookies, client)
+    with the possibly-refreshed cookie list AND the working client — the eval reuses it for the
+    access scrape (the 2026-06-10 regression: this refactor dropped the `client` variable the scrape
+    still referenced, so EVERY consented enroll died with NameError). Shared by the full eval and
+    the synchronous first-login gate so the establish-retry lives in one place."""
     client = _client_from_cookies(cookies)
     try:
-        return client.user_context(), cookies
+        return client.user_context(), cookies, client
     except Exception:  # noqa: BLE001
         from lcr_client.okta_login import establish_lcr_session, session_from_cookies
         s = session_from_cookies(cookies)
         establish_lcr_session(s)
         cookies = [{"name": c.name, "value": c.value, "domain": c.domain, "path": c.path or "/"}
                    for c in s.cookies]
-        return _client_from_cookies(cookies).user_context(), cookies
+        client = _client_from_cookies(cookies)
+        return client.user_context(), cookies, client
 
 
 def calling_gate_check(cookies: list[dict], identity: dict, *,
@@ -111,7 +114,7 @@ def calling_gate_check(cookies: list[dict], identity: dict, *,
     import time as _time
     t0 = _time.monotonic()
     try:
-        ctx, _ = _user_context_with_establish(cookies)
+        ctx, _, _ = _user_context_with_establish(cookies)
     except Exception as exc:  # noqa: BLE001 — LCR error → allow (the deferred full eval still audits)
         logger.info("first-login calling gate skipped (LCR error → allow): %s", exc)
         return None
@@ -287,7 +290,7 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
                     "can_improve": False, "can_enroll": False, "stored": False, "fast": True}
         # No usable credential for the cached unit → the full eval below (it establishes LCR itself).
 
-    ctx, cookies = _user_context_with_establish(cookies)
+    ctx, cookies, client = _user_context_with_establish(cookies)
     logger.info("login eval: user_context %.1fs (unit=%s)", _time.monotonic() - t0, ctx.unit_number)
     # Record the unit now (this is what makes this user's NEXT login zero-LCR) plus the
     # calling-gate outcome the zero-LCR lane will require.

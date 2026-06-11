@@ -36,7 +36,15 @@ _TTL = 600                              # 10 min to complete an MFA challenge
 
 
 class AuthError(RuntimeError):
-    pass
+    """Login failed at the Okta stage. The MESSAGE is what the user sees (broker `detail`, rendered
+    verbatim by all three surfaces); `kind`/`root_cause` keep the raw failure for login_audit — a
+    member saw "IDX step answer failed: Authentication failed" instead of "wrong password" because
+    the raw text doubled as the user message."""
+
+    def __init__(self, message: str, *, kind: str = "other", root_cause: str = ""):
+        super().__init__(message)
+        self.kind = kind
+        self.root_cause = root_cause or message
 
 
 class IdentityError(AuthError):
@@ -47,10 +55,26 @@ class IdentityError(AuthError):
     (e.g. 'auth/me 502'), not just the friendly text — the 2026-06-10 outage was undiagnosable
     from audit rows alone."""
 
-    def __init__(self, message: str, *, kind: str = "other", root_cause: str = ""):
-        super().__init__(message)
-        self.kind = kind
-        self.root_cause = root_cause
+
+def friendly_auth_error(exc: Exception) -> AuthError:
+    """Map a raw Okta/IDX failure to a message the member can act on. Okta deliberately answers
+    both "unknown username" and "wrong password" with the same 'Authentication failed', so the
+    friendly text covers both. Unrecognized failures keep the raw text — an ugly true error beats
+    a wrong friendly one. The raw text always rides along as root_cause for login_audit."""
+    raw = str(exc)
+    low = raw.lower()
+    if ("authentication failed" in low or "credentials are invalid" in low
+            or "no account with" in low or "incorrect username or password" in low):
+        return AuthError(
+            "That username or password is incorrect. It's the same Church Account you use for "
+            "LCR / churchofjesuschrist.org — please check both and try again.",
+            kind="bad_credentials", root_cause=raw)
+    if "locked" in low:
+        return AuthError(
+            "This Church Account is temporarily locked (too many attempts). Unlock it at "
+            "churchofjesuschrist.org, then sign in here again.",
+            kind="account_locked", root_cause=raw)
+    return AuthError(f"login failed: {raw}", root_cause=raw)
 
 
 # In-process LCR outage tracker (single broker instance, best-effort): consecutive identity-leg
@@ -394,7 +418,7 @@ def start_login(username: str, password: str, *, want_refresh_token: bool = True
         raise
     except Exception as exc:  # noqa: BLE001
         dump_debug("broker_login_error", login_id=login_id, error=str(exc))
-        raise AuthError(f"login failed: {exc}") from exc
+        raise friendly_auth_error(exc) from exc
 
     if "successWithInteractionCode" in payload:
         ident = _finish_success(session, payload, verifier, login_id, cid, _t0, username,
@@ -490,7 +514,12 @@ def verify_mfa(login_id: str, code: str, *, want_refresh_token: bool = True,
         payload = _follow(session, ch, {"credentials": {"passcode": code}}, redact=True)
     except Exception as exc:  # noqa: BLE001
         dump_debug("broker_mfa_error", login_id=login_id, error=str(exc))
-        raise AuthError(f"MFA verification failed: {exc}") from exc
+        low = str(exc).lower()
+        if "invalid passcode" in low or "invalid code" in low:
+            raise AuthError("That code wasn't accepted — it may have expired. Request a new "
+                            "code and try again.", kind="mfa_bad_code",
+                            root_cause=str(exc)) from exc
+        raise AuthError(f"MFA verification failed: {exc}", root_cause=str(exc)) from exc
     logger.info("[auth %s] post-verify -> %s", login_id, _idx_summary(payload))
     if "successWithInteractionCode" not in payload:
         # Keep the (refreshed) state so a wrong-code retry uses the latest stateHandle, not a stale one.

@@ -18,9 +18,11 @@ interface Props {
   onLoaded: (s: EnrollmentStatus) => void;
   onRevoke: () => void;
   onSyncNow: () => void;
+  /** Opens the Church re-authorization dialog (set up / re-enroll / take over the sync). */
+  onReauth: () => void;
 }
 
-export function SyncSettingsSheet({ open, onClose, initial, onLoaded, onRevoke, onSyncNow }: Props) {
+export function SyncSettingsSheet({ open, onClose, initial, onLoaded, onRevoke, onSyncNow, onReauth }: Props) {
   const toast = useToast();
   const [status, setStatus] = useState<EnrollmentStatus | null>(initial);
   const [loading, setLoading] = useState(initial == null);
@@ -51,7 +53,12 @@ export function SyncSettingsSheet({ open, onClose, initial, onLoaded, onRevoke, 
   }, [open, initial, onLoaded]);
 
   const cred = status?.credential;
+  const credState = cred?.state ?? 'none';
   const isProvider = cred?.isProvider === true;
+  // A revoked/stale credential needs RE-AUTHORIZATION (any authorized leader may provide it — the
+  // broker enforces who can take over). It can't "Sync now", and a revoked one can't be re-revoked
+  // (the "status says Revoked but offers Revoke" report, 2026-06-10).
+  const needsReauth = credState === 'revoked' || credState === 'stale';
 
   /** Provider self-service wipe: deletes the stake's MEMBER records (access + the sync credential
    *  stay; data re-populates on the next sync) — the self-serve mirror of the admin "Wipe data". */
@@ -89,38 +96,75 @@ export function SyncSettingsSheet({ open, onClose, initial, onLoaded, onRevoke, 
           <Row label="Members" value={String(status.memberCount)} />
           <hr className="divider" />
           {cred == null || cred.state === 'none' ? (
-            <div className="row" style={{ alignItems: 'flex-start', gap: 12 }}>
-              <Icon name="warning" size={20} color="var(--warning)" />
-              <div>
-                <strong>
-                  {status.unitNumber != null
-                    ? `No sync credential for stake ${status.unitNumber}`
-                    : 'No sync credential'}
-                </strong>
-                <p className="small muted">Sign in with your Church account to enable daily updates.</p>
+            <>
+              <div className="row" style={{ alignItems: 'flex-start', gap: 12 }}>
+                <Icon name="warning" size={20} color="var(--warning)" />
+                <div>
+                  <strong>
+                    {status.unitNumber != null
+                      ? `No sync credential for stake ${status.unitNumber}`
+                      : 'No sync credential'}
+                  </strong>
+                  <p className="small muted">Sign in with your Church account to enable daily updates.</p>
+                </div>
               </div>
-            </div>
+              <Button
+                variant="filled"
+                icon="key"
+                onClick={() => {
+                  onClose();
+                  onReauth();
+                }}
+                style={{ marginTop: 12 }}
+              >
+                Set up daily sync
+              </Button>
+            </>
           ) : (
             <>
               <Row
                 label="Status"
-                value={cred.state === 'revoked' ? 'Revoked' : 'Active'}
-                color={cred.state === 'revoked' ? 'var(--warning)' : 'var(--success)'}
+                value={
+                  credState === 'revoked'
+                    ? 'Revoked'
+                    : credState === 'stale'
+                      ? 'Needs re-authorization'
+                      : 'Active'
+                }
+                color={credState === 'active' ? 'var(--success)' : 'var(--warning)'}
               />
               {cred.principalName && <Row label="Provided by" value={cred.principalName} />}
               {cred.enrolledAt && <Row label="Enrolled" value={fmtDateTime(cred.enrolledAt)} />}
               <Row label="Coverage" value={cred.complete ? 'Complete' : 'Partial'} />
+              {credState === 'stale' && cred.lastError && (
+                <p className="tiny muted" style={{ marginTop: 4 }}>
+                  Last sync error: {cred.lastError}
+                </p>
+              )}
             </>
           )}
           <p className="tiny" style={{ marginTop: 8 }}>
             Credentials are encrypted and stored server-side. Your password is never stored.
           </p>
-          {isProvider && (
+          {needsReauth && (
+            <Button
+              variant="filled"
+              icon="key"
+              onClick={() => {
+                onClose();
+                onReauth();
+              }}
+              style={{ marginTop: 16 }}
+            >
+              Re-authorize daily sync
+            </Button>
+          )}
+          {isProvider && credState === 'active' && (
             <Button variant="filled" icon="sync" onClick={onSyncNow} style={{ marginTop: 16 }}>
               Sync my stake now
             </Button>
           )}
-          {isProvider && (
+          {isProvider && credState !== 'revoked' && credState !== 'none' && (
             <Button
               variant="outlined"
               icon="link_off"

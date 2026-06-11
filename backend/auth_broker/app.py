@@ -350,6 +350,11 @@ def auth_sync_now(authorization: str = Header(default="")) -> dict:
     cred = status.get("credential", {})
     if not cred.get("is_provider"):
         raise HTTPException(status_code=403, detail="only the stake's sync provider can start a sync")
+    # A revoked credential cannot sync — dispatching a run that silently skips the stake would be
+    # dishonest (the UI hides the button too; this is the server-side gate behind it).
+    if cred.get("state") == "revoked":
+        raise HTTPException(status_code=409, detail="Sync is paused — the credential was revoked. "
+                                                    "Re-authorize in Sync settings first.")
     if not admin.github_configured():
         raise HTTPException(status_code=503, detail="sync dispatch not configured (GITHUB_TOKEN)")
     try:
@@ -411,7 +416,12 @@ def auth_password(req: PasswordReq) -> dict:
         raise HTTPException(status_code=503, detail=str(e))
     except okta_flow.AuthError as e:
         logger.warning("[req %s] auth failed: %s", rid, e)
-        _audit_okta_failure(req.username, "okta_failed", str(e), rid)
+        # Audit the RAW cause (root_cause), not the friendly message the user saw — a
+        # "wrong password" and a real Okta outage must stay distinguishable after the fact.
+        _audit_okta_failure(req.username, "okta_failed",
+                            getattr(e, "root_cause", "") or str(e), rid,
+                            duration_ms=int((time.monotonic() - t0) * 1000),
+                            phase=f"okta:{getattr(e, 'kind', 'other')}")
         raise HTTPException(status_code=401, detail=str(e))
     if res["status"] == "mfa_required":
         return {"status": "mfa_required", "login_id": res["login_id"], "factors": res["factors"]}
@@ -446,7 +456,9 @@ def auth_mfa_verify(req: MfaReq) -> dict:
                             phase=f"identity:{getattr(e, 'kind', 'other')}")
         raise HTTPException(status_code=503, detail=str(e))
     except okta_flow.AuthError as e:
-        _audit_okta_failure("", "mfa_failed", str(e), rid)
+        _audit_okta_failure("", "mfa_failed", getattr(e, "root_cause", "") or str(e), rid,
+                            duration_ms=int((time.monotonic() - t0) * 1000),
+                            phase=f"okta:{getattr(e, 'kind', 'other')}")
         raise HTTPException(status_code=401, detail=str(e))
     return _complete_login(res, req.enroll, rid, t0)
 

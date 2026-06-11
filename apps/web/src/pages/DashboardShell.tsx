@@ -226,6 +226,7 @@ export function DashboardShell() {
         onLoaded={(s) => d.setEnrollStatus(s)}
         onRevoke={() => setConfirmRevoke(true)}
         onSyncNow={syncNow}
+        onReauth={d.openReauth}
       />
       <ReauthDialog open={d.reauthOpen} onClose={d.closeReauth} />
       {report && <ReportSheet open onClose={() => setReport(null)} report={report} onEmail={emailReport} />}
