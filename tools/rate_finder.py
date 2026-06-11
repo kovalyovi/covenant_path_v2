@@ -252,13 +252,12 @@ class EndpointController:
                  recovery_max: float = 900.0, recovery_confirm: int = 2,
                  max_recovery_probes: int = 24, fragile: bool = False,
                  long_pause_hours=(12, 24, 36, 48), graceful_delay: float = 15.0,
+                 fragile_start_delay: float = 180.0, fragile_window: int = 3,
                  clock=time.monotonic):
         self.name = name
         self.success_target = success_target
         self.p95_cap_ms = p95_cap_ms
         self.min_delay = min_delay
-        self.max_delay = max_delay
-        self.window = window
         self.confirm = confirm
         self.cooldown_s = cooldown_s
         self.kill_after = kill_after
@@ -268,21 +267,25 @@ class EndpointController:
         self.recovery_confirm = recovery_confirm     # consecutive probe successes to declare recovery
         self.clock = clock                           # injectable for deterministic tests
 
-        # FRAGILE endpoints (one-work/umlu) take MULTI-HOUR outages, so: cap the pressure low, give up
-        # short-probing FAST (a few probes ≈ minutes, not hours), then LONG-PAUSE 12h→24h→36h→48h
-        # (escalating until healthy) and resume gently — vs hammering a dead cluster every 15min.
+        # FRAGILE endpoints (one-work/umlu) take MULTI-HOUR outages, so the user's golden-spot strategy:
+        # START GENTLE (one request every few MINUTES), then AIMD ramps the rate UP until errors and
+        # settles on the max safe rate. The floor (gentlest) IS that few-minute start, so a small
+        # window keeps minute-spaced rounds fast. On a sustained outage: give up short-probing fast,
+        # LONG-PAUSE 12h→24h→36h→48h, and resume at the gentle start.
         self.fragile = fragile
         self.max_concurrency = 2 if fragile else max_concurrency
-        self.graceful_delay = graceful_delay
+        self.window = fragile_window if fragile else window
+        self.max_delay = fragile_start_delay if fragile else max_delay  # floor = the gentle start
+        self.graceful_delay = fragile_start_delay if fragile else graceful_delay
         self.max_recovery_probes = 4 if fragile else max_recovery_probes
         # escalating long-pause schedule (seconds) — only used by fragile endpoints after a give-up.
         self.long_pause_schedule = [h * 3600 for h in long_pause_hours] if fragile else []
         self.long_pause_until = 0.0
         self.long_pause_idx = 0
 
-        # current pressure — start gentle (fragile starts even gentler — the graceful delay)
+        # current pressure — start gentle (fragile starts at the few-minute floor, then ramps up)
         self.concurrency = 1
-        self.delay_s = max(min_delay, graceful_delay if fragile else 1.5)
+        self.delay_s = max(min_delay, fragile_start_delay if fragile else 1.5)
 
         self.gold: GoldSpot | None = None
         self.stable_rate_per_min: float | None = None    # highest ZERO-error sustained throughput
@@ -665,7 +668,8 @@ class Harness:
             stability_confirm=args.stability_confirm, recovery_min=args.recovery_probe_min,
             recovery_max=args.recovery_probe_max, recovery_confirm=args.recovery_confirm,
             max_recovery_probes=args.max_recovery_probes, fragile=t.fragile,
-            long_pause_hours=args.long_pause_hours, graceful_delay=args.graceful_delay)
+            long_pause_hours=args.long_pause_hours, graceful_delay=args.graceful_delay,
+            fragile_start_delay=args.fragile_start_delay, fragile_window=args.fragile_window)
             for t in self.targets}
         if args.resume:
             self._resume(args.resume)
@@ -922,8 +926,12 @@ def main() -> int:
                          "after each give-up wait the next value, then one health check; holds at the "
                          "last value until healthy")
     ap.add_argument("--graceful-delay", type=float, default=15.0,
-                    help="inter-request delay (s) a fragile endpoint resumes at once it's back — find "
-                         "its safe cadence gently")
+                    help="inter-request delay (s) a NON-fragile endpoint resumes at after recovery")
+    ap.add_argument("--fragile-start-delay", type=float, default=180.0,
+                    help="fragile endpoints START here — 1 request every few MINUTES (the gentle floor) "
+                         "— then AIMD ramps the rate up until errors to find the golden spot")
+    ap.add_argument("--fragile-window", type=int, default=3,
+                    help="requests per round for fragile endpoints (small so minute-spaced rounds are fast)")
     ap.add_argument("--resume", default=None,
                     help="seed gold spots from a prior recommendation.json (path, or 'auto' for the "
                          "latest in the output dir) — for tiled GitHub-Actions runs")

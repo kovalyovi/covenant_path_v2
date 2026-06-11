@@ -297,9 +297,10 @@ def test_fragile_long_pause_escalation() -> None:
     # resume gently once a post-pause health check finds it back (the user's strategy).
     clock = FakeClock()
     c = _ctrl(kill_after=1, clock=clock, fragile=True,
-              long_pause_hours=(12, 24, 36, 48), graceful_delay=15.0)
+              long_pause_hours=(12, 24, 36, 48), fragile_start_delay=15.0)
     check("fragile caps concurrency low", c.max_concurrency == 2)
     check("fragile gives up short-probing fast (few probes)", c.max_recovery_probes == 4)
+    check("fragile starts at the gentle few-minute floor", c.delay_s == 15.0 and c.max_delay == 15.0)
     # open an outage and exhaust the short probes -> should enter a 12h long pause, not resume.
     c.concurrency = 1
     c.delay_s = c.max_delay  # at the floor so an outage opens
@@ -321,7 +322,7 @@ def test_fragile_long_pause_escalation() -> None:
     clock.t = c.long_pause_until
     c.record_health_check(Sample(200, 80.0))
     check("healthy health check clears the long pause", not c.is_long_paused())
-    check("resumes at the graceful delay (gentle cadence)", c.delay_s == 15.0)
+    check("resumes at the gentle few-minute start (golden-spot search restarts low)", c.delay_s == 15.0)
     check("pause level reset after recovery", c.long_pause_idx == 0)
 
 
