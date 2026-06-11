@@ -121,6 +121,72 @@ def test_report_degradation_helpers():
     return "feature gate + blocked-marking + coverage ok"
 
 
+def test_membertools_auth():
+    """Member Tools bearer mint/refresh/fetch (offline, mocked): silent authorize 302→code→token,
+    login_required failure, refresh, invalid_grant→RefreshTokenExpired, and the bulk fetch."""
+    from lcr_client import membertools as mt
+    v, c = mt._pkce()
+    assert v and c and "=" not in v and "+" not in v, "PKCE base64url"
+
+    class FakeResp:
+        def __init__(self, status=200, headers=None, j=None):
+            self.status_code, self.headers, self._j, self.text = status, headers or {}, j, ""
+        def json(self):
+            if self._j is None:
+                raise ValueError("no json")
+            return self._j
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"http {self.status_code}")
+
+    class FakeSession:
+        def __init__(self, loc):
+            self._loc = loc
+        def get(self, url, **k):
+            return FakeResp(302, headers={"Location": self._loc})
+
+    saved_post = mt.requests.post
+    try:
+        posts = []
+        def fake_post(url, **k):
+            posts.append((url, k))
+            if url.endswith("/token"):
+                return FakeResp(200, j={"access_token": "AT", "refresh_token": "RT", "expires_in": 86400})
+            return FakeResp(200, j={})
+        mt.requests.post = fake_post
+
+        tok = mt.mint_from_okta_session(FakeSession("membertoolsauth://login?state=x&code=THECODE"))
+        assert tok["access_token"] == "AT" and tok["refresh_token"] == "RT"
+        tform = next(k["data"] for u, k in posts if u.endswith("/token"))
+        assert tform["grant_type"] == "authorization_code" and tform["code"] == "THECODE"
+        assert tform["client_id"] == mt.CLIENT_ID and "code_verifier" in tform
+
+        # silent SSO didn't take → error=login_required → MemberToolsError (not a code)
+        try:
+            mt.mint_from_okta_session(FakeSession("membertoolsauth://login?error=login_required"))
+            assert False, "expected MemberToolsError"
+        except mt.MemberToolsError:
+            pass
+
+        assert mt.refresh("RT")["access_token"] == "AT"
+        rform = next(k["data"] for u, k in posts
+                     if u.endswith("/token") and k["data"].get("grant_type") == "refresh_token")
+        assert rform["refresh_token"] == "RT"
+
+        mt.requests.post = lambda url, **k: FakeResp(400, j={"error": "invalid_grant", "error_description": "dead"})
+        try:
+            mt.refresh("RT")
+            assert False, "expected RefreshTokenExpired"
+        except mt.RefreshTokenExpired:
+            pass
+
+        mt.requests.post = lambda url, **k: FakeResp(200, j={"covenantPathMembers": [{"id": "1"}]})
+        assert "covenantPathMembers" in mt.fetch_sync("AT")
+    finally:
+        mt.requests.post = saved_post
+    return "membertools mint/refresh/fetch + login_required + invalid_grant ok"
+
+
 def test_stale_first_unit_ordering():
     """build_stake_report's stale-first reorder: oldest-data units first, never-synced to the front,
     stable for ties — so a mid-run one-work outage leaves the LEAST-stale units unfinished."""
@@ -579,7 +645,7 @@ def main() -> int:
     print("== OFFLINE tests ==")
     offline = [test_token_store_roundtrip, test_token_store_key_mismatch,
                test_report_degradation_helpers, test_stale_first_unit_ordering,
-               test_calling_union_and_neutralize,
+               test_membertools_auth, test_calling_union_and_neutralize,
                test_http_util_transient_classification, test_http_util_retry_and_breaker,
                test_profile_action_retries_transient_500,
                test_okta_building_blocks, test_access_humanize,
