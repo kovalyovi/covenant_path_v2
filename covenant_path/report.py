@@ -469,6 +469,85 @@ def order_units_stale_first(units: list, unit_order: list[int]) -> list:
     return sorted(units, key=lambda u: rank.get(u.unit_number, -1))
 
 
+def build_membertools_report(
+    client: LcrClient,
+    *,
+    access_token: str | None = None,
+    refresh_token: str | None = None,
+    with_profile: bool = True,
+    access: dict | None = None,
+    cache: "ProfileCache | None" = None,
+    include_returning: bool = True,
+    verbose: bool = True,
+) -> tuple[list[CovenantPathMember], dict]:
+    """Build the covenant-path report from the RELIABLE Member Tools bulk API instead of the fragile
+    one-work cluster. ONE POST /api/v5/sync replaces the per-unit progress-record + per-person details
+    fan-out; the per-member /mlt profile merge (the reliable cluster) still fills the profile fields
+    (patriarchal_blessing, temple_recommend, ministering, priesthood, …) via _apply_profile, exactly
+    as before. Returns (members, run_stats).
+
+    Token: prefer an explicit `access_token`; else `refresh_token` (the stored 45-day token — the
+    delegated-stake path); else a silent mint off the live Okta session in `client` (the operator's
+    own sync, right after login). Raises membertools.MemberToolsError / RefreshTokenExpired up to the
+    caller so it can fall back to the old path or prompt a re-auth."""
+    from lcr_client import membertools
+    from covenant_path.membertools_adapter import adapt_sync
+
+    if not access_token:
+        if refresh_token:
+            access_token = membertools.refresh(refresh_token).get("access_token")
+        else:
+            access_token = membertools.mint_from_okta_session(client.session.session).get("access_token")
+    if not access_token:
+        raise membertools.MemberToolsError("no Member Tools access token")
+
+    payload = membertools.fetch_sync(access_token)
+    members = adapt_sync(payload, include_returning=include_returning)
+    stats = {"source": "membertools", "units": 1, "units_failed": 0, "failed_units": [],
+             "failed_unit_numbers": [], "members": len(members), "profile_ok": 0, "profile_cached": 0,
+             "profile_blocked": 0, "profile_error": 0}
+    if verbose:
+        print(f"[membertools] /api/v5/sync -> {len(members)} covenant-path members")
+
+    if access is None:
+        try:
+            access = covenant_path_access(client)
+        except Exception:  # noqa: BLE001 — profile merge is best-effort; sentinels survive
+            access = {}
+    can_profiles = _feature_allowed(access, "menu.view.member.profiles")
+    profile_blocked = False
+    fail_streak = 0
+    for member in members:
+        uuid = member.person_uuid
+        if not (with_profile and uuid):
+            continue
+        cached = cache.get(uuid) if cache else None
+        if cached is not None:
+            _apply_profile(member, cached)
+            stats["profile_cached"] += 1
+        elif profile_blocked:
+            _mark_profile_blocked(member)
+            stats["profile_blocked"] += 1
+        else:
+            try:
+                prof = profile_fields(client.session, uuid)
+                _apply_profile(member, prof)
+                if cache:
+                    cache.put(uuid, prof)
+                stats["profile_ok"] += 1
+                fail_streak = 0
+            except Exception as exc:  # noqa: BLE001
+                stats["profile_error"] += 1
+                fail_streak += 1
+                # If profiles keep failing AND the calling can't reach them, stop hammering a blocked
+                # endpoint and mark the rest access-blocked (mirrors build_stake_report).
+                if not can_profiles and fail_streak >= 5:
+                    profile_blocked = True
+                    _mark_profile_blocked(member)
+                logger.warning("profile merge failed for %s: %s", str(uuid)[:8], exc)
+    return members, stats
+
+
 def build_stake_report(
     client: LcrClient,
     include_returning: bool = False,

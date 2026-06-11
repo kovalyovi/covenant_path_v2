@@ -172,6 +172,42 @@ def test_membertools_adapter():
     return "membertools adapter: uuid mapping, progress fields, lessons, weeks, kind, de-dup ok"
 
 
+def test_membertools_build_report():
+    """build_membertools_report: bulk fetch (mocked) → adapt → /mlt profile merge fills the reliable
+    fields (patriarchal_blessing etc.) via _apply_profile. The fragile cluster is never touched."""
+    from covenant_path import report
+    import lcr_client.membertools as mt
+    payload = {
+        "units": [{"unitNumber": 100, "name": "Ward A"}],
+        "covenantPathMembers": [{
+            "id": "iid", "memberUuid": "PU-1", "unitNumber": 100, "sex": "MALE",
+            "confirmationDate": "2026-03-15", "friends": [{"name": "F"}],
+            "sacramentAttendance": [], "teachingRecords": [],
+        }],
+    }
+    saved_fetch, saved_prof = mt.fetch_sync, report.profile_fields
+    try:
+        mt.fetch_sync = lambda token, **k: payload
+        report.profile_fields = lambda session, uuid: {
+            "patriarchal_blessing": "Yes", "temple_recommend": "Active", "priesthood_office": None}
+
+        class FakeClient:
+            session = object()
+
+        members, stats = report.build_membertools_report(
+            FakeClient(), access_token="X", verbose=False,
+            access={"features": [{"feature": "menu.view.member.profiles", "allowed": True}]})
+        assert stats["source"] == "membertools" and stats["members"] == 1 == len(members)
+        assert stats["profile_ok"] == 1 and stats["failed_units"] == []
+        m = members[0]
+        assert m.person_uuid == "PU-1" and m.unit == "Ward A" and m.kind == "new_member"
+        assert m.baptism_date == "2026-03-15" and m.friends == "Yes"
+        assert m.patriarchal_blessing == "Yes" and m.temple_recommend == "Active"  # /mlt merge filled
+    finally:
+        mt.fetch_sync, report.profile_fields = saved_fetch, saved_prof
+    return "membertools build report: bulk + /mlt profile merge ok"
+
+
 def test_membertools_auth():
     """Member Tools bearer mint/refresh/fetch (offline, mocked): silent authorize 302→code→token,
     login_required failure, refresh, invalid_grant→RefreshTokenExpired, and the bulk fetch."""
@@ -696,7 +732,7 @@ def main() -> int:
     print("== OFFLINE tests ==")
     offline = [test_token_store_roundtrip, test_token_store_key_mismatch,
                test_report_degradation_helpers, test_stale_first_unit_ordering,
-               test_membertools_auth, test_membertools_adapter,
+               test_membertools_auth, test_membertools_adapter, test_membertools_build_report,
                test_calling_union_and_neutralize,
                test_http_util_transient_classification, test_http_util_retry_and_breaker,
                test_profile_action_retries_transient_500,
