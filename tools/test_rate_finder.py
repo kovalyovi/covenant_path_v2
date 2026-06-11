@@ -343,6 +343,49 @@ def test_long_pause_holds_at_last_value() -> None:
           abs(c.long_pause_until - (clock() + 24 * 3600)) < 1)
 
 
+def test_binary_search_converges_on_threshold() -> None:
+    # Once there's a stable spacing + a faster one that errored, bisect to pin the exact threshold.
+    # Model: spacing >= 60s is 100% stable; faster errors. The search must converge near 60s.
+    T = 60.0
+    c = _ctrl(confirm=2, bsearch_tol=0.1, max_delay=300.0)
+    c._stable_bound_delay = 120.0   # known stable (slow)
+    c._unstable_bound_delay = 20.0  # known unstable (fast)
+
+    def step():
+        clean = c.delay_s >= T
+        c._adapt(slo_ok=clean, zero_err=clean, transient=(0 if clean else 1),
+                 per_min=60 / c.delay_s, success=1.0 if clean else 0.5,
+                 p50=10, p95=10, max_ra=0, n=3)
+
+    step()  # first call enters binary search (bracket ready)
+    check("binary search engaged once a bracket exists", c.bsearch or c.threshold_stable_delay)
+    for _ in range(300):
+        if c.threshold_stable_delay is not None:
+            break
+        step()
+    check("binary search converged on a threshold", c.threshold_stable_delay is not None)
+    check("converged threshold is within ~15% of the true 60s boundary",
+          c.threshold_stable_delay is not None and 55.0 <= c.threshold_stable_delay <= 72.0)
+    check("threshold reported as a rate too",
+          c.summary()["threshold_rate_per_min"] is not None)
+
+
+def test_threshold_pin_and_drift_research() -> None:
+    # After converging, the controller PINS at the threshold; a later error there re-opens the search.
+    c = _ctrl(confirm=2, bsearch_tol=0.1, max_delay=300.0)
+    c.threshold_stable_delay = 60.0
+    c.delay_s = 60.0
+    # a clean round while pinned: hold (no change, no re-search)
+    c._adapt(slo_ok=True, zero_err=True, transient=0, per_min=1.0, success=1.0,
+             p50=10, p95=10, max_ra=0, n=3)
+    check("pinned + clean holds the threshold", c.threshold_stable_delay == 60.0 and not c.bsearch)
+    # an error at the pinned spacing → drift → re-search (threshold cleared, backed off)
+    c._adapt(slo_ok=False, zero_err=False, transient=1, per_min=1.0, success=0.5,
+             p50=10, p95=10, max_ra=0, n=3)
+    check("error at the pinned spacing clears the threshold (drift)", c.threshold_stable_delay is None)
+    check("drift backs the spacing off", c.delay_s > 60.0)
+
+
 def test_total_requests_counted() -> None:
     clock = FakeClock()
     c = _ctrl(kill_after=1, clock=clock)
@@ -392,6 +435,8 @@ def main() -> int:
     test_recovery_flaky_flag()
     test_fragile_long_pause_escalation()
     test_long_pause_holds_at_last_value()
+    test_binary_search_converges_on_threshold()
+    test_threshold_pin_and_drift_research()
     test_total_requests_counted()
     test_resume_seeds_stability_and_episodes()
     print(f"\n{_PASS} passed, {_FAIL} failed")

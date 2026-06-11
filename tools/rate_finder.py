@@ -253,7 +253,7 @@ class EndpointController:
                  max_recovery_probes: int = 24, fragile: bool = False,
                  long_pause_hours=(12, 24, 36, 48), graceful_delay: float = 15.0,
                  fragile_start_delay: float = 180.0, fragile_window: int = 3,
-                 clock=time.monotonic):
+                 bsearch_tol: float = 0.12, clock=time.monotonic):
         self.name = name
         self.success_target = success_target
         self.p95_cap_ms = p95_cap_ms
@@ -295,6 +295,19 @@ class EndpointController:
         self.healthy_streak = 0
         self.zero_streak = 0                              # consecutive ZERO-error rounds (stability)
         self.bad_streak = 0
+
+        # BINARY SEARCH for the exact stable↔unstable THRESHOLD: once AIMD has both a confirmed-stable
+        # spacing AND a faster spacing that errored, we bracket [unstable_delay, stable_delay] and
+        # bisect to converge on the golden spot (the fastest spacing that still holds 100%), instead of
+        # AIMD oscillating. Once found we PIN there; a later error re-opens the search (tracks drift).
+        self.bsearch_tol = bsearch_tol
+        self.bsearch = False
+        self.bsearch_lo = 0.0            # delay known UNSTABLE (faster bound)
+        self.bsearch_hi = 0.0            # delay known STABLE (slower bound)
+        self._bsearch_clean = 0
+        self._stable_bound_delay: float | None = None    # fastest (lowest-delay) clean spacing seen
+        self._unstable_bound_delay: float | None = None  # slowest (highest-delay) erroring spacing seen
+        self.threshold_stable_delay: float | None = None  # converged golden-spot inter-request delay (s)
         self.parked_until = 0.0                          # coarse bound; episodes are the real gate
 
         # FLOOR error rate: error % observed at the GENTLEST rate (concurrency=1, max delay). If this
@@ -397,11 +410,46 @@ class EndpointController:
         else:
             self.zero_streak = 0
 
+        # Track the bracket for the binary-search threshold (delay terms: lower delay = higher rate).
+        if zero_err:
+            self._stable_bound_delay = min(self._stable_bound_delay or 1e12, self.delay_s)
+        if transient:
+            self._unstable_bound_delay = max(self._unstable_bound_delay or 0.0, self.delay_s)
+
         if max_ra:
             # Server explicitly asked us to slow down — honor it and treat as a back-off signal.
             logger.warning("[%s] Retry-After=%ss — honoring + backing off", self.name, max_ra)
             self._backoff(per_min)
             time.sleep(min(max_ra, 120))
+            return
+
+        # PINNED at a found threshold: hold the golden spot; only an error here re-opens the search
+        # (so we track threshold DRIFT over the day instead of assuming it's fixed forever).
+        if self.threshold_stable_delay is not None and not self.bsearch:
+            if transient:
+                logger.info("[%s] threshold drifted — error at 1 per %.0fs; re-searching",
+                            self.name, self.delay_s)
+                self.bsearch_lo = self.delay_s
+                self.threshold_stable_delay = None
+                self._stable_bound_delay = None
+                self.delay_s = min(self.max_delay, self.delay_s * 1.4)  # back off to regain stability
+            return
+
+        if self.bsearch:
+            self._bsearch_step(zero_err, transient, per_min)
+            return
+
+        # ENTER binary search the moment we have a clean bracket (a stable spacing + a faster one that
+        # errored). Bisect between them to pin the exact threshold.
+        if (self._stable_bound_delay is not None and self._unstable_bound_delay is not None
+                and self._unstable_bound_delay < self._stable_bound_delay):
+            self.bsearch = True
+            self.bsearch_lo = self._unstable_bound_delay
+            self.bsearch_hi = self._stable_bound_delay
+            self._bsearch_clean = 0
+            self.delay_s = (self.bsearch_lo + self.bsearch_hi) / 2
+            logger.info("[%s] BINARY SEARCH: bracket 1 per %.0fs (stable) … 1 per %.0fs (unstable)",
+                        self.name, self.bsearch_hi, self.bsearch_lo)
             return
 
         if slo_ok:
@@ -428,6 +476,40 @@ class EndpointController:
             self._backoff(per_min)
             if self._at_floor() and self.bad_streak >= self.kill_after and not self.in_episode():
                 self._start_episode(per_min, n)
+
+    def _bsearch_step(self, zero_err: bool, transient: bool, per_min: float) -> None:
+        """One bisection step on the inter-request delay. The bracket is [lo=unstable, hi=stable]; a
+        midpoint that errors becomes the new lo, one that holds `confirm` clean rounds becomes the new
+        hi. Converges when the bracket is within `bsearch_tol` → that hi is the golden spot (pinned)."""
+        # If the known-STABLE bound itself now errors, conditions changed (LCR degrading) — bail out so
+        # the normal AIMD/outage path takes over instead of converging on a false threshold.
+        if transient and self.delay_s >= self.bsearch_hi - 1e-6:
+            logger.info("[%s] binary search aborted — even the stable bound errors now", self.name)
+            self.bsearch = False
+            self._stable_bound_delay = None
+            self._unstable_bound_delay = self.delay_s
+            self._backoff(per_min)
+            return
+        if transient:
+            self.bsearch_lo = self.delay_s          # this spacing is too fast → unstable
+            self._bsearch_clean = 0
+        elif zero_err:
+            self._bsearch_clean += 1
+            if self._bsearch_clean < self.confirm:
+                return                              # need `confirm` clean rounds to call it stable
+            self.bsearch_hi = self.delay_s          # confirmed stable at this spacing
+            self._bsearch_clean = 0
+        else:
+            return                                  # ambiguous (permanent/auth) — hold
+        if self.bsearch_hi - self.bsearch_lo <= max(self.bsearch_tol * self.bsearch_hi, self.min_delay):
+            self.threshold_stable_delay = round(self.bsearch_hi, 1)
+            self.bsearch = False
+            self.delay_s = self.bsearch_hi          # pin at the golden spot
+            logger.warning("[%s] THRESHOLD found: 100%% stable at 1 per %.1fs (~%.2f/min); "
+                           "errors below ~1 per %.1fs", self.name, self.bsearch_hi,
+                           60 / self.bsearch_hi, self.bsearch_lo)
+            return
+        self.delay_s = (self.bsearch_lo + self.bsearch_hi) / 2   # next midpoint
 
     # -- outage episodes + active recovery probing ---------------------------
     def _start_episode(self, per_min: float, n: int) -> None:
@@ -612,6 +694,13 @@ class EndpointController:
             # THE HEADLINE: the rate that held 100% stability (zero errors), as req/min AND interval.
             "stable_rate_per_min": stable,
             "stable_interval_s": round(60 / stable, 1) if stable else None,
+            # binary-searched exact threshold: the FASTEST spacing that still holds 100% stability.
+            "threshold_interval_s": self.threshold_stable_delay,
+            "threshold_rate_per_min": (round(60 / self.threshold_stable_delay, 2)
+                                       if self.threshold_stable_delay else None),
+            "bsearch_active": self.bsearch,
+            "bsearch_bracket_s": ([round(self.bsearch_lo, 1), round(self.bsearch_hi, 1)]
+                                  if self.bsearch else None),
             # can we even reach 100%? error % at the gentlest rate + a one-word verdict.
             "floor_error_pct": self.floor_error_pct(),
             "stability_verdict": self.stability_verdict(),
@@ -669,7 +758,8 @@ class Harness:
             recovery_max=args.recovery_probe_max, recovery_confirm=args.recovery_confirm,
             max_recovery_probes=args.max_recovery_probes, fragile=t.fragile,
             long_pause_hours=args.long_pause_hours, graceful_delay=args.graceful_delay,
-            fragile_start_delay=args.fragile_start_delay, fragile_window=args.fragile_window)
+            fragile_start_delay=args.fragile_start_delay, fragile_window=args.fragile_window,
+            bsearch_tol=args.bsearch_tol)
             for t in self.targets}
         if args.resume:
             self._resume(args.resume)
@@ -932,6 +1022,9 @@ def main() -> int:
                          "— then AIMD ramps the rate up until errors to find the golden spot")
     ap.add_argument("--fragile-window", type=int, default=3,
                     help="requests per round for fragile endpoints (small so minute-spaced rounds are fast)")
+    ap.add_argument("--bsearch-tol", type=float, default=0.12,
+                    help="binary-search convergence tolerance (fraction of the stable bound) for the "
+                         "exact stable↔unstable threshold")
     ap.add_argument("--resume", default=None,
                     help="seed gold spots from a prior recommendation.json (path, or 'auto' for the "
                          "latest in the output dir) — for tiled GitHub-Actions runs")
