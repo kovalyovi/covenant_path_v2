@@ -12,6 +12,11 @@ coverage
 # TypeScript incremental build cache
 *.tsbuildinfo
 
+# Playwright e2e artifacts
+test-results/
+playwright-report/
+blob-report/
+
 # Env — never commit real secrets
 .env
 .env.*

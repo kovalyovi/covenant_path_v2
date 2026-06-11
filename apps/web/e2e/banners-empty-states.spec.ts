@@ -1,0 +1,108 @@
+// Scenario 6 — dashboard banners + empty states:
+//   • StaleBanner variants (revoked / stale-non-provider "take it over") and their re-enroll action
+//   • the live SyncingBanner with the elapsed counter (driven by stakes.sync_state = 'running')
+//   • EmptyState variants: no-role-but-known-stake / no credential / first sync running
+
+import { test, expect } from '@playwright/test';
+import { openDashboard, enrollmentStatus, stakeRow, STAKE_NAME } from './support';
+
+test.describe('banners', () => {
+  test('a revoked credential shows the paused banner and Re-enroll opens the ReauthDialog', async ({ page }) => {
+    await openDashboard(page, {
+      broker: {
+        'GET /auth/enrollment-status': { json: enrollmentStatus({}, { state: 'revoked', is_provider: false }) },
+      },
+    });
+
+    const banner = page.getByRole('status').filter({ hasText: 'Sync paused' });
+    await expect(banner).toContainText('Sync paused — credential revoked. Re-enroll to resume daily updates.');
+
+    await banner.getByRole('button', { name: 'Re-enroll' }).click();
+    await expect(page.getByRole('dialog', { name: 'Re-authorize daily sync' })).toBeVisible();
+    await expect(page).toHaveURL(/\/baptisms$/); // in-app modal, not a login bounce
+  });
+
+  test('a stale NON-provider credential offers to take the sync over', async ({ page }) => {
+    await openDashboard(page, {
+      broker: {
+        'GET /auth/enrollment-status': {
+          json: enrollmentStatus({}, { state: 'stale', is_provider: false, last_error: 'session expired' }),
+        },
+      },
+    });
+
+    const banner = page.getByRole('status').filter({ hasText: 'daily sync has failed' });
+    await expect(banner).toContainText('The leader who set it up needs to re-authorize');
+    await expect(banner).toContainText('take it over');
+    await expect(banner.getByRole('button', { name: 'Authorize on my account' })).toBeVisible();
+  });
+
+  test('a running sync shows the live banner with an elapsed counter', async ({ page }) => {
+    const startedAt = new Date(Date.now() - 90_000).toISOString(); // 1m 30s ago
+    await openDashboard(page, {
+      supabase: { stakes: [stakeRow({ sync_state: 'running', sync_started_at: startedAt })] },
+    });
+
+    const banner = page.getByRole('status').filter({ hasText: 'Syncing your stake from LCR' });
+    await expect(banner).toContainText('fresh data in a few minutes');
+    await expect(banner).toContainText(/\b1m \d+s elapsed/);
+  });
+});
+
+test.describe('empty states', () => {
+  test('no role in a KNOWN stake explains access ended — not a setup prompt', async ({ page }) => {
+    await openDashboard(page, {
+      supabase: { stakes: [], members: [], comments: [] },
+      broker: {
+        'GET /auth/enrollment-status': {
+          json: enrollmentStatus(
+            { status: 'no_role', member_count: 42, has_data: true },
+            { state: 'active', is_provider: false },
+          ),
+        },
+      },
+    });
+
+    await expect(page.getByRole('heading', { name: 'No access with your current calling' })).toBeVisible();
+    await expect(page.getByText(`${STAKE_NAME} is synced with Covenant Path`)).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Authorize stake sync' })).not.toBeVisible();
+  });
+
+  test('no credential at all prompts to set up stake sync (and opens the ReauthDialog)', async ({ page }) => {
+    await openDashboard(page, {
+      supabase: { stakes: [], members: [], comments: [] },
+      broker: {
+        'GET /auth/enrollment-status': {
+          json: enrollmentStatus(
+            { status: 'no_role', stake_name: null, unit_number: null, member_count: 0, has_data: false },
+            { state: 'none', complete: false, principal_name: null },
+          ),
+        },
+      },
+    });
+
+    await expect(page.getByRole('heading', { name: 'Set up stake sync' })).toBeVisible();
+    const cta = page.getByRole('button', { name: 'Authorize stake sync' });
+    await expect(cta).toBeVisible();
+
+    await cta.click();
+    await expect(page.getByRole('dialog', { name: 'Re-authorize daily sync' })).toBeVisible();
+  });
+
+  test('an active credential with no data yet shows the first-sync-running state', async ({ page }) => {
+    await openDashboard(page, {
+      supabase: { stakes: [], members: [], comments: [] },
+      broker: {
+        'GET /auth/enrollment-status': {
+          json: enrollmentStatus(
+            { member_count: 0, has_data: false, last_synced_at: null },
+            { state: 'active', is_provider: true },
+          ),
+        },
+      },
+    });
+
+    await expect(page.getByRole('heading', { name: 'Setting up your stake…' })).toBeVisible();
+    await expect(page.getByText('the first sync is running')).toBeVisible();
+  });
+});

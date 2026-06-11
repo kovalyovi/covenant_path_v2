@@ -11,6 +11,9 @@ export default mergeConfig(
       environment: 'jsdom',
       setupFiles: ['./src/test/setup.ts'],
       css: false,
+      // Unit tests live under src/ only — keeps vitest away from the Playwright specs in e2e/
+      // (their default include pattern would otherwise pick up e2e/*.spec.ts).
+      include: ['src/**/*.{test,spec}.{ts,tsx}'],
     },
   }),
 );

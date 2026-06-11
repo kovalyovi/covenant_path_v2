@@ -39,13 +39,18 @@ LCR (church data)
    change it there and all views follow. See "Where things are defined" below.
 3. **RLS is the only access gate.** Clients do no filtering; the DB returns only allowed
    rows. Any new client query is automatically scoped. Don't add app-side access checks.
-4. **Test before commit.** Backend: `python tools/test_suite.py` (+ `--live`),
-   `python -m backend.test_rls`, `python -m backend.test_power_users`,
-   `python -m backend.test_admins`, `python -m backend.test_broker`,
-   `python -m backend.test_login_audit`, `python -m backend.test_reconcile`,
-   `python -m backend.test_calling_overrides`. **Web (React, `apps/web`):** `npm run typecheck`
-   (clean) · `npm run test` · `npm run build`. **Native:** verified in CI
+4. **Test before commit** (full lane map + scenario catalog: `docs/TESTING.md`). Backend:
+   `python tools/test_suite.py` (+ `--live`), `python -m backend.test_broker`,
+   `python -m ruff check --select F821 backend lcr_client covenant_path sheets_sync scripts tests`,
+   **`python -m pytest tests/e2e -q`** (real broker vs mock LCR — no secrets), and the live
+   suites when their areas are touched: `python -m backend.test_rls`, `test_power_users`,
+   `test_admins`, `test_login_audit`, `test_reconcile`, `test_calling_overrides`.
+   **Web (React, `apps/web`):** `npm run typecheck` · `npm run test` · `npm run build` ·
+   **`npm run e2e`** (Playwright, mocked edges). **Native:** verified in CI
    (`build-native-ios.yml` / `build-native-android.yml`) — the agent can't build native locally.
+   CI re-runs the right lanes on push via `.github/workflows/tests.yml` (nightly = everything).
+   **A user-facing change or bug fix MUST add/extend its scenario row in `docs/TESTING.md`**
+   (regression tests must FAIL against the pre-fix code).
 5. **Migrations are additive + numbered** (`backend/migrations/000N_*.sql`), idempotent
    (`if not exists` / `drop policy ... ; create`). Apply with `python -m backend.apply`.
 6. **`cd /d <path>` is a cmd.exe idiom that SILENTLY FAILS in the bash tool** — use plain

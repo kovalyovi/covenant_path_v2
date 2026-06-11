@@ -1,0 +1,172 @@
+# The "features touched => their tests run" gate (docs/TESTING.md).
+#
+# Push to main: path-filtered jobs — backend changes run the backend lanes, web changes the web
+# lanes. Nightly + manual dispatch: EVERYTHING, including the secrets-gated live lanes (prod
+# smoke suites and the test-project RLS matrix). No pull_request triggers on purpose: this is a
+# public repo and the secret-bearing lanes must never be reachable from forks (the mock lanes
+# need no secrets at all).
+name: tests
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 7 * * *" # nightly full run (07:17 UTC)
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    # On schedule/dispatch there is no diff — everything runs (the filter only narrows pushes).
+    outputs:
+      backend: ${{ github.event_name != 'push' && 'true' || steps.filter.outputs.backend }}
+      web: ${{ github.event_name != 'push' && 'true' || steps.filter.outputs.web }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'push'
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'lcr_client/**'
+              - 'covenant_path/**'
+              - 'sheets_sync/**'
+              - 'scripts/**'
+              - 'tools/**'
+              - 'tests/**'
+              - 'requirements*.txt'
+              - '.github/workflows/tests.yml'
+            web:
+              - 'apps/web/**'
+              - '.github/workflows/tests.yml'
+
+  lint-backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install ruff
+      # F821 (undefined name) is the class of bug that broke every enroll on 2026-06-10.
+      - run: ruff check --select F821 backend lcr_client covenant_path sheets_sync scripts tests
+
+  backend-offline:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - run: pip install -r requirements-dev.txt
+      - run: python tools/test_suite.py
+      - run: python -m backend.test_broker
+
+  backend-e2e-mock:
+    # The real broker + real lcr_client against the fixture mock LCR/Okta + Supabase stub.
+    # Zero secrets — safe anywhere.
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest tests/e2e -q --timeout=300
+
+  web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run: { working-directory: apps/web }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: apps/web/package-lock.json }
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run build
+
+  web-e2e:
+    # Playwright UI-state lane: everything mocked at the network edge — zero secrets.
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run: { working-directory: apps/web }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: apps/web/package-lock.json }
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report/
+          retention-days: 7
+
+  live-smoke:
+    # Existing live suites against PRODUCTION Supabase (read/temp-row tests, service key needed).
+    # Nightly + manual only — never on plain pushes, never reachable from forks.
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: live suites (skip cleanly when secrets are absent)
+        run: |
+          if [ -z "$SUPABASE_URL" ]; then echo "no prod secrets — skipping"; exit 0; fi
+          python -m backend.test_rls
+          python -m backend.test_power_users
+          python -m backend.test_admins
+          python -m backend.test_login_audit
+          python -m backend.test_reconcile
+          python -m backend.test_calling_overrides
+
+  rls-matrix-testproject:
+    # Phase B: seeded persona matrix against the DEDICATED TEST Supabase project.
+    # Runs only when the CP_TEST_SUPABASE_* secrets exist (set them after creating the project).
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    env:
+      CP_TEST_SUPABASE_URL: ${{ secrets.CP_TEST_SUPABASE_URL }}
+      CP_TEST_SUPABASE_ANON_KEY: ${{ secrets.CP_TEST_SUPABASE_ANON_KEY }}
+      CP_TEST_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CP_TEST_SUPABASE_SERVICE_ROLE_KEY }}
+      CP_TEST_SUPABASE_DB_URL: ${{ secrets.CP_TEST_SUPABASE_DB_URL }}
+      OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - run: pip install -r requirements-dev.txt
+      - name: migrate + seed + RLS matrix (skip cleanly until the test project exists)
+        run: |
+          if [ -z "$CP_TEST_SUPABASE_URL" ]; then echo "no test-project secrets — skipping"; exit 0; fi
+          SUPABASE_DB_URL="$CP_TEST_SUPABASE_DB_URL" python -m backend.apply
+          python -m tests.seed
+          python -m pytest tests/test_rls_matrix.py -q --timeout=300
