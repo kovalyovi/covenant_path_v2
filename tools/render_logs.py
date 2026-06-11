@@ -73,7 +73,10 @@ def _parse_since(s: str) -> datetime:
 
 
 def _parse_iso(s: str) -> datetime:
-    return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc)
+    # Render emits nanosecond fractions ("...47.450447824Z"); Python <3.11 fromisoformat
+    # only accepts up to microseconds — trim the fraction to 6 digits.
+    s = re.sub(r"\.(\d{6})\d+", r".\1", s.replace("Z", "+00:00"))
+    return datetime.fromisoformat(s).astimezone(timezone.utc)
 
 
 def fetch_logs(service_id: str, owner_id: str, start: datetime, end: datetime,
