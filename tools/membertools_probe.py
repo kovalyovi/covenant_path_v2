@@ -160,6 +160,27 @@ def main() -> int:
         mark = "OK " if hit else "?? "
         print(f"  {mark}{concept:24} -> {hit if hit else 'NOT FOUND (candidates: %s)' % candidates}")
 
+    # CORRECTNESS: which MT id matches our existing person_uuid? (wrong choice => duplicated members)
+    try:
+        from backend import db as _db
+        ids_id, ids_member = set(), set()
+        for arr in ("covenantPathInvestigators", "covenantPathMembers", "covenantPathReturningMembers"):
+            for p in (data.get(arr) or []):
+                if p.get("id"):
+                    ids_id.add(str(p["id"]).lower())
+                if p.get("memberUuid"):
+                    ids_member.add(str(p["memberUuid"]).lower())
+        conn = _db.connect(); cur = conn.cursor()
+        cur.execute("select lower(person_uuid) from members where person_uuid is not null")
+        ours = {r[0] for r in cur.fetchall()}
+        conn.close()
+        print("\n=== person_uuid MATCH vs our DB (which MT field to key on) ===")
+        print(f"  our DB person_uuids: {len(ours)}")
+        print(f"  MT 'id'        overlap: {len(ids_id & ours)} / {len(ids_id)}")
+        print(f"  MT 'memberUuid' overlap: {len(ids_member & ours)} / {len(ids_member)}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"\n(person_uuid cross-check skipped: {exc})")
+
     out = Path(__file__).resolve().parent / "output" / "membertools_sync_shape.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     shape = {"top_level": top,

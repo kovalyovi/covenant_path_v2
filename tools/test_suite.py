@@ -121,6 +121,57 @@ def test_report_degradation_helpers():
     return "feature gate + blocked-marking + coverage ok"
 
 
+def test_membertools_adapter():
+    """Member Tools /api/v5/sync payload → CovenantPathMember (synthetic fixture, no PII): person_uuid
+    = memberUuid|id, covenant-path progress filled, profile fields = NEEDS_PROFILE sentinel, lessons
+    from teachingRecords, weeks-since computed from sacramentAttendance, kind + unit + de-dup."""
+    from datetime import date, timedelta
+    from covenant_path.membertools_adapter import adapt_sync
+    from covenant_path.report import NEEDS_PROFILE
+    attended = (date.today() - timedelta(days=14)).isoformat()  # 2 weeks ago
+    payload = {
+        "units": [{"unitNumber": 100, "name": "Alpha Ward",
+                   "childUnits": [{"unitNumber": 101, "name": "Beta Branch"}]}],
+        "covenantPathInvestigators": [{
+            "id": "INV-UUID", "unitNumber": 101, "sex": "FEMALE", "baptismGoalDate": "2026-07-01",
+            "firstTaught": "2026-05-01", "nextAppointment": "2026-06-20",
+            "friends": [{"name": "Pat Friend"}, {"names": {"given": "Sam", "family": "Helper"}}],
+            "sacramentAttendance": [{"date": attended, "attended": True},
+                                    {"date": "2026-04-01", "attended": False}],
+            "teachingRecords": [{"title": "Restoration",
+                                 "principles": [{"title": "First Vision", "taught": True, "memberPresent": True}]}],
+            "commitments": [{"title": "Baptism"}],
+        }],
+        "covenantPathMembers": [{
+            "id": "MEMBER-INTERNAL-ID", "memberUuid": "MEMBER-PERSON-UUID", "unitNumber": 100,
+            "sex": "MALE", "confirmationDate": "2026-03-15", "friends": [],
+            "sacramentAttendance": [], "teachingRecords": [],
+        }],
+        # a duplicate of the member under returning — must de-dupe by person_uuid
+        "covenantPathReturningMembers": [{"id": "X", "memberUuid": "MEMBER-PERSON-UUID", "unitNumber": 100}],
+    }
+    rows = {m.person_uuid: m for m in adapt_sync(payload)}
+    assert set(rows) == {"INV-UUID", "MEMBER-PERSON-UUID"}, list(rows)  # de-duped, keyed right
+
+    inv = rows["INV-UUID"]
+    assert inv.kind == "investigator" and inv.unit == "Beta Branch" and inv.sex == "F"
+    assert inv.baptism_goal_date == "2026-07-01"
+    assert inv.friends == "Yes" and inv.friends_count == 2
+    assert inv.weeks_since_last_attendance == 2, inv.weeks_since_last_attendance
+    assert inv.details["lessons"][0]["name"] == "Restoration"
+    assert inv.details["lessons"][0]["principles"][0]["memberPresent"] is True
+    assert inv.details["firstLesson"] == "2026-05-01" and inv.details["source"] == "membertools"
+    # profile fields await the /mlt merge
+    assert inv.patriarchal_blessing == NEEDS_PROFILE and inv.temple_recommend == NEEDS_PROFILE
+
+    mem = rows["MEMBER-PERSON-UUID"]
+    assert mem.kind == "new_member" and mem.unit == "Alpha Ward" and mem.sex == "M"
+    assert mem.baptism_date == "2026-03-15"  # confirmationDate = the precise baptism date
+    assert mem.friends == "No" and mem.friends_count == 0
+    assert mem.weeks_since_last_attendance is None  # no attended record
+    return "membertools adapter: uuid mapping, progress fields, lessons, weeks, kind, de-dup ok"
+
+
 def test_membertools_auth():
     """Member Tools bearer mint/refresh/fetch (offline, mocked): silent authorize 302→code→token,
     login_required failure, refresh, invalid_grant→RefreshTokenExpired, and the bulk fetch."""
@@ -645,7 +696,8 @@ def main() -> int:
     print("== OFFLINE tests ==")
     offline = [test_token_store_roundtrip, test_token_store_key_mismatch,
                test_report_degradation_helpers, test_stale_first_unit_ordering,
-               test_membertools_auth, test_calling_union_and_neutralize,
+               test_membertools_auth, test_membertools_adapter,
+               test_calling_union_and_neutralize,
                test_http_util_transient_classification, test_http_util_retry_and_breaker,
                test_profile_action_retries_transient_500,
                test_okta_building_blocks, test_access_humanize,
