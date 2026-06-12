@@ -552,10 +552,13 @@ def auth_otp_start(req: OtpStartReq,
         # operator) was invisible in login_audit — every start looked like it never happened. The
         # identifier lands in the email column (it's what the member typed; admin-only RLS), so a
         # phantom send to an email-shaped identifier is diagnosable from the audit alone.
+        # identifier_hint present == the email did NOT resolve to a cached username (truly suspect);
+        # a resolved email identified with the real username and sends normally.
         _audit_okta_event(req.email, "otp_code_sent",
-                          "identifier looks like an email — possible enumeration-prevention "
-                          "phantom (no email is sent for a non-username identifier)"
-                          if "@" in (req.email or "") else "", rid,
+                          "identifier looks like an email and did not resolve to a known Church "
+                          "username — possible enumeration-prevention phantom (no email is sent "
+                          "for a non-username identifier)"
+                          if res.get("identifier_hint") else "", rid,
                           duration_ms=int((time.monotonic() - t0) * 1000),
                           phase="okta:otp_code_sent")
         return res
