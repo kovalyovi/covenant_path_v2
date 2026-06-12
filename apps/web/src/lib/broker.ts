@@ -311,9 +311,11 @@ export class BrokerClient {
     return this.post('/auth/mfa/verify', { login_id: loginId, code, enroll });
   }
 
-  /** Church account sign-in via email OTP (Church's Okta sends the code, not Supabase). */
-  otpStart(email: string, enroll = false): Promise<void> {
-    return this.postJson('/auth/otp/start', { email, enroll }).then(() => {});
+  /** Church account sign-in via email OTP (Church's Okta sends the code, not Supabase).
+   *  The body may carry advisory hints: `identifier_hint` (email-shaped identifier — see the
+   *  phantom-flow incident) and `throttle_hint` (a send burst may have paused Okta's emails). */
+  otpStart(email: string, enroll = false): Promise<Record<string, unknown>> {
+    return this.postJson('/auth/otp/start', { email, enroll });
   }
 
   otpVerify(email: string, code: string, enroll = false): Promise<BrokerResult> {

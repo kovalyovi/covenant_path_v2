@@ -32,6 +32,8 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [otpSent, setOtpSent] = useState(false);
+  // Broker advisory after a send burst: Okta quietly pauses email delivery (2026-06-12).
+  const [throttleHint, setThrottleHint] = useState<string | null>(null);
   // Same MFA-input hygiene as LoginPage (2026-06-11): codes never survive a factor switch or a
   // failed verify, and resend cools down so the member waits for the FRESH code.
   const [resendIn, setResendIn] = useState(0);
@@ -48,6 +50,7 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
     setMfaCode('');
     setOtpCode('');
     setOtpSent(false);
+    setThrottleHint(null);
     setResendIn(0);
     setError(null);
     setStatus(null);
@@ -129,7 +132,8 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
 
   const startOtp = () =>
     run(async () => {
-      await broker.otpStart(email.trim(), true); // enroll=true
+      const body = await broker.otpStart(email.trim(), true); // enroll=true
+      setThrottleHint(typeof body['throttle_hint'] === 'string' ? (body['throttle_hint'] as string) : null);
       setOtpSent(true);
       setOtpCode('');
       setResendIn(30);
@@ -220,6 +224,9 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
           <p>A code was sent to the email address on your Church Account. Enter it here.</p>
           {otpUsernameHint(email) && (
             <p className="tiny" style={{ color: 'var(--primary)' }}>{otpUsernameHint(email)}</p>
+          )}
+          {throttleHint && (
+            <p className="tiny" style={{ color: 'var(--primary)' }}>{throttleHint}</p>
           )}
           <label className="field">
             <span>Verification code</span>

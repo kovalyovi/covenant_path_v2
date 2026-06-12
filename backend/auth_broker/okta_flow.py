@@ -864,6 +864,19 @@ _OTP_USERNAME_HINT = (
     "what you entered is probably not your username — start over and enter the username you use "
     "at churchofjesuschrist.org (usually not an email address).")
 
+# Okta SILENTLY stops emailing codes after a burst of requests for the same account (observed
+# live 2026-06-12: five delivered in 36 minutes, then every accepted select produced no email
+# for 40+ minutes — wire-indistinguishable from a normal send). Track sends per identifier so
+# the member is told the likely reason instead of hammering "Send a new code" (which extends
+# the suppression). In-memory is fine — the broker runs single-instance.
+_OTP_SEND_TIMES: dict[str, list[float]] = {}  # identifier -> recent send timestamps
+_OTP_THROTTLE_WINDOW = 3600.0
+_OTP_THROTTLE_AFTER = 4  # the 4th+ send within the window earns the hint
+_OTP_THROTTLE_HINT = (
+    "Several codes were requested for this account recently — the Church sign-in service may "
+    "quietly pause email delivery for a while. If no code arrives, wait 15-30 minutes before "
+    "requesting another, and only enter the NEWEST code.")
+
 
 def otp_start(identifier: str) -> dict:
     """Begin a PASSWORDLESS login: identify -> find okta_email on the PRIMARY factor menu ->
@@ -874,6 +887,10 @@ def otp_start(identifier: str) -> dict:
     # Mappings whose pending login was TTL-pruned are dead — drop them so the map stays bounded.
     for k in [k for k, v in _OTP_BY_IDENTIFIER.items() if v not in _PENDING]:
         _OTP_BY_IDENTIFIER.pop(k, None)
+    now = time.time()
+    for k in [k for k, ts in _OTP_SEND_TIMES.items()
+              if not ts or now - ts[-1] > _OTP_THROTTLE_WINDOW]:
+        _OTP_SEND_TIMES.pop(k, None)
     ident = (identifier or "").strip().lower()
     if not ident:
         raise AuthError("Enter your Church username first.", kind="otp_bad_request")
@@ -918,6 +935,11 @@ def otp_start(identifier: str) -> dict:
     res = {"status": "code_sent", "sent_to": email_factor.get("label") or "your email"}
     if "@" in ident and not resolved:
         res["identifier_hint"] = _OTP_USERNAME_HINT
+    sends = [t for t in _OTP_SEND_TIMES.get(ident, []) if now - t < _OTP_THROTTLE_WINDOW]
+    sends.append(now)
+    _OTP_SEND_TIMES[ident] = sends
+    if len(sends) >= _OTP_THROTTLE_AFTER:
+        res["throttle_hint"] = _OTP_THROTTLE_HINT
     return res
 
 

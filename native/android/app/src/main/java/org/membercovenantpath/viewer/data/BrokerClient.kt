@@ -191,12 +191,13 @@ class BrokerClient(private val auth: AuthRepository = AuthRepository()) {
         })
 
     /** Passwordless Church sign-in: the broker asks Okta to email a code (no password). Throws a
-     *  friendly BrokerException when the account's Okta policy is password-first (the default). */
-    suspend fun otpStart(email: String, enroll: Boolean = false) {
+     *  friendly BrokerException when the account's Okta policy is password-first (the default).
+     *  The body may carry advisory hints: `identifier_hint` (email-shaped identifier — phantom
+     *  flow) and `throttle_hint` (a send burst may have paused Okta's emails, 2026-06-12). */
+    suspend fun otpStart(email: String, enroll: Boolean = false): JsonObject =
         postJsonRetry("/auth/otp/start", buildJsonObject {
             put("email", JsonPrimitive(email)); put("enroll", JsonPrimitive(enroll))
         })
-    }
 
     suspend fun otpVerify(email: String, code: String, enroll: Boolean = false): BrokerResult =
         post("/auth/otp/verify", buildJsonObject {

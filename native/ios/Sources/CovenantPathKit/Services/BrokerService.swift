@@ -249,9 +249,12 @@ public final class BrokerService: @unchecked Sendable {
         return result(from: d)
     }
 
-    /// Church account sign-in via email OTP (sent by Church's Okta, not Supabase).
-    public func otpStart(_ email: String, enroll: Bool = false) async throws {
-        _ = try await postJSON("/auth/otp/start", ["email": email, "enroll": enroll])
+    /// Church account sign-in via email OTP (sent by Church's Okta, not Supabase). The body may
+    /// carry advisory hints: `identifier_hint` (email-shaped identifier — phantom flow) and
+    /// `throttle_hint` (a send burst may have paused Okta's emails, 2026-06-12).
+    @discardableResult
+    public func otpStart(_ email: String, enroll: Bool = false) async throws -> [String: Any] {
+        try await postJSON("/auth/otp/start", ["email": email, "enroll": enroll])
     }
 
     public func otpVerify(_ email: String, _ code: String, enroll: Bool = false) async throws -> BrokerResult {

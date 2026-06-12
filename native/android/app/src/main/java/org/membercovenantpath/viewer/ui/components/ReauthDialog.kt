@@ -27,6 +27,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonPrimitive
 import org.membercovenantpath.viewer.data.AuthRepository
 import org.membercovenantpath.viewer.data.BrokerClient
 import org.membercovenantpath.viewer.data.BrokerException
@@ -66,6 +67,8 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
     var mfaCode by remember { mutableStateOf("") }
     var otpCode by remember { mutableStateOf("") }
     var otpSent by remember { mutableStateOf(false) }
+    // Broker advisory after a send burst: Okta quietly pauses email delivery (2026-06-12).
+    var throttleHint by remember { mutableStateOf<String?>(null) }
     var loginId by remember { mutableStateOf<String?>(null) }
     var factors by remember { mutableStateOf<List<BrokerFactor>>(emptyList()) }
     var factorSent by remember { mutableStateOf<BrokerFactor?>(null) }
@@ -170,7 +173,8 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
     fun startOtp() = step {
         // enroll=true: this IS the consent. The broker answers only after Okta actually sent
         // the email (or with an honest error when the account is password-first).
-        broker.otpStart(email.trim(), enroll = true)
+        val body = broker.otpStart(email.trim(), enroll = true)
+        throttleHint = (body["throttle_hint"] as? JsonPrimitive)?.content
         otpSent = true
         otpCode = ""
         resendIn = 30
@@ -199,6 +203,11 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
                     otpSent -> {
                         Text("A code was sent to the email address on your Church Account. Enter it here.")
                         otpUsernameHint(email.trim())?.let {
+                            Spacer(Modifier.size(4.dp))
+                            Text(it, style = MaterialTheme.typography.bodySmall,
+                                 color = MaterialTheme.colorScheme.primary)
+                        }
+                        throttleHint?.let {
                             Spacer(Modifier.size(4.dp))
                             Text(it, style = MaterialTheme.typography.bodySmall,
                                  color = MaterialTheme.colorScheme.primary)

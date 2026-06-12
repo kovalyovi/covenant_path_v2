@@ -773,6 +773,40 @@ def _continuation_payload() -> dict:
     }
 
 
+def test_otp_send_burst_throttle_hint() -> None:
+    # Okta SILENTLY stops emailing codes after a burst (observed live 2026-06-12: five delivered
+    # in 36 minutes, then nothing for 40+ minutes with every select still accepted). The 4th+
+    # send within the hour must carry throttle_hint so the member stops hammering "Send a new
+    # code" (which extends the suppression) instead of reporting "no code ever arrives".
+    from backend.auth_broker import identity_cache as ic
+
+    def fake_drive(_s, identifier, _lid):
+        return ({"stateHandle": "sh",
+                 "authenticators": {"value": [{"id": "em1", "key": "okta_email"}]},
+                 "remediation": {"value": [{
+                     "name": "select-authenticator-authenticate", "href": "https://x/idx/select",
+                     "value": [{"name": "authenticator", "options": [{
+                         "label": "Email",
+                         "value": {"form": {"value": [{"name": "id", "value": "em1"}]}},
+                     }]}]}]}}, "ver")
+
+    saved = (okta_flow._drive_to_identify, okta_flow.select_factor, ic.username_for_email)
+    okta_flow._drive_to_identify = fake_drive
+    okta_flow.select_factor = lambda _lid, _fid: {"status": "code_sent"}
+    ic.username_for_email = lambda _e: None
+    ident = "burst.tester"
+    try:
+        hints = [("throttle_hint" in okta_flow.otp_start(ident)) for _ in range(4)]
+        check("first three sends carry no throttle hint", hints[:3] == [False, False, False])
+        check("the 4th send within the hour carries the throttle hint", hints[3] is True)
+    finally:
+        okta_flow._drive_to_identify, okta_flow.select_factor, ic.username_for_email = saved
+        okta_flow._OTP_SEND_TIMES.pop(ident, None)
+        lid = okta_flow._OTP_BY_IDENTIFIER.pop(ident, None)
+        if lid:
+            okta_flow._PENDING.pop(lid, None)
+
+
 def test_otp_mfa_continuation() -> None:
     # 2026-06-12 (operator enabled MFA): a CORRECT emailed code came back "We couldn't verify
     # that code" forever — the post-verify payload was a CONTINUATION (next factor owed), not a
@@ -1880,6 +1914,7 @@ def main() -> int:
     test_verify_wrong_code_friendly_and_state_refresh()
     test_otp_email_identifier_guidance()
     test_otp_start_resolves_cached_email()
+    test_otp_send_burst_throttle_hint()
     test_otp_mfa_continuation()
     test_verify_no_message_still_friendly()
     test_mfa_bad_code_factor_guidance()

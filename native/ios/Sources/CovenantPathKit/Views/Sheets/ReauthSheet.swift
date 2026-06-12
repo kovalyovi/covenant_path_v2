@@ -25,6 +25,8 @@ struct ReauthSheet: View {
     @State private var factors: [BrokerFactor] = []
     @State private var factorSent: BrokerFactor?
     @State private var otpSent = false
+    // Broker advisory after a send burst: Okta quietly pauses email delivery (2026-06-12).
+    @State private var throttleHint: String?
     @State private var busy = false
     @State private var status: String?
     @State private var error: String?
@@ -70,6 +72,9 @@ struct ReauthSheet: View {
                 .font(.callout)
             if let hint = otpUsernameHint(for: email.trimmed) {
                 Text(hint).font(.caption).foregroundStyle(.tint)
+            }
+            if let throttleHint {
+                Text(throttleHint).font(.caption).foregroundStyle(.tint)
             }
             TextField("Verification code", text: $otpCode)
                 .textContentType(.oneTimeCode).keyboardType(.numberPad)
@@ -229,7 +234,9 @@ struct ReauthSheet: View {
 
     private func startOtp() async throws {
         guard let broker else { throw BrokerError("Church login is not configured (BROKER_URL).") }
-        try await broker.otpStart(email.trimmed, enroll: true)
+        let body = try await broker.otpStart(email.trimmed, enroll: true)
+        // Broker advisory after a send burst: Okta quietly pauses email delivery (2026-06-12).
+        throttleHint = body["throttle_hint"] as? String
         otpSent = true
         otpCode = ""
         startResendCooldown()

@@ -99,6 +99,23 @@ test.describe('reauth dialog', () => {
     await expect(dialog.getByText(/Codes are sent by Church USERNAME/)).not.toBeVisible();
   });
 
+  test('a send-burst throttle hint from the broker shows on the code screen', async ({ page }) => {
+    // Okta silently pauses email delivery after a burst of code requests (2026-06-12) — the
+    // broker counts sends and warns; the dialog must surface that instead of a silent dead-end.
+    const hint =
+      'Several codes were requested for this account recently — the Church sign-in service may ' +
+      'quietly pause email delivery for a while.';
+    await openReauth(page, {
+      'POST /auth/otp/start': { json: { status: 'code_sent', sent_to: 'Email', throttle_hint: hint } },
+    });
+    const dialog = reauthDialog(page);
+    await dialog.getByRole('button', { name: 'Email code' }).click();
+    await dialog.getByLabel('Church username').fill('leader.example');
+    await dialog.getByRole('button', { name: 'Send code', exact: true }).click();
+
+    await expect(dialog.getByText(/quietly pause email delivery/)).toBeVisible();
+  });
+
   test('an MFA-enabled account continues past the emailed code to the password step (A29)', async ({ page }) => {
     // Regression (2026-06-12, the operator's account after enabling MFA): the emailed code is
     // ACCEPTED and Okta then demands a DISTINCT factor — the password. Pre-fix the broker
