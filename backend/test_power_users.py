@@ -64,6 +64,28 @@ def run() -> int:
         cur.execute("select invite_power_user('wardonly@example.org', %s)", (unit_id,))
         checks.append(("stake grants ward-only scope", seen('wardonly@example.org'), ward_n))
 
+        # DBRLS-03: a co-leader who did NOT issue the invite (and isn't an admin) cannot revoke it.
+        cur.execute("insert into user_roles (stake_id, unit_id, role, email, source) "
+                    "values (%s,null,'stake_leader','coleader@test.org','calling')", (sid,))
+        caller('coleader@test.org')
+        cur.execute("select revoke_power_user('missionary@example.org')")
+        checks.append(("DBRLS-03 non-inviter cannot revoke", seen('missionary@example.org'), stake_n))
+
+        # DBRLS-02: a credential write with NO access posture must NOT mint a stake_leader role;
+        # an access-bearing write (the real enroll path) does. Trigger: bind_provider_stake_role.
+        cur.execute("insert into stake_credentials "
+                    "(stake_id, principal_email, credential_enc, access_rank, granting_role_ids, revoked) "
+                    "values (%s,'spoof@evil.test','x',null,null,false) on conflict (stake_id) do update set "
+                    "principal_email=excluded.principal_email, access_rank=excluded.access_rank, "
+                    "granting_role_ids=excluded.granting_role_ids, credential_enc=excluded.credential_enc, "
+                    "revoked=excluded.revoked", (sid,))
+        cur.execute("select count(*) from user_roles where stake_id=%s and lower(email)='spoof@evil.test'", (sid,))
+        checks.append(("DBRLS-02 bare credential write binds no role", cur.fetchone()[0], 0))
+        cur.execute("update stake_credentials set principal_email='realleader@example.org', "
+                    "access_rank=10, granting_role_ids=array[1]::integer[] where stake_id=%s", (sid,))
+        cur.execute("select count(*) from user_roles where stake_id=%s and lower(email)='realleader@example.org'", (sid,))
+        checks.append(("DBRLS-02 access-bearing write binds role", cur.fetchone()[0], 1))
+
         caller(stake_email)
         cur.execute("select revoke_power_user('missionary@example.org')")
         checks.append(("revoke", seen('missionary@example.org'), 0))

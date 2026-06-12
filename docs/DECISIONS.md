@@ -6,6 +6,50 @@ Newest first.
 
 ---
 
+## ADR-010 — Security-audit hardening: verify the provider→stake binding, accept the service-role blast radius (2026-06-11)
+
+**Context.** A full-stack security audit (3 independent review passes + a remediation pass) found
+the access model sound overall — no cross-tenant read path, secret tables RLS-locked, crypto AEAD —
+but flagged two structural risks. (1) **DBRLS-02:** the `bind_provider_stake_role` trigger (0029)
+granted a **stake-wide `stake_leader`** role to whatever `principal_email` appeared on any
+non-revoked `stake_credentials` write, *trusting* the email rather than verifying it leads that
+stake. (2) **DBRLS-07:** 0046 grants `service_role` blanket `ALL PRIVILEGES`, so the entire write
+side rests on that key not leaking. Both are gated today only by the service-role boundary (the
+broker writes credentials via the vetted `enroll_stake_credential` RPC; clients can't reach the
+table at all), but a leaked key or a future half-trusted write would turn a credential row directly
+into whole-stake member access.
+
+**Decision (migration 0048).** Keep the endpoint-independent trigger, but stop trusting the email:
+(a) **hard gate** — only an *access-bearing* enrollment (`access_rank` + `granting_role_ids`
+populated, which only the enroll RPC sets after a real LCR login) may mint a role, so a bare or
+partial write to `stake_credentials` grants nothing; (b) **corroborate-or-flag** — the email is
+checked against the broker's verified `church_identities` cache for the stake's unit (the normal
+enroll writes that row before the credential — `enroll.py` `set_unit` precedes the RPC). Because
+that cache write is best-effort, an *uncorroborated* binding still proceeds (never re-break the
+"enroller sees 0 members" bug 0029 fixed) but is recorded in `role_binding_audit` for review. On
+**DBRLS-07**, we **accept** the blanket `service_role` grant — it's the broker's deliberate
+RLS-bypassing operating model and reverting to per-write definer RPCs is a large rewrite — with the
+compensating controls that the key lives only in the Render env (never the repo), rotates on the
+failover runbook, and the credential blobs stay envelope-encrypted with `CP_TOKEN_KEY` (off-DB), so
+a key leak still doesn't yield plaintext sessions.
+
+**Why safe.** The hard gate closes the realistic vector (an accidental/future bare write minting
+access); the corroboration + audit converts the residual deliberate-key-leak vector from a silent
+grant into a flagged, detectable one — without any regression risk to legitimate first enrolls. The
+same migration also adds the empty-email `nullif` guard to `set_stake_sheets_enabled` (DBRLS-01),
+scopes `revoke_power_user` to the inviter-or-admin with an audit (DBRLS-03), binds `member_comments`
+inserts to a real member (DBRLS-04), scrubs audit-table PII in `remove_stake` (DBRLS-05), and logs
+cross-stake ward re-parents (DBRLS-06).
+
+**Consequence.** A direct write to `stake_credentials` no longer grants access unless it looks like a
+real enrollment, and any binding the identity cache can't corroborate is visible to admins.
+Full prevention (REQUIRE corroboration) is the next step once the enroll path guarantees the
+identity write precedes the credential write; tracked, not yet taken, to avoid onboarding regressions
+that can't be reproduced without a live DB. Behavior change to note: a stake leader who did not issue
+a power-user invitation must now be an app admin to revoke it.
+
+---
+
 ## ADR-009 — Login fast lane: cache the verified identity, keep LCR off the sign-in path (2026-06-09)
 
 **Context.** A Church-account sign-in took 75–110s even on a WARM broker. Measured breakdown:
