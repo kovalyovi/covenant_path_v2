@@ -144,9 +144,18 @@ export function LoginPage() {
     return false;
   }
 
+  // A plain sign-in (viewing) uses the light /auth/password flow; accepting the post-login "set up
+  // sync?" offer switches to the credential-capture (one-MFA) /auth/web/* flow so that consent mints
+  // the 45-day Member Tools sync token. A ref (not state) so the routing is correct synchronously
+  // within the same MFA continuation.
+  const webModeRef = useRef(false);
+  const selectFactorFn = (lid: string, fid: string) =>
+    webModeRef.current ? broker.webSelectFactor(lid, fid) : broker.selectFactor(lid, fid);
+
   const churchSignIn = () =>
     run(async () => {
       const t0 = performance.now();
+      webModeRef.current = false; // a plain sign-in only views
       const r = await broker.password(username.trim(), password, authorizeSync);
       if (mfaRequired(r)) {
         setLoginId(r.loginId ?? null);
@@ -162,7 +171,7 @@ export function LoginPage() {
 
   const selectFactor = (f: BrokerFactor) =>
     run(async () => {
-      await broker.selectFactor(loginId!, f.id);
+      await selectFactorFn(loginId!, f.id);
       setFactorSent(f);
       // A switched/re-sent factor invalidates whatever was typed for the previous one — leftover
       // input silently submitted against the new challenge is the 2026-06-11 failure.
@@ -174,7 +183,9 @@ export function LoginPage() {
     run(async () => {
       const t0 = performance.now();
       try {
-        const r = await broker.verifyMfa(loginId!, mfaCode.trim(), authorizeSync);
+        const r = webModeRef.current
+          ? await broker.webVerify(loginId!, mfaCode.trim(), true)
+          : await broker.verifyMfa(loginId!, mfaCode.trim(), authorizeSync);
         await finishChurch(r);
       } catch (e) {
         setMfaCode(''); // a rejected code must be retyped fresh, not resubmitted stale
@@ -211,7 +222,8 @@ export function LoginPage() {
         : `${stake} isn't set up for daily sync yet. Authorize your Church session so your stake's ` +
           `data refreshes automatically each day? It's stored encrypted (never your password) and revocable anytime.`;
       if (window.confirm(msg)) {
-        const r2 = await broker.password(username.trim(), password, true); // re-auth WITH consent
+        webModeRef.current = true; // consent → the one-MFA credential-capture flow (mints the token)
+        const r2 = await broker.webStart(username.trim(), password, true); // re-auth WITH consent
         if (mfaRequired(r2)) {
           setAuthorizeSync(true); // so completing MFA stores the credential
           setLoginId(r2.loginId ?? null);

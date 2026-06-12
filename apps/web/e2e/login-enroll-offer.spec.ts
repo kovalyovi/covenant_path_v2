@@ -17,10 +17,9 @@ test.describe('login enroll offer', () => {
 
     const { broker } = await openLogin(page, {
       broker: {
-        'POST /auth/password': ({ call }) =>
-          call === 1
-            ? { json: brokerLogin({ authorized: true, stored: false, can_enroll: true, stake: STAKE_NAME }) }
-            : { json: brokerLogin({ authorized: true, stored: true }) },
+        // The plain sign-in offers enrollment; accepting re-auths via the credential-capture flow.
+        'POST /auth/password': { json: brokerLogin({ authorized: true, stored: false, can_enroll: true, stake: STAKE_NAME }) },
+        'POST /auth/web/start': { json: brokerLogin({ authorized: true, stored: true }) },
       },
     });
 
@@ -32,9 +31,11 @@ test.describe('login enroll offer', () => {
     expect(dialogs[0]).toContain('revocable anytime');
 
     const logins = broker.callsTo('/auth/password');
-    expect(logins).toHaveLength(2);
-    expect(logins[0].body).toMatchObject({ enroll: false });
-    expect(logins[1].body).toMatchObject({ enroll: true }); // the re-auth carries the consent
+    expect(logins).toHaveLength(1);
+    expect(logins[0].body).toMatchObject({ enroll: false }); // the plain sign-in only views
+    const reauths = broker.callsTo('/auth/web/start');
+    expect(reauths).toHaveLength(1);
+    expect(reauths[0].body).toMatchObject({ enroll: true }); // accepting carries the consent
   });
 
   test('declining the offer signs in without a second auth call', async ({ page }) => {
@@ -69,10 +70,8 @@ test.describe('login enroll offer', () => {
 
     await openLogin(page, {
       broker: {
-        'POST /auth/password': ({ call }) =>
-          call === 1
-            ? { json: brokerLogin({ authorized: true, stored: false, can_enroll: true, stake: STAKE_NAME }) }
-            : { json: brokerLogin({ authorized: true, stored: false, error: enrollError }) },
+        'POST /auth/password': { json: brokerLogin({ authorized: true, stored: false, can_enroll: true, stake: STAKE_NAME }) },
+        'POST /auth/web/start': { json: brokerLogin({ authorized: true, stored: false, error: enrollError }) },
       },
     });
 
