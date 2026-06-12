@@ -30,7 +30,7 @@ function reauthDialog(page: Page) {
 test.describe('reauth dialog', () => {
   test('successful enroll toasts "Daily sync authorized" and closes the dialog', async ({ page }) => {
     const { broker } = await openReauth(page, {
-      'POST /auth/password': { json: brokerLogin({ authorized: true, stored: true }) },
+      'POST /auth/web/start': { json: brokerLogin({ authorized: true, stored: true }) },
     });
 
     const dialog = reauthDialog(page);
@@ -42,7 +42,8 @@ test.describe('reauth dialog', () => {
     await expect(dialog).not.toBeVisible();
     await expect(page).toHaveURL(/\/baptisms$/); // stayed in the app the whole time
 
-    const logins = broker.callsTo('/auth/password');
+    // Password lane → the one-MFA credential-capture flow (mints the 45-day sync token).
+    const logins = broker.callsTo('/auth/web/start');
     expect(logins).toHaveLength(1);
     expect(logins[0].body).toMatchObject({ enroll: true }); // this dialog IS the consent
   });
@@ -50,7 +51,7 @@ test.describe('reauth dialog', () => {
   test('stored:false keeps the dialog open and shows "could not be set up — <error>"', async ({ page }) => {
     const enrollError = 'LCR returned 502 on the access check.';
     await openReauth(page, {
-      'POST /auth/password': { json: brokerLogin({ authorized: true, stored: false, error: enrollError }) },
+      'POST /auth/web/start': { json: brokerLogin({ authorized: true, stored: false, error: enrollError }) },
     });
 
     const dialog = reauthDialog(page);
@@ -152,6 +153,7 @@ test.describe('reauth dialog', () => {
 
     await expect(page.getByText('Daily sync authorized — your stake will refresh within minutes.')).toBeVisible();
     await expect(dialog).not.toBeVisible();
+    // OTP lane → the continuation completes on /auth/mfa/verify (webMode is false for OTP).
     const verifies = broker.callsTo('/auth/mfa/verify');
     expect(verifies).toHaveLength(1);
     expect(verifies[0].body).toMatchObject({ login_id: 'L-cont', code: 'correct-horse', enroll: true });
@@ -159,8 +161,9 @@ test.describe('reauth dialog', () => {
 
   test('the MFA path inside the dialog completes the enroll', async ({ page }) => {
     const { broker } = await openReauth(page, {
-      'POST /auth/password': { json: brokerMfa() },
-      'POST /auth/mfa/verify': { json: brokerLogin({ authorized: true, stored: true }) },
+      'POST /auth/web/start': { json: brokerMfa() },
+      'POST /auth/web/select': { json: { status: 'code_sent' } },
+      'POST /auth/web/verify': { json: brokerLogin({ authorized: true, stored: true }) },
     });
 
     const dialog = reauthDialog(page);
@@ -181,7 +184,7 @@ test.describe('reauth dialog', () => {
     await expect(page.getByText('Daily sync authorized — your stake will refresh within minutes.')).toBeVisible();
     await expect(dialog).not.toBeVisible();
 
-    const verifies = broker.callsTo('/auth/mfa/verify');
+    const verifies = broker.callsTo('/auth/web/verify');
     expect(verifies).toHaveLength(1);
     expect(verifies[0].body).toMatchObject({ code: '123456', enroll: true });
   });

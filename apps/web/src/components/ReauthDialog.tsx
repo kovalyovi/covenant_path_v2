@@ -34,6 +34,9 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
   const [otpSent, setOtpSent] = useState(false);
   // Broker advisory after a send burst: Okta quietly pauses email delivery (2026-06-12).
   const [throttleHint, setThrottleHint] = useState<string | null>(null);
+  // The password lane uses the credential-capture (one-MFA) flow (/auth/web/*) so the single MFA
+  // mints the 45-day sync token; the OTP lane keeps /auth/otp + /auth/mfa. Routes the shared steps.
+  const [webMode, setWebMode] = useState(false);
   // Same MFA-input hygiene as LoginPage (2026-06-11): codes never survive a factor switch or a
   // failed verify, and resend cools down so the member waits for the FRESH code.
   const [resendIn, setResendIn] = useState(0);
@@ -54,6 +57,7 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
     setResendIn(0);
     setError(null);
     setStatus(null);
+    setWebMode(false);
   }
 
   async function run(action: () => Promise<void>) {
@@ -102,6 +106,11 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
     onClose();
   }
 
+  const selectFactorFn = (lid: string, fid: string) =>
+    webMode ? broker.webSelectFactor(lid, fid) : broker.selectFactor(lid, fid);
+  const verifyMfaFn = (lid: string, code: string) =>
+    webMode ? broker.webVerify(lid, code, true) : broker.verifyMfa(lid, code, true);
+
   // Enter (or re-enter) the MFA factor step — used by the password lane AND by the passwordless
   // lane's continuation: an MFA-enabled account's emailed code is ACCEPTED and Okta then demands
   // a DISTINCT factor (for Church accounts that's the password — 2026-06-12, the operator's own
@@ -114,7 +123,7 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
     setFactorSent(null);
     setMfaCode('');
     if (r.factors.length === 1 && r.loginId) {
-      await broker.selectFactor(r.loginId, r.factors[0].id);
+      await selectFactorFn(r.loginId, r.factors[0].id);
       setFactorSent(r.factors[0]);
       setResendIn(30);
     }
@@ -122,7 +131,8 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
 
   const signIn = () =>
     run(async () => {
-      const r = await broker.password(username.trim(), password, true); // enroll=true: this IS the consent
+      setWebMode(true); // password lane → the one-MFA credential-capture flow
+      const r = await broker.webStart(username.trim(), password, true); // enroll=true: this IS the consent
       if (mfaRequired(r)) {
         await enterMfa(r);
         return;
@@ -156,7 +166,7 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
 
   const pickFactor = (f: BrokerFactor) =>
     run(async () => {
-      await broker.selectFactor(loginId!, f.id);
+      await selectFactorFn(loginId!, f.id);
       setFactorSent(f);
       setMfaCode('');
       setResendIn(30);
@@ -165,7 +175,7 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
   const verify = () =>
     run(async () => {
       try {
-        const r = await broker.verifyMfa(loginId!, mfaCode.trim(), true);
+        const r = await verifyMfaFn(loginId!, mfaCode.trim());
         if (mfaRequired(r)) {
           await enterMfa(r); // chained continuation (rare): yet another factor owed
           return;

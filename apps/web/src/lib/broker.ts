@@ -303,6 +303,21 @@ export class BrokerClient {
     return this.post('/auth/password', { username, password, enroll });
   }
 
+  // Credential-capture (one-MFA) lane — drives authn → LCR authorize → MFA so a SINGLE MFA yields
+  // the LCR session AND the 45-day Member Tools sync token (minted server-side, persisted at enroll).
+  // Used by the web ENROLL/re-auth so a stake's unattended 45-day sync needs no stored password/TOTP.
+  webStart(username: string, password: string, enroll = true): Promise<BrokerResult> {
+    return this.post('/auth/web/start', { username, password, enroll });
+  }
+
+  webSelectFactor(loginId: string, factorId: string): Promise<BrokerResult> {
+    return this.post('/auth/web/select', { login_id: loginId, factor_id: factorId });
+  }
+
+  webVerify(loginId: string, code: string, enroll = true): Promise<BrokerResult> {
+    return this.post('/auth/web/verify', { login_id: loginId, code, enroll });
+  }
+
   selectFactor(loginId: string, factorId: string): Promise<BrokerResult> {
     return this.post('/auth/mfa/select', { login_id: loginId, factor_id: factorId });
   }
