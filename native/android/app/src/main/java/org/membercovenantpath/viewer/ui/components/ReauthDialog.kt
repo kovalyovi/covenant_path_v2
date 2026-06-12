@@ -50,9 +50,9 @@ private const val NO_ACCESS_MSG =
  *
  * USERNAME + PASSWORD ONLY (2026-06-12). Setting up daily sync mints a 45-day Member Tools token via
  * a silent SSO that needs the global Okta session only the classic username+password lane establishes
- * (/auth/web/*). The passwordless emailed-code (OTP) lane was removed: its Okta session is app-scoped
- * and could never mint the token. A leader who'd rather not type a password uses the Church-website
- * capture below (also enroll=true). See docs/DECISIONS.md (ADR-010).
+ * (the /auth/web endpoints). The passwordless emailed-code (OTP) lane was removed: its Okta session is
+ * app-scoped and could never mint the token. A leader who'd rather not type a password uses the
+ * Church-website capture below (also enroll=true). See docs/DECISIONS.md (ADR-011).
  */
 @Composable
 fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {

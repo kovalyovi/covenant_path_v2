@@ -43,4 +43,4 @@ fun mfaPrompt(f: BrokerFactor): MfaPrompt {
 }
 
 // NOTE: otpUsernameHint() was removed 2026-06-12 with the passwordless Church-OTP lane (it couldn't
-// mint the daily-sync token). Church sign-in is username+password only. See docs/DECISIONS.md ADR-010.
+// mint the daily-sync token). Church sign-in is username+password only. See docs/DECISIONS.md ADR-011.

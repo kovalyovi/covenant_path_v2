@@ -12,7 +12,7 @@ import SwiftUI
 /// a silent SSO that needs the global Okta session only the classic username+password lane establishes
 /// (/auth/web/*). The passwordless emailed-code (OTP) lane was removed: its Okta session is app-scoped
 /// and could never mint the token. A leader who'd rather not type a password uses the Church-website
-/// capture below (also enroll=true). See docs/DECISIONS.md (ADR-010).
+/// capture below (also enroll=true). See docs/DECISIONS.md (ADR-011).
 struct ReauthSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appServices) private var services

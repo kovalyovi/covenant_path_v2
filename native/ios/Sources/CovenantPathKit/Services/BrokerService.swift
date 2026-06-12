@@ -279,7 +279,7 @@ public final class BrokerService: @unchecked Sendable {
     // NOTE: the passwordless Church-login lane (Okta emailed code, /auth/otp/*) was REMOVED
     // 2026-06-12 — its app-scoped Okta session could never mint the 45-day daily-sync token.
     // Church auth is now username+password only (password()/webStart()). Passwordless VIEWING uses
-    // the Supabase email relay below. See docs/DECISIONS.md (ADR-010).
+    // the Supabase email relay below. See docs/DECISIONS.md (ADR-011).
 
     // MARK: - email relay (port of emailStart/emailVerify)
 
