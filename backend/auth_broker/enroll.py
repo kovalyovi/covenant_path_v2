@@ -413,12 +413,45 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
         raise RuntimeError(f"enroll RPC failed ({r.status_code}): {r.text[:160]}")
     logger.info("enrolled stake %s (%s): coverage_complete=%s rank=%s",
                 ctx.unit_name, ctx.unit_number, coverage["complete"], rank)
+    # Bootstrap the Member Tools 45-day refresh token NOW, while the Okta session is fresh and
+    # mintable — and persist it in Supabase. The daily covenant-path sync renews off it with no
+    # live Okta session, so a delegated stake keeps syncing for 45 days even though its stored Okta
+    # web session dies within days (the 2026-06-12 "re-authorize" loop: mint_from_okta_session got
+    # login_required once the session expired). Best-effort: a mint failure never fails the enroll.
+    _bootstrap_membertools_token(client, ctx.unit_number)
     initial_sync = _kickoff_initial_sync(ctx.unit_number)
     base["stored"] = True
     base["initial_sync"] = initial_sync
     _notify_enrolled(identity, ctx, coverage, initial_sync)
     _audit("enrolled")
     return base
+
+
+def _bootstrap_membertools_token(client, unit_number: int) -> None:
+    """Mint a Member Tools token off the freshly-authenticated session and persist its 45-day
+    refresh token in Supabase, keyed by this stake. The daily sync then renews the /api/v5/sync
+    bearer with NO Okta session for 45 days — decoupling the sync from Okta-web-session longevity
+    (and from the operator's headless login, which MFA can break). Best-effort: any failure here is
+    logged and swallowed so it never fails the enroll that just succeeded."""
+    try:
+        from lcr_client import membertools
+        from backend import credentials, db
+        tok = membertools.mint_from_okta_session(client.session.session)
+        refresh = tok.get("refresh_token")
+        if not refresh:
+            logger.warning("enroll: Member Tools mint returned no refresh token (stake %s)", unit_number)
+            return
+        conn = db.connect()
+        try:
+            stake_id = credentials.stake_id_for_unit(conn, unit_number)
+            if stake_id:
+                credentials.save_membertools_refresh(conn, stake_id, refresh)
+                logger.info("enroll: bootstrapped Member Tools 45-day token for stake %s", unit_number)
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 — bootstrap is best-effort; the daily sync re-mints if absent
+        logger.warning("enroll: Member Tools token bootstrap skipped for stake %s: %s",
+                       unit_number, exc)
 
 
 def persist(cookies: list[dict], identity: dict) -> dict:

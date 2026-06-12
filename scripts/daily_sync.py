@@ -54,6 +54,97 @@ def _stake_unit_for_token(client) -> int | None:
     return None
 
 
+# --- Member Tools refresh token: Supabase-persisted (migration 0049) FIRST, local file store as a
+#     dev fallback. Persisting to Supabase is what makes the 45-day token survive the CI runners. ----
+
+def _membertools_token(stake_unit: int | None) -> dict:
+    """{refresh_token, minted_at} for a stake — Supabase first (persists across CI), else the local
+    file store. {} when neither has one. Never raises (a lookup miss just means we re-mint)."""
+    if not stake_unit:
+        return {}
+    try:
+        from backend import credentials, db
+        conn = db.connect()
+        try:
+            sid = credentials.stake_id_for_unit(conn, stake_unit)
+            tok = credentials.get_membertools_refresh(conn, sid) if sid else None
+            if tok:
+                return tok
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 — DB hiccup must not break the sync; fall back to file
+        logger.warning("Member Tools token DB read skipped for stake %s: %s", stake_unit, exc)
+    try:
+        from lcr_client import token_store
+        return token_store.get_membertools_token(stake_unit) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _save_membertools_token(stake_unit: int, refresh_token: str) -> None:
+    """Persist a freshly-minted Member Tools refresh token to BOTH Supabase (durable, CI-surviving)
+    and the local file store (dev). Best-effort each."""
+    try:
+        from backend import credentials, db
+        conn = db.connect()
+        try:
+            sid = credentials.stake_id_for_unit(conn, stake_unit)
+            if sid:
+                credentials.save_membertools_refresh(conn, sid, refresh_token)
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Member Tools token DB save skipped for stake %s: %s", stake_unit, exc)
+    try:
+        from lcr_client import token_store
+        token_store.save_membertools_token(stake_unit, refresh_token)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _membertools_access_token(client, stake_unit: int | None) -> str | None:
+    """Get a Member Tools /api/v5/sync bearer for this stake, preferring the 45-day refresh token
+    (no Okta session needed) over a fresh mint:
+      1. a stored refresh token (Supabase, then file) → membertools.refresh() — the steady state;
+      2. on a 45-day-wall RefreshTokenExpired, clear it and fall through;
+      3. else mint off the LIVE Okta session (only works on a fresh login / right after enroll), and
+         PERSIST the new 45-day refresh token so step 1 carries the next 45 days.
+    Extracted so the refresh-vs-mint decision is unit-testable in isolation."""
+    from lcr_client import membertools
+    stored = _membertools_token(stake_unit)
+    if stored.get("refresh_token"):
+        try:
+            access = membertools.refresh(stored["refresh_token"]).get("access_token")
+            if access:
+                return access
+        except membertools.RefreshTokenExpired:
+            _clear_membertools_token(stake_unit)  # 45-day wall → re-mint below
+    tok = membertools.mint_from_okta_session(client.session.session)
+    if stake_unit and tok.get("refresh_token"):
+        _save_membertools_token(stake_unit, tok["refresh_token"])
+    return tok.get("access_token")
+
+
+def _clear_membertools_token(stake_unit: int) -> None:
+    """Drop an expired (45-day wall) Member Tools refresh token from both stores so we re-mint."""
+    try:
+        from backend import credentials, db
+        conn = db.connect()
+        try:
+            sid = credentials.stake_id_for_unit(conn, stake_unit)
+            if sid:
+                credentials.clear_membertools_refresh(conn, sid)
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Member Tools token DB clear skipped for stake %s: %s", stake_unit, exc)
+    try:
+        from lcr_client import token_store
+        token_store.clear_membertools_token(stake_unit)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _sync_one(args) -> dict:
     """Report + export + optional Sheets/Supabase for the CURRENT session/stake."""
     from lcr_client import LcrClient, metrics
@@ -97,23 +188,9 @@ def _sync_one(args) -> dict:
                                   only_unit=getattr(args, "unit", None), unit_order=unit_order)
         cp_source = "one-work-legacy"
     else:
-        from lcr_client import membertools, token_store
         from covenant_path.report import build_membertools_report
         stake_unit = _stake_unit_for_token(client)
-        stored = (token_store.get_membertools_token(stake_unit) if stake_unit else None) or {}
-        access_token = None
-        if stored.get("refresh_token"):
-            try:
-                access_token = membertools.refresh(stored["refresh_token"]).get("access_token")
-            except membertools.RefreshTokenExpired:
-                token_store.clear_membertools_token(stake_unit)  # 45-day wall → re-mint below
-        if not access_token:
-            # No usable stored token → mint off the live Okta session (only works on a FRESH login).
-            # A delegated stake whose stored session can't mint here needs a re-authorization.
-            tok = membertools.mint_from_okta_session(client.session.session)
-            access_token = tok.get("access_token")
-            if stake_unit and tok.get("refresh_token"):
-                token_store.save_membertools_token(stake_unit, tok["refresh_token"])
+        access_token = _membertools_access_token(client, stake_unit)
         rows, mt_stats = build_membertools_report(
             client, access_token=access_token, with_profile=args.with_profile,
             access=access, cache=cache, verbose=args.verbose)

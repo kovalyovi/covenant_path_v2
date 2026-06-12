@@ -114,6 +114,63 @@ def list_active_stakes(conn) -> list[dict]:
         return [{"stake_id": r[0], "unit_number": r[1], "name": r[2]} for r in cur.fetchall()]
 
 
+def stake_id_for_unit(conn, unit_number: int) -> str | None:
+    """Resolve a stake's UUID id from its LCR unit number (the daily sync keys by unit)."""
+    with conn.cursor() as cur:
+        cur.execute("select id from stakes where unit_number=%s", (unit_number,))
+        row = cur.fetchone()
+    return str(row[0]) if row else None
+
+
+# --- Member Tools 45-day refresh token (migration 0049): persisted in Supabase so the daily sync
+#     renews the /api/v5/sync bearer with NO live Okta session — survives the ephemeral CI runners
+#     the local file store can't. Encrypted with the same envelope key as the credential blob. -------
+
+def save_membertools_refresh(conn, stake_id: str, refresh_token: str,
+                             minted_at: str | None = None) -> None:
+    """Persist a stake's Member Tools refresh token (encrypted). Preserves the ORIGINAL mint date
+    across refreshes (rotation is off) so the 45-day clock isn't reset by a renewal."""
+    if not refresh_token:
+        return
+    blob = _encrypt_envelope(json.dumps({"refresh_token": refresh_token}).encode("utf-8"))
+    with conn.cursor() as cur:
+        cur.execute(
+            """update stake_credentials
+                  set membertools_refresh_enc = %s,
+                      membertools_minted_at = coalesce(membertools_minted_at, %s, now())
+                where stake_id = %s""",
+            (blob, minted_at, stake_id))
+    conn.commit()
+    logger.info("saved Member Tools refresh token for stake %s", stake_id)
+
+
+def get_membertools_refresh(conn, stake_id: str) -> dict | None:
+    """{refresh_token, minted_at} for a stake (decrypted), or None when absent/empty."""
+    with conn.cursor() as cur:
+        cur.execute("""select membertools_refresh_enc, membertools_minted_at
+                       from stake_credentials where stake_id=%s and not revoked""", (stake_id,))
+        row = cur.fetchone()
+    if not row or not row[0]:
+        return None
+    try:
+        secret = json.loads(_decrypt_envelope(row[0]).decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 — a bad/old blob must not break the sync
+        logger.warning("Member Tools token decrypt skipped for stake %s: %s", stake_id, exc)
+        return None
+    tok = secret.get("refresh_token")
+    return {"refresh_token": tok, "minted_at": row[1]} if tok else None
+
+
+def clear_membertools_refresh(conn, stake_id: str) -> None:
+    """Drop a stake's Member Tools refresh token (it hit the 45-day wall / was revoked) so the next
+    sync re-mints off a fresh Okta session instead of looping on a dead refresh token."""
+    with conn.cursor() as cur:
+        cur.execute("""update stake_credentials
+                       set membertools_refresh_enc = null, membertools_minted_at = null
+                       where stake_id = %s""", (stake_id,))
+    conn.commit()
+
+
 def revoke(conn, stake_id: str, reason: str = "manual") -> None:
     with conn.cursor() as cur:
         cur.execute("""update stake_credentials set revoked=true, revoked_at=now(),

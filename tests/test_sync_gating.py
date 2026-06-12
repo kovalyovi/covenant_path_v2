@@ -158,3 +158,72 @@ def test_always_allowed_stewardship_calling_survives_an_empty_matrix(patched):
                         "runner_positions": [{"name": "Stake Clerk"}]}
     ds._revoke_if_ineligible(_ST)
     assert rec.revoked == []
+
+
+# --- E6: Member Tools token acquisition (the 2026-06-12 "re-authorize loop" fix) -----------------
+# The delegated sync mints the /api/v5/sync bearer via a SILENT prompt=none authorize that needs a
+# LIVE Okta web session — which a stored delegated credential loses within days. The fix persists the
+# Member Tools 45-day REFRESH token (Supabase, migration 0049) and renews off it with NO Okta session.
+# These prove _membertools_access_token PREFERS the refresh token and only mints when there's none.
+
+
+class _FakeMTClient:
+    """Minimal stand-in: _membertools_access_token only touches client.session.session."""
+    class _S:
+        session = object()
+    session = _S()
+
+
+def _patch_membertools(monkeypatch, *, refresh_result=None, refresh_raises=False, mint_result=None):
+    from lcr_client import membertools
+    calls = {"refresh": 0, "mint": 0, "saved": [], "cleared": []}
+
+    def fake_refresh(token):
+        calls["refresh"] += 1
+        if refresh_raises:
+            raise membertools.RefreshTokenExpired("45-day wall")
+        return refresh_result or {}
+
+    def fake_mint(_session):
+        calls["mint"] += 1
+        return mint_result or {}
+
+    monkeypatch.setattr(membertools, "refresh", fake_refresh)
+    monkeypatch.setattr(membertools, "mint_from_okta_session", fake_mint)
+    monkeypatch.setattr(ds, "_save_membertools_token", lambda u, t: calls["saved"].append((u, t)))
+    monkeypatch.setattr(ds, "_clear_membertools_token", lambda u: calls["cleared"].append(u))
+    return calls
+
+
+def test_membertools_uses_stored_refresh_token_no_mint(monkeypatch):
+    # Steady state: a stored 45-day refresh token renews the bearer with NO Okta session — the
+    # mint-off-live-session path (which the aged delegated credential can't do) is never reached.
+    monkeypatch.setattr(ds, "_membertools_token", lambda u: {"refresh_token": "R", "minted_at": "x"})
+    calls = _patch_membertools(monkeypatch, refresh_result={"access_token": "AT-from-refresh"})
+    tok = ds._membertools_access_token(_FakeMTClient(), 503991)
+    assert tok == "AT-from-refresh"
+    assert calls["refresh"] == 1 and calls["mint"] == 0
+
+
+def test_membertools_mints_and_persists_when_no_stored_token(monkeypatch):
+    # First sync after enroll (or no token yet): mint off the live session AND persist the new
+    # 45-day refresh token so the next 45 days take the refresh path.
+    monkeypatch.setattr(ds, "_membertools_token", lambda u: {})
+    calls = _patch_membertools(
+        monkeypatch, mint_result={"access_token": "AT-from-mint", "refresh_token": "NEW-R"})
+    tok = ds._membertools_access_token(_FakeMTClient(), 503991)
+    assert tok == "AT-from-mint"
+    assert calls["mint"] == 1
+    assert calls["saved"] == [(503991, "NEW-R")]  # persisted for next time
+
+
+def test_membertools_expired_refresh_clears_and_remints(monkeypatch):
+    # The 45-day wall: a RefreshTokenExpired clears the dead token and falls through to a fresh mint.
+    monkeypatch.setattr(ds, "_membertools_token", lambda u: {"refresh_token": "OLD"})
+    calls = _patch_membertools(
+        monkeypatch, refresh_raises=True,
+        mint_result={"access_token": "AT-remint", "refresh_token": "R2"})
+    tok = ds._membertools_access_token(_FakeMTClient(), 503991)
+    assert tok == "AT-remint"
+    assert calls["cleared"] == [503991]
+    assert calls["mint"] == 1 and calls["saved"] == [(503991, "R2")]
