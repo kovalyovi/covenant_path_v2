@@ -413,12 +413,9 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
         raise RuntimeError(f"enroll RPC failed ({r.status_code}): {r.text[:160]}")
     logger.info("enrolled stake %s (%s): coverage_complete=%s rank=%s",
                 ctx.unit_name, ctx.unit_number, coverage["complete"], rank)
-    # Bootstrap the Member Tools 45-day refresh token NOW, while the Okta session is fresh and
-    # mintable — and persist it in Supabase. The daily covenant-path sync renews off it with no
-    # live Okta session, so a delegated stake keeps syncing for 45 days even though its stored Okta
-    # web session dies within days (the 2026-06-12 "re-authorize" loop: mint_from_okta_session got
-    # login_required once the session expired). Best-effort: a mint failure never fails the enroll.
-    _bootstrap_membertools_token(client, ctx.unit_number)
+    # The Member Tools 45-day token is bootstrapped by the credential-capture login flow itself
+    # (web_session.py) — one MFA yields the LCR session AND a mintable Okta session, so the token is
+    # minted there and persisted with the credential. This enroll path just stores what it captured.
     initial_sync = _kickoff_initial_sync(ctx.unit_number)
     base["stored"] = True
     base["initial_sync"] = initial_sync
@@ -427,49 +424,11 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
     return base
 
 
-def _session_has_okta_sso(client) -> bool:
-    """True when the session carries a real Okta WEB SSO cookie (`sid`) — the only kind that can
-    SILENTLY mint a Member Tools token (prompt=none). The WebView capture lane sets it (a real
-    browser login on id.churchofjesuschrist.org); the broker's interaction-code IDX flow does NOT,
-    so the password lane is skipped (it would just login_required). Prevents the crash-loop AND the
-    pointless mint attempt on every password enroll."""
-    try:
-        return any(c.name == "sid" and "churchofjesuschrist.org" in (c.domain or "")
-                   for c in client.session.session.cookies)
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def _bootstrap_membertools_token(client, unit_number: int) -> None:
-    """Mint a Member Tools token off the freshly-authenticated session and persist its 45-day
-    refresh token in Supabase (via the REST API — the broker has no psycopg2), keyed by this stake.
-    The daily sync then renews the /api/v5/sync bearer with NO Okta session for 45 days. ONLY runs
-    when the session carries a web SSO `sid` (the WebView capture lane); the password+MFA lane can't
-    mint (Member Tools re-applies MFA to its own OAuth flow — proven 2026-06-12), so it's skipped.
-    Best-effort throughout: any failure is logged and swallowed, never failing the enroll."""
-    if not _session_has_okta_sso(client):
-        logger.info("enroll: skipping Member Tools bootstrap for stake %s (no web SSO session — "
-                    "mint only works from the Church-website/WebView lane)", unit_number)
-        return
-    try:
-        from lcr_client import membertools
-        from backend import credentials
-        tok = membertools.mint_from_okta_session(client.session.session)
-        refresh = tok.get("refresh_token")
-        if not refresh:
-            logger.warning("enroll: Member Tools mint returned no refresh token (stake %s)", unit_number)
-            return
-        _persist_membertools_refresh_rest(unit_number, refresh)
-        logger.info("enroll: bootstrapped Member Tools 45-day token for stake %s", unit_number)
-    except Exception as exc:  # noqa: BLE001 — bootstrap is best-effort; the daily sync re-mints if absent
-        logger.warning("enroll: Member Tools token bootstrap skipped for stake %s: %s",
-                       unit_number, exc)
-
-
-def _persist_membertools_refresh_rest(unit_number: int, refresh_token: str) -> None:
-    """Persist the Member Tools refresh token via Supabase REST (the broker can't use psycopg2):
+def persist_membertools_refresh_rest(unit_number: int, refresh_token: str) -> None:
+    """Persist the Member Tools refresh token via Supabase REST (the broker has no psycopg2):
     resolve the stake id, then PATCH stake_credentials with the Fernet-encrypted token. Mirrors the
-    psycopg2 path in backend.credentials.save_membertools_refresh (same envelope + column)."""
+    psycopg2 path in backend.credentials.save_membertools_refresh (same envelope + column). Called by
+    the credential-capture flow (web_session.py) right after a one-MFA login mints the 45-day token."""
     from backend import credentials
     h = {"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}", "Content-Type": "application/json"}
     s = requests.get(f"{SUPABASE_URL}/rest/v1/stakes",
