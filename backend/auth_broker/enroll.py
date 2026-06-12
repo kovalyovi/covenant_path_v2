@@ -241,7 +241,8 @@ def _audit_login(email, name, ctx, access, authorized, rank, outcome, error=None
 
 
 def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *,
-                             request_id: str | None = None, t_start: float | None = None) -> dict:
+                             request_id: str | None = None, t_start: float | None = None,
+                             membertools_refresh: str | None = None) -> dict:
     """The single login-time entry point. ALWAYS evaluates the captured session's covenant-path
     access — so the no-access gate (N2) and the higher-access "you can improve the sync" offer work
     on every Church login — but STORES the encrypted credential (and kicks off the first sync) ONLY
@@ -413,9 +414,17 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
         raise RuntimeError(f"enroll RPC failed ({r.status_code}): {r.text[:160]}")
     logger.info("enrolled stake %s (%s): coverage_complete=%s rank=%s",
                 ctx.unit_name, ctx.unit_number, coverage["complete"], rank)
-    # The Member Tools 45-day token is bootstrapped by the credential-capture login flow itself
-    # (web_session.py) — one MFA yields the LCR session AND a mintable Okta session, so the token is
-    # minted there and persisted with the credential. This enroll path just stores what it captured.
+    # The Member Tools 45-day token is minted by the credential-capture login flow (web_session.py) —
+    # one MFA yields the LCR session AND a mintable Okta session. Persist it alongside the credential
+    # so the daily sync renews the /api/v5/sync bearer with NO Okta session for 45 days. Best-effort:
+    # a missing token (e.g. the leader has never used Member Tools) doesn't fail the enroll.
+    if membertools_refresh:
+        try:
+            persist_membertools_refresh_rest(ctx.unit_number, membertools_refresh)
+            logger.info("enroll: stored Member Tools 45-day token for stake %s", ctx.unit_number)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("enroll: Member Tools token persist skipped for stake %s: %s",
+                           ctx.unit_number, exc)
     initial_sync = _kickoff_initial_sync(ctx.unit_number)
     base["stored"] = True
     base["initial_sync"] = initial_sync

@@ -198,7 +198,8 @@ def _login_eval(res: dict, store: bool, rid: str, t0: float | None = None) -> di
     t_req = t0 if t0 is not None else time.monotonic()
     t_eval = time.monotonic()
     fut = _EVAL_POOL.submit(enroll.evaluate_and_maybe_store, res["cookies"], ident, store,
-                            request_id=rid, t_start=t_req)
+                            request_id=rid, t_start=t_req,
+                            membertools_refresh=res.get("membertools_refresh"))
     try:
         out = fut.result(timeout=None if store else _EVAL_BUDGET_S)
         logger.info("[req %s] login eval %.1fs (authorized=%s stored=%s can_improve=%s can_enroll=%s)",
@@ -549,6 +550,79 @@ def auth_session(req: SessionReq,
                           getattr(e, "root_cause", "") or str(e), rid,
                           duration_ms=int((time.monotonic() - t0) * 1000),
                           phase=f"okta:{getattr(e, 'kind', 'other')}")
+        raise HTTPException(status_code=401, detail=str(e))
+    return _complete_login(res, req.enroll, rid, t0)
+
+
+# --- credential-capture login (the ONE-MFA flow that mints the 45-day sync token) -----------------
+# web_session drives authn -> LCR authorize -> MFA -> appSession + Member Tools 45-day token, so a
+# single MFA completion yields everything an unattended 45-day sync needs. Used by the web ENROLL
+# (and re-auth) so a stake's sync token is minted at enroll without storing a password or TOTP.
+
+@app.post("/auth/web/start")
+def auth_web_start(req: PasswordReq,
+                   _rl: None = Depends(ratelimit.limiter("password", 8, 300))) -> dict:
+    from backend.auth_broker import web_session
+    rid = _rid()
+    t0 = time.monotonic()
+    logger.info("[req %s] /auth/web/start user=%s enroll=%s", rid, req.username, req.enroll)
+    ratelimit.hit_identifier("password", req.username)
+    try:
+        res = web_session.web_start(req.username.strip(), req.password)
+    except okta_flow.IdentityError as e:
+        _audit_okta_event(req.username, "lcr_identity_failed",
+                          getattr(e, "root_cause", "") or str(e), rid,
+                          duration_ms=int((time.monotonic() - t0) * 1000),
+                          phase=f"identity:{getattr(e, 'kind', 'other')}")
+        raise HTTPException(status_code=503, detail=str(e))
+    except okta_flow.AuthError as e:
+        _audit_okta_event(req.username, "okta_failed",
+                          getattr(e, "root_cause", "") or str(e), rid,
+                          duration_ms=int((time.monotonic() - t0) * 1000), phase=_mfa_phase(e))
+        raise HTTPException(status_code=401, detail=str(e))
+    if res["status"] == "mfa_required":
+        offered = ",".join(res.get("factor_types", []))
+        note = f"factors offered: {offered}"
+        _FAST_POOL.submit(_audit_okta_event, req.username, "mfa_pending", note, rid,
+                          int((time.monotonic() - t0) * 1000), "okta:mfa_pending")
+        return {"status": "mfa_required", "login_id": res["login_id"], "factors": res["factors"]}
+    return _complete_login(res, req.enroll, rid, t0)
+
+
+@app.post("/auth/web/select")
+def auth_web_select(req: FactorReq,
+                    _rl: None = Depends(ratelimit.limiter("mfa", 30, 300))) -> dict:
+    from backend.auth_broker import web_session
+    rid = _rid()
+    logger.info("[req %s] /auth/web/select login=%s", rid, req.login_id)
+    try:
+        return web_session.web_select_factor(req.login_id, req.factor_id)
+    except okta_flow.AuthError as e:
+        _audit_okta_event(getattr(e, "username", ""), "mfa_select_failed",
+                          getattr(e, "root_cause", "") or str(e), rid, phase=_mfa_phase(e))
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/auth/web/verify")
+def auth_web_verify(req: MfaReq,
+                    _rl: None = Depends(ratelimit.limiter("mfa", 30, 300))) -> dict:
+    from backend.auth_broker import web_session
+    rid = _rid()
+    t0 = time.monotonic()
+    logger.info("[req %s] /auth/web/verify login=%s enroll=%s", rid, req.login_id, req.enroll)
+    ratelimit.hit_identifier("mfa", req.login_id)
+    try:
+        res = web_session.web_verify(req.login_id, req.code.strip())
+    except okta_flow.IdentityError as e:  # must precede AuthError (its subclass)
+        _audit_okta_event(getattr(e, "username", ""), "lcr_identity_failed",
+                          getattr(e, "root_cause", "") or str(e), rid,
+                          duration_ms=int((time.monotonic() - t0) * 1000),
+                          phase=f"identity:{getattr(e, 'kind', 'other')}")
+        raise HTTPException(status_code=503, detail=str(e))
+    except okta_flow.AuthError as e:
+        _audit_okta_event(getattr(e, "username", ""), "mfa_failed",
+                          getattr(e, "root_cause", "") or str(e), rid,
+                          duration_ms=int((time.monotonic() - t0) * 1000), phase=_mfa_phase(e))
         raise HTTPException(status_code=401, detail=str(e))
     return _complete_login(res, req.enroll, rid, t0)
 
