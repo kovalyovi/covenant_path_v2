@@ -50,8 +50,8 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.12"
           cache: pip
@@ -73,21 +73,32 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       - name: Find gold spots
+        # CLIENT-05: pass dispatch inputs via env (never interpolate ${{ }} into the shell) and
+        # validate them, so a crafted input can't inject shell — same pattern as daily-sync.yml.
+        env:
+          IN_NO_POST: ${{ github.event.inputs.no_post }}
+          IN_ONLY: ${{ github.event.inputs.only }}
+          IN_HOURS: ${{ github.event.inputs.hours }}
+          IN_MAXC: ${{ github.event.inputs.max_concurrency }}
         run: |
-          NOPOST=""
-          if [ "${{ github.event.inputs.no_post }}" = "true" ]; then NOPOST="--no-post"; fi
+          NOPOST=""; [ "$IN_NO_POST" = "true" ] && NOPOST="--no-post"
           ONLY=""
-          if [ -n "${{ github.event.inputs.only }}" ]; then ONLY="--only ${{ github.event.inputs.only }}"; fi
+          if [ -n "$IN_ONLY" ]; then
+            printf '%s' "$IN_ONLY" | grep -qE '^[A-Za-z0-9_,/-]+$' || { echo "bad --only input"; exit 1; }
+            ONLY="--only $IN_ONLY"
+          fi
+          printf '%s' "${IN_HOURS:-1}" | grep -qE '^[0-9]+$' || { echo "bad hours input"; exit 1; }
+          printf '%s' "${IN_MAXC:-3}" | grep -qE '^[0-9]+$' || { echo "bad max-concurrency input"; exit 1; }
           python tools/rate_finder.py \
-            --hours "${{ github.event.inputs.hours || '1' }}" \
-            --max-concurrency "${{ github.event.inputs.max_concurrency || '3' }}" \
+            --hours "${IN_HOURS:-1}" \
+            --max-concurrency "${IN_MAXC:-3}" \
             --resume auto $NOPOST $ONLY
 
       # Persist results (runners are ephemeral). The recommendation.json carries each endpoint's gold
       # spot; aggregate these artifacts across tiled runs to read the safe per-endpoint pacing.
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: rate-finder-results
           path: tools/output/rate_finder/

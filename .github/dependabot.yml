@@ -1,0 +1,17 @@
+# CLIENT-06 / CLIENT-07: keep the SHA-pinned GitHub Actions and the pinned Python/npm
+# dependencies maintained — Dependabot opens update PRs (with the new SHA/version) weekly,
+# so pinning doesn't mean going stale.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: "/apps/web"
+    schedule:
+      interval: weekly

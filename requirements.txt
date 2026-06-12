@@ -1,13 +1,17 @@
-playwright>=1.44
-python-dotenv>=1.0
-requests>=2.31
-cryptography>=42.0
-google-api-python-client>=2.0   # sheets_sync
-google-auth>=2.0                # sheets_sync (service account)
-psycopg2-binary>=2.9            # backend (Supabase/Postgres)
-fastapi>=0.110                  # auth_broker (Church-login API)
-uvicorn>=0.29                   # auth_broker (ASGI server)
-httpx>=0.27                     # auth_broker tests (FastAPI TestClient)
-webauthn>=2.0                   # auth_broker passwordless passkey login (server-side WebAuthn)
-Pillow>=10.0                    # member-photo pipeline (downsize avatars)
-tzdata>=2024.1                  # ET schedule gate (zoneinfo needs the tz DB on minimal images/Windows)
+# CLIENT-07: pinned to exact versions (was unbounded `>=`, which silently pulls a future
+# major/regressed/malicious release). These are the versions the test suite runs against; bump
+# deliberately (Dependabot opens PRs — .github/dependabot.yml). A full hash-locked install
+# (pip-compile --generate-hashes) is a tracked follow-up that needs a verified Render build.
+playwright==1.60.0
+python-dotenv==1.0.1
+requests==2.32.3
+cryptography==48.0.0
+google-api-python-client==2.187.0   # sheets_sync
+google-auth==2.41.1                  # sheets_sync (service account)
+psycopg2-binary==2.9.12              # backend (Supabase/Postgres)
+fastapi==0.136.3                     # auth_broker (Church-login API)
+uvicorn==0.48.0                      # auth_broker (ASGI server)
+httpx==0.28.1                        # auth_broker tests (FastAPI TestClient)
+webauthn==2.7.1                      # auth_broker passwordless passkey login (server-side WebAuthn)
+Pillow==12.2.0                       # member-photo pipeline (downsize avatars)
+tzdata==2026.2                       # ET schedule gate (zoneinfo needs the tz DB on minimal images/Windows)
