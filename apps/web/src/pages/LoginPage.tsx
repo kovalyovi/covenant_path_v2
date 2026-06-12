@@ -273,12 +273,7 @@ export function LoginPage() {
 
   return (
     <main className="login-wrap">
-      <form
-        className="login-card"
-        onSubmit={(e) => {
-          e.preventDefault();
-        }}
-      >
+      <div className="login-card">
         <h1 style={{ fontSize: '1.4rem' }}>Covenant Path</h1>
 
         {brokerAvailable && !inMfa && (
@@ -297,54 +292,62 @@ export function LoginPage() {
           />
         )}
 
+        {/* One <form> PER mode: Safari classifies password autofill per form element, so a shared
+            form that ever held the username+password fields keeps offering the saved LCR credential
+            on the email field (iPhone QuickType, 2026-06-12). A remounted form that never contains
+            a password lets autocomplete="email" win and suggest the contact email instead. */}
         {mode === 'church' ? (
-          <ChurchFields
-            busy={busy}
-            username={username}
-            password={password}
-            mfaCode={mfaCode}
-            loginId={loginId}
-            factors={factors}
-            factorSent={factorSent}
-            resendIn={resendIn}
-            setUsername={setUsername}
-            setPassword={setPassword}
-            setMfaCode={setMfaCode}
-            onSignIn={churchSignIn}
-            onSelectFactor={selectFactor}
-            onVerify={verifyMfa}
-            onBack={() => reset()}
-            onChooseDifferent={() => {
-              setFactorSent(null);
-              setMfaCode(''); // input typed for the OLD factor must never ride into the new one
-            }}
-          />
+          <form key="church-login" className="login-form" onSubmit={(e) => e.preventDefault()}>
+            <ChurchFields
+              busy={busy}
+              username={username}
+              password={password}
+              mfaCode={mfaCode}
+              loginId={loginId}
+              factors={factors}
+              factorSent={factorSent}
+              resendIn={resendIn}
+              setUsername={setUsername}
+              setPassword={setPassword}
+              setMfaCode={setMfaCode}
+              onSignIn={churchSignIn}
+              onSelectFactor={selectFactor}
+              onVerify={verifyMfa}
+              onBack={() => reset()}
+              onChooseDifferent={() => {
+                setFactorSent(null);
+                setMfaCode(''); // input typed for the OLD factor must never ride into the new one
+              }}
+            />
+          </form>
         ) : (
-          <EmailFields
-            busy={busy}
-            email={email}
-            emailCode={emailCode}
-            emailCodeSent={emailCodeSent}
-            useRelay={useRelay}
-            brokerAvailable={brokerAvailable}
-            setEmail={setEmail}
-            setEmailCode={setEmailCode}
-            onSend={sendEmailCode}
-            onVerify={verifyEmailCode}
-            onUseDifferent={() => setEmailCodeSent(false)}
-            onEnableRelay={() => {
-              setUseRelay(true);
-              setEmailCodeSent(false);
-              setEmailCode('');
-              setError(null);
-            }}
-            onDisableRelay={() => {
-              setUseRelay(false);
-              setEmailCodeSent(false);
-              setEmailCode('');
-              setError(null);
-            }}
-          />
+          <form key="email-otp" className="login-form" onSubmit={(e) => e.preventDefault()}>
+            <EmailFields
+              busy={busy}
+              email={email}
+              emailCode={emailCode}
+              emailCodeSent={emailCodeSent}
+              useRelay={useRelay}
+              brokerAvailable={brokerAvailable}
+              setEmail={setEmail}
+              setEmailCode={setEmailCode}
+              onSend={sendEmailCode}
+              onVerify={verifyEmailCode}
+              onUseDifferent={() => setEmailCodeSent(false)}
+              onEnableRelay={() => {
+                setUseRelay(true);
+                setEmailCodeSent(false);
+                setEmailCode('');
+                setError(null);
+              }}
+              onDisableRelay={() => {
+                setUseRelay(false);
+                setEmailCodeSent(false);
+                setEmailCode('');
+                setError(null);
+              }}
+            />
+          </form>
         )}
 
         {passkeyAvailable && !inMfa && (
@@ -362,7 +365,7 @@ export function LoginPage() {
             {error}
           </p>
         )}
-      </form>
+      </div>
     </main>
   );
 }

@@ -19,6 +19,36 @@ test.describe('login messages', () => {
     await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
   });
 
+  // A27: Safari classifies password autofill PER FORM — when both modes shared one <form>, the
+  // saved LCR credential kept being suggested on the email field (iPhone QuickType, 2026-06-12).
+  // The email-OTP fields must live in their own form, with nothing password-shaped in it.
+  test('email-OTP fields render in their own form, free of password-autofill bait', async ({ page }) => {
+    await openLogin(page);
+
+    // Capture the church mode's form element, then switch to Email code.
+    const churchForm = await page
+      .getByLabel('Church username')
+      .evaluateHandle((el) => el.closest('form'));
+    await page.getByRole('button', { name: 'Email code' }).click();
+
+    const emailInput = page.getByLabel('Email', { exact: true });
+    await expect(emailInput).toHaveAttribute('autocomplete', 'email');
+    // Pre-fix both modes rendered into the SAME persistent form node — Safari's login-form
+    // classification stuck to it. The email field must now sit in a different form element.
+    expect(
+      await emailInput.evaluate((el, church) => el.closest('form') === church, churchForm),
+    ).toBe(false);
+    // And that form must never contain a password/username field for Safari to key off.
+    expect(
+      await emailInput.evaluate(
+        (el) =>
+          el
+            .closest('form')!
+            .querySelector('input[type="password"], [autocomplete~="username"], [autocomplete~="current-password"]') !== null,
+      ),
+    ).toBe(false);
+  });
+
   test('bad credentials show the broker detail in role=alert and stay on the login screen', async ({ page }) => {
     const detail = 'That username or password is incorrect. Please try again.';
     const { supabase } = await openLogin(page, {
