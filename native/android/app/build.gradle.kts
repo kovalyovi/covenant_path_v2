@@ -97,6 +97,7 @@ dependencies {
     implementation(libs.androidx.credentials)
     implementation(libs.androidx.credentials.play.services.auth)
     implementation(libs.androidx.datastore.preferences)
+    implementation(libs.androidx.security.crypto) // CLIENT-01: Keystore-backed encrypted auth session
 
     // Material Components — only to supply the Theme.Material3.* XML launch theme parent.
     implementation(libs.google.android.material)

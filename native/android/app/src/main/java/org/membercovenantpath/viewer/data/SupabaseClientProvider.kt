@@ -28,7 +28,15 @@ object SupabaseClientProvider {
             supabaseUrl = AppConfig.supabaseUrl,
             supabaseKey = AppConfig.supabaseAnonKey,
         ) {
-            install(Auth)
+            install(Auth) {
+                // CLIENT-01: store the session in Keystore-backed EncryptedSharedPreferences instead
+                // of the default plaintext SharedPreferences. Defensive: if construction fails (or the
+                // app Context isn't ready yet), keep supabase-kt's default manager rather than crash.
+                if (AppContextHolder.isReady) {
+                    runCatching { EncryptedSessionManager(AppContextHolder.context) }
+                        .onSuccess { sessionManager = it }
+                }
+            }
             install(Postgrest)
             defaultSerializer = io.github.jan.supabase.serializer.KotlinXSerializer(lenientJson)
         }

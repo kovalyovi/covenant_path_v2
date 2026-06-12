@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.fragment.app.FragmentActivity
+import org.membercovenantpath.viewer.data.AppContextHolder
 import org.membercovenantpath.viewer.data.ErrorReporter
 import org.membercovenantpath.viewer.ui.App
 
@@ -16,6 +17,9 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        // CLIENT-01: make the app Context available before any Supabase client access so the session
+        // is persisted via the Keystore-backed EncryptedSessionManager.
+        AppContextHolder.context = applicationContext
         ErrorReporter.install() // report uncaught errors to the broker /log (no PII)
         setContent { App() }
     }

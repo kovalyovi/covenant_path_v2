@@ -23,6 +23,20 @@ Reference each behavior against the Flutter source noted in [brackets]. Translat
    - **Passkey** (WebAuthn): "Sign in with a passkey" when supported. NOTE: native passkeys use the platform AuthenticationServices (iOS ASAuthorization / Android Credential Manager) against the broker /webauthn/* begin+complete. If a full native WebAuthn impl is too deep, implement it properly IF you can; otherwise stub the button disabled with a clear "use email code on this device" note — but DOCUMENT it as the one partial item.
    - Disclaimer text + footer [disclaimer.dart kDisclaimerLong, DisclaimerFooter]; transient status line ("waking up the sign-in service"); error line.
 4. **Biometric app-lock** [biometric_gate.dart]: optional Face ID / fingerprint required to open the app, togger in Settings. iOS LocalAuthentication; Android BiometricPrompt. Persist the on/off pref.
+   - *2026-06-11 (security audit — CLIENT-01/02/04, verify native via CI builds + AVD spot-check):*
+     **Android** now persists the Supabase session (access + REFRESH token) in **Keystore-backed
+     `EncryptedSharedPreferences`** (`EncryptedSessionManager`, wired into `install(Auth)`; app
+     `Context` via `AppContextHolder` set in `MainActivity.onCreate`), and the manifest sets
+     `allowBackup="false"` — closing the plaintext-`SharedPreferences` + `adb backup` refresh-token
+     theft (iOS already stores the session in the **Keychain** via supabase-swift, confirmed). The
+     wiring is **defensive** (an init failure falls back to supabase-kt's default manager, never
+     crashes startup). **AVD-VERIFY:** sign in → kill+relaunch (session restores) → confirm
+     `shared_prefs/cp_auth.xml` is ciphertext; also confirm the supabase-kt **3.1.1** `SessionManager`
+     method shape + `UserSession` import compile. The **biometric app-lock is defense-in-depth only**
+     (a UI gate over the now-encrypted at-rest session, not a crypto barrier); binding the master key
+     to biometric (`setUserAuthenticationRequired`) is a tracked follow-up tied to the app-lock toggle.
+     Separately, the client **error reporters scrub PII** (emails/URLs/digit-runs) before `/log` on all
+     three surfaces (`ErrorReporter.scrub` in Kotlin + Swift, `errorReporter.ts` web).
 5. **Dark mode** [theme controller]: light/dark/system, persisted; toggle in the menu/Settings. Full Material3 / iOS semantic theming.
 
 ## B. Dashboard shell  [dashboard_page.dart, views/dashboard_shell.dart, dashboard_common.dart]
