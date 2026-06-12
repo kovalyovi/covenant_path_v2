@@ -153,7 +153,12 @@ def _sync_one(args) -> dict:
     from covenant_path.report import build_stake_report, export
 
     metrics.reset()  # isolate this stake's request metrics for the diagnostics row
-    client = LcrClient()
+    # auto_login=False: the daily sync's session is the stored delegated credential (or the operator's
+    # fresh login) — it must NEVER fall back to a fresh okta_login.login() on a 401. That headless
+    # login is MFA-blocked now (2026-06-12), and a recoverable LCR-session expiry must NOT turn into a
+    # hard failure: the covenant-path CORE comes from the Member Tools 45-day token, and the LCR-only
+    # extras (KPIs, missionaries, the eligibility re-check) degrade gracefully (best-effort) instead.
+    client = LcrClient(auto_login=False)
     # Mark the stake "running" before the long scrape so the app can show a syncing banner
     # (and a brand-new stake gets a row immediately). Best-effort — never block the sync.
     # Also compute the STALE-FIRST unit order (oldest data first) so the report refreshes the
@@ -173,7 +178,14 @@ def _sync_one(args) -> dict:
             _c.close()
         except Exception as exc:  # noqa: BLE001
             logger.warning("could not mark sync running: %s", exc)
-    access = covenant_path_access(client)
+    # The access matrix (callings → features) needs the LCR session; best-effort so a dead session
+    # doesn't sink the run — the covenant-path data comes from Member Tools regardless. An empty
+    # access just means coverage/feature gates fall back to sentinels (data still syncs).
+    try:
+        access = covenant_path_access(client)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("access matrix skipped (LCR session unavailable — syncing via Member Tools): %s", exc)
+        access = {}
     cache = ProfileCache(max_age_days=args.cache_max_age_days, enabled=not args.no_cache)
     # The covenant-path data now comes ONLY from the RELIABLE Member Tools bulk API (one /api/v5/sync
     # replaces the fragile /api/report/one-work/* fan-out). The legacy one-work path is DEPRECATED — it
@@ -189,11 +201,19 @@ def _sync_one(args) -> dict:
         cp_source = "one-work-legacy"
     else:
         from covenant_path.report import build_membertools_report
-        stake_unit = _stake_unit_for_token(client)
+        # Prefer the unit number the caller already knows (the delegated stake's credential record) —
+        # the Member Tools 45-day token is keyed by it, and deriving it from user_context (LCR) would
+        # fail once the LCR session dies, stranding a stake that HAS a valid token. Fall back to the
+        # LCR-derived unit only when the caller didn't supply one (the operator's own self-sync).
+        stake_unit = getattr(args, "_stake_unit", None) or _stake_unit_for_token(client)
         access_token = _membertools_access_token(client, stake_unit)
         rows, mt_stats = build_membertools_report(
             client, access_token=access_token, with_profile=args.with_profile,
             access=access, cache=cache, verbose=args.verbose)
+        # The stake/ward structure from the payload — lets the Supabase sync run with NO live LCR
+        # session (it dies within days; the 45-day token outlives it). Stash it off _run_stats so it
+        # isn't written to the diagnostics row.
+        args._mt_unit_context = mt_stats.pop("unit_context", None)
         access.setdefault("_run_stats", {}).update(mt_stats)
         cp_source = "membertools"
         logger.info("covenant-path via Member Tools (/api/v5/sync): %d members", len(rows))
@@ -231,7 +251,8 @@ def _sync_one(args) -> dict:
             failed_unit_numbers = access.get("_run_stats", {}).get("failed_unit_numbers", [])
             result["supabase"] = bsync.sync_stake(
                 client, dicts, conn, failed_unit_numbers=failed_unit_numbers,
-                only_unit=getattr(args, "unit", None), access=access)
+                only_unit=getattr(args, "unit", None), access=access,
+                ctx_override=getattr(args, "_mt_unit_context", None))
             if args.photos:
                 from backend import photos as photopipe
                 s = result["supabase"]
@@ -465,6 +486,7 @@ def _mint_and_sync(args, st: dict) -> None:
     (the caller decides whether one bad stake stops the run). Isolated per stake — no other
     stake's data is touched."""
     args._allow_master = False  # a delegated stake never writes into the operator's master sheet (#3)
+    args._stake_unit = st.get("unit_number")  # known from the credential record — the MT token key
     from backend import credentials, db
     from lcr_client import okta_login
     conn = db.connect()
@@ -475,8 +497,11 @@ def _mint_and_sync(args, st: dict) -> None:
     if not cred or cred.get("revoked"):
         raise RuntimeError("no active credential for this stake")
     session = okta_login.session_from_cookies(cred["cookies"])
-    # Three-tier session renewal: (1) stored LCR appSession (outlives Okta), (2) Okta re-SSO,
-    # (3) OAuth refresh_token → silent SSO. Only fail once all three are exhausted.
+    # Three-tier LCR-session renewal: (1) stored LCR appSession (outlives Okta), (2) Okta re-SSO,
+    # (3) OAuth refresh_token → silent SSO. If ALL fail, the LCR session is dead and can't be renewed
+    # headlessly (MFA) — but the covenant-path CORE comes from the Member Tools 45-day token, which
+    # outlives the LCR session. So when a token exists, sync via it (LCR-only extras best-effort)
+    # instead of stranding the stake; only a stake with NO token genuinely needs a re-authorization.
     try:
         okta_login.verify_session(session)
     except Exception:  # noqa: BLE001
@@ -485,7 +510,11 @@ def _mint_and_sync(args, st: dict) -> None:
             okta_login.verify_session(session)
         except Exception:  # noqa: BLE001
             if not okta_login.try_refresh_session(session, cred.get("refresh_token")):
-                raise
+                if not _membertools_token(st.get("unit_number")).get("refresh_token"):
+                    raise
+                logger.warning("stake %s: LCR session expired and can't renew headlessly — syncing "
+                               "the covenant-path core via the Member Tools 45-day token (LCR-only "
+                               "extras best-effort; a re-auth refreshes them)", st.get("unit_number"))
     okta_login.write_storage_state(session, okta_login.DEFAULT_STORAGE_STATE)
     # #10: periodically re-verify the authorizing leader's calling STILL grants covenant-path access —
     # this runs every sync, so a released/reassigned leader's stored credential is caught and revoked
@@ -509,7 +538,7 @@ def _revoke_if_ineligible(st: dict) -> None:
     from backend import credentials, db, onboarding
     from backend.roles import _calling_always_allowed
     try:
-        access = covenant_path_access(LcrClient())  # reads the storage_state just written for this stake
+        access = covenant_path_access(LcrClient(auto_login=False))  # storage_state just written; no MFA-blocked relogin
         positions = access.get("runner_positions") or []
         if not positions:
             return  # couldn't determine callings → never revoke on an inconclusive read

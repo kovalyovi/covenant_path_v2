@@ -143,6 +143,24 @@ def unit_names(payload: dict) -> dict[int, str]:
     return out
 
 
+def context_from_sync(payload: dict):
+    """Build a UserContext (stake identity + child units) from the Member Tools /api/v5/sync `units`
+    tree — so the daily sync has the stake/ward structure it needs WITHOUT a live LCR session (which
+    dies within days). `positions`/`roles` are empty (those are an LCR concept, re-checked on enroll),
+    so role provisioning + the eligibility re-check stay best-effort. Returns None if `units` is empty."""
+    from lcr_client.models import UnitRef, UserContext
+    units = payload.get("units") or []
+    if not units:
+        return None
+    root = units[0]
+    children = [UnitRef(c.get("name"), c.get("unitNumber"), c.get("unitType"))
+                for c in (root.get("childUnits") or [])]
+    return UserContext(
+        individual_id=None, active_position=None,
+        unit_name=root.get("name"), unit_number=root.get("unitNumber"),
+        positions=[], roles=[], child_units=children, raw=root)
+
+
 def adapt_person(p: dict, kind: str, unit_name_by_number: dict[int, str],
                  name_by_uuid: dict[str, str]) -> CovenantPathMember:
     """One Member Tools covenant-path person → CovenantPathMember. Covenant-path PROGRESS fields are

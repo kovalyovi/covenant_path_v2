@@ -67,8 +67,19 @@ def kpi_subtree(dash: dict) -> dict:
 
 
 def sync_stake(client: LcrClient, members: list[dict], conn,
-               failed_unit_numbers=None, only_unit=None, access=None) -> dict:
-    ctx = client.user_context()
+               failed_unit_numbers=None, only_unit=None, access=None, ctx_override=None) -> dict:
+    # The stake/ward identity. Prefer the live LCR user_context (it also carries positions/roles for
+    # role provisioning); but once the delegated LCR session has aged out, fall back to the structure
+    # the Member Tools /api/v5/sync payload provides (ctx_override) so the data sync still completes —
+    # the covenant-path bulk data came from that same 45-day token regardless of the LCR session.
+    try:
+        ctx = client.user_context()
+    except Exception as exc:  # noqa: BLE001
+        if ctx_override is None:
+            raise
+        logger.warning("user_context via LCR unavailable (%s) — using the Member Tools unit structure",
+                       str(exc)[:120])
+        ctx = ctx_override
     # Stake identity is keyed by unit_number (stable), so a stake RENAME just updates stakes.name —
     # never a duplicate. Units are upserted by unit_number too: a renamed ward updates its name, a
     # ward that moved stakes updates its stake_id, and a person who changed wards gets their unit_id +

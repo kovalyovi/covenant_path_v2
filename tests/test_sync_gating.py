@@ -227,3 +227,67 @@ def test_membertools_expired_refresh_clears_and_remints(monkeypatch):
     assert tok == "AT-remint"
     assert calls["cleared"] == [503991]
     assert calls["mint"] == 1 and calls["saved"] == [(503991, "R2")]
+
+
+# --- E7: Member-Tools-primary resilience (the golden-flow sync, 2026-06-12) ----------------------
+# The covenant-path CORE comes from the Member Tools /api/v5/sync 45-day token; the stake/ward
+# STRUCTURE comes from that same payload (context_from_sync), so the daily sync completes with NO
+# live LCR session (which dies within days). These prove the structure derivation + that sync_stake
+# falls back to it when the LCR user_context is dead. Proven live: 503991 synced 93 members with a
+# dead LCR session.
+
+
+def test_context_from_sync_builds_stake_and_wards():
+    from covenant_path.membertools_adapter import context_from_sync
+    payload = {"units": [{
+        "unitNumber": 503991, "name": "Raleigh North Carolina West Stake", "unitType": "STAKE",
+        "childUnits": [
+            {"unitNumber": 111, "name": "Green Level Ward", "unitType": "WARD"},
+            {"unitNumber": 222, "name": "Highlands Ward", "unitType": "WARD"},
+        ],
+    }]}
+    ctx = context_from_sync(payload)
+    assert ctx.unit_number == 503991
+    assert ctx.unit_name == "Raleigh North Carolina West Stake"
+    assert [(u.unit_number, u.name, u.type) for u in ctx.child_units] == [
+        (111, "Green Level Ward", "WARD"), (222, "Highlands Ward", "WARD")]
+    assert ctx.positions == [] and ctx.roles == []  # LCR-only concepts; re-checked at enroll
+    assert context_from_sync({"units": []}) is None
+
+
+class _StopProbe(Exception):
+    pass
+
+
+def test_sync_stake_falls_back_to_payload_context_when_lcr_dead(monkeypatch):
+    # When the delegated LCR session is dead, sync_stake uses the Member Tools-derived ctx_override
+    # instead of raising — so the data sync still completes (the bulk data came from the token). We
+    # stop at the FIRST DB write (upsert_stake) and assert the identity resolved from the override.
+    import backend.db as dbmod
+    from backend import sync as bsync
+    from lcr_client.models import UnitRef, UserContext
+
+    class _DeadClient:
+        def user_context(self):
+            raise RuntimeError("LCR returned 401. Session expired")
+
+    override = UserContext(individual_id=None, active_position=None, unit_name="Test Stake",
+                           unit_number=999001, positions=[], roles=[],
+                           child_units=[UnitRef("Test Ward", 999002, "WARD")], raw={})
+    captured = {}
+
+    def _upsert_stake(conn, unit_number, name):
+        captured["stake"] = (unit_number, name)
+        raise _StopProbe()  # identity resolved → stop before the rest of the (DB-heavy) sync
+    monkeypatch.setattr(dbmod, "upsert_stake", _upsert_stake)
+
+    try:
+        bsync.sync_stake(_DeadClient(), [], object(), ctx_override=override)
+    except _StopProbe:
+        pass
+    except RuntimeError as e:
+        if "401" in str(e):
+            raise AssertionError("sync_stake raised on the dead LCR user_context instead of using "
+                                 "the Member Tools ctx_override") from e
+        raise
+    assert captured.get("stake") == (999001, "Test Stake")  # identity came from the override
