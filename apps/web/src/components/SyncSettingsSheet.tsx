@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from 'react';
 import { broker, type EnrollmentStatus } from '../lib/broker';
-import { fmtDateTime } from '../logic/dates';
+import { fmtDateTime, fmtEtHourLocal } from '../logic/dates';
 import { Modal } from './Modal';
 import { Button } from './ui';
 import { Icon } from './Icon';
@@ -270,11 +270,9 @@ function ScheduleSection() {
 
   if (!loaded) return <SubsectionSkeleton />; // #16: skeleton while loading, not a blank pop-in
   if (!eligible) return null;
-  const label = (h: number) => {
-    const ampm = h < 12 ? 'AM' : 'PM';
-    const h12 = h % 12 === 0 ? 12 : h % 12;
-    return `${h12}:00 ${ampm} ET`;
-  };
+  // The schedule is stored as an ET hour (the cron gate runs in ET) but DISPLAYED in the
+  // viewer's local time — nobody should have to convert timezones to read their sync time.
+  const label = (h: number) => fmtEtHourLocal(h);
 
   return (
     <div>
@@ -286,7 +284,7 @@ function ScheduleSection() {
       <p className="small muted" style={{ marginTop: 4 }}>
         {paused
           ? 'Automatic daily sync is paused. You can still "Sync my stake now" anytime.'
-          : 'Your stake syncs automatically each day at this time.'}
+          : 'Your stake syncs automatically each day at this time (shown in your local time).'}
       </p>
       <div className="row" style={{ marginTop: 8 }}>
         <select

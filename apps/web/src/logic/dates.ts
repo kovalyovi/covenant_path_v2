@@ -130,6 +130,30 @@ export function fmtDateTime(iso: string): string {
 }
 
 /**
+ * Today's instant for an ET (America/New_York) wall-clock hour. The daily-sync schedule is stored
+ * as an ET hour (`stake_settings.sync_hour_et` — the cron gate runs in ET); clients DISPLAY it in
+ * the viewer's local time. DST-safe: derived from the live ET offset, no hardcoded -5/-4.
+ */
+export function etHourToday(hourET: number): Date {
+  const now = new Date();
+  // ET wall clock "now", reparsed as if local — only the field DIFFERENCE to the target is used.
+  const etWall = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const ms =
+    ((hourET - etWall.getHours()) * 60 - etWall.getMinutes()) * 60_000 - etWall.getSeconds() * 1_000;
+  return new Date(now.getTime() + ms);
+}
+
+/** An ET schedule hour as the viewer's local wall-clock time, e.g. ET 7 → "5:00 AM" in MT. */
+export function fmtEtHourLocal(hourET: number): string {
+  const d = etHourToday(hourET);
+  let h = d.getHours();
+  const ampm = h < 12 ? 'AM' : 'PM';
+  h = h % 12 === 0 ? 12 : h % 12;
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${h}:${mm} ${ampm}`;
+}
+
+/**
  * Compact elapsed time since a past date, e.g. "2 months 3 days" (or "3 days"). Empty for a
  * future/unknown date. Mirrors `monthsDaysAgo` in golden_hour.dart (incl. the day-borrow logic).
  */

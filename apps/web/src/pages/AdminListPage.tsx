@@ -8,7 +8,7 @@ import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { admin } from '../lib/admin';
 import { status as statusColors } from '../theme/tokens';
-import { agoOrNever, dur } from '../logic/dates';
+import { agoOrNever, dur, fmtDateTime } from '../logic/dates';
 import { maskEmail } from '../logic/mask';
 import { Icon } from '../components/Icon';
 import { IconButton, Button } from '../components/ui';
@@ -218,7 +218,8 @@ function LoginTile({ r }: { r: Json }) {
       {r['stake_name'] ? <div className="small muted">{String(r['stake_name'])}</div> : null}
       {callings ? <div className="small muted">Callings: {callings}</div> : null}
       {scope ? <div className="small muted">Sees: {scope}</div> : null}
-      <div className="small muted">{at.slice(0, 16).replace('T', ' ')}</div>
+      {/* fmtDateTime renders the admin's LOCAL time; the raw `at` slice showed UTC. */}
+      <div className="small muted">{fmtDateTime(at)}</div>
     </div>
   );
 }

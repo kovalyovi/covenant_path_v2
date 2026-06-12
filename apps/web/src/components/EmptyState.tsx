@@ -3,6 +3,7 @@
 
 import { broker, type EnrollmentStatus } from '../lib/broker';
 import { useDashboard } from '../hooks/useDashboard';
+import { fmtEtHourLocal } from '../logic/dates';
 import { Icon } from './Icon';
 import { Button } from './ui';
 
@@ -68,8 +69,8 @@ export function EmptyState({ enrollStatus }: { enrollStatus: EnrollmentStatus | 
     }
   } else if (cred?.state === 'active') {
     title = 'Setting up your stake…';
-    body =
-      "Your credential is saved and the first sync is running — your stake's data will appear here in a few minutes. Refresh to check. (It also refreshes daily at 7 am ET.)";
+    // The default daily-sync hour is 7 ET — shown in the viewer's local time.
+    body = `Your credential is saved and the first sync is running — your stake's data will appear here in a few minutes. Refresh to check. (It also refreshes daily at ${fmtEtHourLocal(7)}.)`;
   } else {
     title = 'No members visible';
     body = 'Access is derived from your LCR calling. Sign in with the email your stake has on file.';

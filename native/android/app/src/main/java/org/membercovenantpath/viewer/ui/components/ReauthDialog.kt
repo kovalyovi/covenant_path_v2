@@ -281,7 +281,9 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
                         Text("Choose how to receive your verification code:")
                         Spacer(Modifier.size(8.dp))
                         factors.forEach { f ->
-                            OutlinedButton(onClick = { pickFactor(f) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                            // vertical padding keeps the stacked factor options from rendering flush
+                            // (matches LoginScreen + the web .form-stack gap)
+                            OutlinedButton(onClick = { pickFactor(f) }, enabled = !busy, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
                                 Text(f.label)
                             }
                         }

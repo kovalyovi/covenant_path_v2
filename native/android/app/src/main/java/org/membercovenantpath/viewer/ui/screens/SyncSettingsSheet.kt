@@ -184,9 +184,13 @@ private fun ScheduleSection(s: org.membercovenantpath.viewer.viewmodel.ScheduleS
     if (!s.loaded) { SyncSubsectionSkeleton(); return }  // #16: skeleton while loading, not a pop-in
     if (!s.eligible) return
     var menuOpen by remember { mutableStateOf(false) }
+    // The schedule is STORED as an ET hour (the cron gate runs in ET) but DISPLAYED in the
+    // device's local time — today's instant for that ET hour, formatted locally. DST-safe.
     fun label(h: Int): String {
-        val ampm = if (h < 12) "AM" else "PM"; val h12 = if (h % 12 == 0) 12 else h % 12
-        return "$h12:00 $ampm ET"
+        val et = java.time.ZonedDateTime.now(java.time.ZoneId.of("America/New_York"))
+            .withHour(h).withMinute(0).withSecond(0)
+        val local = et.withZoneSameInstant(java.time.ZoneId.systemDefault())
+        return local.format(java.time.format.DateTimeFormatter.ofPattern("h:mm a", java.util.Locale.US))
     }
     HorizontalDivider(Modifier.padding(vertical = 16.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -197,7 +201,7 @@ private fun ScheduleSection(s: org.membercovenantpath.viewer.viewmodel.ScheduleS
     Spacer(Modifier.size(4.dp))
     Text(
         if (s.paused) "Automatic daily sync is paused. You can still \"Sync my stake now\" anytime."
-        else "Your stake syncs automatically each day at this time.",
+        else "Your stake syncs automatically each day at this time (shown in your local time).",
         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Spacer(Modifier.size(8.dp))

@@ -184,7 +184,7 @@ private fun ChurchFields(vm: AuthViewModel, s: org.membercovenantpath.viewer.vie
             Text("Choose how to receive your verification code:", modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.size(8.dp))
             s.factors.forEach { f ->
-                OutlinedButton(onClick = { vm.selectFactor(f) }, enabled = !s.busy, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) { Text(f.label) }
+                OutlinedButton(onClick = { vm.selectFactor(f) }, enabled = !s.busy, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) { Text(f.label) }
             }
             TextButton(onClick = vm::backToPassword, enabled = !s.busy) { Text("Start over") }
         }

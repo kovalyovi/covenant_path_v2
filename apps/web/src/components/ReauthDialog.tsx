@@ -188,6 +188,7 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
       }}
       title="Re-authorize daily sync"
       hideClose
+      bodyClassName="form-stack"
       actions={
         <>
           <Button onClick={() => { resetAll(); onClose(); }} disabled={busy}>
@@ -315,7 +316,7 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
             Sign in with your Church account (same as LCR) to re-authorize the daily sync. The session
             is stored encrypted — never your password — and is revocable anytime.
           </p>
-          <div style={{ marginBottom: 16 }}>
+          <div>
             <Segmented<ReauthMode>
               ariaLabel="Sign-in method"
               value={mode}
@@ -329,7 +330,7 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
           </div>
           {mode === 'password' ? (
             <>
-              <label className="field" style={{ marginBottom: 8 }}>
+              <label className="field">
                 <span>Church username</span>
                 <input
                   className="input"

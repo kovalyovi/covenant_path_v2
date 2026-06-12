@@ -15,9 +15,11 @@ interface ModalProps {
   sheet?: boolean;
   /** Hide the close (×) button in the title row (e.g. when actions already include Cancel). */
   hideClose?: boolean;
+  /** Extra class for the body (e.g. `form-stack` to stack fields/buttons with the form gap). */
+  bodyClassName?: string;
 }
 
-export function Modal({ open, onClose, title, children, actions, sheet, hideClose }: ModalProps) {
+export function Modal({ open, onClose, title, children, actions, sheet, hideClose, bodyClassName }: ModalProps) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useRef(`modal-${Math.random().toString(36).slice(2)}`).current;
   // Callers pass inline `onClose` arrows, so its identity changes every render. The focus effect
@@ -92,7 +94,7 @@ export function Modal({ open, onClose, title, children, actions, sheet, hideClos
           </span>
           {!hideClose && <IconButton icon="close" label="Close" onClick={onClose} size={20} />}
         </div>
-        <div className="dialog__body">{children}</div>
+        <div className={bodyClassName ? `dialog__body ${bodyClassName}` : 'dialog__body'}>{children}</div>
         {actions && <div className="dialog__actions">{actions}</div>}
       </div>
     </div>,

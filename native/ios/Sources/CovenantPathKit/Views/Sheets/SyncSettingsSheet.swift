@@ -191,7 +191,7 @@ struct ScheduleSection: View {
                     Label("Daily sync time", systemImage: "clock").font(.headline)
                     Text(paused
                          ? "Automatic daily sync is paused. You can still \"Sync my stake now\" anytime."
-                         : "Your stake syncs automatically each day at this time.")
+                         : "Your stake syncs automatically each day at this time (shown in your local time).")
                         .font(.caption).foregroundStyle(.secondary)
                     HStack {
                         Picker("Hour", selection: Binding(get: { hour }, set: { save(hour: $0) })) {
@@ -217,10 +217,19 @@ struct ScheduleSection: View {
         .task { await load() }
     }
 
+    /// The schedule is STORED as an ET hour (the cron gate runs in ET) but DISPLAYED in the
+    /// device's local time — today's instant for that ET hour, formatted locally. DST-safe.
     private func label(_ h: Int) -> String {
-        let ampm = h < 12 ? "AM" : "PM"
-        let h12 = h % 12 == 0 ? 12 : h % 12
-        return "\(h12):00 \(ampm) ET"
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "America/New_York") ?? .current
+        var c = cal.dateComponents([.year, .month, .day], from: Date())
+        c.hour = h
+        c.minute = 0
+        guard let d = cal.date(from: c) else { return "\(h):00" }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US")
+        f.dateFormat = "h:mm a"   // device-local timezone by default
+        return f.string(from: d)
     }
 
     private func load() async {

@@ -10,7 +10,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { admin } from '../lib/admin';
 import { status as statusColors } from '../theme/tokens';
-import { agoOrNever, dur } from '../logic/dates';
+import { agoOrNever, dur, fmtDateTime } from '../logic/dates';
 import { Icon } from '../components/Icon';
 import { IconButton, Button } from '../components/ui';
 import { CardSkeleton } from '../components/Skeletons';
@@ -384,7 +384,8 @@ function LoginAuditCard({ logins: all }: { logins: Json[] }) {
             {r['stake_name'] ? <div className="small muted">{String(r['stake_name'])}</div> : null}
             {callings ? <div className="small muted">Callings: {callings}</div> : null}
             {scope ? <div className="small muted">Sees: {scope}</div> : null}
-            <div className="small muted">{at.slice(0, 16).replace('T', ' ')}</div>
+            {/* fmtDateTime renders the admin's LOCAL time; the raw `at` slice showed UTC. */}
+            <div className="small muted">{fmtDateTime(at)}</div>
           </div>
         );
       })}
@@ -654,7 +655,12 @@ function EndpointHealthCard({ data }: { data: Json }) {
     return <Card title="Endpoint health (trend)">No sync/probe telemetry in the last {days} days yet.</Card>;
   }
   const shown = eps.slice(0, 10); // top of the list only — the full, paginated set lives at /admin/endpoints
-  const hours = Object.keys(byHour).sort((a, b) => Number(a) - Number(b));
+  // Telemetry buckets are UTC hours; show the admin their LOCAL wall-clock hour (whole-hour
+  // offset — half-hour timezones read ±30 min, fine for a "quiet hour" scan).
+  const offH = Math.round(-new Date().getTimezoneOffset() / 60);
+  const hours = Object.keys(byHour)
+    .map((k) => ({ k, local: (((Number(k) + offH) % 24) + 24) % 24 }))
+    .sort((a, b) => a.local - b.local);
   const verdictColor = (v: string) =>
     v === 'hot' ? statusColors.danger : v === 'watch' ? statusColors.warning : statusColors.success;
   const hourColor = (pct: number) =>
@@ -696,20 +702,20 @@ function EndpointHealthCard({ data }: { data: Json }) {
       {hours.length > 0 && (
         <>
           <p className="small" style={{ marginTop: 14, fontWeight: 600 }}>
-            Error rate by hour (UTC) — schedule the heavy sync at a quiet hour
+            Error rate by hour (your local time) — schedule the heavy sync at a quiet hour
           </p>
           <div className="wrap" style={{ gap: 6 }}>
-            {hours.map((h) => {
-              const b = byHour[h];
+            {hours.map(({ k, local }) => {
+              const b = byHour[k];
               const pct = Number(b['error_pct'] ?? 0);
               return (
                 <span
-                  key={h}
+                  key={k}
                   className="chip"
                   title={`${String(b['calls'])} calls`}
                   style={{ padding: '1px 8px', fontSize: 11, borderColor: hourColor(pct) }}
                 >
-                  {h}h · {pct}%
+                  {local}h · {pct}%
                 </span>
               );
             })}

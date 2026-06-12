@@ -735,6 +735,13 @@ button.card--tappable:hover {
   flex-direction: column;
   gap: var(--md);
 }
+/* Auth dialogs (ReauthDialog) stack prompts, fields, and the MFA factor-option buttons with the
+   same rhythm as the login form — without this the stacked buttons render flush. */
+.form-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--md);
+}
 /* The sign-in-method toggle is a full-width control on the login card (the shared `.segmented` is
    intrinsic-width for inline use elsewhere). Splitting the buttons evenly removes the empty pill gap
    that otherwise trails the labels, so both modes read as a balanced, deliberate toggle. */

@@ -2,7 +2,7 @@
 // part most likely to silently misbehave, so the same cases are pinned here.
 
 import { describe, it, expect } from 'vitest';
-import { parseMemberDate, fmtLong, monthsDaysAgo } from '../logic/dates';
+import { parseMemberDate, fmtLong, monthsDaysAgo, etHourToday, fmtEtHourLocal } from '../logic/dates';
 
 describe('parseMemberDate', () => {
   it('parses "6 Feb 2026" and "06 Feb 2026"', () => {
@@ -56,5 +56,30 @@ describe('monthsDaysAgo', () => {
     expect(monthsDaysAgo(d)).toContain('month');
     // exactly today reads "0 days" (never empty/negative)
     expect(monthsDaysAgo(new Date())).toContain('day');
+  });
+});
+
+// The sync schedule is STORED as an ET hour but DISPLAYED local. These invariants hold in
+// whatever timezone the test runner uses: converting the returned instant back to
+// America/New_York must land exactly on the requested wall-clock hour.
+describe('etHourToday / fmtEtHourLocal', () => {
+  const inET = (d: Date, opts: Intl.DateTimeFormatOptions) =>
+    new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', ...opts }).format(d);
+
+  it('returns an instant whose ET wall clock is the requested hour, on the hour', () => {
+    for (const h of [0, 7, 12, 23]) {
+      const d = etHourToday(h);
+      expect(Number(inET(d, { hour: 'numeric', hourCycle: 'h23' }))).toBe(h);
+      expect(Number(inET(d, { minute: 'numeric' }))).toBe(0);
+    }
+  });
+
+  it('formats that instant as the local wall-clock time (h:mm AM/PM)', () => {
+    const s = fmtEtHourLocal(7);
+    expect(s).toMatch(/^\d{1,2}:\d{2} (AM|PM)$/);
+    const d = etHourToday(7);
+    const h24 = d.getHours();
+    const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+    expect(s).toBe(`${h12}:${String(d.getMinutes()).padStart(2, '0')} ${h24 < 12 ? 'AM' : 'PM'}`);
   });
 });
