@@ -163,7 +163,10 @@ def _mint_membertools(session: requests.Session, login_id: str) -> str | None:
         return None
     except Exception as exc:  # noqa: BLE001
         logger.error("[web %s] Member Tools mint errored unexpectedly — daily sync will have NO 45-day "
-                     "token: %r", login_id, exc)
+                     "token. FIX: have the leader re-authorize (username+password) to retry; if it "
+                     "persists, the Member Tools /authorize or /token call itself is failing — check "
+                     "lcr_client/membertools.py (CLIENT_ID / SCOPE / REDIRECT_URI) against a live "
+                     "capture and Okta's status. Cause: %r", login_id, exc)
         return None
     rt = tok.get("refresh_token")
     if rt:
