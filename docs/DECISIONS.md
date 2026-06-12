@@ -6,6 +6,52 @@ Newest first.
 
 ---
 
+## ADR-011 — Church authentication is username + password only; the passwordless OTP lane is removed (2026-06-12)
+
+**Context.** The daily sync's covenant-path data comes from the Member Tools bulk API
+(`/api/v5/sync`), whose bearer is minted by a **silent `prompt=none` SSO** against the Member Tools
+OAuth client. That silent SSO requires a **global Okta web session** (a live `sid` cookie). Member
+Tools also issues a **45-day refresh token** that renews the bearer with no Okta session — the whole
+point of the "enroll once, sync unattended for ~45 days" golden flow (ADR-009 era, migration 0049).
+A leader could sign in to the Church through three lanes: **(1)** classic username + password
+(`/api/v1/authn` → `/authorize?sessionToken=` → one MFA in the Okta widget → success), **(2)** an IDX
+interaction-code password login (`/auth/password` → `/auth/mfa/*`), and **(3)** a **passwordless
+emailed code** as the primary Okta factor (`/auth/otp/*`). Only lane (1) establishes a **global**
+Okta session; lanes (2) and (3) produce an **app-scoped** IDX session for the LCR app's client only.
+
+**The bug (the "Ken Packer" re-auth loop, 2026-06-12).** A leader who enrolled via the passwordless
+OTP lane (lane 3) got a stored credential with **no Member Tools token** — the silent mint returned
+`login_required` (the app-scoped session can't SSO to Member Tools). Every daily sync then failed with
+"silent authorize did not return a code … Okta session not live", and the app kept asking him to
+re-authorize — which he kept doing via the same OTP lane, looping. The UI presented OTP and password
+as equivalent sign-in choices, but only password can set up sync.
+
+**Decision.** **Remove the passwordless Church-OTP lane entirely** (broker `/auth/otp/*` endpoints +
+`okta_flow.otp_start/otp_verify`; the web/iOS/Android re-auth dialogs' "Email code" option; the
+`otpUsernameHint` copy helper on all three surfaces; the e2e/unit OTP tests). Church authentication —
+for both view-only sign-in and sync enrollment — is **username + password** only: `/auth/web/*` (the
+one-MFA credential-capture lane that mints the token) for enroll, `/auth/password` + `/auth/mfa/*` for
+view-only. Be honest in the UI: the re-auth dialog states sync needs a username + password and why.
+
+**What stays.** **Passwordless *viewing* still exists** — the Supabase **email relay** (`/auth/email/*`,
+a 6-digit code to any email, RLS-scoped, no Church session) is a different system and is unaffected;
+it just can't enroll sync. The **mobile "Authorize on the Church website" capture** (a WebView at
+churchofjesuschrist.org, no password typed in our app) also stays and mints the token (it completes a
+full Church login → global session).
+
+**Why.** The OTP lane could never deliver the product's core promise (unattended sync) and its mere
+presence created a silent, looping dead end. One lane that always works beats two where one
+half-works. The cost is that a leader without a usable Church password can't set up sync from our
+forms — but the Church-website capture (mobile) covers the no-password case, and viewing never needed
+a Church password at all.
+
+**Consequence.** A removed feature (passwordless Church sign-in) and its phantom-flow guidance copy.
+Old cached clients that still show "Email code" will 404 on `/auth/otp/*` until they reload — an
+acceptable, brief window for a dead-end button. ADR-supersedes the passwordless-enroll work shipped
+2026-06-11.
+
+---
+
 ## ADR-010 — Security-audit hardening: verify the provider→stake binding, accept the service-role blast radius (2026-06-11)
 
 **Context.** A full-stack security audit (3 independent review passes + a remediation pass) found

@@ -7,26 +7,24 @@ import SwiftUI
 /// auto-select), and keeps the user in the app: on success the broker stores the fresh credential,
 /// we adopt the re-minted Supabase session (same user — never the login screen), reload enrollment
 /// status and toast. Used by the stale/revoked banner and the empty-state authorize CTAs.
+///
+/// USERNAME + PASSWORD ONLY (2026-06-12). Setting up daily sync mints a 45-day Member Tools token via
+/// a silent SSO that needs the global Okta session only the classic username+password lane establishes
+/// (/auth/web/*). The passwordless emailed-code (OTP) lane was removed: its Okta session is app-scoped
+/// and could never mint the token. A leader who'd rather not type a password uses the Church-website
+/// capture below (also enroll=true). See docs/DECISIONS.md (ADR-010).
 struct ReauthSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appServices) private var services
     let store: DashboardStore
     let onToast: (String) -> Void
 
-    enum Mode { case password, otp }
-
-    @State private var mode: Mode = .password
     @State private var username = ""
-    @State private var email = ""
     @State private var password = ""
     @State private var mfaCode = ""
-    @State private var otpCode = ""
     @State private var loginID: String?
     @State private var factors: [BrokerFactor] = []
     @State private var factorSent: BrokerFactor?
-    @State private var otpSent = false
-    // Broker advisory after a send burst: Okta quietly pauses email delivery (2026-06-12).
-    @State private var throttleHint: String?
     @State private var busy = false
     @State private var status: String?
     @State private var error: String?
@@ -35,9 +33,6 @@ struct ReauthSheet: View {
     @State private var resendIn = 0
     @State private var resendTask: Task<Void, Never>?
     @State private var showChurchWeb = false
-    // The password lane uses the credential-capture (one-MFA) flow (/auth/web/*) so the single MFA
-    // mints the 45-day sync token; the OTP lane keeps /auth/otp + /auth/mfa. Routes the shared steps.
-    @State private var webMode = false
 
     var body: some View {
         NavigationStack {
@@ -77,34 +72,7 @@ struct ReauthSheet: View {
 
     @ViewBuilder
     private var stepContent: some View {
-        if otpSent {
-            Text("A code was sent to the email address on your Church Account. Enter it here.")
-                .font(.callout)
-            if let hint = otpUsernameHint(for: email.trimmed) {
-                Text(hint).font(.caption).foregroundStyle(.tint)
-            }
-            if let throttleHint {
-                Text(throttleHint).font(.caption).foregroundStyle(.tint)
-            }
-            TextField("Verification code", text: $otpCode)
-                .textContentType(.oneTimeCode).keyboardType(.numberPad)
-                .textFieldStyle(.roundedBorder)
-                .onChange(of: otpCode) { _, value in
-                    let digits = String(value.filter(\.isNumber).prefix(8))
-                    if digits != value { otpCode = digits }
-                }
-            primaryButton("Verify & authorize", disabled: otpCode.count < 6) { try await verifyOtp() }
-            Button(resendIn > 0 ? "Send a new code (\(resendIn)s)" : "Send a new code") {
-                run { try await startOtp() }
-            }
-            .disabled(busy || resendIn > 0)
-            Button("Use a different username") {
-                otpSent = false
-                otpCode = ""
-                resendIn = 0
-            }
-            .disabled(busy)
-        } else if let factorSent {
+        if let factorSent {
             // The prompt names the code's SOURCE (texted to the masked number vs authenticator
             // app) — a right-looking code from the wrong source is the multi-method trap.
             let tips = mfaPrompt(for: factorSent)
@@ -114,8 +82,8 @@ struct ReauthSheet: View {
                 Text(warning).font(.caption).foregroundStyle(.tint)
             }
             if isPassword {
-                // Passwordless-lane MFA continuation: the next factor is the PASSWORD (a
-                // distinct factor type from the emailed code) — not a 6-digit code.
+                // MFA continuation: the next factor is the PASSWORD (a distinct factor type from a
+                // code) — not a 6-digit code.
                 SecureField("Password", text: $mfaCode)
                     .textContentType(.password)
                     .textFieldStyle(.roundedBorder)
@@ -152,45 +120,23 @@ struct ReauthSheet: View {
                     .disabled(busy)
             }
         } else {
-            Text("Sign in with your Church account (same as LCR) to re-authorize the daily sync. "
-                 + "The session is stored encrypted — never your password — and is revocable anytime.")
+            Text("Sign in with your Church account (same username and password as LCR) to set up the "
+                 + "daily sync. The session is stored encrypted — never your password — and is "
+                 + "revocable anytime.")
                 .font(.callout).foregroundStyle(.secondary)
-            Picker("Sign-in method", selection: $mode) {
-                Text("Church username").tag(Mode.password)
-                Text("Email code").tag(Mode.otp)
-            }
-            .pickerStyle(.segmented)
-            .disabled(busy)
-            .padding(.bottom, 8)
-            if case .password = mode {
-                TextField("Church username", text: $username)
-                    .textContentType(.username).textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .textFieldStyle(.roundedBorder)
-                SecureField("Password", text: $password)
-                    .textContentType(.password)
-                    .submitLabel(.go).onSubmit { if !busy, !username.trimmed.isEmpty, !password.isEmpty { run { try await signIn() } } }
-                    .textFieldStyle(.roundedBorder)
-                primaryButton("Authorize", disabled: username.trimmed.isEmpty || password.isEmpty) { try await signIn() }
-            } else if case .otp = mode {
-                // The identifier Okta matches is the USERNAME, not the email address: an unknown
-                // identifier gets Okta's enumeration-prevention phantom flow — "code sent", nothing
-                // arrives, every code "invalid" (probe-proven 2026-06-12; this field was labeled
-                // "Church email" and stranded Ken Packer + the operator).
-                TextField("Church username", text: $email)
-                    .textContentType(.username)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { if !busy, !email.trimmed.isEmpty { run { try await startOtp() } } }
-                Text("We email a 6-digit code to the address on your Church Account. Enter your "
-                     + "username (same as LCR) — usually not an email address.")
-                    .font(.caption).foregroundStyle(.secondary)
-                if let hint = otpUsernameHint(for: email.trimmed) {
-                    Text(hint).font(.caption).foregroundStyle(.tint)
-                }
-                primaryButton("Send code", disabled: email.trimmed.isEmpty) { try await startOtp() }
-            }
+            Text("Daily sync needs your username and password — that's the only sign-in the Church "
+                 + "lets us renew unattended for ~45 days. (An emailed code can sign you in to view, "
+                 + "but can't authorize the background sync.)")
+                .font(.caption).foregroundStyle(.secondary)
+            TextField("Church username", text: $username)
+                .textContentType(.username).textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .textFieldStyle(.roundedBorder)
+            SecureField("Password", text: $password)
+                .textContentType(.password)
+                .submitLabel(.go).onSubmit { if !busy, !username.trimmed.isEmpty, !password.isEmpty { run { try await signIn() } } }
+                .textFieldStyle(.roundedBorder)
+            primaryButton("Authorize", disabled: username.trimmed.isEmpty || password.isEmpty) { try await signIn() }
             // No password in our app: authorize by signing in on the Church's own web page. Best
             // for an MFA-enabled account (the full Church MFA is available there).
             Divider().padding(.vertical, 4)
@@ -237,19 +183,10 @@ struct ReauthSheet: View {
 
     private var broker: BrokerService? { services?.broker }
 
-    // Route the shared MFA steps to /auth/web/* (password lane) or /auth/mfa/* (OTP-lane continuation).
-    private func selectFactorRouted(_ broker: BrokerService, _ loginID: String, _ factorID: String) async throws {
-        if webMode { try await broker.webSelectFactor(loginID: loginID, factorID: factorID) }
-        else { try await broker.selectFactor(loginID: loginID, factorID: factorID) }
-    }
-    private func verifyRouted(_ broker: BrokerService, _ loginID: String, _ code: String) async throws -> BrokerResult {
-        if webMode { return try await broker.webVerify(loginID: loginID, code: code, enroll: true) }
-        return try await broker.verifyMfa(loginID: loginID, code: code, enroll: true)
-    }
-
     private func signIn() async throws {
         guard let broker else { throw BrokerError("Church login is not configured (BROKER_URL).") }
-        webMode = true // password lane → the one-MFA credential-capture flow (mints the 45-day token)
+        // The password lane IS the credential-capture (one-MFA) flow (/auth/web/*): the single MFA
+        // mints the 45-day sync token.
         let r = try await broker.webStart(username.trimmed, password, enroll: true)
         if r.mfaRequired {
             try await enterMfa(r)
@@ -258,54 +195,25 @@ struct ReauthSheet: View {
         try await finish(r)
     }
 
-    /// Enter (or re-enter) the MFA factor step — used by the password lane AND by the
-    /// passwordless lane's continuation: an MFA-enabled account's emailed code is ACCEPTED and
-    /// Okta then demands a DISTINCT factor (for Church accounts that's the password, 2026-06-12).
+    /// Enter (or re-enter) the MFA factor step. An MFA-enabled account may, after the first factor,
+    /// demand a DISTINCT factor (for Church accounts sometimes the password, 2026-06-12).
     private func enterMfa(_ r: BrokerResult) async throws {
         guard let broker else { return }
-        otpSent = false
-        otpCode = ""
         loginID = r.loginID
         factors = r.factors
         factorSent = nil
         mfaCode = ""
         // Auto-send if there's exactly one factor (matches the login flow + web).
         if r.factors.count == 1, let id = r.loginID {
-            try await selectFactorRouted(broker, id, r.factors[0].id)
+            try await broker.webSelectFactor(loginID: id, factorID: r.factors[0].id)
             factorSent = r.factors[0]
             startResendCooldown()
         }
     }
 
-    private func startOtp() async throws {
-        guard let broker else { throw BrokerError("Church login is not configured (BROKER_URL).") }
-        webMode = false // OTP lane keeps /auth/otp + /auth/mfa (its continuation isn't the web flow)
-        let body = try await broker.otpStart(email.trimmed, enroll: true)
-        // Broker advisory after a send burst: Okta quietly pauses email delivery (2026-06-12).
-        throttleHint = body["throttle_hint"] as? String
-        otpSent = true
-        otpCode = ""
-        startResendCooldown()
-    }
-
-    private func verifyOtp() async throws {
-        guard let broker else { return }
-        do {
-            let r = try await broker.otpVerify(email.trimmed, otpCode.trimmed, enroll: true)
-            if r.mfaRequired {
-                try await enterMfa(r) // code ACCEPTED — the account's MFA owes one more factor
-                return
-            }
-            try await finish(r)
-        } catch {
-            otpCode = "" // a rejected code must be retyped fresh, not resubmitted stale
-            throw error
-        }
-    }
-
     private func pickFactor(_ f: BrokerFactor) async throws {
         guard let broker, let loginID else { return }
-        try await selectFactorRouted(broker, loginID, f.id)
+        try await broker.webSelectFactor(loginID: loginID, factorID: f.id)
         factorSent = f
         mfaCode = ""
         startResendCooldown()
@@ -314,7 +222,7 @@ struct ReauthSheet: View {
     private func verify() async throws {
         guard let broker, let loginID else { return }
         do {
-            let r = try await verifyRouted(broker, loginID, mfaCode.trimmed)
+            let r = try await broker.webVerify(loginID: loginID, code: mfaCode.trimmed, enroll: true)
             if r.mfaRequired {
                 try await enterMfa(r) // chained continuation (rare): yet another factor owed
                 return

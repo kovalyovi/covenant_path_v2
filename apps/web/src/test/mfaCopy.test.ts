@@ -3,7 +3,7 @@
 // failure that locked a stake leader out twice. Mirrored logic in Swift/Kotlin.
 
 import { describe, expect, it } from 'vitest';
-import { mfaPrompt, otpUsernameHint } from '../lib/mfaCopy';
+import { mfaPrompt } from '../lib/mfaCopy';
 
 describe('mfaPrompt', () => {
   it('names the text source, warns off authenticator codes, and offers the stale-number hint', () => {
@@ -45,21 +45,5 @@ describe('mfaPrompt', () => {
     const tips = mfaPrompt({ id: 'pending', label: 'your verification method', method: 'otp' });
     expect(tips.prompt).toContain('A code was just sent via your verification method');
     expect(tips.warning).toBeUndefined();
-  });
-});
-
-describe('otpUsernameHint', () => {
-  // 2026-06-12 (Ken Packer): Okta only matches the Church USERNAME — an email identifier gets
-  // the enumeration-prevention phantom flow and the code never arrives. Email-shaped input
-  // must warn; a username must not.
-  it('warns when the identifier looks like an email address', () => {
-    const hint = otpUsernameHint('leader@example.com');
-    expect(hint).toContain('Church USERNAME');
-    expect(hint).toContain('churchofjesuschrist.org');
-  });
-
-  it('stays quiet for a plain username (and while empty)', () => {
-    expect(otpUsernameHint('leader.example')).toBeNull();
-    expect(otpUsernameHint('')).toBeNull();
   });
 });

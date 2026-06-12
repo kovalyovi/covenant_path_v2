@@ -276,18 +276,10 @@ public final class BrokerService: @unchecked Sendable {
         return result(from: d)
     }
 
-    /// Church account sign-in via email OTP (sent by Church's Okta, not Supabase). The body may
-    /// carry advisory hints: `identifier_hint` (email-shaped identifier — phantom flow) and
-    /// `throttle_hint` (a send burst may have paused Okta's emails, 2026-06-12).
-    @discardableResult
-    public func otpStart(_ email: String, enroll: Bool = false) async throws -> [String: Any] {
-        try await postJSON("/auth/otp/start", ["email": email, "enroll": enroll])
-    }
-
-    public func otpVerify(_ email: String, _ code: String, enroll: Bool = false) async throws -> BrokerResult {
-        let d = try await postJSON("/auth/otp/verify", ["email": email, "code": code, "enroll": enroll])
-        return result(from: d)
-    }
+    // NOTE: the passwordless Church-login lane (Okta emailed code, /auth/otp/*) was REMOVED
+    // 2026-06-12 — its app-scoped Okta session could never mint the 45-day daily-sync token.
+    // Church auth is now username+password only (password()/webStart()). Passwordless VIEWING uses
+    // the Supabase email relay below. See docs/DECISIONS.md (ADR-010).
 
     // MARK: - email relay (port of emailStart/emailVerify)
 

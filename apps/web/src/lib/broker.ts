@@ -326,16 +326,9 @@ export class BrokerClient {
     return this.post('/auth/mfa/verify', { login_id: loginId, code, enroll });
   }
 
-  /** Church account sign-in via email OTP (Church's Okta sends the code, not Supabase).
-   *  The body may carry advisory hints: `identifier_hint` (email-shaped identifier — see the
-   *  phantom-flow incident) and `throttle_hint` (a send burst may have paused Okta's emails). */
-  otpStart(email: string, enroll = false): Promise<Record<string, unknown>> {
-    return this.postJson('/auth/otp/start', { email, enroll });
-  }
-
-  otpVerify(email: string, code: string, enroll = false): Promise<BrokerResult> {
-    return this.post('/auth/otp/verify', { email, code, enroll });
-  }
+  // NOTE: the passwordless Church-login lane (Okta emailed code, /auth/otp/*) was REMOVED 2026-06-12 —
+  // its app-scoped Okta session could never mint the 45-day daily-sync token. Church auth is now
+  // username+password only (password()/webStart()). Passwordless VIEWING uses the Supabase relay below.
 
   /** Email-OTP relay (for networks that can't reach Supabase directly). */
   async emailStart(email: string): Promise<void> {

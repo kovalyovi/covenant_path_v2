@@ -222,19 +222,10 @@ class BrokerClient(private val auth: AuthRepository = AuthRepository()) {
             put("login_id", JsonPrimitive(loginId)); put("code", JsonPrimitive(code)); put("enroll", JsonPrimitive(enroll))
         })
 
-    /** Passwordless Church sign-in: the broker asks Okta to email a code (no password). Throws a
-     *  friendly BrokerException when the account's Okta policy is password-first (the default).
-     *  The body may carry advisory hints: `identifier_hint` (email-shaped identifier — phantom
-     *  flow) and `throttle_hint` (a send burst may have paused Okta's emails, 2026-06-12). */
-    suspend fun otpStart(email: String, enroll: Boolean = false): JsonObject =
-        postJsonRetry("/auth/otp/start", buildJsonObject {
-            put("email", JsonPrimitive(email)); put("enroll", JsonPrimitive(enroll))
-        })
-
-    suspend fun otpVerify(email: String, code: String, enroll: Boolean = false): BrokerResult =
-        post("/auth/otp/verify", buildJsonObject {
-            put("email", JsonPrimitive(email)); put("code", JsonPrimitive(code)); put("enroll", JsonPrimitive(enroll))
-        })
+    // NOTE: the passwordless Church-login lane (Okta emailed code, /auth/otp/*) was REMOVED
+    // 2026-06-12 — its app-scoped Okta session could never mint the 45-day daily-sync token. Church
+    // auth is now username+password only (password()/webStart()). Passwordless VIEWING uses the
+    // Supabase email relay below. See docs/DECISIONS.md (ADR-010).
 
     /** Email-OTP relay (networks that can't reach Supabase directly): broker emails the code. */
     suspend fun emailStart(email: String) {

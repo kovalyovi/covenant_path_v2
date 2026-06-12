@@ -66,17 +66,6 @@ class MfaReq(BaseModel):
     enroll: bool = False
 
 
-class OtpStartReq(BaseModel):
-    email: str
-    enroll: bool = False
-
-
-class OtpVerifyReq(BaseModel):
-    email: str
-    code: str
-    enroll: bool = False
-
-
 class SessionReq(BaseModel):
     cookies: list[dict]
     enroll: bool = False
@@ -627,70 +616,15 @@ def auth_web_verify(req: MfaReq,
     return _complete_login(res, req.enroll, rid, t0)
 
 
-# --- passwordless Church login (emailed code as the PRIMARY factor) ----------
-
-@app.post("/auth/otp/start")
-def auth_otp_start(req: OtpStartReq,
-                   _rl: None = Depends(ratelimit.limiter("otp", 10, 600))) -> dict:
-    """Begin a passwordless (emailed-code) Church login. Answers code_sent only after Okta
-    accepted the email-factor select; a password-first account (the Church default) gets a
-    401 with an honest, actionable message instead."""
-    rid = _rid()
-    t0 = time.monotonic()
-    logger.info("[req %s] /auth/otp/start", rid)  # the identifier is PII — never logged
-    ratelimit.hit_identifier("otp", req.email)
-    try:
-        res = okta_flow.otp_start(req.email)
-        # Audit the SEND too, not just failures: "the code never arrives" (2026-06-12, Ken Packer +
-        # operator) was invisible in login_audit — every start looked like it never happened. The
-        # identifier lands in the email column (it's what the member typed; admin-only RLS), so a
-        # phantom send to an email-shaped identifier is diagnosable from the audit alone.
-        # identifier_hint present == the email did NOT resolve to a cached username (truly suspect);
-        # a resolved email identified with the real username and sends normally.
-        _audit_okta_event(req.email, "otp_code_sent",
-                          "identifier looks like an email and did not resolve to a known Church "
-                          "username — possible enumeration-prevention phantom (no email is sent "
-                          "for a non-username identifier)"
-                          if res.get("identifier_hint") else "", rid,
-                          duration_ms=int((time.monotonic() - t0) * 1000),
-                          phase="okta:otp_code_sent")
-        return res
-    except okta_flow.AuthError as e:
-        _audit_okta_event(getattr(e, "username", "") or req.email, "otp_start_failed",
-                          getattr(e, "root_cause", "") or str(e), rid,
-                          duration_ms=int((time.monotonic() - t0) * 1000),
-                          phase=_mfa_phase(e))
-        raise HTTPException(status_code=401, detail=str(e))
-
-
-@app.post("/auth/otp/verify")
-def auth_otp_verify(req: OtpVerifyReq,
-                    _rl: None = Depends(ratelimit.limiter("otp", 20, 600))) -> dict:
-    """Verify the emailed code and finish the login — the same completion (Supabase mint +
-    login eval, in parallel) as the password/MFA paths."""
-    rid = _rid()
-    t0 = time.monotonic()
-    logger.info("[req %s] /auth/otp/verify", rid)
-    ratelimit.hit_identifier("otp", req.email)
-    try:
-        res = okta_flow.otp_verify(req.email, req.code.strip(),
-                                   want_refresh_token=req.enroll,
-                                   allow_cached_identity=not req.enroll)
-    except okta_flow.IdentityError as e:  # must precede AuthError (its subclass)
-        logger.warning("[req %s] LCR identity failed after OTP OK (%s): %s",
-                       rid, getattr(e, "root_cause", "?"), e)
-        _audit_okta_event(getattr(e, "username", ""), "lcr_identity_failed",
-                          getattr(e, "root_cause", "") or str(e), rid,
-                          duration_ms=int((time.monotonic() - t0) * 1000),
-                          phase=f"identity:{getattr(e, 'kind', 'other')}")
-        raise HTTPException(status_code=503, detail=str(e))
-    except okta_flow.AuthError as e:
-        _audit_okta_event(getattr(e, "username", "") or req.email, "mfa_failed",
-                          getattr(e, "root_cause", "") or str(e), rid,
-                          duration_ms=int((time.monotonic() - t0) * 1000),
-                          phase=_mfa_phase(e))
-        raise HTTPException(status_code=401, detail=str(e))
-    return _mfa_handoff(res, req.email, rid, t0) or _complete_login(res, req.enroll, rid, t0)
+# NOTE: the passwordless Church-login lane (emailed code as the PRIMARY Okta factor, /auth/otp/*)
+# was REMOVED 2026-06-12. It signed a leader in but its Okta IDX session is app-scoped — it can NOT
+# silently SSO to Member Tools, so it could never mint the 45-day daily-sync token (it stored a
+# token-less credential that failed every sync with login_required; the "Ken Packer" re-auth loop).
+# Church authentication is now USERNAME + PASSWORD only (the classic /api/v1/authn lane, /auth/web/*
+# for enroll + /auth/password for view-only), which establishes the global Okta session the silent
+# Member Tools mint needs. Passwordless VIEWING still exists via the Supabase email relay below
+# (/auth/email/*) — that's a different system (no Church session, RLS-scoped, can't enroll). See
+# docs/DECISIONS.md (ADR-010).
 
 
 # --- email-OTP relay (sign in when the browser can't reach Supabase directly) ---
