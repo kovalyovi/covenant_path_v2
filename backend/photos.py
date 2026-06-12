@@ -30,7 +30,12 @@ from lcr_client.logging_setup import get_logger
 logger = get_logger()
 BUCKET = "member-photos"
 SIZE = 96                      # px (square-ish thumbnail)
-SIGNED_TTL = 60 * 60 * 24 * 365  # 1 year
+# BACKEND-06: a signed URL is a bearer capability for facial PII (anyone holding the string can
+# fetch the image, bypassing RLS). sync_photos_for_stake re-signs every member's photo on each daily
+# run, so a short TTL stays fresh for active stakes while a leaked URL — or a paused stake's URLs —
+# expire within a week instead of a year. (Full fix — on-demand minting via a gated route — tracked
+# as a follow-up that needs a 3-surface client change.)
+SIGNED_TTL = 60 * 60 * 24 * 7  # 7 days (re-signed daily by sync_photos_for_stake)
 
 
 def _sb() -> tuple[str, str]:
