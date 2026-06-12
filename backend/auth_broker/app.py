@@ -627,7 +627,7 @@ def google_start(authorization: str = Header(default="")) -> dict:
         raise HTTPException(status_code=403,
                             detail="Only your stake's sync provider can connect Google Drive.")
     logger.info("[req %s] /auth/google/start stake=%s", rid, stake_id)
-    return {"url": google_oauth.start_url(stake_id)}
+    return {"url": google_oauth.start_url(stake_id, email)}
 
 
 @app.get("/auth/google/callback", response_class=HTMLResponse)
@@ -644,9 +644,10 @@ def google_callback(code: str = "", state: str = "", error: str = "") -> HTMLRes
         logger.info("[req %s] google drive connected for stake=%s", rid, stake_id)
         return HTMLResponse(_popup_html(f"Google Drive connected ({tokens.get('email') or ''}). "
                                         "You can close this window."))
-    except Exception as e:  # noqa: BLE001 — never 500 the OAuth popup; show the cause instead
-        logger.exception("[req %s] google callback failed", rid)
-        return HTMLResponse(_popup_html(f"Could not connect: {type(e).__name__}: {str(e)[:200]}"))
+    except Exception:  # noqa: BLE001 — never 500 the OAuth popup; keep the detail server-side only
+        logger.exception("[req %s] google callback failed", rid)  # BACKEND-08: generic to the client
+        return HTMLResponse(_popup_html(
+            "Could not connect Google Drive. Please close this window and try again."))
 
 
 @app.post("/auth/google/disconnect")
@@ -918,8 +919,8 @@ def admin_actions(runs: int = 15, commits: int = 10, email: str = Depends(requir
                 "runs": admin.list_runs(max(1, min(runs, 100))),
                 "commits": admin.recent_commits(max(1, min(commits, 100)))}
     except Exception as e:  # noqa: BLE001 — surface upstream GitHub errors as 503
-        logger.error("admin/actions failed: %s", e)
-        raise HTTPException(status_code=503, detail=f"github error: {e}")
+        logger.error("admin/actions failed: %s", e)  # BACKEND-08: detail to logs, generic to client
+        raise HTTPException(status_code=503, detail="GitHub is temporarily unavailable.")
 
 
 @app.post("/admin/actions/run")
@@ -949,4 +950,5 @@ def admin_run_status(run_id: int, email: str = Depends(require_admin)) -> dict:
     try:
         return admin.run_status(run_id)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=503, detail=f"github error: {e}")
+        logger.error("admin/run-status failed: %s", e)  # BACKEND-08: detail to logs, generic to client
+        raise HTTPException(status_code=503, detail="GitHub is temporarily unavailable.")

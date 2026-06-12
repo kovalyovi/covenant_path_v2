@@ -490,7 +490,9 @@ def _notify_enrolled(identity: dict, ctx, coverage: dict, initial_sync: bool) ->
         return
     try:
         from backend.auth_broker import admin
-        name = identity.get("name") or "there"
+        from html import escape  # BACKEND-02: name/unit come from LCR — escape before the HTML body
+        name = escape(identity.get("name") or "there")
+        unit_name = escape(ctx.unit_name or "your unit")
         cov_line = ("Your access can pull the full covenant-path dataset."
                     if coverage.get("complete")
                     else "Some fields need a leader with broader access — the app shows who to ask, "
@@ -498,7 +500,7 @@ def _notify_enrolled(identity: dict, ctx, coverage: dict, initial_sync: bool) ->
         sync_line = ("The first sync is running now — your stake's data will appear in a few minutes."
                      if initial_sync else "Your stake will refresh on the daily schedule.")
         html = (f"<p>Hi {name},</p>"
-                f"<p>You authorized <b>Covenant Path</b> to keep <b>{ctx.unit_name}</b> synced daily "
+                f"<p>You authorized <b>Covenant Path</b> to keep <b>{unit_name}</b> synced daily "
                 f"using your Church (LCR) session. It is encrypted server-side — your password is "
                 f"never stored — and you can pause or revoke it anytime in the app under "
                 f"<b>Settings → Sync settings</b>.</p>"

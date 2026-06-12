@@ -35,7 +35,8 @@ logger = get_logger()
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 SCOPES = "https://www.googleapis.com/auth/drive.file openid email"
-_STATE_TTL = 600  # signed-state validity (seconds)
+_STATE_TTL = 300  # signed-state validity (seconds); single-use via _CONSUMED (BACKEND-05)
+_CONSUMED: dict[str, float] = {}  # nonce -> consumed-at; a given signed state is redeemable once
 _DEFAULT_REDIRECT = "https://covenant-path-broker.onrender.com/auth/google/callback"
 
 
@@ -66,16 +67,20 @@ def _unb64(s: str) -> bytes:
 
 # --- CSRF/stake-bound signed state -----------------------------------------
 
-def sign_state(stake_id: str) -> str:
-    """HMAC-signed, short-TTL state binding the OAuth round-trip to one stake (+ a nonce)."""
+def sign_state(stake_id: str, subject: str | None = None) -> str:
+    """HMAC-signed, short-TTL, single-use state binding the OAuth round-trip to one stake (+ a
+    nonce, and the initiating user when known — BACKEND-05)."""
     payload = _b64(json.dumps(
-        {"s": stake_id, "n": _b64(os.urandom(9)), "e": int(time.time()) + _STATE_TTL}).encode())
+        {"s": stake_id, "u": (subject or "").lower(), "n": _b64(os.urandom(12)),
+         "e": int(time.time()) + _STATE_TTL}).encode())
     sig = _b64(hmac.new(_load_key(), payload.encode(), hashlib.sha256).digest())
     return f"{payload}.{sig}"
 
 
 def verify_state(state: str) -> str:
-    """Return the bound stake_id, or raise if the signature is wrong / it expired."""
+    """Return the bound stake_id, or raise if the signature is wrong / expired / already used.
+    Single-use (BACKEND-05): a signed state is redeemable at most once, so a leaked or replayed
+    callback can't re-bind a stake's Drive within the TTL window."""
     try:
         payload, sig = state.split(".", 1)
     except (ValueError, AttributeError):
@@ -86,12 +91,19 @@ def verify_state(state: str) -> str:
     d = json.loads(_unb64(payload))
     if int(d.get("e", 0)) < time.time():
         raise OAuthError("state expired — start over")
+    now = time.time()
+    for k in [k for k, t in list(_CONSUMED.items()) if now - t > _STATE_TTL]:
+        _CONSUMED.pop(k, None)  # prune expired nonces so the map stays bounded
+    nonce = d.get("n", "")
+    if nonce in _CONSUMED:
+        raise OAuthError("this Drive-connect link was already used — start over")
+    _CONSUMED[nonce] = now
     return str(d["s"])
 
 
 # --- OAuth flow ------------------------------------------------------------
 
-def start_url(stake_id: str) -> str:
+def start_url(stake_id: str, subject: str | None = None) -> str:
     cid, _, redirect = _cfg()
     return AUTH_URL + "?" + urlencode({
         "client_id": cid,
@@ -101,7 +113,7 @@ def start_url(stake_id: str) -> str:
         "access_type": "offline",   # we need a refresh token
         "prompt": "consent",        # force a refresh token even on re-consent
         "include_granted_scopes": "true",
-        "state": sign_state(stake_id),
+        "state": sign_state(stake_id, subject),
     })
 
 

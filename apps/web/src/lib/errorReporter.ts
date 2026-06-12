@@ -4,6 +4,17 @@
 
 import { brokerUrl } from './config';
 
+// CLIENT-04: a thrown Supabase/Postgrest/render error can embed member data (emails, names, tokens
+// in URLs) in its `.message`. Strip the obvious PII patterns before anything leaves the device —
+// the goal is a diagnosable error class, not raw content.
+export function scrub(s: string): string {
+  return s
+    .replace(/[\w.+-]+@[\w.-]+\.\w+/g, '<email>')
+    .replace(/https?:\/\/\S+/g, '<url>')
+    .replace(/\b\d{6,}\b/g, '<num>')
+    .slice(0, 300);
+}
+
 export function reportError(error: unknown, where?: string): void {
   if (!brokerUrl) return;
   const msg = error instanceof Error ? error.message : String(error);
@@ -16,7 +27,7 @@ export function reportError(error: unknown, where?: string): void {
       level: 'error',
       event: 'client.error',
       surface: 'web',
-      message: msg.length > 400 ? msg.slice(0, 400) : msg,
+      message: scrub(msg),
       context: { type, ...(where ? { where } : {}) },
     }),
   }).catch(() => {});

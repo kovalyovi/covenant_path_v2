@@ -82,20 +82,25 @@ def build_report(auth_id: str, email: str | None = None) -> dict:
 
 
 def _report_html(rep: dict) -> str:
-    when = rep.get("generated_at", "")[:10]
+    # BACKEND-02: member names/units/milestones flow from LCR (lower trust) into an HTML email —
+    # escape every interpolated value so a crafted name can't inject markup into the leader's inbox.
+    from html import escape
+    when = escape(rep.get("generated_at", "")[:10])
     head = (f"<h2>Covenant Path — convert report</h2>"
-            f"<p><b>{rep.get('stake_name') or 'Your scope'}</b> · generated {when}</p>"
+            f"<p><b>{escape(rep.get('stake_name') or 'Your scope')}</b> · generated {when}</p>"
             f"<p>{rep['total']} new members · {rep['on_track']} on track · "
             f"{len(rep['outstanding'])} with outstanding steps.</p>")
     if rep["by_milestone"]:
-        summary = "".join(f"<li>{label}: {n} still need this</li>" for label, n in rep["by_milestone"])
+        summary = "".join(f"<li>{escape(str(label))}: {n} still need this</li>"
+                          for label, n in rep["by_milestone"])
         head += f"<h3>Most-needed steps</h3><ul>{summary}</ul>"
     if not rep["outstanding"]:
         return head + "<p>Everyone in scope is on track. 🎉</p>"
     parts = []
     for o in rep["outstanding"]:
-        unit = f" ({o['unit']})" if o.get("unit") else ""
-        parts.append(f"<li><b>{o['name']}</b>{unit} — {', '.join(o['missing'])}</li>")
+        unit = f" ({escape(str(o['unit']))})" if o.get("unit") else ""
+        missing = escape(", ".join(str(m) for m in o["missing"]))
+        parts.append(f"<li><b>{escape(str(o['name'] or ''))}</b>{unit} — {missing}</li>")
     return head + f"<h3>Outstanding by member</h3><ul>{''.join(parts)}</ul>"
 
 

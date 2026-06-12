@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import time
 from datetime import datetime, timezone
@@ -54,6 +55,18 @@ def _handle() -> str:
     return secrets.token_urlsafe(12)
 
 
+_B64URL = re.compile(r"^[A-Za-z0-9_-]{16,512}$")  # WebAuthn credential ids are base64url
+
+
+def _safe_cred_id(cred_id: str) -> str:
+    """BACKEND-03: the credential id is attacker-controlled (unauthenticated /webauthn/login/complete)
+    and is interpolated into a PostgREST `eq.` filter — require strict base64url so it cannot carry
+    filter operators/metacharacters."""
+    if not cred_id or not _B64URL.match(cred_id):
+        raise PasskeyError("malformed passkey response")
+    return cred_id
+
+
 def _rest(method: str, path: str, **kw):
     # Merge caller headers INTO the service headers — register_complete/login_complete pass their
     # own `headers=` kwarg, which collided with this signature's hardcoded one and 500'd BOTH
@@ -86,7 +99,7 @@ def register_begin(email: str) -> dict:
         user_id=email.lower().encode("utf-8"),
         authenticator_selection=AuthenticatorSelectionCriteria(
             resident_key=ResidentKeyRequirement.REQUIRED,
-            user_verification=UserVerificationRequirement.PREFERRED),
+            user_verification=UserVerificationRequirement.REQUIRED),  # BACKEND-09: require UV
         exclude_credentials=exclude)
     h = _handle()
     _PENDING[h] = {"challenge": opts.challenge, "email": email.lower(), "ts": time.time()}
@@ -134,9 +147,7 @@ def login_complete(handle: str, credential: dict) -> dict:
     pend = _PENDING.pop(handle, None)
     if not pend:
         raise PasskeyError("login expired — start over")
-    cred_id = credential.get("id") or credential.get("rawId")
-    if not cred_id:
-        raise PasskeyError("malformed passkey response")
+    cred_id = _safe_cred_id(credential.get("id") or credential.get("rawId") or "")
     rows = _rest("GET", "webauthn_credentials",
                  params={"select": "*", "credential_id": f"eq.{cred_id}", "limit": "1"})
     recs = rows.json() if rows.status_code == 200 else []
@@ -150,9 +161,13 @@ def login_complete(handle: str, credential: dict) -> dict:
             credential=json.dumps(credential), expected_challenge=pend["challenge"],
             expected_rp_id=RP_ID, expected_origin=ORIGINS,
             credential_public_key=base64url_to_bytes(rec["public_key"]),
-            credential_current_sign_count=rec["sign_count"], require_user_verification=False)
+            credential_current_sign_count=rec["sign_count"],
+            require_user_verification=True)  # BACKEND-09: a session-minting login must prove UV
     except Exception as exc:  # noqa: BLE001
         raise PasskeyError(f"passkey verification failed: {exc}") from exc
+    # BACKEND-09: treat a sign-count regression (cloned authenticator) as a hard failure.
+    if rec.get("sign_count") and ver.new_sign_count and ver.new_sign_count <= rec["sign_count"]:
+        raise PasskeyError("passkey verification failed: sign-count regression")
     _rest("PATCH", "webauthn_credentials",
           headers={**admin._sb_headers(), "Content-Type": "application/json", "Prefer": "return=minimal"},
           params={"credential_id": f"eq.{cred_id}"},

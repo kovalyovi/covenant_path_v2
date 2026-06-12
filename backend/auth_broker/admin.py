@@ -723,14 +723,17 @@ def _send_email(to: str, subject: str, html: str) -> None:
 def send_contact(reporter: str, subject: str, message: str) -> dict:
     """Support / contact form (#74): email the owner a message from a signed-in user so they can
     follow up. Distinct from feedback→GitHub issue (#58) — this is a direct human support channel."""
-    subject = (subject or "").strip()[:140] or "Covenant Path — support request"
+    # collapse whitespace (incl. newlines) so the subject can't inject email headers; cap length.
+    subject = " ".join((subject or "").split())[:140] or "Covenant Path — support request"
     body = (message or "").strip()
     if not body:
         raise AdminError("a message is required")
+    # BACKEND-02: user-supplied reporter/subject/body must be HTML-escaped before entering the body.
+    from html import escape
     html = (f"<h2>Support request</h2>"
-            f"<p><b>From:</b> {reporter}</p>"
-            f"<p><b>Subject:</b> {subject}</p>"
-            f"<hr><p style='white-space:pre-wrap'>{body}</p>")
+            f"<p><b>From:</b> {escape(reporter)}</p>"
+            f"<p><b>Subject:</b> {escape(subject)}</p>"
+            f"<hr><p style='white-space:pre-wrap'>{escape(body)}</p>")
     _send_email(OWNER_EMAIL, f"[Covenant Path support] {subject}", html)
     return {"status": "sent", "to": OWNER_EMAIL}
 
@@ -752,9 +755,10 @@ def request_admin_invite(email: str, requested_by: str) -> dict:
     if r.status_code >= 300:
         raise AdminError(f"could not record request ({r.status_code}): {r.text[:160]}")
     link = f"{BROKER_PUBLIC_URL}/admin/approve?token={token}"
+    from html import escape  # BACKEND-02: escape requester/email before the HTML body
     _send_email(OWNER_EMAIL, f"Approve admin access for {email}?",
-                f"<p><b>{requested_by}</b> requested admin access for <b>{email}</b> on "
-                f"Covenant Path.</p><p><a href=\"{link}\">Approve {email} as an admin</a></p>"
+                f"<p><b>{escape(requested_by)}</b> requested admin access for <b>{escape(email)}</b> on "
+                f"Covenant Path.</p><p><a href=\"{escape(link)}\">Approve {escape(email)} as an admin</a></p>"
                 f"<p>If you didn't expect this, ignore it — no access is granted unless you "
                 f"click the link.</p>")
     return {"status": "pending_owner_approval", "email": email, "owner": OWNER_EMAIL}

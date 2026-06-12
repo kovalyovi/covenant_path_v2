@@ -15,9 +15,16 @@ import kotlinx.serialization.json.buildJsonObject
 object ErrorReporter {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    // CLIENT-04: strip obvious PII (emails, URLs, long digit runs) before telemetry leaves the device.
+    internal fun scrub(s: String): String =
+        s.replace(Regex("[\\w.+-]+@[\\w.-]+\\.\\w+"), "<email>")
+            .replace(Regex("https?://\\S+"), "<url>")
+            .replace(Regex("\\b\\d{6,}\\b"), "<num>")
+            .let { if (it.length > 300) it.substring(0, 300) else it }
+
     fun report(error: Throwable, where: String? = null) {
         if (!AppConfig.brokerAvailable) return
-        val msg = error.toString().let { if (it.length > 400) it.substring(0, 400) else it }
+        val msg = scrub(error.toString())
         scope.launch {
             runCatching {
                 Net.postJson(

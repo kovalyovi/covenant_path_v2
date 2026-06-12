@@ -643,6 +643,11 @@ def test_google_oauth_state():
     from backend.auth_broker import google_oauth as g
     st = g.sign_state("stake-xyz-1")
     assert g.verify_state(st) == "stake-xyz-1", "state round-trip"
+    try:  # BACKEND-05: a signed state is single-use — a replay must be rejected.
+        g.verify_state(st)
+        raise AssertionError("state replay not caught (single-use)")
+    except g.OAuthError:
+        pass
     for bad in (st[:-2] + "zz", "garbage", st.replace(".", "_")):
         try:
             g.verify_state(bad)

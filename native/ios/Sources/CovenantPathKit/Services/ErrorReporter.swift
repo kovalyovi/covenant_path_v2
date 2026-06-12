@@ -26,6 +26,17 @@ public enum ErrorReporter {
     }
 
     public static func report(type: String, message: String, where loc: String?) {
-        broker?.log(type: type, message: message, surface: "native", where: loc)
+        broker?.log(type: type, message: scrub(message), surface: "native", where: loc)
+    }
+
+    // CLIENT-04: strip obvious PII (emails, URLs, long digit runs) before telemetry leaves the device.
+    static func scrub(_ s: String) -> String {
+        var out = s
+        for (pat, rep) in [("[\\w.+-]+@[\\w.-]+\\.\\w+", "<email>"),
+                           ("https?://\\S+", "<url>"),
+                           ("\\b\\d{6,}\\b", "<num>")] {
+            out = out.replacingOccurrences(of: pat, with: rep, options: .regularExpression)
+        }
+        return String(out.prefix(300))
     }
 }

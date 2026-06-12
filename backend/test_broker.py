@@ -1568,6 +1568,39 @@ def test_sync_now_blocked_when_revoked() -> None:
         admin.verify_user, admin.enrollment_status = old_verify, old_status
 
 
+def test_report_html_escapes_member_data() -> None:
+    # BACKEND-02: LCR-sourced names/units must be HTML-escaped in the report email body.
+    from backend.auth_broker import reports
+    rep = {"stake_name": "S", "generated_at": "2026-06-11T00:00:00", "total": 1, "on_track": 0,
+           "outstanding": [{"name": "<script>x</script>", "unit": "<b>U</b>", "missing": ["baptism"]}],
+           "by_milestone": [("<i>m</i>", 1)]}
+    html = reports._report_html(rep)
+    check("report html: member name escaped", "<script>" not in html and "&lt;script&gt;" in html)
+    check("report html: unit escaped", "<b>U</b>" not in html)
+
+
+def test_safe_cred_id_rejects_filter_metachars() -> None:
+    # BACKEND-03: the unauthenticated passkey credential id must be strict base64url before it
+    # reaches a PostgREST eq. filter.
+    from backend.auth_broker import webauthn_flow as wf
+    good = "A" * 20 + "_-"
+    check("cred_id: valid base64url accepted", wf._safe_cred_id(good) == good)
+    for bad in ("a,b", "x*", "ab.cd", "short", "has space", ""):
+        try:
+            wf._safe_cred_id(bad)
+            check(f"cred_id rejects {bad!r}", False)
+        except wf.PasskeyError:
+            check(f"cred_id rejects {bad!r}", True)
+
+
+def test_user_routes_require_auth() -> None:
+    # BACKEND-04: the broker bypasses RLS (service key), so each data route's own auth check is the
+    # gate. A representative data route must reject an unauthenticated call (never serve data).
+    # (A few routes call admin.verify_user directly and 500 on missing auth rather than 403 — tracked
+    # as a follow-up to route them through require_user; they still never serve data unauthenticated.)
+    check("report no auth -> 403 (not served)", client.get("/report").status_code == 403)
+
+
 def test_ratelimit_check_caps_attempts() -> None:
     # BACKEND-01: the sliding-window core raises 429 once `limit` hits land inside `window`.
     from fastapi import HTTPException
@@ -1657,6 +1690,9 @@ def main() -> int:
     test_admin_requires_auth()
     test_admin_actions_graceful_without_github()
     test_dispatch_allowlist()
+    test_report_html_escapes_member_data()
+    test_safe_cred_id_rejects_filter_metachars()
+    test_user_routes_require_auth()
     test_ratelimit_check_caps_attempts()
     test_mfa_lockout_after_max_fails()
     print(f"\n{_PASS} passed, {_FAIL} failed")
