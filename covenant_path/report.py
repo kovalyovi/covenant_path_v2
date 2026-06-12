@@ -548,7 +548,19 @@ def build_membertools_report(
                 if not can_profiles and fail_streak >= 5:
                     profile_blocked = True
                     _mark_profile_blocked(member)
-                logger.warning("profile merge failed for %s: %s", str(uuid)[:8], exc)
+                # Per-member detail at DEBUG only — when the LCR session is dead EVERY member fails the
+                # SAME way, and 90+ identical WARNING lines bury real problems. One summary line below
+                # tells the story; raise the log level to DEBUG for the per-member cause.
+                logger.debug("profile merge failed for %s: %s", str(uuid)[:8], exc)
+    err = stats.get("profile_error", 0)
+    if err:
+        ok = stats.get("profile_ok", 0)
+        logger.warning(
+            "profile extras: %d/%d members enriched, %d unavailable — the LCR per-member profile fetch "
+            "failed (commonly the delegated LCR session is no longer live; the covenant-path CORE still "
+            "synced from the Member Tools token, and these deep-profile fields keep their last-good "
+            "values). A re-authorization re-establishes the LCR session to refresh them; set logging to "
+            "DEBUG for the per-member cause.", ok, ok + err, err)
     return members, stats
 
 
