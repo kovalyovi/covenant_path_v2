@@ -1,5 +1,10 @@
 # Local-first / on-demand architecture — PROPOSAL (for discussion, not built)
 
+> **STATUS: PARKED for later (2026-06-11).** Documented thoroughly; not started. Pick back up from
+> the "Questions for you" section — the one piece that needs a decision before any building is the
+> **email-digest data source** (see "The email-digest problem" below). Nothing here is implemented;
+> the current Supabase + daily-sync + Member-Tools pipeline remains live and unchanged.
+
 **Your idea:** stop storing stake data in Supabase + running daily jobs. Instead, fetch each user's
 stake data **live when they log in**, cache it **on the client** (browser + native), merge on the
 client, show a pending indicator while refreshing — and make the repo private again.
@@ -92,6 +97,54 @@ Test runs on push fit in a private repo's free Actions budget (2,000 min/month).
 
 ---
 
+## ⭐ The email-digest problem (the open question — thinking it through)
+You still want a **daily email that checks the items** (Golden-Hour milestones, people approaching a
+baptism date, lapsed attendance, etc.). But local-first creates a real tension: **a daily cron needs
+data to read, and local-first keeps the data only on clients.** A cron has no logged-in user and (by
+design) no stored Church credential to fetch with. So where does the digest's data come from? Three
+honest options:
+
+### Option A — Thin snapshot pushed by the client (RECOMMENDED)
+When a user logs in and fetches fresh data, the client also **pushes a small "digest slice" to the
+server** — *only* the milestone-relevant fields (name, unit, baptism date/goal, last-attendance,
+the Golden-Hour flags), not the whole 7 MB stake, not notes. A daily cron then **reads those stored
+slices and emails "here's what needs attention"** — purely from the snapshot, **with no Church access
+at all.**
+- ✅ **No stored Church credential** — keeps the credential machinery dead.
+- ✅ Server stores only a tiny milestone slice (one small table), not the stake.
+- ✅ Consistent with the whole model: the digest reflects the **last login's** data
+  ("freshness = last login"). For a *standing-alert* digest ("these 5 people are within 2 weeks of
+  their baptism date") that's fine — it's a reminder, not a change-feed.
+- ⚠️ If nobody logs in for days, the digest reflects stale-ish data (acceptable, and we can note
+  "as of <date>" in the email).
+- ⚠️ It's a "what's pending now" digest, not a true "what changed since yesterday" diff (a diff
+  needs a daily *fetch*, which needs a credential — see B).
+
+### Option B — Opt-in "digest token" + residual cron (for truly-fresh daily digests)
+A stake that wants a **genuinely daily, freshly-fetched** digest **opts in** by authorizing a stored
+Member Tools token *specifically for notifications*. A small residual cron fetches just that stake
+each morning, diffs, and emails.
+- ✅ True daily freshness + real day-over-day diffs.
+- ❌ Re-introduces a stored token (and the 45-day re-auth wall) — **but only for stakes that opt into
+  always-on digests**, and scoped to one feature. The **operator stake already auto-mints in CI**, so
+  the operator gets fresh digests for free; delegated stakes opt in if they want them.
+- This cleanly **decouples** the two concerns: *viewing* is always credential-free on-demand;
+  *notifications* are an opt-in that inherently needs a server that can act while you're away.
+
+### Option C — Send at login (no cron)
+Compute "what needs attention" client-side right after the on-login fetch and have the broker send the
+email then.
+- ✅ Simplest; no cron, no stored slice.
+- ❌ Fires only when someone logs in (not "daily"), and needs **dedup** so two leaders logging in the
+  same day don't both trigger it. Weakest fit for "a daily email."
+
+**My recommendation: Option A as the default** (no credentials, fits local-first, one tiny table),
+**with Option B available as opt-in** for any stake that specifically wants fresh daily diffs. That
+gives you the daily email without resurrecting the credential problem for everyone — only those who
+opt into always-on freshness take that on. **This is the piece to decide before building.**
+
+---
+
 ## Migration plan (phased — full wipe is fine, as you said)
 1. **Broker:** new `GET /stake` endpoint — mint the user's Member Tools token (from their login),
    `fetch_sync` → adapt (reuse `build_membertools_report`) → return JSON. Lazy `/mlt` enrich for
@@ -118,11 +171,14 @@ Test runs on push fit in a private repo's free Actions budget (2,000 min/month).
 Building the views *now* against Supabase and *again* after the pivot would be double work — so I'd
 settle the architecture first, then build the views on the new model.
 
-## Questions for you
-1. **Email digests + Google Sheets** — keep them (needs a tiny residual cron) or drop them?
-2. **Notes** — keep shared (tiny Supabase) or make them per-user-local (no sharing)?
-3. **Native** — fetch Member Tools **directly** (no CORS, simplest) or **via the broker** (one code path)?
-4. **Refresh** — login-only, or also a manual "Refresh now" button + maybe a foreground auto-refresh if
+## Questions for you (decide before building)
+1. **Email digest data source** — Option A (thin client-pushed snapshot + cron, no credentials,
+   *my rec*), Option B (opt-in stored digest token for fresh daily diffs), or C (send-at-login)? See
+   "The email-digest problem" above. **This is the gating decision.**
+2. **Google Sheets mirror** — keep (needs a residual cron, same question as digests) or drop?
+3. **Notes** — keep shared (tiny Supabase) or make them per-user-local (no sharing)?
+4. **Native** — fetch Member Tools **directly** (no CORS, simplest) or **via the broker** (one code path)?
+5. **Refresh** — login-only, or also a manual "Refresh now" button + maybe a foreground auto-refresh if
    the cache is older than N hours?
-5. **Views timing** — build them *after* the pivot (my rec, build once), or build now on Supabase and
+6. **Views timing** — build them *after* the pivot (my rec, build once), or build now on Supabase and
    port later?
