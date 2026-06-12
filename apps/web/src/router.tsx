@@ -19,6 +19,7 @@ import { GoldenHourTab } from './pages/tabs/GoldenHourTab';
 import { NeedsTab } from './pages/tabs/NeedsTab';
 import { TableTab } from './pages/tabs/TableTab';
 import { PersonDetailPage } from './pages/PersonDetailPage';
+import { ReauthPage } from './pages/ReauthPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { InvitePage } from './pages/InvitePage';
 
@@ -84,6 +85,8 @@ export const router = createBrowserRouter([
         ],
       },
       { path: 'person/:id', element: <PersonDetailPage /> },
+      // Deep link from the day-40 "re-authorize your sync" email — opens the one-MFA dialog (Piece 3).
+      { path: 'reauth', element: <ReauthPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: 'invite', element: <InvitePage /> },
       { path: 'admin', element: <LazyRoute><AdminPage /></LazyRoute> },

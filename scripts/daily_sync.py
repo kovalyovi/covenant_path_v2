@@ -743,10 +743,13 @@ def _maybe_age_alert(st: dict) -> None:
     the session is older than CP_CREDENTIAL_AGE_ALERT_DAYS (default 21; 0 disables) so they
     re-authorize at their convenience instead of discovering a dead sync. Fully guarded — alerting
     must never affect the run."""
+    # Default 40: the Member Tools token lasts 45 days from (re-)enroll (which also bumps the
+    # credential's updated_at), so nudging at ~day 40 leaves a ~5-day window to re-authorize via the
+    # emailed /reauth link before the sync would pause. 0 disables.
     try:
-        days = int(os.environ.get("CP_CREDENTIAL_AGE_ALERT_DAYS", "21"))
+        days = int(os.environ.get("CP_CREDENTIAL_AGE_ALERT_DAYS", "40"))
     except ValueError:
-        days = 21
+        days = 40
     if days <= 0:
         return
     try:
@@ -762,17 +765,22 @@ def _maybe_age_alert(st: dict) -> None:
         if not provider:
             return
         name = st.get("name") or st.get("unit_number")
+        reauth_url = os.environ.get("APP_URL", "https://app.membercovenantpath.org").rstrip("/") + "/reauth"
         mailer.send_email(
             provider,
             f"Covenant Path — re-authorize the {name} sync when convenient",
             (f"<p>The daily sync for <b>{name}</b> is still working, but the Church session backing "
-             f"it is over <b>{days} days</b> old and can't renew itself — at some point it will "
-             f"expire and the sync will pause.</p>"
-             f"<p>To avoid an interruption, open the app → <b>Sync settings → Re-authorize daily "
-             f"sync</b> and sign in once. It takes under a minute, and you'll get this nudge at most "
-             f"once per stored session.</p>"),
+             f"it is over <b>{days} days</b> old and will expire soon — when it does, the sync pauses "
+             f"until you re-authorize.</p>"
+             f'<p style="margin:18px 0"><a href="{reauth_url}" '
+             f'style="background:#7c5cff;color:#fff;padding:11px 20px;border-radius:8px;'
+             f'text-decoration:none;font-weight:600">Re-authorize the {name} sync</a></p>'
+             f"<p>It takes under a minute — sign in once on the Church page (one verification code) "
+             f"and the sync keeps running for another ~45 days. You'll get this nudge at most once "
+             f"per stored session. (You can also do it in the app → <b>Sync settings → "
+             f"Re-authorize daily sync</b>.)</p>"),
             sender)
-        logger.info("aging-credential nudge sent for %s (older than %dd, no refresh token)",
+        logger.info("aging-credential nudge sent for %s (older than %dd) with the reauth deep link",
                     name, days)
     except Exception as exc:  # noqa: BLE001
         logger.debug("age alert skipped: %s", exc)
