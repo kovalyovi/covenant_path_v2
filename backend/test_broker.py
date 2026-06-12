@@ -59,11 +59,12 @@ def test_cors() -> None:
         r = _preflight(ok_origin)
         check(f"preflight allows {ok_origin}",
               r.headers.get("access-control-allow-origin") == ok_origin)
-    # A foreign origin must NOT be granted CORS (no ACAO header echoing it).
-    bad = "https://evil.example.com"
-    r = _preflight(bad)
-    check("preflight denies foreign origin",
-          r.headers.get("access-control-allow-origin") not in (bad, "*"))
+    # A foreign origin must NOT be granted CORS (no ACAO header echoing it). BACKEND-07: a stranger's
+    # *.pages.dev deploy must be denied now that the regex is pinned to this project's Pages site.
+    for bad in ("https://evil.example.com", "https://evil.pages.dev"):
+        r = _preflight(bad)
+        check(f"preflight denies {bad}",
+              r.headers.get("access-control-allow-origin") not in (bad, "*"))
 
 
 class _FakeResp:

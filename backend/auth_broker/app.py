@@ -39,7 +39,9 @@ _origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") 
 _origin_regex = os.environ.get(
     "ALLOWED_ORIGIN_REGEX",
     r"https://([a-z0-9-]+\.)*membercovenantpath\.org"
-    r"|https://([a-z0-9-]+\.)*pages\.dev"
+    # BACKEND-07: pin to THIS project's Cloudflare Pages site (prod + preview subdomains), not all
+    # of *.pages.dev (which would trust any attacker's Pages deploy). Env override corrects the slug.
+    r"|https://([a-z0-9-]+\.)?covenant-path-app\.pages\.dev"
     r"|http://localhost(:[0-9]+)?"
     r"|http://127\.0\.0\.1(:[0-9]+)?")
 app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_origin_regex=_origin_regex,

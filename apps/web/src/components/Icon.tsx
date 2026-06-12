@@ -239,7 +239,9 @@ export function Icon({ name, size = 20, color, title, style, className }: Props)
       aria-hidden={title ? undefined : true}
       aria-label={title}
       focusable="false"
-      dangerouslySetInnerHTML={{ __html: title ? `<title>${title}</title>${inner}` : inner }}
+      // CLIENT-03: only the static PATHS entry goes through innerHTML. The accessible name comes
+      // from aria-label (React-escaped), so we never interpolate `title` into raw HTML.
+      dangerouslySetInnerHTML={{ __html: inner }}
     />
   );
 }
