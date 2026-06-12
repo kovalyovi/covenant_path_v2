@@ -93,22 +93,34 @@ struct ReauthSheet: View {
             // The prompt names the code's SOURCE (texted to the masked number vs authenticator
             // app) — a right-looking code from the wrong source is the multi-method trap.
             let tips = mfaPrompt(for: factorSent)
+            let isPassword = factorSent.method == "password"
             Text(tips.prompt).font(.callout)
             if let warning = tips.warning {
                 Text(warning).font(.caption).foregroundStyle(.tint)
             }
-            TextField("Verification code", text: $mfaCode)
-                .textContentType(.oneTimeCode).keyboardType(.numberPad)
-                .textFieldStyle(.roundedBorder)
-                .onChange(of: mfaCode) { _, value in
-                    let digits = String(value.filter(\.isNumber).prefix(8))
-                    if digits != value { mfaCode = digits }
-                }
-            primaryButton("Verify & authorize", disabled: mfaCode.count < 6) { try await verify() }
-            Button(resendIn > 0 ? "Send a new code (\(resendIn)s)" : "Send a new code") {
-                run { try await pickFactor(factorSent) }
+            if isPassword {
+                // Passwordless-lane MFA continuation: the next factor is the PASSWORD (a
+                // distinct factor type from the emailed code) — not a 6-digit code.
+                SecureField("Password", text: $mfaCode)
+                    .textContentType(.password)
+                    .textFieldStyle(.roundedBorder)
+            } else {
+                TextField("Verification code", text: $mfaCode)
+                    .textContentType(.oneTimeCode).keyboardType(.numberPad)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: mfaCode) { _, value in
+                        let digits = String(value.filter(\.isNumber).prefix(8))
+                        if digits != value { mfaCode = digits }
+                    }
             }
-            .disabled(busy || resendIn > 0)
+            primaryButton("Verify & authorize",
+                          disabled: isPassword ? mfaCode.isEmpty : mfaCode.count < 6) { try await verify() }
+            if !isPassword {
+                Button(resendIn > 0 ? "Send a new code (\(resendIn)s)" : "Send a new code") {
+                    run { try await pickFactor(factorSent) }
+                }
+                .disabled(busy || resendIn > 0)
+            }
             if let hint = tips.noCodeHint {
                 Text(hint).font(.caption).foregroundStyle(.secondary)
             }
@@ -190,18 +202,29 @@ struct ReauthSheet: View {
         guard let broker else { throw BrokerError("Church login is not configured (BROKER_URL).") }
         let r = try await broker.password(username.trimmed, password, enroll: true)
         if r.mfaRequired {
-            loginID = r.loginID
-            factors = r.factors
-            // Auto-send if there's exactly one factor (matches the login flow + web).
-            if r.factors.count == 1, let id = r.loginID {
-                try await broker.selectFactor(loginID: id, factorID: r.factors[0].id)
-                factorSent = r.factors[0]
-                mfaCode = ""
-                startResendCooldown()
-            }
+            try await enterMfa(r)
             return
         }
         try await finish(r)
+    }
+
+    /// Enter (or re-enter) the MFA factor step — used by the password lane AND by the
+    /// passwordless lane's continuation: an MFA-enabled account's emailed code is ACCEPTED and
+    /// Okta then demands a DISTINCT factor (for Church accounts that's the password, 2026-06-12).
+    private func enterMfa(_ r: BrokerResult) async throws {
+        guard let broker else { return }
+        otpSent = false
+        otpCode = ""
+        loginID = r.loginID
+        factors = r.factors
+        factorSent = nil
+        mfaCode = ""
+        // Auto-send if there's exactly one factor (matches the login flow + web).
+        if r.factors.count == 1, let id = r.loginID {
+            try await broker.selectFactor(loginID: id, factorID: r.factors[0].id)
+            factorSent = r.factors[0]
+            startResendCooldown()
+        }
     }
 
     private func startOtp() async throws {
@@ -216,6 +239,10 @@ struct ReauthSheet: View {
         guard let broker else { return }
         do {
             let r = try await broker.otpVerify(email.trimmed, otpCode.trimmed, enroll: true)
+            if r.mfaRequired {
+                try await enterMfa(r) // code ACCEPTED — the account's MFA owes one more factor
+                return
+            }
             try await finish(r)
         } catch {
             otpCode = "" // a rejected code must be retyped fresh, not resubmitted stale
@@ -235,6 +262,10 @@ struct ReauthSheet: View {
         guard let broker, let loginID else { return }
         do {
             let r = try await broker.verifyMfa(loginID: loginID, code: mfaCode.trimmed, enroll: true)
+            if r.mfaRequired {
+                try await enterMfa(r) // chained continuation (rare): yet another factor owed
+                return
+            }
             try await finish(r)
         } catch {
             mfaCode = "" // a rejected code must be retyped fresh, not resubmitted stale

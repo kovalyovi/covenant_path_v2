@@ -479,6 +479,20 @@ def auth_mfa_select(req: FactorReq,
         raise HTTPException(status_code=400, detail=str(e))
 
 
+def _mfa_handoff(res: dict, who: str, rid: str, t0: float) -> dict | None:
+    """A VERIFIED step that still owes another factor (MFA continuation — e.g. an MFA-enabled
+    account in the passwordless lane: emailed code, then the password). Audits the hand-off
+    like the password endpoint does and returns the wire shape; None when res is a completion."""
+    if res.get("status") != "mfa_required":
+        return None
+    offered = ",".join(res.get("factor_types", []))
+    dropped = ",".join(res.get("dropped_factor_types", []))
+    note = f"continuation factors offered: {offered}" + (f"; dropped: {dropped}" if dropped else "")
+    _FAST_POOL.submit(_audit_okta_event, who, "mfa_pending", note, rid,
+                      int((time.monotonic() - t0) * 1000), "okta:mfa_pending")
+    return {"status": "mfa_required", "login_id": res["login_id"], "factors": res["factors"]}
+
+
 @app.post("/auth/mfa/verify")
 def auth_mfa_verify(req: MfaReq,
                     _rl: None = Depends(ratelimit.limiter("mfa", 30, 300))) -> dict:
@@ -504,7 +518,7 @@ def auth_mfa_verify(req: MfaReq,
                           duration_ms=int((time.monotonic() - t0) * 1000),
                           phase=_mfa_phase(e))
         raise HTTPException(status_code=401, detail=str(e))
-    return _complete_login(res, req.enroll, rid, t0)
+    return _mfa_handoff(res, "", rid, t0) or _complete_login(res, req.enroll, rid, t0)
 
 
 @app.post("/auth/session")
@@ -580,7 +594,7 @@ def auth_otp_verify(req: OtpVerifyReq,
                           duration_ms=int((time.monotonic() - t0) * 1000),
                           phase=_mfa_phase(e))
         raise HTTPException(status_code=401, detail=str(e))
-    return _complete_login(res, req.enroll, rid, t0)
+    return _mfa_handoff(res, req.email, rid, t0) or _complete_login(res, req.enroll, rid, t0)
 
 
 # --- email-OTP relay (sign in when the browser can't reach Supabase directly) ---

@@ -749,6 +749,85 @@ def test_otp_start_resolves_cached_email() -> None:
                 okta_flow._PENDING.pop(stale, None)
 
 
+def _continuation_payload() -> dict:
+    """The live 2026-06-12 post-verify shape for an MFA-enabled account in the passwordless lane:
+    the emailed code was ACCEPTED, success absent, and Okta offers the next DISTINCT factor —
+    a select menu of password + webauthn (no messages anywhere)."""
+    return {
+        "stateHandle": "sh-CONT",
+        "authenticators": {"value": [{"id": "pw1", "key": "okta_password"},
+                                     {"id": "wa1", "key": "webauthn"}]},
+        "currentAuthenticatorEnrollment": {"value": {"key": "okta_password"}},
+        "remediation": {"value": [
+            {"name": "select-authenticator-authenticate", "href": "https://x/idx/select",
+             "value": [{"name": "authenticator", "options": [
+                 {"label": "Password",
+                  "value": {"form": {"value": [{"name": "id", "value": "pw1"}]}}},
+                 {"label": "Security Key or Biometric Authenticator",
+                  "value": {"form": {"value": [{"name": "id", "value": "wa1"},
+                                               {"name": "methodType", "value": "webauthn"}]}}},
+             ]}]},
+            {"name": "challenge-authenticator", "href": "https://x/idx/challenge",
+             "value": [{"name": "credentials", "form": {"value": [{"name": "passcode"}]}}]},
+        ]},
+    }
+
+
+def test_otp_mfa_continuation() -> None:
+    # 2026-06-12 (operator enabled MFA): a CORRECT emailed code came back "We couldn't verify
+    # that code" forever — the post-verify payload was a CONTINUATION (next factor owed), not a
+    # failure. verify_mfa must hand off to the factor step (same login_id, mfa_required shape),
+    # keep the password as a selectable factor (method="password" so clients render a password
+    # box), drop webauthn, and NOT bump the brute-force fail counter.
+    lid = "test-otp-cont"
+    ident = "leader.example"
+    _pending_at_challenge(lid, field="passcode", ftype="okta_email")
+    okta_flow._PENDING[lid]["username"] = ident
+    okta_flow._OTP_BY_IDENTIFIER[ident] = lid
+
+    saved = okta_flow._follow
+    okta_flow._follow = lambda *_a, **_k: _continuation_payload()
+    try:
+        res = okta_flow.otp_verify(ident, "123456")
+    finally:
+        okta_flow._follow = saved
+    check("continuation returns mfa_required (not an error)", res.get("status") == "mfa_required")
+    check("continuation keeps the SAME login_id", res.get("login_id") == lid)
+    labels = [(f.get("label"), f.get("method")) for f in res.get("factors", [])]
+    check("password offered as a factor with method=password", ("Password", "password") in labels)
+    check("webauthn dropped from the continuation menu",
+          all("Security" not in (f.get("label") or "") for f in res.get("factors", [])))
+    check("no fail bump on a continuation", okta_flow._PENDING[lid].get("fails", 0) == 0)
+    check("pending payload advanced to the continuation state",
+          okta_flow._PENDING[lid]["payload"].get("stateHandle") == "sh-CONT")
+    check("otp identifier map released on hand-off", ident not in okta_flow._OTP_BY_IDENTIFIER)
+
+    # The password factor is selectable: the select POST lands on a passcode challenge.
+    pw = next(f for f in okta_flow._PENDING[lid]["factors"] if f.get("type") == "okta_password")
+    okta_flow._follow = lambda *_a, **_k: {
+        "stateHandle": "sh-PW",
+        "remediation": {"value": [_code_challenge_rem("passcode")]}}
+    try:
+        sel = okta_flow.select_factor(lid, pw["id"])
+    finally:
+        okta_flow._follow = saved
+    check("password factor select -> code_sent", sel.get("status") == "code_sent")
+
+    # A continuation payload WITH error messages is a failure, not a hand-off.
+    bad = _continuation_payload()
+    bad["messages"] = {"value": [{"message": "Invalid code. Try again.", "class": "ERROR"}]}
+    okta_flow._follow = lambda *_a, **_k: bad
+    try:
+        okta_flow.verify_mfa(lid, "999999")
+        check("messages payload still classifies as failure", False)
+    except okta_flow.AuthError as e:
+        check("messages payload still classifies as failure", True)
+        check("failure keeps mfa_bad_code", getattr(e, "kind", "") == "mfa_bad_code")
+    finally:
+        okta_flow._follow = saved
+        okta_flow._PENDING.pop(lid, None)
+
+
 def test_verify_no_message_still_friendly() -> None:
     # A 4xx with NO message anywhere must still produce a friendly retry message — the raw-JSON
     # wall is what made a recoverable wrong code look fatal.
@@ -1801,6 +1880,7 @@ def main() -> int:
     test_verify_wrong_code_friendly_and_state_refresh()
     test_otp_email_identifier_guidance()
     test_otp_start_resolves_cached_email()
+    test_otp_mfa_continuation()
     test_verify_no_message_still_friendly()
     test_mfa_bad_code_factor_guidance()
     test_mfa_expired_messages_friendly()

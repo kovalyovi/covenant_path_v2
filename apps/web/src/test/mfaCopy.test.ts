@@ -32,6 +32,15 @@ describe('mfaPrompt', () => {
     expect(tips.noCodeHint).toBeUndefined();
   });
 
+  it('password continuation says the code was accepted and asks for the password', () => {
+    // 2026-06-12: an MFA-enabled account's emailed code is ACCEPTED, then Okta wants the
+    // password — the copy must make clear this is progress, not a rejected code.
+    const tips = mfaPrompt({ id: 'pw1', label: 'Password', method: 'password' });
+    expect(tips.prompt).toContain('code was accepted');
+    expect(tips.prompt).toContain('Church Account password');
+    expect(tips.warning).toBeUndefined();
+  });
+
   it("shape B's generic pending factor keeps the generic copy (method otp must not mislead)", () => {
     const tips = mfaPrompt({ id: 'pending', label: 'your verification method', method: 'otp' });
     expect(tips.prompt).toContain('A code was just sent via your verification method');

@@ -37,6 +37,14 @@ public func mfaPrompt(for factor: BrokerFactor) -> MfaPrompt {
         return MfaPrompt(prompt: "Enter the current code shown in \(factor.label).",
                          warning: nil, noCodeHint: nil)
     }
+    // Passwordless-lane MFA continuation: the emailed code was ACCEPTED and Okta now wants a
+    // DISTINCT factor type — for Church accounts that's the password (2026-06-12).
+    if method == "password" {
+        return MfaPrompt(
+            prompt: "Your code was accepted. Your account uses multi-factor sign-in, so enter "
+                + "your Church Account password to finish.",
+            warning: nil, noCodeHint: nil)
+    }
     return MfaPrompt(
         prompt: "A code was just sent via \(factor.label). Wait for the new one to arrive, then enter it here.",
         warning: nil, noCodeHint: nil)

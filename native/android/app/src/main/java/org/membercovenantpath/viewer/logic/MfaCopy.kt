@@ -32,6 +32,12 @@ fun mfaPrompt(f: BrokerFactor): MfaPrompt {
             "A new code was just sent via ${f.label}. Enter the code from the newest email — it can take a minute to arrive.",
         )
         "otp", "totp" -> MfaPrompt("Enter the current code shown in ${f.label}.")
+        // Passwordless-lane MFA continuation: the emailed code was ACCEPTED and Okta now wants a
+        // DISTINCT factor type — for Church accounts that's the password (2026-06-12).
+        "password" -> MfaPrompt(
+            "Your code was accepted. Your account uses multi-factor sign-in, so enter your " +
+                "Church Account password to finish.",
+        )
         else -> MfaPrompt("A code was just sent via ${f.label}. Wait for the new one to arrive, then enter it here.")
     }
 }

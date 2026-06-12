@@ -99,18 +99,29 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
     onClose();
   }
 
+  // Enter (or re-enter) the MFA factor step — used by the password lane AND by the passwordless
+  // lane's continuation: an MFA-enabled account's emailed code is ACCEPTED and Okta then demands
+  // a DISTINCT factor (for Church accounts that's the password — 2026-06-12, the operator's own
+  // account after enabling MFA: every correct code read as "couldn't verify").
+  async function enterMfa(r: BrokerResult) {
+    setOtpSent(false);
+    setOtpCode('');
+    setLoginId(r.loginId ?? null);
+    setFactors(r.factors);
+    setFactorSent(null);
+    setMfaCode('');
+    if (r.factors.length === 1 && r.loginId) {
+      await broker.selectFactor(r.loginId, r.factors[0].id);
+      setFactorSent(r.factors[0]);
+      setResendIn(30);
+    }
+  }
+
   const signIn = () =>
     run(async () => {
       const r = await broker.password(username.trim(), password, true); // enroll=true: this IS the consent
       if (mfaRequired(r)) {
-        setLoginId(r.loginId ?? null);
-        setFactors(r.factors);
-        if (r.factors.length === 1) {
-          await broker.selectFactor(r.loginId!, r.factors[0].id);
-          setFactorSent(r.factors[0]);
-          setMfaCode('');
-          setResendIn(30);
-        }
+        await enterMfa(r);
         return;
       }
       await finish(r);
@@ -128,6 +139,10 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
     run(async () => {
       try {
         const r = await broker.otpVerify(email.trim(), otpCode.trim(), true);
+        if (mfaRequired(r)) {
+          await enterMfa(r); // code ACCEPTED — the account's MFA owes one more factor
+          return;
+        }
         await finish(r);
       } catch (e) {
         setOtpCode(''); // a rejected code must be retyped fresh
@@ -147,6 +162,10 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
     run(async () => {
       try {
         const r = await broker.verifyMfa(loginId!, mfaCode.trim(), true);
+        if (mfaRequired(r)) {
+          await enterMfa(r); // chained continuation (rare): yet another factor owed
+          return;
+        }
         await finish(r);
       } catch (e) {
         setMfaCode(''); // a rejected code must be retyped fresh
@@ -175,7 +194,13 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
               Verify & authorize
             </Button>
           ) : factorSent ? (
-            <Button variant="filled" onClick={verify} disabled={busy || mfaCode.length < 6} loading={busy}>
+            <Button
+              variant="filled"
+              onClick={verify}
+              // A password isn't a 6-digit code — gate it on non-empty only.
+              disabled={busy || (factorSent.method === 'password' ? mfaCode.length === 0 : mfaCode.length < 6)}
+              loading={busy}
+            >
               Verify & authorize
             </Button>
           ) : loginId == null && mode === 'password' ? (
@@ -229,23 +254,40 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
               {mfaPrompt(factorSent).warning}
             </p>
           )}
-          <label className="field">
-            <span>Verification code</span>
-            <input
-              className="input"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              value={mfaCode}
-              onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
-            />
-          </label>
-          <Button
-            onClick={() => pickFactor(factorSent)}
-            disabled={busy || resendIn > 0}
-            type="button"
-          >
-            {resendIn > 0 ? `Send a new code (${resendIn}s)` : 'Send a new code'}
-          </Button>
+          {factorSent.method === 'password' ? (
+            /* Passwordless-lane MFA continuation: the next factor is the PASSWORD (a distinct
+               factor type from the emailed code) — a digits-only code box can't take it. */
+            <label className="field">
+              <span>Password</span>
+              <input
+                className="input"
+                type="password"
+                autoComplete="current-password"
+                value={mfaCode}
+                onChange={(e) => setMfaCode(e.target.value)}
+              />
+            </label>
+          ) : (
+            <label className="field">
+              <span>Verification code</span>
+              <input
+                className="input"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={mfaCode}
+                onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
+              />
+            </label>
+          )}
+          {factorSent.method !== 'password' && (
+            <Button
+              onClick={() => pickFactor(factorSent)}
+              disabled={busy || resendIn > 0}
+              type="button"
+            >
+              {resendIn > 0 ? `Send a new code (${resendIn}s)` : 'Send a new code'}
+            </Button>
+          )}
           {mfaPrompt(factorSent).noCodeHint && <p className="tiny">{mfaPrompt(factorSent).noCodeHint}</p>}
           <Button onClick={() => { setFactorSent(null); setMfaCode(''); }} disabled={busy} type="button">
             Choose a different method

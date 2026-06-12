@@ -177,12 +177,17 @@ def _authenticator_object(opt: dict) -> dict:
     return obj
 
 
-def _factors(remediation: dict, types: dict[str, str] | None = None) -> list[dict]:
+def _factors(remediation: dict, types: dict[str, str] | None = None,
+             keep_password: bool = False) -> list[dict]:
     """Extract selectable 2nd-factor options from an IDX select. Each entry carries:
       - id/label/method: the client-facing summary (the unchanged shape the apps already render),
       - type: the Okta factor key (okta_email/google_otp/phone_number/…) for logging,
       - _auth: the FULL authenticator body to POST on select (see `_authenticator_object`).
-    The password option is dropped (it's the primary factor, not a 2nd factor)."""
+    The password option is dropped by default (it's the primary factor, not a 2nd factor) —
+    EXCEPT in a passwordless-lane MFA continuation (keep_password=True): after the emailed code,
+    Okta demands a DISTINCT factor type, and for Church accounts that menu is effectively the
+    password (phone/TOTP share email's possession type; webauthn can't ride the broker). A kept
+    password factor carries method="password" so clients render a password box, not a code box."""
     types = types or {}
     out = []
     for field in remediation.get("value", []):
@@ -194,10 +199,10 @@ def _factors(remediation: dict, types: dict[str, str] | None = None) -> list[dic
             method = auth.get("methodType")
             label = opt.get("label", "")
             ftype = types.get(fid, "")
-            # Drop the password authenticator — by type when known, else by label fallback.
             is_password = ftype == "okta_password" or (not ftype and "password" in label.lower())
-            if fid and not is_password:
-                out.append({"id": fid, "label": label, "method": method,
+            if fid and (keep_password or not is_password):
+                out.append({"id": fid, "label": label,
+                            "method": "password" if is_password else method,
                             "type": ftype, "_auth": auth})
     return out
 
@@ -743,6 +748,13 @@ def verify_mfa(login_id: str, code: str, *, want_refresh_token: bool = True,
         raise classified from exc
     logger.info("[auth %s] post-verify -> %s", login_id, _idx_summary(payload))
     if "successWithInteractionCode" not in payload:
+        # The answer may have been ACCEPTED with another factor still owed — an MFA-enabled
+        # account in the passwordless lane (2026-06-12: the operator enabled MFA and every
+        # correct emailed code came back "couldn't verify"). Hand off to the factor step
+        # instead of classifying a verified step as a failure.
+        cont = _mfa_continuation(login_id, pend, payload, username)
+        if cont is not None:
+            return cont
         # Keep the (refreshed) state so a wrong-code retry uses the latest stateHandle, not a stale one.
         pend["payload"] = payload
         pend["ts"] = time.time()
@@ -758,6 +770,55 @@ def verify_mfa(login_id: str, code: str, *, want_refresh_token: bool = True,
     cookies = serialize_cookies(session)
     _PENDING.pop(login_id, None)
     return {"status": "success", "identity": ident, "cookies": cookies}
+
+
+def _mfa_continuation(login_id: str, pend: dict, payload: dict, username: str) -> dict | None:
+    """A verified step that did NOT finish the login but offers the NEXT factor is a
+    CONTINUATION, not a failure. Seen when an MFA-enabled account uses the passwordless lane:
+    the emailed code satisfies the possession factor, then Okta demands a DISTINCT factor type
+    — for Church accounts that menu is effectively the password (live 2026-06-12: post-verify
+    `select-authenticator-authenticate` + password challenge, no messages). Returns the same
+    mfa_required hand-off shape as start_login (the client re-enters the factor step with the
+    SAME login_id, so /auth/mfa/select + /auth/mfa/verify just work), or None when the payload
+    is a plain failure (messages present / nothing actionable) — the caller classifies those.
+    Raises mfa_unsupported when every remaining factor is undriveable (e.g. webauthn-only)."""
+    if _idx_messages(payload):
+        return None  # an error message means the answer was rejected, not accepted-and-continued
+    rems = _remediations(payload)
+    sel = rems.get("select-authenticator-authenticate")
+    ch = rems.get("challenge-authenticator")
+    types = _authenticator_types(payload)
+    if sel is not None:
+        all_factors = _factors(sel, types, keep_password=True)
+        factors, dropped = _split_supported(all_factors)
+        if all_factors and not factors:
+            dump_debug("broker_mfa_continuation_unsupported", login_id=login_id, dropped=dropped,
+                       summary=_idx_summary(payload))
+            raise AuthError(_NO_SUPPORTED_FACTORS_MSG, kind="mfa_unsupported",
+                            root_cause=f"continuation offers only unsupported factors: {dropped}",
+                            username=username)
+        if factors:
+            logger.info("[auth %s] MFA continuation (next factor); factor_types=%s dropped=%s",
+                        login_id, [f["type"] or f["method"] or "?" for f in factors], dropped)
+            pend.update(payload=payload, factors=factors, ts=time.time())
+            return {"status": "mfa_required", "login_id": login_id,
+                    "factors": _public_factors(factors),
+                    "factor_types": [f["type"] or f["method"] or "?" for f in factors],
+                    "dropped_factor_types": dropped}
+    if ch is not None and _challenge_code_field(ch) is not None:
+        # Already at the next challenge (Okta auto-selected) — shape-B-style hand-off. Name a
+        # password challenge so clients render a password box, not a 6-digit code box.
+        cur = (payload.get("currentAuthenticatorEnrollment", {}).get("value", {}) or {})
+        is_password = (cur.get("key") or "") == "okta_password"
+        logger.info("[auth %s] MFA continuation (auto-challenged %s)", login_id,
+                    cur.get("key") or "factor")
+        pend.update(payload=payload, factors=[], ts=time.time())
+        factor = ({"id": "pending", "label": "your Church Account password", "method": "password"}
+                  if is_password else
+                  {"id": "pending", "label": "your verification method", "method": "otp"})
+        return {"status": "mfa_required", "login_id": login_id, "factors": [factor],
+                "factor_types": [cur.get("key") or "?"]}
+    return None
 
 
 def verify_captured_session(cookies: list[dict]) -> dict:

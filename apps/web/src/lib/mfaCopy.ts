@@ -37,6 +37,15 @@ export function mfaPrompt(f: BrokerFactor): MfaPrompt {
   if (method === 'otp' || method === 'totp') {
     return { prompt: `Enter the current code shown in ${f.label}.` };
   }
+  // Passwordless-lane MFA continuation: the emailed code was ACCEPTED and Okta now wants a
+  // DISTINCT factor type — for Church accounts that's the password (2026-06-12).
+  if (method === 'password') {
+    return {
+      prompt:
+        'Your code was accepted. Your account uses multi-factor sign-in, so enter your ' +
+        'Church Account password to finish.',
+    };
+  }
   return { prompt: `A code was just sent via ${f.label}. Wait for the new one to arrive, then enter it here.` };
 }
 

@@ -117,19 +117,29 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
         )
     }
 
+    // Enter (or re-enter) the MFA factor step — used by the password lane AND by the
+    // passwordless lane's continuation: an MFA-enabled account's emailed code is ACCEPTED and
+    // Okta then demands a DISTINCT factor (for Church accounts that's the password, 2026-06-12).
+    suspend fun enterMfa(r: BrokerResult) {
+        otpSent = false
+        otpCode = ""
+        loginId = r.loginId
+        factors = r.factors
+        factorSent = null
+        mfaCode = ""
+        // Auto-send if there's exactly one factor (matches the login flow + web).
+        if (r.factors.size == 1 && r.loginId != null) {
+            broker.selectFactor(r.loginId!!, r.factors.first().id)
+            factorSent = r.factors.first()
+            resendIn = 30
+        }
+    }
+
     fun signIn() = step {
         // enroll=true: this IS the consent (the whole point of re-authorizing).
         val r = broker.password(username.trim(), password, enroll = true)
         if (r.mfaRequired) {
-            loginId = r.loginId
-            factors = r.factors
-            // Auto-send if there's exactly one factor (matches the login flow + web).
-            if (r.factors.size == 1) {
-                broker.selectFactor(r.loginId!!, r.factors.first().id)
-                factorSent = r.factors.first()
-                mfaCode = ""
-                resendIn = 30
-            }
+            enterMfa(r)
             return@step
         }
         finish(r)
@@ -146,6 +156,10 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
     fun verify() = step {
         try {
             val r = broker.verifyMfa(loginId!!, mfaCode.trim(), enroll = true)
+            if (r.mfaRequired) {
+                enterMfa(r) // chained continuation (rare): yet another factor owed
+                return@step
+            }
             finish(r)
         } catch (e: Throwable) {
             mfaCode = "" // a rejected code must be retyped fresh
@@ -165,6 +179,10 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
     fun verifyOtp() = step {
         try {
             val r = broker.otpVerify(email.trim(), otpCode.trim(), enroll = true)
+            if (r.mfaRequired) {
+                enterMfa(r) // code ACCEPTED — the account's MFA owes one more factor
+                return@step
+            }
             finish(r)
         } catch (e: Throwable) {
             otpCode = "" // a rejected code must be retyped fresh
@@ -207,6 +225,7 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
                         // Names the code's SOURCE (texted number vs authenticator app) — the
                         // wrong-source code is the multi-method trap (2026-06-11).
                         val tips = mfaPrompt(factorSent!!)
+                        val isPassword = factorSent?.method == "password"
                         Text(tips.prompt)
                         tips.warning?.let {
                             Spacer(Modifier.size(4.dp))
@@ -214,18 +233,32 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
                                  color = MaterialTheme.colorScheme.primary)
                         }
                         Spacer(Modifier.size(8.dp))
-                        OutlinedTextField(
-                            mfaCode, { mfaCode = it.filter(Char::isDigit).take(8) },
-                            label = { Text("Verification code") },
-                            singleLine = true,
-                            enabled = !busy,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        TextButton(
-                            onClick = { factorSent?.let { pickFactor(it) } },
-                            enabled = !busy && resendIn <= 0,
-                        ) { Text(if (resendIn > 0) "Send a new code (${resendIn}s)" else "Send a new code") }
+                        if (isPassword) {
+                            // Passwordless-lane MFA continuation: the next factor is the PASSWORD
+                            // (a distinct factor type from the emailed code) — not a 6-digit code.
+                            OutlinedTextField(
+                                mfaCode, { mfaCode = it },
+                                label = { Text("Password") },
+                                singleLine = true,
+                                enabled = !busy,
+                                visualTransformation = PasswordVisualTransformation(),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        } else {
+                            OutlinedTextField(
+                                mfaCode, { mfaCode = it.filter(Char::isDigit).take(8) },
+                                label = { Text("Verification code") },
+                                singleLine = true,
+                                enabled = !busy,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            TextButton(
+                                onClick = { factorSent?.let { pickFactor(it) } },
+                                enabled = !busy && resendIn <= 0,
+                            ) { Text(if (resendIn > 0) "Send a new code (${resendIn}s)" else "Send a new code") }
+                        }
                         tips.noCodeHint?.let {
                             Text(it, style = MaterialTheme.typography.bodySmall,
                                  color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -326,7 +359,11 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
                 otpSent -> TextButton(onClick = { verifyOtp() }, enabled = !busy && otpCode.length >= 6) {
                     Text("Verify & authorize")
                 }
-                factorSent != null -> TextButton(onClick = { verify() }, enabled = !busy && mfaCode.length >= 6) {
+                // A password isn't a 6-digit code — gate it on non-empty only.
+                factorSent != null -> TextButton(
+                    onClick = { verify() },
+                    enabled = !busy && if (factorSent?.method == "password") mfaCode.isNotEmpty() else mfaCode.length >= 6,
+                ) {
                     Text("Verify & authorize")
                 }
                 loginId == null && mode == ReauthMode.Password -> TextButton(

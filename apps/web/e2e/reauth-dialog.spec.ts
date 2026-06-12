@@ -99,6 +99,47 @@ test.describe('reauth dialog', () => {
     await expect(dialog.getByText(/Codes are sent by Church USERNAME/)).not.toBeVisible();
   });
 
+  test('an MFA-enabled account continues past the emailed code to the password step (A29)', async ({ page }) => {
+    // Regression (2026-06-12, the operator's account after enabling MFA): the emailed code is
+    // ACCEPTED and Okta then demands a DISTINCT factor — the password. Pre-fix the broker
+    // classified the continuation as a bad code ("We couldn't verify that code") forever.
+    const { broker } = await openReauth(page, {
+      'POST /auth/otp/start': { json: { status: 'code_sent', sent_to: 'Email' } },
+      'POST /auth/otp/verify': {
+        json: {
+          status: 'mfa_required',
+          login_id: 'L-cont',
+          factors: [{ id: 'pw1', label: 'Password', method: 'password' }],
+        },
+      },
+      'POST /auth/mfa/select': { json: { status: 'code_sent' } },
+      'POST /auth/mfa/verify': { json: brokerLogin({ authorized: true, stored: true }) },
+    });
+    const dialog = reauthDialog(page);
+    await dialog.getByRole('button', { name: 'Email code' }).click();
+    await dialog.getByLabel('Church username').fill('leader.example');
+    await dialog.getByRole('button', { name: 'Send code', exact: true }).click();
+    await dialog.getByLabel('Verification code').fill('123456');
+    await dialog.getByRole('button', { name: 'Verify & authorize' }).click();
+
+    // The single password factor auto-selects and the step renders a PASSWORD box, not a code
+    // box — and there's no "Send a new code" (nothing was sent for a password).
+    await expect(dialog.getByText(/Your code was accepted/)).toBeVisible();
+    const pw = dialog.getByLabel('Password', { exact: true });
+    await expect(pw).toHaveAttribute('type', 'password');
+    await expect(dialog.getByRole('button', { name: /Send a new code/ })).not.toBeVisible();
+    expect(broker.callsTo('/auth/mfa/select')).toHaveLength(1);
+
+    await pw.fill('correct-horse');
+    await dialog.getByRole('button', { name: 'Verify & authorize' }).click();
+
+    await expect(page.getByText('Daily sync authorized — your stake will refresh within minutes.')).toBeVisible();
+    await expect(dialog).not.toBeVisible();
+    const verifies = broker.callsTo('/auth/mfa/verify');
+    expect(verifies).toHaveLength(1);
+    expect(verifies[0].body).toMatchObject({ login_id: 'L-cont', code: 'correct-horse', enroll: true });
+  });
+
   test('the MFA path inside the dialog completes the enroll', async ({ page }) => {
     const { broker } = await openReauth(page, {
       'POST /auth/password': { json: brokerMfa() },
