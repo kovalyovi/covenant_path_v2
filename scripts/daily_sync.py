@@ -113,15 +113,30 @@ def _membertools_access_token(client, stake_unit: int | None) -> str | None:
     from lcr_client import membertools
     stored = _membertools_token(stake_unit)
     if stored.get("refresh_token"):
+        # STEADY STATE: renew the bearer off the stored 45-day token — NO Okta session, NO login, NO
+        # fallback. This is the path a healthy enrolled stake takes every day.
+        logger.info("stake %s: renewing the Member Tools bearer off the stored 45-day refresh token "
+                    "(no Okta session needed)", stake_unit)
         try:
             access = membertools.refresh(stored["refresh_token"]).get("access_token")
             if access:
+                logger.info("stake %s: Member Tools bearer renewed from the stored token", stake_unit)
                 return access
+            logger.error("stake %s: Member Tools refresh returned no access token — the stored token "
+                         "may be malformed; will try a fresh mint off the live session", stake_unit)
         except membertools.RefreshTokenExpired:
+            logger.warning("stake %s: the stored Member Tools token hit the 45-day wall (RefreshToken"
+                           "Expired) — clearing it and minting fresh off the live session (this needs a "
+                           "fresh login/re-auth; a delegated session that can't SSO will need re-auth)",
+                           stake_unit)
             _clear_membertools_token(stake_unit)  # 45-day wall → re-mint below
-    tok = membertools.mint_from_okta_session(client.session.session)
+    else:
+        logger.info("stake %s: no stored Member Tools token — minting fresh off the live Okta session "
+                    "(expected only right after enroll / on the operator's own fresh login)", stake_unit)
+    tok = membertools.mint_from_okta_session(client.session.session)  # raises MemberToolsError if dead
     if stake_unit and tok.get("refresh_token"):
         _save_membertools_token(stake_unit, tok["refresh_token"])
+        logger.info("stake %s: minted + persisted a fresh Member Tools 45-day token", stake_unit)
     return tok.get("access_token")
 
 

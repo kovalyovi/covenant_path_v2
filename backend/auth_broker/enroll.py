@@ -421,10 +421,24 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
     if membertools_refresh:
         try:
             persist_membertools_refresh_rest(ctx.unit_number, membertools_refresh)
-            logger.info("enroll: stored Member Tools 45-day token for stake %s", ctx.unit_number)
+            logger.info("enroll: stored Member Tools 45-day token for stake %s (len=%d) — daily sync "
+                        "is now self-renewing for ~45 days", ctx.unit_number, len(membertools_refresh))
         except Exception as exc:  # noqa: BLE001
-            logger.warning("enroll: Member Tools token persist skipped for stake %s: %s",
-                           ctx.unit_number, exc)
+            # The token MINTED but didn't PERSIST → the daily sync won't find it → silent sync failure.
+            # ERROR, not warning: this is exactly the kind of capture gap we must catch immediately.
+            logger.error("enroll: Member Tools token MINTED but FAILED TO PERSIST for stake %s — the "
+                         "daily sync will NOT find it and will report needs-reauth. Fix the persist "
+                         "path (Supabase REST PATCH of stake_credentials.membertools_refresh_enc) and "
+                         "have the leader re-authorize. Cause: %r", ctx.unit_number, exc)
+    else:
+        # No token came back from the capture flow. For the /auth/web/* lane this is abnormal (it should
+        # always mint) — the broker's web_session._finish already logged the mint failure with its cause.
+        # Record the consequence at the enroll layer too so the stake's state is unambiguous.
+        logger.error("enroll: stored a credential for stake %s WITHOUT a Member Tools 45-day token — "
+                     "the daily sync will report needs-reauth until a successful re-authorization mints "
+                     "one. (A token-less capture means the login session couldn't SSO to Member Tools; "
+                     "see the broker's '[web …] Member Tools mint FAILED' line for the exact cause.)",
+                     ctx.unit_number)
     initial_sync = _kickoff_initial_sync(ctx.unit_number)
     base["stored"] = True
     base["initial_sync"] = initial_sync

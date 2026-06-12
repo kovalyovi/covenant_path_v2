@@ -84,10 +84,13 @@ def _authn(session: requests.Session, username: str, password: str, login_id: st
     token = j.get("sessionToken")
     if not token:
         # MFA_REQUIRED here would be an org with authn-level MFA (not the Church's current policy).
+        logger.warning("[web %s] authn returned no sessionToken (status=%s) — account has authn-level "
+                       "MFA we can't drive headlessly", login_id, j.get("status"))
         raise AuthError("Your Church Account needs an extra verification step we can't complete "
                         "automatically. Please sign in once at lcr.churchofjesuschrist.org, then retry.",
                         kind="authn_no_token", root_cause=f"authn status={j.get('status')}",
                         username=username)
+    logger.info("[web %s] authn OK — sessionToken obtained (status=%s)", login_id, j.get("status"))
     return token
 
 
@@ -132,21 +135,44 @@ def _follow_success(session: requests.Session, payload: dict, login_id: str) -> 
 
 
 def _mint_membertools(session: requests.Session, login_id: str) -> str | None:
-    """Silently mint the Member Tools 45-day token off the now-MFA-satisfied session. Best-effort:
-    a mint failure (e.g. the member has never used Member Tools) must not fail the login — the daily
-    sync just won't have the bulk token until the next re-auth."""
+    """Silently mint the Member Tools 45-day token off the now-MFA-satisfied session — THE credential
+    the daily sync runs on. Returns the refresh token, or None on failure. It does NOT raise (a login
+    must still succeed so the leader gets in), but a None here means the stake's sync WON'T run until a
+    fresh re-auth, so failures are logged at ERROR with the exact cause and consequence — never silent.
+
+    The two failure shapes we expect, and the fix for each:
+      • MemberToolsError 'Okta session not live' (login_required): the session that reached here can't
+        SSO to Member Tools — it's an IDX/app-scoped session, NOT the global Okta session the classic
+        authn→authorize lane establishes. For /auth/web/* this should NEVER happen (it IS that lane);
+        if it does, the authorize leg didn't set the global `sid` cookie — inspect _open_lcr_authorize.
+      • any other error → the Member Tools /authorize or /token call itself failed (network / Okta
+        outage / changed client config) — the message carries the HTTP status."""
     try:
         from lcr_client import membertools
-        tok = membertools.mint_from_okta_session(session)
-        rt = tok.get("refresh_token")
-        if rt:
-            logger.info("[web %s] Member Tools 45-day token minted", login_id)
-        else:
-            logger.warning("[web %s] Member Tools mint returned no refresh token", login_id)
-        return rt
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("[web %s] Member Tools mint skipped: %s", login_id, exc)
+    except Exception as exc:  # noqa: BLE001 — import guard so a packaging problem is still diagnosable
+        logger.error("[web %s] Member Tools mint UNAVAILABLE (import failed) — daily sync will have NO "
+                     "45-day token: %s", login_id, exc)
         return None
+    try:
+        tok = membertools.mint_from_okta_session(session)
+    except membertools.MemberToolsError as exc:
+        logger.error("[web %s] Member Tools mint FAILED — the stake's daily sync will have NO 45-day "
+                     "token and will NOT run until a successful re-authorization. Cause: %s "
+                     "(expected the classic authn→authorize lane to leave a live Okta `sid`; check the "
+                     "_open_lcr_authorize leg if this recurs on /auth/web/*)", login_id, exc)
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logger.error("[web %s] Member Tools mint errored unexpectedly — daily sync will have NO 45-day "
+                     "token: %r", login_id, exc)
+        return None
+    rt = tok.get("refresh_token")
+    if rt:
+        logger.info("[web %s] Member Tools 45-day token minted (expires_in=%s)",
+                    login_id, tok.get("expires_in"))
+    else:
+        logger.error("[web %s] Member Tools mint returned an access token but NO refresh token — the "
+                     "sync can't renew past 24h; treating as no token (re-auth needed)", login_id)
+    return rt
 
 
 # --- the resumable API (mirrors okta_flow.start_login / select_factor / verify_mfa) --------------
@@ -253,10 +279,26 @@ def web_verify(login_id: str, code: str) -> dict:
 
 
 def _finish(session: requests.Session, payload: dict, login_id: str, username: str) -> dict:
-    """Shared tail: follow success -> appSession, read identity, mint Member Tools, clean up."""
+    """Shared tail: follow success -> appSession, read identity, mint Member Tools, clean up.
+
+    Emits ONE structured 'capture complete' line summarizing every credential captured — so a partial
+    capture (e.g. identity OK but no Member Tools token) is obvious at a glance and we know exactly
+    which leg to look at, without reconstructing the run from scattered breadcrumbs."""
     _follow_success(session, payload, login_id)
     ident = _identity(session, login_id)
     membertools_refresh = _mint_membertools(session, login_id)
+    cookies = serialize_cookies(session)
+    # Summarize from the SERIALIZED jar (a plain list of dicts) — the same thing we persist — so the
+    # log reflects exactly what's stored and never depends on the live requests jar's shape.
+    n_app = sum(1 for c in cookies if str(c.get("name", "")).startswith("appSession"))
+    has_sid = any(c.get("name") == "sid" for c in cookies)
+    has_lcr_refresh = bool(ident.get("refresh_token"))
+    logger.info(
+        "[web %s] capture complete: user=%s name=%r email=%s | appSession=%d okta_sid=%s "
+        "lcr_refresh_token=%s membertools_45d_token=%s%s",
+        login_id, ident.get("username") or username or "?", ident.get("name") or "?",
+        bool(ident.get("email")), n_app, has_sid, has_lcr_refresh, bool(membertools_refresh),
+        "" if membertools_refresh else "  ← NO SYNC TOKEN: daily sync will not run until re-auth")
     _WEB_PENDING.pop(login_id, None)
-    return {"status": "success", "identity": ident, "cookies": serialize_cookies(session),
+    return {"status": "success", "identity": ident, "cookies": cookies,
             "membertools_refresh": membertools_refresh}
