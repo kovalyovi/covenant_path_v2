@@ -17,6 +17,10 @@ from backend.auth_broker.app import app, require_admin
 from backend.auth_broker import admin, session_mint, okta_flow, enroll
 import backend.auth_broker.app as appmod
 
+# Rate limiting has its own unit test (test_ratelimit_check_caps_attempts); disable the HTTP-path
+# limiter here so this suite's many same-IP TestClient calls don't trip a 429 (BACKEND-01).
+os.environ.setdefault("RL_DISABLED", "1")
+
 client = TestClient(app)
 _PASS = 0
 _FAIL = 0
@@ -1564,6 +1568,39 @@ def test_sync_now_blocked_when_revoked() -> None:
         admin.verify_user, admin.enrollment_status = old_verify, old_status
 
 
+def test_ratelimit_check_caps_attempts() -> None:
+    # BACKEND-01: the sliding-window core raises 429 once `limit` hits land inside `window`.
+    from fastapi import HTTPException
+    from backend.auth_broker import ratelimit
+    key = f"unit-test-{time.time()}"
+    ratelimit._check(key, 2, 100)
+    ratelimit._check(key, 2, 100)
+    raised = False
+    try:
+        ratelimit._check(key, 2, 100)
+    except HTTPException as e:
+        raised = e.status_code == 429
+    check("ratelimit: 3rd hit over limit 2 -> 429", raised)
+    ratelimit._check(f"{key}-other", 2, 100)  # a distinct key is independent
+    check("ratelimit: distinct key not limited", True)
+
+
+def test_mfa_lockout_after_max_fails() -> None:
+    # BACKEND-01: a pending login is dropped after _MFA_MAX_FAILS wrong codes (no infinite retry).
+    lid = f"unit-test-{time.time()}"
+    okta_flow._PENDING[lid] = {"session": None, "payload": {}, "fails": 0}
+    for _ in range(okta_flow._MFA_MAX_FAILS - 1):
+        okta_flow._bump_mfa_fail(okta_flow._PENDING[lid], lid, "u@x.test", "totp")
+    check("mfa lockout: pending alive before the cap", lid in okta_flow._PENDING)
+    locked = False
+    try:
+        okta_flow._bump_mfa_fail(okta_flow._PENDING[lid], lid, "u@x.test", "totp")
+    except okta_flow.AuthError as e:
+        locked = getattr(e, "kind", "") == "mfa_locked"
+    check("mfa lockout: final wrong code raises mfa_locked", locked)
+    check("mfa lockout: pending dropped after the cap", lid not in okta_flow._PENDING)
+
+
 def main() -> int:
     print("broker tests")
     test_fast_lane_eval_zero_lcr()
@@ -1620,6 +1657,8 @@ def main() -> int:
     test_admin_requires_auth()
     test_admin_actions_graceful_without_github()
     test_dispatch_allowlist()
+    test_ratelimit_check_caps_attempts()
+    test_mfa_lockout_after_max_fails()
     print(f"\n{_PASS} passed, {_FAIL} failed")
     return 1 if _FAIL else 0
 

@@ -16,6 +16,7 @@ State between steps is held in-memory keyed by login_id (TTL); fine for a single
 
 from __future__ import annotations
 
+import os
 import re
 import secrets
 import time
@@ -32,8 +33,12 @@ from backend.auth_broker import identity_cache
 
 logger = get_logger()
 
-_PENDING: dict[str, dict] = {}          # login_id -> {session, payload, ts}
+_PENDING: dict[str, dict] = {}          # login_id -> {session, payload, ts, fails}
 _TTL = 600                              # 10 min to complete an MFA challenge
+# BACKEND-01: lock a pending login after N wrong codes so a captured login_id can't be used to
+# brute-force the 6-digit code (a failed verify otherwise keeps the pending alive indefinitely).
+# Generous so a legitimate fat-finger retry is never affected; env-tunable.
+_MFA_MAX_FAILS = int(os.environ.get("MFA_MAX_FAILS", "6"))
 
 
 class AuthError(RuntimeError):
@@ -680,6 +685,19 @@ def _classify_mfa_failure(raw: str, messages: str, *, username: str, factor_type
                      username=username, factor_type=factor_type)
 
 
+def _bump_mfa_fail(pend: dict, login_id: str, username: str, ftype: str) -> None:
+    """Count a failed code attempt and, after _MFA_MAX_FAILS, drop the pending login and raise a
+    terminal 'start over' error — closing the BACKEND-01 brute-force window (a failed verify
+    otherwise refreshed and kept the pending alive forever)."""
+    pend["fails"] = pend.get("fails", 0) + 1
+    if pend["fails"] >= _MFA_MAX_FAILS:
+        _PENDING.pop(login_id, None)
+        for k in [k for k, v in _OTP_BY_IDENTIFIER.items() if v == login_id]:
+            _OTP_BY_IDENTIFIER.pop(k, None)
+        raise AuthError("Too many incorrect codes — please start the sign-in again.",
+                        kind="mfa_locked", username=username, factor_type=ftype)
+
+
 def verify_mfa(login_id: str, code: str, *, want_refresh_token: bool = True,
                allow_cached_identity: bool = False) -> dict:
     """Submit the MFA code and finish login (same fast-lane/full-path tail as start_login).
@@ -720,15 +738,18 @@ def verify_mfa(login_id: str, code: str, *, want_refresh_token: bool = True,
         dump_debug("broker_mfa_error", login_id=login_id, factor_type=ftype, error=str(exc),
                    messages=messages,
                    summary=_idx_summary(err_payload) if err_payload else None)
-        raise _classify_mfa_failure(str(exc), messages, username=username,
-                                    factor_type=ftype) from exc
+        classified = _classify_mfa_failure(str(exc), messages, username=username, factor_type=ftype)
+        _bump_mfa_fail(pend, login_id, username, ftype)  # may raise mfa_locked (and drop the pending)
+        raise classified from exc
     logger.info("[auth %s] post-verify -> %s", login_id, _idx_summary(payload))
     if "successWithInteractionCode" not in payload:
         # Keep the (refreshed) state so a wrong-code retry uses the latest stateHandle, not a stale one.
         pend["payload"] = payload
         pend["ts"] = time.time()
-        raise _classify_mfa_failure("MFA answer accepted but login did not complete",
-                                    _idx_messages(payload), username=username, factor_type=ftype)
+        classified = _classify_mfa_failure("MFA answer accepted but login did not complete",
+                                           _idx_messages(payload), username=username, factor_type=ftype)
+        _bump_mfa_fail(pend, login_id, username, ftype)  # may raise mfa_locked (and drop the pending)
+        raise classified
     from backend import observability as obs
     cid = obs.new_correlation_id()
     # t0 = now: times only this completion leg (the gap since start_login is human typing time).

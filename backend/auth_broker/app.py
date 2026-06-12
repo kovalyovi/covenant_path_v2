@@ -24,7 +24,8 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from lcr_client.logging_setup import get_logger
-from backend.auth_broker import admin, email_relay, google_oauth, okta_flow, session_mint
+from backend.auth_broker import (
+    admin, email_relay, google_oauth, okta_flow, ratelimit, session_mint)
 
 logger = get_logger()
 app = FastAPI(title="Covenant Path — Church login broker")
@@ -417,10 +418,12 @@ def _mfa_phase(e: okta_flow.AuthError) -> str:
 
 
 @app.post("/auth/password")
-def auth_password(req: PasswordReq) -> dict:
+def auth_password(req: PasswordReq,
+                  _rl: None = Depends(ratelimit.limiter("password", 8, 300))) -> dict:
     rid = _rid()
     t0 = time.monotonic()
     logger.info("[req %s] /auth/password user=%s", rid, req.username)
+    ratelimit.hit_identifier("password", req.username)
     try:
         # Plain sign-ins ride the cached-identity fast lane (no LCR) and skip the dead token
         # exchange; an enroll needs the real LCR session + refresh token, so it takes the full path.
@@ -458,7 +461,8 @@ def auth_password(req: PasswordReq) -> dict:
 
 
 @app.post("/auth/mfa/select")
-def auth_mfa_select(req: FactorReq) -> dict:
+def auth_mfa_select(req: FactorReq,
+                    _rl: None = Depends(ratelimit.limiter("mfa", 30, 300))) -> dict:
     rid = _rid()
     t0 = time.monotonic()
     logger.info("[req %s] /auth/mfa/select login=%s", rid, req.login_id)
@@ -474,10 +478,12 @@ def auth_mfa_select(req: FactorReq) -> dict:
 
 
 @app.post("/auth/mfa/verify")
-def auth_mfa_verify(req: MfaReq) -> dict:
+def auth_mfa_verify(req: MfaReq,
+                    _rl: None = Depends(ratelimit.limiter("mfa", 30, 300))) -> dict:
     rid = _rid()
     t0 = time.monotonic()
     logger.info("[req %s] /auth/mfa/verify login=%s", rid, req.login_id)
+    ratelimit.hit_identifier("mfa", req.login_id)
     try:
         res = okta_flow.verify_mfa(req.login_id, req.code.strip(),
                                    want_refresh_token=req.enroll,
@@ -515,13 +521,15 @@ def auth_session(req: SessionReq) -> dict:
 # --- passwordless Church login (emailed code as the PRIMARY factor) ----------
 
 @app.post("/auth/otp/start")
-def auth_otp_start(req: OtpStartReq) -> dict:
+def auth_otp_start(req: OtpStartReq,
+                   _rl: None = Depends(ratelimit.limiter("otp", 10, 600))) -> dict:
     """Begin a passwordless (emailed-code) Church login. Answers code_sent only after Okta
     accepted the email-factor select; a password-first account (the Church default) gets a
     401 with an honest, actionable message instead."""
     rid = _rid()
     t0 = time.monotonic()
     logger.info("[req %s] /auth/otp/start", rid)  # the identifier is PII — never logged
+    ratelimit.hit_identifier("otp", req.email)
     try:
         return okta_flow.otp_start(req.email)
     except okta_flow.AuthError as e:
@@ -533,12 +541,14 @@ def auth_otp_start(req: OtpStartReq) -> dict:
 
 
 @app.post("/auth/otp/verify")
-def auth_otp_verify(req: OtpVerifyReq) -> dict:
+def auth_otp_verify(req: OtpVerifyReq,
+                    _rl: None = Depends(ratelimit.limiter("otp", 20, 600))) -> dict:
     """Verify the emailed code and finish the login — the same completion (Supabase mint +
     login eval, in parallel) as the password/MFA paths."""
     rid = _rid()
     t0 = time.monotonic()
     logger.info("[req %s] /auth/otp/verify", rid)
+    ratelimit.hit_identifier("otp", req.email)
     try:
         res = okta_flow.otp_verify(req.email, req.code.strip(),
                                    want_refresh_token=req.enroll,
@@ -572,7 +582,8 @@ class EmailVerifyReq(BaseModel):
 
 
 @app.post("/auth/email/start")
-def auth_email_start(req: EmailStartReq) -> dict:
+def auth_email_start(req: EmailStartReq,
+                     _rl: None = Depends(ratelimit.limiter("email", 10, 600))) -> dict:
     """Relay an email one-time-code request to Supabase (server-side, no browser CORS)."""
     rid = _rid()
     logger.info("[req %s] /auth/email/start", rid)
@@ -583,10 +594,12 @@ def auth_email_start(req: EmailStartReq) -> dict:
 
 
 @app.post("/auth/email/verify")
-def auth_email_verify(req: EmailVerifyReq) -> dict:
+def auth_email_verify(req: EmailVerifyReq,
+                      _rl: None = Depends(ratelimit.limiter("email", 20, 600))) -> dict:
     """Verify the emailed code server-side and return session tokens for setSession."""
     rid = _rid()
     logger.info("[req %s] /auth/email/verify", rid)
+    ratelimit.hit_identifier("email", req.email)
     try:
         return email_relay.verify_email_login(req.email, req.code)
     except email_relay.RelayError as e:
@@ -706,7 +719,8 @@ def webauthn_register_complete(req: PasskeyCompleteReq, email: str = Depends(req
 
 
 @app.post("/webauthn/login/begin")
-def webauthn_login_begin() -> dict:
+def webauthn_login_begin(
+        _rl: None = Depends(ratelimit.limiter("passkey", 30, 300))) -> dict:
     """Begin a passwordless passkey login (discoverable credential challenge). No auth required."""
     from backend.auth_broker import webauthn_flow
     try:
@@ -716,7 +730,8 @@ def webauthn_login_begin() -> dict:
 
 
 @app.post("/webauthn/login/complete")
-def webauthn_login_complete(req: PasskeyCompleteReq) -> dict:
+def webauthn_login_complete(req: PasskeyCompleteReq,
+                            _rl: None = Depends(ratelimit.limiter("passkey", 30, 300))) -> dict:
     """Verify the assertion and mint a Supabase session OTP for the passkey's owner."""
     rid = _rid()
     from backend.auth_broker import webauthn_flow
