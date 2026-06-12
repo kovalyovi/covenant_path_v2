@@ -101,6 +101,14 @@ struct LoginView: View {
                 resendIn = 0
             }
         }
+        // "Sign in on the Church website" — the WebView capture lane (no password in our app).
+        .sheet(isPresented: Binding(get: { session.showChurchWebLogin },
+                                    set: { session.showChurchWebLogin = $0 })) {
+            ChurchWebAuthSheet(
+                purpose: .login,
+                onCapture: { cookies in Task { await session.churchWebLogin(cookies: cookies) } },
+                onCancel: { session.showChurchWebLogin = false })
+        }
         // #8: post-login offer to set up / improve daily sync (consent moved off the login form).
         .alert(session.enrollOffer?.improving == true ? "Improve your stake's sync?" : "Set up daily sync?",
                isPresented: enrollOfferBinding, presenting: session.enrollOffer) { _ in
@@ -190,6 +198,19 @@ struct LoginView: View {
             primaryButton("Sign in") {
                 await session.churchSignIn(username: username, password: password)
             }
+            // Prefer not to type a password here? Sign in on the Church's own page in a WebView —
+            // the password is autofilled (Face ID) / typed on churchofjesuschrist.org, never in our
+            // app, with the full Church MFA. The captured session is what reaches the broker.
+            Button {
+                session.presentChurchWebLogin()
+            } label: {
+                Label("Sign in on the Church website instead", systemImage: "globe")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(session.isBusy)
+            Text("Opens churchofjesuschrist.org — your password is entered there, never in this app.")
+                .font(.caption2).foregroundStyle(.secondary)
         }
     }
 

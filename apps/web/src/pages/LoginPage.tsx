@@ -494,6 +494,14 @@ function ChurchFields(p: ChurchProps) {
       <Button variant="filled" onClick={p.onSignIn} disabled={p.busy} loading={p.busy} type="submit">
         Sign in
       </Button>
+      {/* The password-free, sign-in-on-the-Church-page lane only exists in the MOBILE apps: a browser
+          can't read churchofjesuschrist.org's cookies (same-origin), so the WebView capture is
+          native-only. Point web users who'd rather not type a password here at the app. */}
+      <p className="tiny" style={{ color: 'var(--on-surface-variant)' }}>
+        Prefer not to enter your password here? Use the Covenant Path <strong>mobile app</strong> to
+        sign in on the Church's own website (churchofjesuschrist.org) — your password is entered there,
+        never in the app.
+      </p>
     </>
   );
 }

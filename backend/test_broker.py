@@ -627,6 +627,83 @@ def test_verify_wrong_code_friendly_and_state_refresh() -> None:
     okta_flow._follow = saved
 
 
+def test_captured_session_verify() -> None:
+    # 2026-06-13: the WebView Church-login lane — the leader signs in on churchofjesuschrist.org
+    # inside the app's WebView and the app posts the captured session COOKIES (no password ever
+    # reaching us). verify_captured_session must: (a) reject a jar with no usable Church cookies
+    # honestly; (b) keep only Church-domain cookies; (c) re-raise an LCR IdentityError so the API
+    # maps it to 503; (d) wrap a transient LCR failure as IdentityError; (e) return the success
+    # shape when identity resolves.
+    from lcr_client.okta_login import LoginError
+
+    # (a) empty / non-Church jars fail with the actionable message, never an empty-jar "stranger".
+    for jar in ([], [{"name": "x", "value": "1", "domain": "example.com"}],
+                [{"name": "appSession.0", "value": "", "domain": "lcr.churchofjesuschrist.org"}]):
+        try:
+            okta_flow.verify_captured_session(jar)
+            check("no usable Church cookies -> AuthError", False)
+        except okta_flow.IdentityError:
+            check("no usable Church cookies -> AuthError (not IdentityError)", False)
+        except okta_flow.AuthError as e:
+            check("no usable Church cookies -> AuthError", True)
+            check("captured_no_cookies kind", getattr(e, "kind", "") == "captured_no_cookies")
+
+    church = [
+        {"name": "sid", "value": "okta-sid", "domain": "id.churchofjesuschrist.org"},
+        {"name": "appSession.0", "value": "a", "domain": "lcr.churchofjesuschrist.org"},
+        {"name": "appSession.1", "value": "b", "domain": "lcr.churchofjesuschrist.org"},
+        {"name": "junk", "value": "drop-me", "domain": "tracker.example.com"},
+    ]
+    saved = okta_flow._identity
+    captured_session = {}
+
+    # (e) success: identity resolves -> success shape; the non-Church cookie was filtered out.
+    def fake_identity(session, _lid):
+        captured_session["jar"] = sorted(c.name for c in session.cookies)
+        return {"email": "leader@example.com", "name": "Leader", "username": "leader.example"}
+
+    okta_flow._identity = fake_identity
+    try:
+        res = okta_flow.verify_captured_session(church)
+        check("captured session verifies to success", res.get("status") == "success")
+        check("identity carried through", (res.get("identity") or {}).get("email") == "leader@example.com")
+        check("non-Church cookie filtered before building the session",
+              "junk" not in captured_session.get("jar", []))
+        check("Church session cookies kept", "appSession.0" in captured_session.get("jar", []))
+    finally:
+        okta_flow._identity = saved
+
+    # (c) an IdentityError from the identity leg propagates unchanged (API -> 503).
+    def raise_identity(_s, _l):
+        raise okta_flow.IdentityError("LCR down", kind="lcr_5xx", root_cause="auth/me 502")
+    okta_flow._identity = raise_identity
+    try:
+        okta_flow.verify_captured_session(church)
+        check("IdentityError propagates", False)
+    except okta_flow.IdentityError as e:
+        check("IdentityError propagates", True)
+        check("IdentityError keeps kind", getattr(e, "kind", "") == "lcr_5xx")
+    except okta_flow.AuthError:
+        check("IdentityError propagates (not downgraded to AuthError)", False)
+    finally:
+        okta_flow._identity = saved
+
+    # (d) a transient LCR LoginError is wrapped as IdentityError (503), not a 401 "bad sign-in".
+    def raise_5xx(_s, _l):
+        raise LoginError("/api/auth/me failed: 502 text/plain")
+    okta_flow._identity = raise_5xx
+    try:
+        okta_flow.verify_captured_session(church)
+        check("transient LCR failure -> IdentityError", False)
+    except okta_flow.IdentityError as e:
+        check("transient LCR failure -> IdentityError", True)
+        check("wrapped failure records the root cause", "auth/me" in getattr(e, "root_cause", ""))
+    except okta_flow.AuthError:
+        check("transient LCR failure -> IdentityError (not 401 AuthError)", False)
+    finally:
+        okta_flow._identity = saved
+
+
 def test_otp_email_identifier_guidance() -> None:
     # 2026-06-12 (Ken Packer + operator): the Church Okta org matches the USERNAME only — an
     # email-shaped identifier lands in Okta's enumeration-prevention PHANTOM flow (select
@@ -1912,6 +1989,7 @@ def main() -> int:
     test_verify_answers_with_declared_field()
     test_verify_normalizes_code()
     test_verify_wrong_code_friendly_and_state_refresh()
+    test_captured_session_verify()
     test_otp_email_identifier_guidance()
     test_otp_start_resolves_cached_email()
     test_otp_send_burst_throttle_hint()

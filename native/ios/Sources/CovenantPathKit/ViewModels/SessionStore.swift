@@ -51,6 +51,11 @@ public final class SessionStore {
     public var emailCodeSent = false
     public var useRelay = false   // route email-code through the broker (blocked networks)
 
+    /// "Sign in on the Church website" — presents the in-app WebView at churchofjesuschrist.org so
+    /// the password is entered/autofilled ON the Church page, never in our UI (the captured session
+    /// is posted to the broker). Drives a `.sheet` in `LoginView`.
+    public var showChurchWebLogin = false
+
     private let auth: AuthService
     private let broker: BrokerService
     private let passkeyAvailableProvider: () -> Bool
@@ -193,6 +198,25 @@ public final class SessionStore {
 
     public func backFromMfa() { factorSent = nil }
     public func backToChurchStart() { resetChurch() }
+
+    // MARK: - Church website (WebView capture — no password in our app)
+
+    /// Open the in-app Church web sign-in.
+    public func presentChurchWebLogin() { showChurchWebLogin = true }
+
+    /// The WebView captured the Church session cookies (the leader signed in on the Church's own
+    /// page). Post them to the broker, which verifies the session and mints ours. We adopt the
+    /// view session directly (N2-guarded) — NOT the post-login enroll offer, which re-auths with a
+    /// password we deliberately never collected here. Setting up daily sync is a separate, explicit
+    /// step (the re-auth dialog's "Authorize on the Church website" button, enroll=true).
+    public func churchWebLogin(cookies: [[String: String]]) async {
+        showChurchWebLogin = false
+        await run {
+            let r = try await self.broker.captureSession(cookies: cookies, enroll: false)
+            if r.authorized == false { throw BrokerError(SessionStore.noAccessMessage) }
+            try await self.consume(r)
+        }
+    }
 
     // MARK: - Email code
 

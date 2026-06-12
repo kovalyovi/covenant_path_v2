@@ -63,6 +63,10 @@ data class LoginUiState(
     // #8: post-login offer to set up / improve daily sync (shown as a dialog) when the stake has no
     // sufficient credential. null = no offer pending.
     val enrollOffer: EnrollOffer? = null,
+
+    // "Sign in on the Church website" — presents the in-app WebView at churchofjesuschrist.org so
+    // the password is entered/autofilled ON the Church page, never in our UI.
+    val showChurchWeb: Boolean = false,
 ) {
     data class EnrollOffer(val stake: String, val improving: Boolean)
 
@@ -205,6 +209,24 @@ class AuthViewModel(
         pendingResult = null
         _login.update { it.copy(enrollOffer = null) }
         if (r != null) run { consume(r) }
+    }
+
+    // ---- Church website (WebView capture — no password in our app) ----
+    fun presentChurchWeb() = _login.update { it.copy(showChurchWeb = true, error = null) }
+    fun dismissChurchWeb() = _login.update { it.copy(showChurchWeb = false) }
+
+    /** The WebView captured the Church session cookies (the leader signed in on the Church's own
+     *  page). Post them to the broker, which verifies the session and mints ours. We adopt the view
+     *  session directly (N2-guarded) — NOT the post-login enroll offer, which re-auths with a
+     *  password we deliberately never collected here. Setting up daily sync is a separate, explicit
+     *  step (the re-auth dialog's "Authorize on the Church website" button, enroll=true). */
+    fun churchWebLogin(cookies: List<Map<String, String>>) {
+        _login.update { it.copy(showChurchWeb = false) }
+        run {
+            val r = broker.captureSession(cookies, enroll = false)
+            if (r.authorized == false) throw BrokerException(NO_ACCESS_MSG)
+            consume(r)
+        }
     }
 
     fun selectFactor(f: BrokerFactor) = run { selectFactorNow(f) }

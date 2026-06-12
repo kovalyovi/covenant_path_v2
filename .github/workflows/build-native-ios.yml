@@ -29,6 +29,13 @@ jobs:
         run: xcodegen generate
       - name: Build (unsigned, generic iOS device)
         working-directory: native/ios
+        # Inject real config (anon key is RLS-safe; broker enables Church login) via build settings
+        # → Info.plist, so the sideloaded .ipa is a WORKING build, not the config-error screen.
+        # Empty values still build a valid app. Mirrors the Android workflow.
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          BROKER_URL: ${{ secrets.BROKER_URL }}
         run: |
           set -o pipefail
           xcodebuild \
@@ -37,12 +44,28 @@ jobs:
             -skipPackagePluginValidation \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
-            build | xcpretty || xcodebuild \
-            -scheme CovenantPath \
-            -destination 'generic/platform=iOS' \
-            -skipPackagePluginValidation \
-            -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+            SUPABASE_URL="$SUPABASE_URL" SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" BROKER_URL="$BROKER_URL" \
+            build
+      - name: Package unsigned .ipa (for AltStore/Sideloadly — see docs/IOS_SIDELOAD.md)
+        working-directory: native/ios
+        # An unsigned .ipa is just the built .app inside a Payload/ folder, zipped. AltStore /
+        # SideStore / Sideloadly re-sign it with a free Apple ID at install time (7-day refresh).
+        run: |
+          set -euo pipefail
+          APP=$(find build/Build/Products -maxdepth 3 -name 'CovenantPath.app' -type d | head -1)
+          test -n "$APP" || { echo "::error::CovenantPath.app not found"; exit 1; }
+          echo "Packaging $APP"
+          rm -rf Payload CovenantPath.ipa
+          mkdir Payload
+          cp -R "$APP" Payload/
+          zip -qry CovenantPath.ipa Payload
+          ls -lh CovenantPath.ipa
+      - name: Upload unsigned .ipa
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: covenant-path-ios-unsigned-ipa
+          path: native/ios/CovenantPath.ipa
+          if-no-files-found: error
       - name: Unit tests (pure logic, macOS)
         working-directory: native/ios
         continue-on-error: true   # logic tests are macOS-buildable; UI target is iOS-only

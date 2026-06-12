@@ -387,6 +387,14 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
               )}
             </>
           )}
+          {/* The password-free "authorize on the Church's own page" lane is MOBILE-only — a browser
+              can't read churchofjesuschrist.org's cookies (same-origin), so the WebView capture
+              can't run on web. Point leaders who'd rather not type a password at the app. */}
+          <p className="tiny" style={{ color: 'var(--on-surface-variant)' }}>
+            Prefer not to enter your password? Authorize from the Covenant Path <strong>mobile app</strong>,
+            which signs you in on the Church's own website — no password in the app. (Enrolling your
+            stake on the phone activates the daily sync here too.)
+          </p>
         </>
       )}
       {busy && status && <p style={{ color: 'var(--primary)' }} role="status">{status}</p>}

@@ -34,6 +34,7 @@ struct ReauthSheet: View {
     // failed verify, and resend cools down so the member waits for the FRESH code.
     @State private var resendIn = 0
     @State private var resendTask: Task<Void, Never>?
+    @State private var showChurchWeb = false
 
     var body: some View {
         NavigationStack {
@@ -61,6 +62,12 @@ struct ReauthSheet: View {
         }
         .presentationDetents([.medium, .large])
         .interactiveDismissDisabled(busy)
+        .sheet(isPresented: $showChurchWeb) {
+            ChurchWebAuthSheet(
+                purpose: .enroll,
+                onCapture: { cookies in showChurchWeb = false; authorizeWithCaptured(cookies) },
+                onCancel: { showChurchWeb = false })
+        }
     }
 
     // MARK: - the 3 steps (username/password → pick factor → enter code), mirrors web ReauthDialog
@@ -181,6 +188,30 @@ struct ReauthSheet: View {
                 }
                 primaryButton("Send code", disabled: email.trimmed.isEmpty) { try await startOtp() }
             }
+            // No password in our app: authorize by signing in on the Church's own web page. Best
+            // for an MFA-enabled account (the full Church MFA is available there).
+            Divider().padding(.vertical, 4)
+            Button {
+                error = nil
+                showChurchWeb = true
+            } label: {
+                Label("Authorize on the Church website instead", systemImage: "globe")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(busy)
+            Text("Opens churchofjesuschrist.org — your password is entered there, never in this app.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    /// The Church web sheet captured a session (the leader authorized on churchofjesuschrist.org).
+    /// Post the cookies with enroll=true so the broker stores the sync credential, then finish.
+    private func authorizeWithCaptured(_ cookies: [[String: String]]) {
+        guard let broker = services?.broker else { return }
+        run {
+            let r = try await broker.captureSession(cookies: cookies, enroll: true)
+            try await finish(r)
         }
     }
 

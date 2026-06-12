@@ -3,9 +3,11 @@ package org.membercovenantpath.viewer.ui.components
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -25,6 +27,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
@@ -69,6 +73,8 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
     var otpSent by remember { mutableStateOf(false) }
     // Broker advisory after a send burst: Okta quietly pauses email delivery (2026-06-12).
     var throttleHint by remember { mutableStateOf<String?>(null) }
+    // "Authorize on the Church website" — the WebView capture lane (no password in our app).
+    var showChurchWeb by remember { mutableStateOf(false) }
     var loginId by remember { mutableStateOf<String?>(null) }
     var factors by remember { mutableStateOf<List<BrokerFactor>>(emptyList()) }
     var factorSent by remember { mutableStateOf<BrokerFactor?>(null) }
@@ -168,6 +174,13 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
             mfaCode = "" // a rejected code must be retyped fresh
             throw e
         }
+    }
+
+    // The Church web sheet captured a session (the leader authorized on churchofjesuschrist.org).
+    // Post the cookies with enroll=true so the broker stores the sync credential, then finish.
+    fun authorizeWithCaptured(cookies: List<Map<String, String>>) = step {
+        val r = broker.captureSession(cookies, enroll = true)
+        finish(r)
     }
 
     fun startOtp() = step {
@@ -353,6 +366,22 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
                                      color = MaterialTheme.colorScheme.primary)
                             }
                         }
+                        // No password in our app: authorize by signing in on the Church's own web
+                        // page. Best for an MFA-enabled account (the full Church MFA is there).
+                        Spacer(Modifier.size(8.dp))
+                        HorizontalDivider()
+                        Spacer(Modifier.size(8.dp))
+                        OutlinedButton(
+                            onClick = { error = null; showChurchWeb = true },
+                            enabled = !busy,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Authorize on the Church website instead") }
+                        Text(
+                            "Opens churchofjesuschrist.org — your password is entered there, never in this app.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
                     }
                 }
                 if (busy && status != null) {
@@ -390,4 +419,17 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
         },
         dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
     )
+
+    if (showChurchWeb) {
+        Dialog(
+            onDismissRequest = { showChurchWeb = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            ChurchWebAuthSheet(
+                isEnroll = true,
+                onCapture = { cookies -> showChurchWeb = false; authorizeWithCaptured(cookies) },
+                onCancel = { showChurchWeb = false },
+            )
+        }
+    }
 }

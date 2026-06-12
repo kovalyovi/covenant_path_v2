@@ -821,19 +821,48 @@ def _mfa_continuation(login_id: str, pend: dict, payload: dict, username: str) -
     return None
 
 
+_CAPTURED_NO_COOKIES_MSG = (
+    "The Church sign-in didn't return a session. Please complete the sign-in on the Church page "
+    "(including any verification step) and try again.")
+
+
 def verify_captured_session(cookies: list[dict]) -> dict:
-    """Native WebView path: the app captured the Okta/LCR session itself (password only
-    to Okta). Verify it server-side and return identity — no password ever reaches us."""
+    """Native WebView path: the app captured the Okta/LCR session itself (the password was
+    typed only on the Church's own page, never reaching us). Verify it server-side and return
+    identity. An LCR-identity failure is raised as IdentityError so the API maps it to 503 (LCR
+    down) rather than a 401 that reads like 'bad sign-in' — same classification as the password
+    lane (2026-06-10 outage)."""
     from lcr_client.okta_login import session_from_cookies
-    session = session_from_cookies(cookies)
+    # Keep only the Church-domain cookies that actually carry the session — a capture that
+    # produced none (user cancelled / closed before finishing MFA) must fail honestly, not POST
+    # an empty jar that 'verifies' as a stranger.
+    usable = [c for c in (cookies or []) if c.get("name") and c.get("value")
+              and "churchofjesuschrist.org" in (c.get("domain") or "")]
+    if not usable:
+        raise AuthError(_CAPTURED_NO_COOKIES_MSG, kind="captured_no_cookies",
+                        root_cause=f"captured cookie jar had no usable Church cookies "
+                                   f"({len(cookies or [])} received)")
+    session = session_from_cookies(usable)
     login_id = _new_login_id()
     try:
         return {"status": "success", "identity": _identity(session, login_id),
                 "cookies": serialize_cookies(session)}
+    except IdentityError:
+        raise  # the API layer maps this to 503 + an honest "LCR didn't answer" message
     except Exception as exc:  # noqa: BLE001
+        # The captured Okta session was valid enough to build a jar — so a failure here is the
+        # LCR identity leg (SSO / auth/me), not a bad sign-in. Any classified LCR kind maps to
+        # IdentityError (503), the same as the password lane; only a truly unclassifiable error
+        # falls through to the generic 401.
+        kind, root_cause = classify_lcr_failure(exc)
+        if kind != "other":
+            raise IdentityError(
+                "Your Church sign-in worked, but the Church directory (LCR) didn't answer when "
+                "we asked who you are — it may be slow or briefly down. Please try again in a "
+                "minute.", kind=kind, root_cause=root_cause) from exc
         dump_debug("broker_session_verify_error", login_id=login_id, error=str(exc))
         raise AuthError("We couldn't verify the sign-in session from the app — please try "
-                        "signing in again.", root_cause=str(exc)) from exc
+                        "signing in again on the Church page.", root_cause=str(exc)) from exc
 
 
 # --- passwordless email-code login (OTP as the PRIMARY factor) ----------------------------------

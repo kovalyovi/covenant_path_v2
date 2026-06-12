@@ -180,6 +180,20 @@ class BrokerClient(private val auth: AuthRepository = AuthRepository()) {
             put("username", JsonPrimitive(username)); put("password", JsonPrimitive(password)); put("enroll", JsonPrimitive(enroll))
         })
 
+    /** Captured-session lane: the leader signed in on the Church's OWN web page inside a WebView
+     *  (password autofilled/typed on churchofjesuschrist.org — never in our UI or on our server),
+     *  and we post the resulting Church session cookies here. The broker verifies the session and
+     *  returns the same shape as the password lane. [cookies] are {name,value,domain,path} maps. */
+    suspend fun captureSession(cookies: List<Map<String, String>>, enroll: Boolean = false): BrokerResult =
+        post("/auth/session", buildJsonObject {
+            put("cookies", kotlinx.serialization.json.buildJsonArray {
+                cookies.forEach { c ->
+                    add(buildJsonObject { c.forEach { (k, v) -> put(k, JsonPrimitive(v)) } })
+                }
+            })
+            put("enroll", JsonPrimitive(enroll))
+        })
+
     suspend fun selectFactor(loginId: String, factorId: String): BrokerResult =
         post("/auth/mfa/select", buildJsonObject {
             put("login_id", JsonPrimitive(loginId)); put("factor_id", JsonPrimitive(factorId))

@@ -522,14 +522,33 @@ def auth_mfa_verify(req: MfaReq,
 
 
 @app.post("/auth/session")
-def auth_session(req: SessionReq) -> dict:
-    """Native WebView path: app captured the Okta session itself (password only to Okta)."""
+def auth_session(req: SessionReq,
+                 _rl: None = Depends(ratelimit.limiter("session", 12, 600))) -> dict:
+    """Native WebView capture path: the leader signed in on the Church's OWN web page inside the
+    app's WebView (password autofilled/typed on churchofjesuschrist.org, full MFA there — including
+    text/email/authenticator, which the broker-relayed lanes can't all offer). The app captures the
+    resulting Church session cookies and posts them here; the password NEVER reaches our app UI or
+    our server. We verify the session, then mint the Supabase session (login) and/or store the
+    encrypted credential (enroll) — the same completion as every other lane."""
     rid = _rid()
     t0 = time.monotonic()
-    logger.info("[req %s] /auth/session (native captured)", rid)
+    logger.info("[req %s] /auth/session (captured Church web session, %d cookies)",
+                rid, len(req.cookies or []))
     try:
         res = okta_flow.verify_captured_session(req.cookies)
+    except okta_flow.IdentityError as e:  # must precede AuthError (its subclass)
+        logger.warning("[req %s] LCR identity failed after captured session (%s): %s",
+                       rid, getattr(e, "root_cause", "?"), e)
+        _audit_okta_event(getattr(e, "username", ""), "lcr_identity_failed",
+                          getattr(e, "root_cause", "") or str(e), rid,
+                          duration_ms=int((time.monotonic() - t0) * 1000),
+                          phase=f"identity:{getattr(e, 'kind', 'other')}")
+        raise HTTPException(status_code=503, detail=str(e))
     except okta_flow.AuthError as e:
+        _audit_okta_event(getattr(e, "username", ""), "captured_session_failed",
+                          getattr(e, "root_cause", "") or str(e), rid,
+                          duration_ms=int((time.monotonic() - t0) * 1000),
+                          phase=f"okta:{getattr(e, 'kind', 'other')}")
         raise HTTPException(status_code=401, detail=str(e))
     return _complete_login(res, req.enroll, rid, t0)
 

@@ -240,6 +240,16 @@ public final class BrokerService: @unchecked Sendable {
         return result(from: d)
     }
 
+    /// Captured-session lane: the leader signed in on the Church's OWN web page inside a WKWebView
+    /// (password autofilled/typed on churchofjesuschrist.org — never in our UI or on our server),
+    /// and we post the resulting Church session cookies here. The broker verifies the session and
+    /// returns the same shape as the password lane (a Supabase session for login, or the enroll
+    /// result). `cookies` are {name, value, domain, path} dicts captured from the WebView.
+    public func captureSession(cookies: [[String: String]], enroll: Bool = false) async throws -> BrokerResult {
+        let d = try await postJSON("/auth/session", ["cookies": cookies, "enroll": enroll])
+        return result(from: d)
+    }
+
     public func selectFactor(loginID: String, factorID: String) async throws {
         _ = try await postJSON("/auth/mfa/select", ["login_id": loginID, "factor_id": factorID])
     }

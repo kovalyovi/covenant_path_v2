@@ -38,8 +38,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.membercovenantpath.viewer.logic.mfaPrompt
+import org.membercovenantpath.viewer.ui.components.ChurchWebAuthSheet
 import org.membercovenantpath.viewer.viewmodel.AuthViewModel
 import org.membercovenantpath.viewer.viewmodel.LoginMode
 
@@ -135,6 +138,20 @@ fun LoginScreen(vm: AuthViewModel) {
             dismissButton = { TextButton(onClick = vm::declineEnroll) { Text("Not now") } },
         )
     }
+
+    // "Sign in on the Church website" — the WebView capture lane (no password in our app).
+    if (s.showChurchWeb) {
+        Dialog(
+            onDismissRequest = vm::dismissChurchWeb,
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            ChurchWebAuthSheet(
+                isEnroll = false,
+                onCapture = { cookies -> vm.churchWebLogin(cookies) },
+                onCancel = vm::dismissChurchWeb,
+            )
+        }
+    }
 }
 
 @Composable
@@ -204,6 +221,20 @@ private fun ChurchFields(vm: AuthViewModel, s: org.membercovenantpath.viewer.vie
             // No "authorize daily sync" checkbox here (#8): signing in only views. If the stake isn't
             // synced yet, we offer to set it up in a dialog AFTER a successful sign-in.
             Button(onClick = vm::churchSignIn, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) { spinnerOr(s.busy, "Sign in") }
+            Spacer(Modifier.size(8.dp))
+            // Prefer not to type a password here? Sign in on the Church's own page in a WebView —
+            // the password is autofilled / typed on churchofjesuschrist.org, never in our app, with
+            // the full Church MFA. The captured session is what reaches the broker.
+            OutlinedButton(onClick = vm::presentChurchWeb, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) {
+                Text("Sign in on the Church website instead")
+            }
+            Text(
+                "Opens churchofjesuschrist.org — your password is entered there, never in this app.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            )
         }
     }
 }
