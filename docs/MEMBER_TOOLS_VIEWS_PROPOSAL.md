@@ -71,3 +71,20 @@ covenant-path-relevant. (We'd extend the adapter to keep `isKeeping`.)
   you'd prioritize? (Full list available: attendance %, recommend coverage, priesthood gaps, etc.)
 - For **Lessons** (#1): show ALL lessons, or just the most recent / in-progress one?
 - Any of the "NOT proposing" items you actually DO want (e.g. ministering)?
+
+---
+
+## DECISIONS (2026-06-11) — APPROVED, parked behind the architecture pivot
+User: "Love your proposals." Build **all of them together**, with:
+1. **Lessons taught** — show **ALL** lessons (not just in-progress). (Q1=all)
+2. **Recommend/priesthood KPI tiles** — yes, match the KPI-tile style. (Q2=yes)
+3. No scoped-out items wanted back — households/ministering/calendars stay out. (Q3=none)
+4. **PLUS a proper Missionaries TAB with unit filters** — show which missionaries are assigned to
+   each ward, filterable by unit. NOTE: missionaries are NOT removed today — they render as a
+   per-unit `MissionaryStrip` inside the Baptisms tab (from `stakes.missionaries`, migration 0026,
+   /mlt/orgs #29). Promote to a dedicated tab; Member Tools `missionariesAssigned` gives richer data.
+
+**Sequencing:** these read from each member`s `details` (presentation-only) so they survive the data
+source change — but per the recommendation they are **parked to build AFTER the local-first pivot**
+(see docs/LOCAL_FIRST_ARCHITECTURE_PROPOSAL.md) so they are built once against the final model, not
+twice. All ship to React web + native iOS + native Android together (three-surface rule).
