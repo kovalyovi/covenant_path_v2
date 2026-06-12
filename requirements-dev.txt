@@ -1,5 +1,5 @@
 # Test/dev-only dependencies (runtime deps live in requirements.txt — fastapi, uvicorn,
 # requests and cryptography already ship there and the test harness reuses them).
-pytest>=8.0
+pytest>=9.0.3
 pytest-timeout>=2.3
 tzdata  # zoneinfo database on Windows (tests/test_sync_gating.py uses America/New_York)
