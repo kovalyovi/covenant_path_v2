@@ -35,3 +35,16 @@ fun mfaPrompt(f: BrokerFactor): MfaPrompt {
         else -> MfaPrompt("A code was just sent via ${f.label}. Wait for the new one to arrive, then enter it here.")
     }
 }
+
+/**
+ * Passwordless (primary-factor) email codes are sent by Church USERNAME: Okta's enumeration
+ * prevention gives an unknown identifier a realistic phantom flow — select accepted, "code sent",
+ * nothing ever arrives, every code "invalid" (probe-proven 2026-06-12; it stranded Ken Packer and
+ * the operator). The org doesn't match the email address, so an email-shaped identifier gets this
+ * warning instead of a silent dead-end. Mirrors web `mfaCopy.ts` and Swift `MfaCopy.swift`.
+ */
+fun otpUsernameHint(identifier: String): String? {
+    if (!identifier.contains("@")) return null
+    return "That looks like an email address. Codes are sent by Church USERNAME — if it isn't also " +
+        "your username, no code will arrive. Use the username you sign in with at churchofjesuschrist.org."
+}

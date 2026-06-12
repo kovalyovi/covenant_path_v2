@@ -33,6 +33,7 @@ import org.membercovenantpath.viewer.data.BrokerException
 import org.membercovenantpath.viewer.data.BrokerFactor
 import org.membercovenantpath.viewer.data.BrokerResult
 import org.membercovenantpath.viewer.logic.mfaPrompt
+import org.membercovenantpath.viewer.logic.otpUsernameHint
 
 // N2: shown when the Church login succeeds but the calling has no covenant-path access.
 private const val NO_ACCESS_MSG =
@@ -178,7 +179,12 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
             Column {
                 when {
                     otpSent -> {
-                        Text("A code was just sent to your email. Enter it here.")
+                        Text("A code was sent to the email address on your Church Account. Enter it here.")
+                        otpUsernameHint(email.trim())?.let {
+                            Spacer(Modifier.size(4.dp))
+                            Text(it, style = MaterialTheme.typography.bodySmall,
+                                 color = MaterialTheme.colorScheme.primary)
+                        }
                         Spacer(Modifier.size(8.dp))
                         OutlinedTextField(
                             otpCode, { otpCode = it.filter(Char::isDigit).take(8) },
@@ -195,7 +201,7 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
                         TextButton(
                             onClick = { otpSent = false; otpCode = ""; resendIn = 0 },
                             enabled = !busy,
-                        ) { Text("Use a different email") }
+                        ) { Text("Use a different username") }
                     }
                     factorSent != null -> {
                         // Names the code's SOURCE (texted number vs authenticator app) — the
@@ -279,14 +285,29 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         } else {
+                            // The identifier Okta matches is the USERNAME, not the email address: an
+                            // unknown identifier gets Okta's enumeration-prevention phantom flow —
+                            // "code sent", nothing arrives, every code "invalid" (probe-proven
+                            // 2026-06-12; this field was labeled "Church email" and stranded users).
                             OutlinedTextField(
                                 email, { email = it },
-                                label = { Text("Church email") },
+                                label = { Text("Church username") },
                                 singleLine = true,
                                 enabled = !busy,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                                 modifier = Modifier.fillMaxWidth(),
                             )
+                            Spacer(Modifier.size(4.dp))
+                            Text(
+                                "We email a 6-digit code to the address on your Church Account. Enter " +
+                                    "your username (same as LCR) — usually not an email address.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            otpUsernameHint(email.trim())?.let {
+                                Spacer(Modifier.size(4.dp))
+                                Text(it, style = MaterialTheme.typography.bodySmall,
+                                     color = MaterialTheme.colorScheme.primary)
+                            }
                         }
                     }
                 }

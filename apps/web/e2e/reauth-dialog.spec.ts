@@ -65,29 +65,38 @@ test.describe('reauth dialog', () => {
     await expect(page.getByText('Daily sync authorized — your stake will refresh within minutes.')).not.toBeVisible();
   });
 
-  test('Email-code mode: the field has email semantics and Send code POSTs the typed email', async ({ page }) => {
-    // Regression (2026-06-11): the Church-email field lacked name/inputMode/email semantics, so phone
-    // password managers autofilled the LCR USERNAME and React's state stayed empty — "Send code" hit
-    // /auth/otp/start with a BLANK identifier and no code was ever sent.
+  test('Email-code mode asks for the USERNAME and warns on an email-shaped identifier (A28)', async ({ page }) => {
+    // Regression (2026-06-12, Ken Packer): the field was labeled "Church email", but the Church
+    // Okta org only matches the USERNAME — an unknown identifier gets Okta's enumeration-prevention
+    // phantom flow ("code sent", nothing ever arrives, every code "invalid"). The field now asks
+    // for the username, and an email-shaped identifier gets the warning before AND after the send.
     const { broker } = await openReauth(page, {
-      'POST /auth/otp/start': { json: { status: 'code_sent', sent_to: 'your email' } },
+      'POST /auth/otp/start': { json: { status: 'code_sent', sent_to: 'Email' } },
     });
     const dialog = reauthDialog(page);
     await dialog.getByRole('button', { name: 'Email code' }).click();
 
-    const emailField = dialog.getByLabel('Church email');
-    await expect(emailField).toHaveAttribute('type', 'email');
-    await expect(emailField).toHaveAttribute('name', 'email');     // distinct from the username field
-    await expect(emailField).toHaveAttribute('inputmode', 'email'); // so managers offer the EMAIL
+    const identField = dialog.getByLabel('Church username');
+    // The saved LCR username is exactly the right autofill for this field now.
+    await expect(identField).toHaveAttribute('autocomplete', 'username');
 
-    await emailField.fill('leader@example.com');
+    await identField.fill('leader@example.com');
+    await expect(dialog.getByText(/Codes are sent by Church USERNAME/)).toBeVisible();
     await dialog.getByRole('button', { name: 'Send code', exact: true }).click();
 
-    // Wait for the sent-state transition (proves otpStart resolved) BEFORE asserting the recorded call.
-    await expect(dialog.getByText(/A code was just sent/)).toBeVisible();
+    // Wait for the sent-state transition (proves otpStart resolved) BEFORE asserting the recorded
+    // call; the warning persists on the code screen, and the typed identifier is POSTed (NOT blank
+    // — the 2026-06-11 autofill/empty-state regression stays covered).
+    await expect(dialog.getByText(/A code was sent/)).toBeVisible();
+    await expect(dialog.getByText(/Codes are sent by Church USERNAME/)).toBeVisible();
     const starts = broker.callsTo('/auth/otp/start');
     expect(starts).toHaveLength(1);
-    expect(starts[0].body).toMatchObject({ email: 'leader@example.com', enroll: true }); // NOT blank
+    expect(starts[0].body).toMatchObject({ email: 'leader@example.com', enroll: true });
+
+    // A plain username raises no warning.
+    await dialog.getByRole('button', { name: 'Use a different username' }).click();
+    await identField.fill('leader.example');
+    await expect(dialog.getByText(/Codes are sent by Church USERNAME/)).not.toBeVisible();
   });
 
   test('the MFA path inside the dialog completes the enroll', async ({ page }) => {

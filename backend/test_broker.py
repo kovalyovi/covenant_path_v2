@@ -627,6 +627,128 @@ def test_verify_wrong_code_friendly_and_state_refresh() -> None:
     okta_flow._follow = saved
 
 
+def test_otp_email_identifier_guidance() -> None:
+    # 2026-06-12 (Ken Packer + operator): the Church Okta org matches the USERNAME only — an
+    # email-shaped identifier lands in Okta's enumeration-prevention PHANTOM flow (select
+    # accepted, "code sent", nothing ever arrives, every code "invalid"; wire-indistinguishable
+    # from a real flow, probe-proven). The broker can't detect it, so it must guide instead:
+    # the empty-identifier message asks for the USERNAME, and a rejected code on an unresolved
+    # email identifier appends the username hint. (Pre-fix: a bare "Invalid code" loop.)
+    from lcr_client.okta_login import LoginError
+    try:
+        okta_flow.otp_start("")
+        check("empty otp identifier raises", False)
+    except okta_flow.AuthError as e:
+        check("empty otp identifier raises", True)
+        check("empty-identifier message asks for the username", "Church username" in str(e))
+
+    lid = "test-otp-phantom"
+    ident = "leader@example.com"
+    _pending_at_challenge(lid, field="passcode", ftype="okta_email")
+    okta_flow._PENDING[lid]["username"] = ident  # unresolved: pending kept the typed email
+    okta_flow._OTP_BY_IDENTIFIER[ident] = lid
+
+    def fake_follow(_s, _rem, _body, **_k):
+        raise LoginError("IDX step answer failed: HTTP 401", payload={
+            "stateHandle": "sh-NEW",
+            "messages": {"value": [{"message": "Invalid code. Try again.", "class": "ERROR"}]},
+            "remediation": {"value": [_code_challenge_rem()]}})
+
+    saved = okta_flow._follow
+    okta_flow._follow = fake_follow
+    try:
+        okta_flow.otp_verify(ident, "123456")
+        check("phantom verify raises", False)
+    except okta_flow.AuthError as e:
+        check("phantom verify raises", True)
+        check("bad code keeps kind mfa_bad_code", getattr(e, "kind", "") == "mfa_bad_code")
+        check("unresolved email identifier appends the username guidance",
+              "USERNAME" in str(e) and "churchofjesuschrist.org" in str(e))
+    finally:
+        okta_flow._follow = saved
+
+    # The SAME failure on a RESOLVED email (pending carries the cached username) is just a typo —
+    # no username guidance.
+    okta_flow._PENDING[lid]["username"] = "leader.example"
+    okta_flow._OTP_BY_IDENTIFIER[ident] = lid
+    okta_flow._follow = fake_follow
+    try:
+        okta_flow.otp_verify(ident, "123456")
+        check("resolved-email verify raises", False)
+    except okta_flow.AuthError as e:
+        check("resolved-email verify raises", True)
+        check("resolved email identifier gets NO username guidance", "USERNAME" not in str(e))
+    finally:
+        okta_flow._follow = saved
+        okta_flow._PENDING.pop(lid, None)
+        okta_flow._OTP_BY_IDENTIFIER.pop(ident, None)
+
+    # Ken Packer's exact dead-end (2026-06-12): a failed verify left a challenge-less pending
+    # payload, and the retry surfaced MFA-menu copy ("Please choose a verification method
+    # first") in a lane that HAS no menu. The OTP lane must name the actual way out instead.
+    okta_flow._PENDING[lid] = {
+        "session": None, "verifier": "", "username": ident, "selected_type": "okta_email",
+        "payload": {"stateHandle": "sh", "remediation": {"value": []}}, "ts": time.time(),
+    }
+    okta_flow._OTP_BY_IDENTIFIER[ident] = lid
+    try:
+        okta_flow.otp_verify(ident, "123456")
+        check("challenge-less pending raises", False)
+    except okta_flow.AuthError as e:
+        check("challenge-less pending raises", True)
+        check("no-challenge keeps its kind", getattr(e, "kind", "") == "mfa_no_challenge")
+        check("no-challenge message says to send a new code", "Send a new code" in str(e))
+        check("no-challenge message drops the MFA-menu copy", "verification method" not in str(e))
+        check("no-challenge message carries the username guidance (unresolved email)",
+              "USERNAME" in str(e))
+    finally:
+        okta_flow._PENDING.pop(lid, None)
+        okta_flow._OTP_BY_IDENTIFIER.pop(ident, None)
+
+
+def test_otp_start_resolves_cached_email() -> None:
+    # An email the cache knows resolves to the Church username BEFORE Okta sees it (the phantom
+    # flow never starts), and the response carries no identifier_hint; an UNKNOWN email proceeds
+    # as typed and the response warns. Okta legs are stubbed — this tests the resolution wiring.
+    from backend.auth_broker import identity_cache as ic
+    calls: list[str] = []
+
+    def fake_drive(_s, identifier, _lid):
+        calls.append(identifier)
+        return ({"stateHandle": "sh",
+                 "authenticators": {"value": [{"id": "em1", "key": "okta_email"}]},
+                 "remediation": {"value": [{
+                     "name": "select-authenticator-authenticate", "href": "https://x/idx/select",
+                     "value": [{"name": "authenticator", "options": [{
+                         "label": "Email",
+                         "value": {"form": {"value": [{"name": "id", "value": "em1"},
+                                                      {"name": "methodType", "value": "email"}]}},
+                     }]}]}]}}, "ver")
+
+    saved_drive = okta_flow._drive_to_identify
+    saved_select = okta_flow.select_factor
+    saved_lookup = ic.username_for_email
+    okta_flow._drive_to_identify = fake_drive
+    okta_flow.select_factor = lambda _lid, _fid: {"status": "code_sent"}
+    ic.username_for_email = lambda e: "leader.example" if e == "known@example.com" else None
+    try:
+        res = okta_flow.otp_start("known@example.com")
+        check("known email identifies with the cached username", calls[-1] == "leader.example")
+        check("resolved email gets no identifier_hint", "identifier_hint" not in res)
+        res = okta_flow.otp_start("unknown@example.com")
+        check("unknown email identifies as typed", calls[-1] == "unknown@example.com")
+        check("unknown email response carries the username hint",
+              "USERNAME" in res.get("identifier_hint", ""))
+    finally:
+        okta_flow._drive_to_identify = saved_drive
+        okta_flow.select_factor = saved_select
+        ic.username_for_email = saved_lookup
+        for k in ("known@example.com", "unknown@example.com"):
+            stale = okta_flow._OTP_BY_IDENTIFIER.pop(k, None)
+            if stale:
+                okta_flow._PENDING.pop(stale, None)
+
+
 def test_verify_no_message_still_friendly() -> None:
     # A 4xx with NO message anywhere must still produce a friendly retry message — the raw-JSON
     # wall is what made a recoverable wrong code look fatal.
@@ -1677,6 +1799,8 @@ def main() -> int:
     test_verify_answers_with_declared_field()
     test_verify_normalizes_code()
     test_verify_wrong_code_friendly_and_state_refresh()
+    test_otp_email_identifier_guidance()
+    test_otp_start_resolves_cached_email()
     test_verify_no_message_still_friendly()
     test_mfa_bad_code_factor_guidance()
     test_mfa_expired_messages_friendly()

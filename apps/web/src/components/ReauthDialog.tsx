@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { broker, BrokerError, mfaRequired, type BrokerFactor, type BrokerResult } from '../lib/broker';
-import { mfaPrompt } from '../lib/mfaCopy';
+import { mfaPrompt, otpUsernameHint } from '../lib/mfaCopy';
 import { kNoAccessMessage } from '../lib/disclaimer';
 import { useDashboard } from '../hooks/useDashboard';
 import { useToast } from './Toast';
@@ -192,7 +192,10 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
     >
       {otpSent ? (
         <>
-          <p>A code was just sent to your email. Enter it here.</p>
+          <p>A code was sent to the email address on your Church Account. Enter it here.</p>
+          {otpUsernameHint(email) && (
+            <p className="tiny" style={{ color: 'var(--primary)' }}>{otpUsernameHint(email)}</p>
+          )}
           <label className="field">
             <span>Verification code</span>
             <input
@@ -215,7 +218,7 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
             disabled={busy}
             type="button"
           >
-            Use a different email
+            Use a different username
           </Button>
         </>
       ) : factorSent ? (
@@ -305,18 +308,16 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
           ) : (
             <>
               <label className="field">
-                <span>Church email</span>
-                {/* Distinct name + email semantics so the password manager offers the EMAIL address —
-                    not the saved LCR username from the Church-username form (feedback #3, mirrors
-                    LoginPage). Without these the field autofilled the username and React's state
-                    stayed empty, so "Send code" hit /auth/otp/start with a BLANK identifier
-                    (audit: otp_start_failed "Enter your Church Account email…") — no code ever sent. */}
+                <span>Church username</span>
+                {/* The identifier Okta matches is the USERNAME, not the email address: an unknown
+                    identifier gets Okta's enumeration-prevention phantom flow — "code sent", nothing
+                    arrives, every code "invalid" (probe-proven 2026-06-12; this field was labeled
+                    "Church email" and stranded Ken Packer + the operator). Username autofill is
+                    therefore CORRECT here — the saved LCR username is exactly what belongs in it. */}
                 <input
                   className="input"
-                  type="email"
-                  name="email"
-                  inputMode="email"
-                  autoComplete="email"
+                  name="church-username"
+                  autoComplete="username"
                   autoCapitalize="none"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
@@ -325,6 +326,15 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
                   }}
                 />
               </label>
+              <p className="tiny">
+                We email a 6-digit code to the address on your Church Account. Enter your
+                username (same as LCR) — usually not an email address.
+              </p>
+              {otpUsernameHint(email) && (
+                <p className="tiny" style={{ color: 'var(--primary)' }} role="note">
+                  {otpUsernameHint(email)}
+                </p>
+              )}
             </>
           )}
         </>

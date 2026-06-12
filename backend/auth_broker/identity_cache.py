@@ -55,6 +55,31 @@ def get(username: str) -> dict | None:
         return None
 
 
+def username_for_email(email: str) -> str | None:
+    """Map an email to the Church USERNAME a prior verified login taught us (newest row wins).
+    Lets the passwordless lane accept the EMAIL a member naturally types: the Church Okta org
+    only matches usernames — an email identifier lands in the enumeration-prevention phantom
+    flow ("code sent", nothing arrives; the 2026-06-12 incident). The mapping comes from OUR
+    OWN prior Okta-verified logins, and the code still goes only to the account's enrolled
+    email, so this resolves convenience, not trust. Best-effort: None on any failure."""
+    e = (email or "").strip().lower()
+    if not (SUPABASE_URL and SERVICE_KEY and e):
+        return None
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/church_identities", headers=_headers(),
+                         params={"email": f"eq.{e}", "select": "username,updated_at",
+                                 "order": "updated_at.desc", "limit": "2"}, timeout=6)
+        rows = r.json() if r.status_code == 200 else []
+        for row in rows:
+            u = (row.get("username") or "").strip().lower()
+            if u and u != e:  # an email-shaped username IS the email — nothing to resolve
+                return u
+        return None
+    except Exception as exc:  # noqa: BLE001 — lookup miss must never break the OTP start
+        logger.info("identity cache email lookup skipped: %s", exc)
+        return None
+
+
 def put(username: str, identity: dict, *, unit_number: int | None = None,
         stake_name: str | None = None, has_calling: bool | None = None) -> None:
     """Upsert the verified identity under the TYPED username and under the canonical LCR username

@@ -792,6 +792,17 @@ _OTP_UNAVAILABLE_MSG = (
     "Use the Church username option instead; if your account has MFA, an emailed code can still "
     "be your second step.")
 
+# Okta's account-enumeration prevention makes an UNKNOWN identifier wire-indistinguishable from a
+# real one (probe-proven 2026-06-12: a bogus identifier gets the same Email+Password menu, the
+# email-factor select is accepted, a passcode challenge comes back — and no email is ever sent;
+# every code answers "Invalid code"). The Church org matches the USERNAME, not the email address
+# (the same account: username → code in 1s, its gmail → phantom). We can't detect the phantom
+# server-side, so an email-shaped identifier gets honest guidance instead of a silent dead-end.
+_OTP_USERNAME_HINT = (
+    "Heads up: codes are sent by Church USERNAME. If no code arrives within a couple of minutes, "
+    "what you entered is probably not your username — start over and enter the username you use "
+    "at churchofjesuschrist.org (usually not an email address).")
+
 
 def otp_start(identifier: str) -> dict:
     """Begin a PASSWORDLESS login: identify -> find okta_email on the PRIMARY factor menu ->
@@ -804,11 +815,22 @@ def otp_start(identifier: str) -> dict:
         _OTP_BY_IDENTIFIER.pop(k, None)
     ident = (identifier or "").strip().lower()
     if not ident:
-        raise AuthError("Enter your Church Account email or username first.", kind="otp_bad_request")
+        raise AuthError("Enter your Church username first.", kind="otp_bad_request")
     login_id = _new_login_id()
+    # Okta matches the USERNAME only — an email identifier gets the enumeration-prevention
+    # phantom flow (code never arrives). Any prior verified login taught us this member's
+    # email -> username, so resolve it and identify with the username; an unknown email
+    # proceeds as typed (it might BE a username) with the honest hint in the response.
+    okta_ident, resolved = ident, False
+    if "@" in ident:
+        known = identity_cache.username_for_email(ident)
+        if known:
+            okta_ident, resolved = known, True
+            logger.info("[auth %s] otp identifier: email resolved to a cached Church username",
+                        login_id)
     session = new_session()
     try:
-        payload, verifier = _drive_to_identify(session, ident, login_id)
+        payload, verifier = _drive_to_identify(session, okta_ident, login_id)
     except AuthError:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -824,14 +846,18 @@ def otp_start(identifier: str) -> dict:
         offered = sorted({f.get("type") or f.get("method") or "?" for f in factors})
         raise AuthError(_OTP_UNAVAILABLE_MSG, kind="otp_unavailable",
                         root_cause=f"primary factors offered: {','.join(offered) or 'password-only'}",
-                        username=ident, factor_type="okta_email")
-    _store_pending(login_id, session, payload, verifier, factors, ident)
+                        username=okta_ident, factor_type="okta_email")
+    _store_pending(login_id, session, payload, verifier, factors, okta_ident)
     select_factor(login_id, email_factor["id"])  # raises friendly if Okta rejects the send
+    # The map stays keyed by what the member TYPED — otp_verify receives the same identifier.
     old = _OTP_BY_IDENTIFIER.get(ident)
     if old and old != login_id:
         _PENDING.pop(old, None)  # a resend replaces the older challenge — the freshest code wins
     _OTP_BY_IDENTIFIER[ident] = login_id
-    return {"status": "code_sent", "sent_to": email_factor.get("label") or "your email"}
+    res = {"status": "code_sent", "sent_to": email_factor.get("label") or "your email"}
+    if "@" in ident and not resolved:
+        res["identifier_hint"] = _OTP_USERNAME_HINT
+    return res
 
 
 def _drive_to_identify(session: requests.Session, identifier: str, login_id: str) -> tuple[dict, str]:
@@ -862,8 +888,37 @@ def otp_verify(identifier: str, code: str, *, want_refresh_token: bool = True,
     if not login_id or login_id not in _PENDING:
         _OTP_BY_IDENTIFIER.pop(ident, None)
         raise AuthError(_EXPIRED_MSG, kind="mfa_expired", username=ident)
-    res = verify_mfa(login_id, code, want_refresh_token=want_refresh_token,
-                     allow_cached_identity=allow_cached_identity)
+    # When the typed email RESOLVED to a cached username at start, the pending carries that
+    # username — codes really were sent, so a rejected code there is a typo, not the phantom.
+    unresolved_email = "@" in ident and (_PENDING[login_id].get("username") or ident) == ident
+    try:
+        res = verify_mfa(login_id, code, want_refresh_token=want_refresh_token,
+                         allow_cached_identity=allow_cached_identity)
+    except IdentityError:
+        raise
+    except AuthError as exc:
+        kind = getattr(exc, "kind", "")
+        # "Please choose a verification method first" is MFA-menu copy — the OTP lane HAS no
+        # menu (the Email factor is auto-selected). It surfaces here when a failed verify left
+        # a challenge-less pending payload (Ken Packer hit it retrying codes the phantom flow
+        # had rejected, 2026-06-12). Name the actual way out: a fresh code.
+        if kind == "mfa_no_challenge":
+            msg = ("This code request is no longer active — tap 'Send a new code' and enter "
+                   "the newest code.")
+            if unresolved_email:
+                msg += " " + _OTP_USERNAME_HINT
+            raise AuthError(msg, kind=kind, root_cause=exc.root_cause,
+                            username=exc.username or ident,
+                            factor_type=exc.factor_type) from exc
+        # A rejected code on an UNRESOLVED email-shaped identifier is exactly what Okta's
+        # enumeration-prevention phantom flow produces (no email was ever sent; every code is
+        # "invalid"). Append the username guidance so the member isn't stuck retyping codes
+        # that can't work.
+        if unresolved_email and kind == "mfa_bad_code":
+            raise AuthError(f"{exc} {_OTP_USERNAME_HINT}", kind=exc.kind,
+                            root_cause=exc.root_cause, username=exc.username or ident,
+                            factor_type=exc.factor_type) from exc
+        raise
     _OTP_BY_IDENTIFIER.pop(ident, None)
     return res
 

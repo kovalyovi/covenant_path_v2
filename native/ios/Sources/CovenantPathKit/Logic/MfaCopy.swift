@@ -41,3 +41,14 @@ public func mfaPrompt(for factor: BrokerFactor) -> MfaPrompt {
         prompt: "A code was just sent via \(factor.label). Wait for the new one to arrive, then enter it here.",
         warning: nil, noCodeHint: nil)
 }
+
+/// Passwordless (primary-factor) email codes are sent by Church USERNAME: Okta's enumeration
+/// prevention gives an unknown identifier a realistic phantom flow — select accepted, "code sent",
+/// nothing ever arrives, every code "invalid" (probe-proven 2026-06-12; it stranded Ken Packer and
+/// the operator). The org doesn't match the email address, so an email-shaped identifier gets this
+/// warning instead of a silent dead-end. Mirrors web `mfaCopy.ts` and Kotlin `MfaCopy.kt`.
+public func otpUsernameHint(for identifier: String) -> String? {
+    guard identifier.contains("@") else { return nil }
+    return "That looks like an email address. Codes are sent by Church USERNAME — if it isn't also "
+        + "your username, no code will arrive. Use the username you sign in with at churchofjesuschrist.org."
+}

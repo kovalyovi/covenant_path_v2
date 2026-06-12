@@ -533,7 +533,18 @@ def auth_otp_start(req: OtpStartReq,
     logger.info("[req %s] /auth/otp/start", rid)  # the identifier is PII — never logged
     ratelimit.hit_identifier("otp", req.email)
     try:
-        return okta_flow.otp_start(req.email)
+        res = okta_flow.otp_start(req.email)
+        # Audit the SEND too, not just failures: "the code never arrives" (2026-06-12, Ken Packer +
+        # operator) was invisible in login_audit — every start looked like it never happened. The
+        # identifier lands in the email column (it's what the member typed; admin-only RLS), so a
+        # phantom send to an email-shaped identifier is diagnosable from the audit alone.
+        _audit_okta_event(req.email, "otp_code_sent",
+                          "identifier looks like an email — possible enumeration-prevention "
+                          "phantom (no email is sent for a non-username identifier)"
+                          if "@" in (req.email or "") else "", rid,
+                          duration_ms=int((time.monotonic() - t0) * 1000),
+                          phase="okta:otp_code_sent")
+        return res
     except okta_flow.AuthError as e:
         _audit_okta_event(getattr(e, "username", "") or req.email, "otp_start_failed",
                           getattr(e, "root_cause", "") or str(e), rid,

@@ -66,8 +66,11 @@ struct ReauthSheet: View {
     @ViewBuilder
     private var stepContent: some View {
         if otpSent {
-            Text("A code was just sent to your email. Enter it here.")
+            Text("A code was sent to the email address on your Church Account. Enter it here.")
                 .font(.callout)
+            if let hint = otpUsernameHint(for: email.trimmed) {
+                Text(hint).font(.caption).foregroundStyle(.tint)
+            }
             TextField("Verification code", text: $otpCode)
                 .textContentType(.oneTimeCode).keyboardType(.numberPad)
                 .textFieldStyle(.roundedBorder)
@@ -80,7 +83,7 @@ struct ReauthSheet: View {
                 run { try await startOtp() }
             }
             .disabled(busy || resendIn > 0)
-            Button("Use a different email") {
+            Button("Use a different username") {
                 otpSent = false
                 otpCode = ""
                 resendIn = 0
@@ -143,13 +146,22 @@ struct ReauthSheet: View {
                     .textFieldStyle(.roundedBorder)
                 primaryButton("Authorize", disabled: username.trimmed.isEmpty || password.isEmpty) { try await signIn() }
             } else if case .otp = mode {
-                TextField("Church email", text: $email)
-                    .textContentType(.emailAddress)
+                // The identifier Okta matches is the USERNAME, not the email address: an unknown
+                // identifier gets Okta's enumeration-prevention phantom flow — "code sent", nothing
+                // arrives, every code "invalid" (probe-proven 2026-06-12; this field was labeled
+                // "Church email" and stranded Ken Packer + the operator).
+                TextField("Church username", text: $email)
+                    .textContentType(.username)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                    .keyboardType(.emailAddress)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { if !busy, !email.trimmed.isEmpty { run { try await startOtp() } } }
+                Text("We email a 6-digit code to the address on your Church Account. Enter your "
+                     + "username (same as LCR) — usually not an email address.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if let hint = otpUsernameHint(for: email.trimmed) {
+                    Text(hint).font(.caption).foregroundStyle(.tint)
+                }
                 primaryButton("Send code", disabled: email.trimmed.isEmpty) { try await startOtp() }
             }
         }
