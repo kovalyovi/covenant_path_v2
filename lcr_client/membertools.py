@@ -25,9 +25,32 @@ import base64
 import hashlib
 import json
 import secrets
+import time
 from urllib.parse import urlparse, parse_qs
 
 import requests
+
+_TRANSIENT_STATUS = frozenset({500, 502, 503, 504, 408, 429})
+
+
+def _retry_post(url: str, *, retryable_on_5xx: bool = True, attempts: int = 4,
+                base_delay: float = 2.0, max_delay: float = 20.0, **kwargs) -> requests.Response:
+    """POST with retry on TRANSIENT failures only (5xx/429/timeout/conn-reset) — Member Tools and Okta
+    can transiently 503 (observed). Returns the response (caller inspects status for 4xx semantics);
+    raises MemberToolsError after exhausting retries on a transient failure."""
+    last: Exception | None = None
+    for i in range(attempts):
+        try:
+            r = requests.post(url, **kwargs)
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            last = exc
+        else:
+            if not (retryable_on_5xx and r.status_code in _TRANSIENT_STATUS):
+                return r
+            last = MemberToolsError(f"{url.rsplit('/', 1)[-1]} {r.status_code} (transient)")
+        if i < attempts - 1:
+            time.sleep(min(base_delay * (2 ** i), max_delay))
+    raise MemberToolsError(f"POST {url} failed after {attempts} attempts: {last}")
 
 from lcr_client.logging_setup import get_logger
 
@@ -71,11 +94,11 @@ def _pkce() -> tuple[str, str]:
 
 
 def _token_request(form: dict) -> dict:
-    """POST the Okta /token endpoint. Raises RefreshTokenExpired on invalid_grant, MemberToolsError
-    otherwise; returns the token JSON on success."""
-    r = requests.post(f"{OKTA}/token", data=form, timeout=60,
-                      headers={"User-Agent": USER_AGENT, "Accept": "application/json",
-                               "Content-Type": "application/x-www-form-urlencoded"})
+    """POST the Okta /token endpoint (retried on transient 5xx). Raises RefreshTokenExpired on
+    invalid_grant, MemberToolsError otherwise; returns the token JSON on success."""
+    r = _retry_post(f"{OKTA}/token", data=form, timeout=60,
+                    headers={"User-Agent": USER_AGENT, "Accept": "application/json",
+                             "Content-Type": "application/x-www-form-urlencoded"})
     if r.status_code >= 400:
         try:
             err = r.json()
@@ -134,11 +157,12 @@ def refresh(refresh_token: str) -> dict:
 # --- bulk fetch ----------------------------------------------------------------------------------
 
 def fetch_sync(access_token: str, *, timeout: float = 180.0) -> dict:
-    """The whole-stake bulk pull. Returns the parsed JSON (~7MB) with covenantPath* + everything."""
-    r = requests.post(SYNC_URL, data=json.dumps(SYNC_BODY), timeout=timeout,
-                      headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json",
-                               "Content-Type": "application/json", "Accept-Language": "en-US,en;q=0.9",
-                               "User-Agent": USER_AGENT})
+    """The whole-stake bulk pull (retried on transient 5xx — Member Tools can briefly 503). Returns the
+    parsed JSON (~7MB) with covenantPath* + everything."""
+    r = _retry_post(SYNC_URL, data=json.dumps(SYNC_BODY), timeout=timeout,
+                    headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json",
+                             "Content-Type": "application/json", "Accept-Language": "en-US,en;q=0.9",
+                             "User-Agent": USER_AGENT})
     if r.status_code == 401:
         raise MemberToolsError("/api/v5/sync 401 — access token expired/invalid")
     r.raise_for_status()

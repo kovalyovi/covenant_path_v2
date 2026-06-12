@@ -39,6 +39,21 @@ logger = get_logger()
 TEST_SPREADSHEET_ID = "1JD9EC_SafClaY8cOcRzi5ZI4fUnjOxa-xXJA0lxgJaA"
 
 
+def _stake_unit_for_token(client) -> int | None:
+    """The stake's unit number, used to key its stored Member Tools token. Reads user-context with a
+    short retry (that endpoint is occasionally flaky). None if unreadable → we then mint a fresh token
+    rather than look one up."""
+    import time as _t
+    for i in range(3):
+        try:
+            return client.user_context().unit_number
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("user-context for token key failed (try %d): %s", i + 1, exc)
+            if i < 2:
+                _t.sleep(2 * (i + 1))
+    return None
+
+
 def _sync_one(args) -> dict:
     """Report + export + optional Sheets/Supabase for the CURRENT session/stake."""
     from lcr_client import LcrClient, metrics
@@ -69,43 +84,42 @@ def _sync_one(args) -> dict:
             logger.warning("could not mark sync running: %s", exc)
     access = covenant_path_access(client)
     cache = ProfileCache(max_age_days=args.cache_max_age_days, enabled=not args.no_cache)
-    # PRIMARY: the RELIABLE Member Tools bulk API (one /api/v5/sync replaces the fragile one-work
-    # fan-out). Token: a stored 45-day refresh token, else a silent mint off the live Okta session (CI
-    # logs in fresh, so the session is live). Any failure → FALL BACK to the old one-work path, so we
-    # never regress. A full-unit refetch (only_unit) still uses the per-unit path. (docs/SYNC_PACING_PLAN)
-    rows = None
-    cp_source = None
-    if not getattr(args, "unit", None) and not getattr(args, "no_membertools", False):
-        try:
-            from lcr_client import membertools, token_store
-            from covenant_path.report import build_membertools_report
-            ctx_mt = client.user_context()
-            stored = token_store.get_membertools_token(ctx_mt.unit_number) or {}
-            access_token = None
-            if stored.get("refresh_token"):
-                try:
-                    access_token = membertools.refresh(stored["refresh_token"]).get("access_token")
-                except membertools.RefreshTokenExpired:
-                    token_store.clear_membertools_token(ctx_mt.unit_number)  # 45-day wall → re-mint
-            if not access_token:
-                tok = membertools.mint_from_okta_session(client.session.session)
-                access_token = tok.get("access_token")
-                if tok.get("refresh_token"):
-                    token_store.save_membertools_token(ctx_mt.unit_number, tok["refresh_token"])
-            rows, mt_stats = build_membertools_report(
-                client, access_token=access_token, with_profile=args.with_profile,
-                access=access, cache=cache, verbose=args.verbose)
-            access.setdefault("_run_stats", {}).update(mt_stats)
-            cp_source = "membertools"
-            logger.info("covenant-path via Member Tools (/api/v5/sync): %d members", len(rows))
-        except Exception as exc:  # noqa: BLE001 — never let the new path break the sync
-            logger.warning("Member Tools path unavailable — falling back to one-work: %s", exc)
-            rows = None
-    if rows is None:
+    # The covenant-path data now comes ONLY from the RELIABLE Member Tools bulk API (one /api/v5/sync
+    # replaces the fragile /api/report/one-work/* fan-out). The legacy one-work path is DEPRECATED — it
+    # is never run automatically; it remains reachable ONLY via --unit (ops single-ward refetch) or
+    # --no-membertools (debug escape hatch). On a Member Tools outage the run is SKIPPED (the
+    # non-destructive upsert preserves last-good data; it retries next run) rather than falling back to
+    # the fragile cluster. Token: a stored 45-day refresh token, else a silent mint off the live Okta
+    # session (a fresh login — CI / re-auth). (docs/SYNC_PACING_PLAN + project_membertools_bulk_api)
+    if getattr(args, "unit", None) or getattr(args, "no_membertools", False):
         rows = build_stake_report(client, with_profile=args.with_profile, access=access,
                                   cache=cache, verbose=args.verbose,
                                   only_unit=getattr(args, "unit", None), unit_order=unit_order)
-        cp_source = cp_source or "one-work"
+        cp_source = "one-work-legacy"
+    else:
+        from lcr_client import membertools, token_store
+        from covenant_path.report import build_membertools_report
+        stake_unit = _stake_unit_for_token(client)
+        stored = (token_store.get_membertools_token(stake_unit) if stake_unit else None) or {}
+        access_token = None
+        if stored.get("refresh_token"):
+            try:
+                access_token = membertools.refresh(stored["refresh_token"]).get("access_token")
+            except membertools.RefreshTokenExpired:
+                token_store.clear_membertools_token(stake_unit)  # 45-day wall → re-mint below
+        if not access_token:
+            # No usable stored token → mint off the live Okta session (only works on a FRESH login).
+            # A delegated stake whose stored session can't mint here needs a re-authorization.
+            tok = membertools.mint_from_okta_session(client.session.session)
+            access_token = tok.get("access_token")
+            if stake_unit and tok.get("refresh_token"):
+                token_store.save_membertools_token(stake_unit, tok["refresh_token"])
+        rows, mt_stats = build_membertools_report(
+            client, access_token=access_token, with_profile=args.with_profile,
+            access=access, cache=cache, verbose=args.verbose)
+        access.setdefault("_run_stats", {}).update(mt_stats)
+        cp_source = "membertools"
+        logger.info("covenant-path via Member Tools (/api/v5/sync): %d members", len(rows))
     access.setdefault("_run_stats", {})["covenant_path_source"] = cp_source
     dicts = [asdict(r) for r in rows]
     export(rows, access=access, with_profile=args.with_profile)

@@ -263,6 +263,8 @@ def test_membertools_auth():
             return FakeResp(302, headers={"Location": self._loc})
 
     saved_post = mt.requests.post
+    saved_sleep = mt.time.sleep
+    mt.time.sleep = lambda *a, **k: None  # don't actually back off in the test
     try:
         posts = []
         def fake_post(url, **k):
@@ -299,8 +301,17 @@ def test_membertools_auth():
 
         mt.requests.post = lambda url, **k: FakeResp(200, j={"covenantPathMembers": [{"id": "1"}]})
         assert "covenantPathMembers" in mt.fetch_sync("AT")
+
+        # RETRY: a transient 503 then a 200 → fetch_sync recovers (Member Tools can briefly 503)
+        nfetch = [0]
+        def flaky(url, **k):
+            nfetch[0] += 1
+            return FakeResp(503, j={}) if nfetch[0] == 1 else FakeResp(200, j={"covenantPathMembers": []})
+        mt.requests.post = flaky
+        assert "covenantPathMembers" in mt.fetch_sync("AT") and nfetch[0] == 2, nfetch[0]
     finally:
         mt.requests.post = saved_post
+        mt.time.sleep = saved_sleep
     return "membertools mint/refresh/fetch + login_required + invalid_grant ok"
 
 
