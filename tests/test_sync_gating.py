@@ -291,3 +291,42 @@ def test_sync_stake_falls_back_to_payload_context_when_lcr_dead(monkeypatch):
                                  "the Member Tools ctx_override") from e
         raise
     assert captured.get("stake") == (999001, "Test Stake")  # identity came from the override
+
+
+# --- E8: needs-reauth classification (2026-06-12 "Ken" fix) --------------------------------------
+# A stake that can't sync headlessly because it has NO Member Tools 45-day token AND its LCR session
+# either is dead OR is an OTP/passwordless (IDX) session that can't silently mint one (login_required)
+# is in the EXPECTED "leader must re-authorize with a password" state — NOT an infra failure. It must
+# NOT red-fail the daily workflow (which would go red every scheduled hour until the leader acts); it
+# is flagged for the ops table + the app banner + a once-per-streak email. Real infra failures (an
+# LCR/Member Tools outage, a code bug) are NOT re-auth cases and still red-fail.
+
+
+@pytest.mark.parametrize("msg", [
+    "silent authorize did not return a code (HTTP 302, error=login_required) — Okta session not live",
+    "SSO did not complete — landed back on Okta",
+    "no active credential for this stake",
+    "Unexpected IDX state; remediations=['select-authenticator-authenticate']",
+    "needs re-authorization",
+])
+def test_is_needs_reauth_true_for_reauth_signals(msg):
+    assert ds._is_needs_reauth(RuntimeError(msg)) is True
+
+
+@pytest.mark.parametrize("msg", [
+    "/api/v5/sync 503 Service Unavailable",
+    "LCR returned 500 on one-work",
+    "connection reset by peer",
+    "KeyError: 'covenantPathMembers'",
+])
+def test_is_needs_reauth_false_for_real_failures(msg):
+    # An infrastructure outage or a bug is NOT a re-auth case — it must still red-fail the workflow.
+    assert ds._is_needs_reauth(RuntimeError(msg)) is False
+
+
+def test_flag_needs_reauth_does_not_raise_without_db(monkeypatch):
+    # The flag is fully guarded: a DB hiccup must never turn a graceful "needs re-auth" into a crash
+    # (the caller returns exit 0 on it). With no DB it logs and returns — never raises.
+    import backend.db as dbmod
+    monkeypatch.setattr(dbmod, "connect", lambda: (_ for _ in ()).throw(RuntimeError("no DB")))
+    ds._flag_needs_reauth(999001, "login_required — Okta session not live")  # must not raise

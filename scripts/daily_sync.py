@@ -508,10 +508,16 @@ def _mint_and_sync(args, st: dict) -> None:
         try:
             okta_login.establish_lcr_session(session)
             okta_login.verify_session(session)
-        except Exception:  # noqa: BLE001
+        except Exception as renew_exc:  # noqa: BLE001
             if not okta_login.try_refresh_session(session, cred.get("refresh_token")):
                 if not _membertools_token(st.get("unit_number")).get("refresh_token"):
-                    raise
+                    # Dead LCR session AND no Member Tools token → nothing can sync headlessly. Raise a
+                    # CLEARLY-classifiable error so run_one_stake treats it as the expected "leader must
+                    # re-authorize" state (non-failing, flagged for the ops table) rather than a red
+                    # infra failure. Re-auth must be with a PASSWORD (the OTP/IDX lane can't mint).
+                    raise RuntimeError(
+                        "LCR session expired and no Member Tools sync token — needs re-authorization "
+                        "(sign in with a Church password to mint a fresh 45-day token)") from renew_exc
                 logger.warning("stake %s: LCR session expired and can't renew headlessly — syncing "
                                "the covenant-path core via the Member Tools 45-day token (LCR-only "
                                "extras best-effort; a re-auth refreshes them)", st.get("unit_number"))
@@ -682,6 +688,17 @@ def run_one_stake(args, unit: int) -> int:
             return 0
         except Exception as exc:  # noqa: BLE001
             logger.error("stake %s delegated sync failed: %s", unit, exc)
+            # A stake whose LCR session is dead AND has no Member Tools token genuinely needs the LEADER
+            # to re-authorize — that's an EXPECTED, leader-actionable state, not an infrastructure
+            # failure. Don't red-fail the workflow on it (or the daily run goes red every hour until the
+            # leader acts); flag it stale so it surfaces in the ops table + the app banner + a
+            # once-per-streak email, and exit cleanly. Real failures (LCR/Member Tools outage, a bug)
+            # still fall through to the alert + non-zero exit below.
+            if _is_needs_reauth(exc):
+                _flag_needs_reauth(unit, str(exc))
+                print(f"[i] stake {unit} needs re-authorization (session expired, no sync token) — "
+                      f"flagged for the leader, not failed")
+                return 0
             # Self-heal: if the operator account (LCR_LOGIN) is available and this is THEIR stake, a
             # stale delegated credential shouldn't strand the stake — log in fresh and sync. We only
             # claim recovery if the self pass actually synced the requested unit (so a non-operator
@@ -784,6 +801,68 @@ def _maybe_age_alert(st: dict) -> None:
                     name, days)
     except Exception as exc:  # noqa: BLE001
         logger.debug("age alert skipped: %s", exc)
+
+
+_NEEDS_REAUTH_SIGNALS = (
+    "login_required",            # silent Member Tools authorize had no live Okta session
+    "okta session not live",
+    "landed back on okta",       # SSO bounced to the Okta login page (session dead)
+    "no active credential",      # the stored credential was revoked / cleared
+    "select-authenticator",      # a headless renew hit an MFA challenge (can't continue unattended)
+    "needs re-authorization",
+)
+
+
+def _is_needs_reauth(exc) -> bool:
+    """True when a stake's sync failure is the EXPECTED 'a leader must re-authorize' state — the LCR
+    session is dead AND there's no Member Tools token, so nothing can be synced headlessly. These are
+    NOT infrastructure failures: they don't red-fail the daily workflow, they flag the stake for the
+    leader (ops table + app banner + a once-per-streak email). Anything else (an LCR/Member Tools
+    outage, a code bug) IS a real failure and still red-fails."""
+    msg = str(exc).lower()
+    return any(s in msg for s in _NEEDS_REAUTH_SIGNALS)
+
+
+def _flag_needs_reauth(unit, reason: str) -> None:
+    """A stake whose Church session expired with no sync token: flag it stale so the ops enrolled-stakes
+    table + the app re-auth banner show it, and email the LEADER (provider) ONCE per streak with the
+    re-authorize path — but do NOT red-alert the operator or fail the workflow. It's waiting on the
+    leader, not broken. Fully guarded — flagging must never change the run's exit status."""
+    if not unit:
+        return
+    try:
+        from backend import credentials, db, observability as obs
+        stake_name = str(unit)
+        notify = False
+        provider = None
+        msg = (reason[:300] + " — a leader must re-authorize with their Church PASSWORD (Sync settings → "
+               "Re-authorize) to mint a fresh 45-day sync token.")
+        conn = db.connect()
+        try:
+            with conn.cursor() as cur:
+                # A distinct sync_state (not 'error') so the ops table reads it as "waiting on the leader"
+                # rather than a broken sync. The app only special-cases 'running', so this is inert there.
+                cur.execute("update stakes set sync_state='needs_reauth' where unit_number=%s "
+                            "returning id, name", (unit,))
+                row = cur.fetchone()
+            conn.commit()
+            if row:
+                stake_id, stake_name = row[0], (row[1] or stake_name)
+                db.insert_diagnostics(conn, stake_id, "needs_reauth", {"unit": unit, "reason": reason[:400]})
+                credentials.mark_failed(conn, stake_id, msg)                  # stale → app banner + ops table
+                notify = credentials.claim_stale_notification(conn, stake_id)  # no-spam: once per streak
+                provider = credentials.provider_email(conn, stake_id)
+        finally:
+            conn.close()
+        obs.event("sync.stake.needs_reauth", level="warning", stake=int(unit),
+                  status="needs_reauth", message=reason[:200])
+        obs.flush()
+        logger.warning("stake %s (%s) needs re-authorization — flagged for the leader (not failed)",
+                       unit, stake_name)
+        if notify and provider:  # success->failure edge only
+            _email_provider_failure(provider, stake_name, unit, msg)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("needs-reauth flag skipped (non-fatal): %s", exc)
 
 
 def _alert_sync_failure(unit, reason: str) -> None:
