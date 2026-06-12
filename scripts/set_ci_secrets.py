@@ -11,13 +11,28 @@ Requires: gh authenticated (gh auth status). Re-runnable (idempotent).
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
-REPO = "kovalyovi/covenant_path_v2"
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TEST_SPREADSHEET_ID = "1JD9EC_SafClaY8cOcRzi5ZI4fUnjOxa-xXJA0lxgJaA"
+
+
+def _repo_from_git_remote() -> str | None:
+    """owner/repo from the origin remote, so a fork/rename needs no code edit."""
+    try:
+        url = subprocess.run(["git", "-C", str(REPO_ROOT), "remote", "get-url", "origin"],
+                             capture_output=True, text=True, check=True).stdout.strip()
+    except Exception:  # noqa: BLE001 — best-effort; fall back to env/default
+        return None
+    m = re.search(r"github\.com[:/]+([^/]+/[^/]+?)(?:\.git)?$", url)
+    return m.group(1) if m else None
+
+
+REPO = os.environ.get("GITHUB_REPO") or _repo_from_git_remote() or "kovalyovi/covenant_path_v2"
+TEST_SPREADSHEET_ID = os.environ.get(
+    "TEST_SPREADSHEET_ID", "1JD9EC_SafClaY8cOcRzi5ZI4fUnjOxa-xXJA0lxgJaA")
 
 
 def _gh() -> str:
@@ -59,10 +74,8 @@ def main() -> int:
     _set(gh, "SPREADSHEET_ID", os.getenv("SPREADSHEET_ID", TEST_SPREADSHEET_ID))
 
     sa_path = os.getenv("SHEETS_SERVICE_ACCOUNT") or "sheets_sync/service_account.json"
-    for candidate in (sa_path, "D:/dev/member_covenant_path/service_account.json"):
-        if candidate and Path(candidate).exists():
-            _set(gh, "GOOGLE_SERVICE_ACCOUNT_JSON", Path(candidate).read_text(encoding="utf-8"))
-            break
+    if sa_path and Path(sa_path).exists():
+        _set(gh, "GOOGLE_SERVICE_ACCOUNT_JSON", Path(sa_path).read_text(encoding="utf-8"))
     else:
         print("  - skip GOOGLE_SERVICE_ACCOUNT_JSON (no service_account.json found)")
     return 0

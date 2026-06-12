@@ -21,3 +21,6 @@ venv/
 
 # Cloudflare Wrangler local cache (Pages deploys)
 .wrangler/
+
+# Local Claude Code worktrees / agent state — never commit (esp. on a public repo)
+.claude/
