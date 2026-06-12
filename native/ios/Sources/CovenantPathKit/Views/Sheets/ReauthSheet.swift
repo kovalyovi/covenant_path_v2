@@ -35,6 +35,9 @@ struct ReauthSheet: View {
     @State private var resendIn = 0
     @State private var resendTask: Task<Void, Never>?
     @State private var showChurchWeb = false
+    // The password lane uses the credential-capture (one-MFA) flow (/auth/web/*) so the single MFA
+    // mints the 45-day sync token; the OTP lane keeps /auth/otp + /auth/mfa. Routes the shared steps.
+    @State private var webMode = false
 
     var body: some View {
         NavigationStack {
@@ -234,9 +237,20 @@ struct ReauthSheet: View {
 
     private var broker: BrokerService? { services?.broker }
 
+    // Route the shared MFA steps to /auth/web/* (password lane) or /auth/mfa/* (OTP-lane continuation).
+    private func selectFactorRouted(_ broker: BrokerService, _ loginID: String, _ factorID: String) async throws {
+        if webMode { try await broker.webSelectFactor(loginID: loginID, factorID: factorID) }
+        else { try await broker.selectFactor(loginID: loginID, factorID: factorID) }
+    }
+    private func verifyRouted(_ broker: BrokerService, _ loginID: String, _ code: String) async throws -> BrokerResult {
+        if webMode { return try await broker.webVerify(loginID: loginID, code: code, enroll: true) }
+        return try await broker.verifyMfa(loginID: loginID, code: code, enroll: true)
+    }
+
     private func signIn() async throws {
         guard let broker else { throw BrokerError("Church login is not configured (BROKER_URL).") }
-        let r = try await broker.password(username.trimmed, password, enroll: true)
+        webMode = true // password lane → the one-MFA credential-capture flow (mints the 45-day token)
+        let r = try await broker.webStart(username.trimmed, password, enroll: true)
         if r.mfaRequired {
             try await enterMfa(r)
             return
@@ -257,7 +271,7 @@ struct ReauthSheet: View {
         mfaCode = ""
         // Auto-send if there's exactly one factor (matches the login flow + web).
         if r.factors.count == 1, let id = r.loginID {
-            try await broker.selectFactor(loginID: id, factorID: r.factors[0].id)
+            try await selectFactorRouted(broker, id, r.factors[0].id)
             factorSent = r.factors[0]
             startResendCooldown()
         }
@@ -265,6 +279,7 @@ struct ReauthSheet: View {
 
     private func startOtp() async throws {
         guard let broker else { throw BrokerError("Church login is not configured (BROKER_URL).") }
+        webMode = false // OTP lane keeps /auth/otp + /auth/mfa (its continuation isn't the web flow)
         let body = try await broker.otpStart(email.trimmed, enroll: true)
         // Broker advisory after a send burst: Okta quietly pauses email delivery (2026-06-12).
         throttleHint = body["throttle_hint"] as? String
@@ -290,7 +305,7 @@ struct ReauthSheet: View {
 
     private func pickFactor(_ f: BrokerFactor) async throws {
         guard let broker, let loginID else { return }
-        try await broker.selectFactor(loginID: loginID, factorID: f.id)
+        try await selectFactorRouted(broker, loginID, f.id)
         factorSent = f
         mfaCode = ""
         startResendCooldown()
@@ -299,7 +314,7 @@ struct ReauthSheet: View {
     private func verify() async throws {
         guard let broker, let loginID else { return }
         do {
-            let r = try await broker.verifyMfa(loginID: loginID, code: mfaCode.trimmed, enroll: true)
+            let r = try await verifyRouted(broker, loginID, mfaCode.trimmed)
             if r.mfaRequired {
                 try await enterMfa(r) // chained continuation (rare): yet another factor owed
                 return

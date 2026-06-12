@@ -204,6 +204,24 @@ class BrokerClient(private val auth: AuthRepository = AuthRepository()) {
             put("login_id", JsonPrimitive(loginId)); put("code", JsonPrimitive(code)); put("enroll", JsonPrimitive(enroll))
         })
 
+    // Credential-capture (one-MFA) lane: authn → LCR authorize → MFA so a SINGLE MFA mints the 45-day
+    // Member Tools sync token (server-side, persisted at enroll). Used by the ENROLL / re-auth so a
+    // typed-password enrollment yields unattended 45-day sync without storing the password or a TOTP.
+    suspend fun webStart(username: String, password: String, enroll: Boolean = true): BrokerResult =
+        post("/auth/web/start", buildJsonObject {
+            put("username", JsonPrimitive(username)); put("password", JsonPrimitive(password)); put("enroll", JsonPrimitive(enroll))
+        })
+
+    suspend fun webSelectFactor(loginId: String, factorId: String): BrokerResult =
+        post("/auth/web/select", buildJsonObject {
+            put("login_id", JsonPrimitive(loginId)); put("factor_id", JsonPrimitive(factorId))
+        })
+
+    suspend fun webVerify(loginId: String, code: String, enroll: Boolean = true): BrokerResult =
+        post("/auth/web/verify", buildJsonObject {
+            put("login_id", JsonPrimitive(loginId)); put("code", JsonPrimitive(code)); put("enroll", JsonPrimitive(enroll))
+        })
+
     /** Passwordless Church sign-in: the broker asks Okta to email a code (no password). Throws a
      *  friendly BrokerException when the account's Okta policy is password-first (the default).
      *  The body may carry advisory hints: `identifier_hint` (email-shaped identifier — phantom

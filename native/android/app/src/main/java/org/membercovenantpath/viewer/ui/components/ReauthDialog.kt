@@ -75,6 +75,9 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
     var throttleHint by remember { mutableStateOf<String?>(null) }
     // "Authorize on the Church website" — the WebView capture lane (no password in our app).
     var showChurchWeb by remember { mutableStateOf(false) }
+    // The password lane uses the credential-capture (one-MFA) flow (/auth/web/*) so the single MFA
+    // mints the 45-day sync token; the OTP lane keeps /auth/otp + /auth/mfa. Routes the shared steps.
+    var webMode by remember { mutableStateOf(false) }
     var loginId by remember { mutableStateOf<String?>(null) }
     var factors by remember { mutableStateOf<List<BrokerFactor>>(emptyList()) }
     var factorSent by remember { mutableStateOf<BrokerFactor?>(null) }
@@ -126,6 +129,12 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
         )
     }
 
+    // Route the shared MFA steps to /auth/web/* (password lane) or /auth/mfa/* (OTP-lane continuation).
+    suspend fun selectFactorRouted(lid: String, fid: String): BrokerResult =
+        if (webMode) broker.webSelectFactor(lid, fid) else broker.selectFactor(lid, fid)
+    suspend fun verifyRouted(lid: String, code: String): BrokerResult =
+        if (webMode) broker.webVerify(lid, code, enroll = true) else broker.verifyMfa(lid, code, enroll = true)
+
     // Enter (or re-enter) the MFA factor step — used by the password lane AND by the
     // passwordless lane's continuation: an MFA-enabled account's emailed code is ACCEPTED and
     // Okta then demands a DISTINCT factor (for Church accounts that's the password, 2026-06-12).
@@ -138,15 +147,17 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
         mfaCode = ""
         // Auto-send if there's exactly one factor (matches the login flow + web).
         if (r.factors.size == 1 && r.loginId != null) {
-            broker.selectFactor(r.loginId!!, r.factors.first().id)
+            selectFactorRouted(r.loginId!!, r.factors.first().id)
             factorSent = r.factors.first()
             resendIn = 30
         }
     }
 
     fun signIn() = step {
-        // enroll=true: this IS the consent (the whole point of re-authorizing).
-        val r = broker.password(username.trim(), password, enroll = true)
+        // enroll=true: this IS the consent. The password lane uses the one-MFA credential-capture
+        // flow so the single MFA mints the 45-day sync token.
+        webMode = true
+        val r = broker.webStart(username.trim(), password, enroll = true)
         if (r.mfaRequired) {
             enterMfa(r)
             return@step
@@ -155,7 +166,7 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
     }
 
     fun pickFactor(f: BrokerFactor) = step {
-        broker.selectFactor(loginId!!, f.id)
+        selectFactorRouted(loginId!!, f.id)
         // Fresh challenge → fresh input; the cooldown nudges waiting for the NEW code.
         factorSent = f
         mfaCode = ""
@@ -164,7 +175,7 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
 
     fun verify() = step {
         try {
-            val r = broker.verifyMfa(loginId!!, mfaCode.trim(), enroll = true)
+            val r = verifyRouted(loginId!!, mfaCode.trim())
             if (r.mfaRequired) {
                 enterMfa(r) // chained continuation (rare): yet another factor owed
                 return@step
@@ -184,6 +195,7 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
     }
 
     fun startOtp() = step {
+        webMode = false // OTP lane keeps /auth/otp + /auth/mfa (its continuation isn't the web flow)
         // enroll=true: this IS the consent. The broker answers only after Okta actually sent
         // the email (or with an honest error when the account is password-first).
         val body = broker.otpStart(email.trim(), enroll = true)

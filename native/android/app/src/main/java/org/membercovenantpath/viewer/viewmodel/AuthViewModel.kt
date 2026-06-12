@@ -170,8 +170,16 @@ class AuthViewModel(
     private var pendingResult: BrokerResult? = null
 
     // ---- Church account ----
+    // A consenting login (enroll) uses the credential-capture (one-MFA) flow (/auth/web/*) so the
+    // single MFA mints the 45-day sync token; a plain view-only sign-in uses the light /auth/password.
+    // authorizeSync IS the enroll flag (set when the post-login offer is accepted), so it routes the
+    // shared MFA steps to the right backend pending store.
+    private val webMode get() = _login.value.authorizeSync
+
     fun churchSignIn() = run {
-        val r = broker.password(_login.value.username.trim(), _login.value.password, enroll = _login.value.authorizeSync)
+        val r = if (_login.value.authorizeSync)
+            broker.webStart(_login.value.username.trim(), _login.value.password, enroll = true)
+        else broker.password(_login.value.username.trim(), _login.value.password, enroll = false)
         if (r.mfaRequired) {
             _login.update { it.copy(loginId = r.loginId, factors = r.factors) }
             if (r.factors.size == 1) selectFactorNow(r.factors.first())
@@ -231,7 +239,8 @@ class AuthViewModel(
 
     fun selectFactor(f: BrokerFactor) = run { selectFactorNow(f) }
     private suspend fun selectFactorNow(f: BrokerFactor) {
-        broker.selectFactor(_login.value.loginId!!, f.id)
+        if (webMode) broker.webSelectFactor(_login.value.loginId!!, f.id)
+        else broker.selectFactor(_login.value.loginId!!, f.id)
         // Fresh challenge → fresh input; the cooldown nudges waiting for the NEW code.
         _login.update { it.copy(factorSent = f, mfaCode = "") }
         startResendCooldown()
@@ -239,7 +248,9 @@ class AuthViewModel(
 
     fun verifyMfa() = run {
         try {
-            val r = broker.verifyMfa(_login.value.loginId!!, _login.value.mfaCode.trim(), enroll = _login.value.authorizeSync)
+            val r = if (webMode)
+                broker.webVerify(_login.value.loginId!!, _login.value.mfaCode.trim(), enroll = true)
+            else broker.verifyMfa(_login.value.loginId!!, _login.value.mfaCode.trim(), enroll = _login.value.authorizeSync)
             finishChurch(r)
         } catch (e: Throwable) {
             _login.update { it.copy(mfaCode = "") } // a rejected code must be retyped fresh

@@ -826,6 +826,20 @@ _CAPTURED_NO_COOKIES_MSG = (
     "(including any verification step) and try again.")
 
 
+def _mint_membertools_silent(session: requests.Session, login_id: str) -> str | None:
+    """Silently mint the Member Tools 45-day refresh token off a live, MFA-satisfied Okta session
+    (prompt=none). Best-effort: never raises — a mint failure just means no bulk token this enroll."""
+    try:
+        from lcr_client import membertools
+        rt = membertools.mint_from_okta_session(session).get("refresh_token")
+        logger.info("[%s] Member Tools token %s off captured session",
+                    login_id, "minted" if rt else "mint returned none")
+        return rt
+    except Exception as exc:  # noqa: BLE001
+        logger.info("[%s] Member Tools mint skipped (captured session): %s", login_id, exc)
+        return None
+
+
 def verify_captured_session(cookies: list[dict]) -> dict:
     """Native WebView path: the app captured the Okta/LCR session itself (the password was
     typed only on the Church's own page, never reaching us). Verify it server-side and return
@@ -845,8 +859,13 @@ def verify_captured_session(cookies: list[dict]) -> dict:
     session = session_from_cookies(usable)
     login_id = _new_login_id()
     try:
-        return {"status": "success", "identity": _identity(session, login_id),
-                "cookies": serialize_cookies(session)}
+        ident = _identity(session, login_id)
+        # The captured browser session completed MFA on the Church page, so its Okta session can
+        # SILENTLY mint the Member Tools 45-day sync token (prompt=none SSO) — the same token the
+        # password lane's web_session mints. Best-effort: a member who has never used Member Tools
+        # (or a session that can't SSO) just enrolls without it; the daily sync re-mints on re-auth.
+        return {"status": "success", "identity": ident, "cookies": serialize_cookies(session),
+                "membertools_refresh": _mint_membertools_silent(session, login_id)}
     except IdentityError:
         raise  # the API layer maps this to 503 + an honest "LCR didn't answer" message
     except Exception as exc:  # noqa: BLE001

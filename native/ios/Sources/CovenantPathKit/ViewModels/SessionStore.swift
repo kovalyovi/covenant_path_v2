@@ -133,13 +133,23 @@ public final class SessionStore {
     /// no longer captures a credential automatically. Carried across the MFA steps so verifyMfa stores
     /// only when the leader authorized it.
     private var enrollConsent = false
+    // A consenting login (enroll) uses the credential-capture (one-MFA) flow (/auth/web/*) so the
+    // single MFA mints the 45-day sync token; a plain view-only sign-in uses the light /auth/password.
+    // Carried across the MFA steps to route select/verify to the right backend pending store.
+    private var webMode = false
 
     public func churchSignIn(username: String, password: String, authorizeSync: Bool = false) async {
         enrollConsent = authorizeSync
+        webMode = authorizeSync
         lastUsername = username.trimmed   // stashed so a post-login enroll offer can re-auth (#8)
         lastPassword = password
         await run {
-            let r = try await self.broker.password(username.trimmed, password, enroll: authorizeSync)
+            let r: BrokerResult
+            if authorizeSync {
+                r = try await self.broker.webStart(username.trimmed, password, enroll: true)
+            } else {
+                r = try await self.broker.password(username.trimmed, password, enroll: false)
+            }
             if r.mfaRequired {
                 self.loginID = r.loginID
                 self.factors = r.factors
@@ -183,7 +193,8 @@ public final class SessionStore {
     public func selectFactor(_ f: BrokerFactor) async {
         guard let loginID else { return }
         await run {
-            try await self.broker.selectFactor(loginID: loginID, factorID: f.id)
+            if self.webMode { try await self.broker.webSelectFactor(loginID: loginID, factorID: f.id) }
+            else { try await self.broker.selectFactor(loginID: loginID, factorID: f.id) }
             self.factorSent = f
         }
     }
@@ -191,7 +202,12 @@ public final class SessionStore {
     public func verifyMfa(code: String) async {
         guard let loginID else { return }
         await run {
-            let r = try await self.broker.verifyMfa(loginID: loginID, code: code.trimmed, enroll: self.enrollConsent)
+            let r: BrokerResult
+            if self.webMode {
+                r = try await self.broker.webVerify(loginID: loginID, code: code.trimmed, enroll: true)
+            } else {
+                r = try await self.broker.verifyMfa(loginID: loginID, code: code.trimmed, enroll: self.enrollConsent)
+            }
             try await self.finishChurch(r)
         }
     }
