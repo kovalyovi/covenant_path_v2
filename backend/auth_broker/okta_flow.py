@@ -86,6 +86,17 @@ def friendly_auth_error(exc: Exception) -> AuthError:
             "This Church Account is temporarily locked (too many attempts). Unlock it at "
             "churchofjesuschrist.org, then sign in here again.",
             kind="account_locked", root_cause=raw)
+    # Okta returns "Password requirements were not met" when the submitted password is rejected at the
+    # IDX challenge — in practice a wrong password OR an account whose password expired / no longer
+    # meets the Church's policy (Okta then wants a reset). It read as a confusing dead-end (Ken Packer,
+    # 2026-06-12 — he fell back to the emailed-code lane that can't set up sync). Name the way out.
+    if "requirements were not met" in low or "password requirements" in low:
+        return AuthError(
+            "Your Church password wasn't accepted. Make sure it's the password you use at "
+            "churchofjesuschrist.org — and if it's correct, your account may need a password reset "
+            "there (the Church periodically requires one). Reset it at churchofjesuschrist.org, then "
+            "sign in here again.",
+            kind="password_rejected", root_cause=raw)
     return AuthError(f"Sign-in failed: {raw}", root_cause=raw)
 
 

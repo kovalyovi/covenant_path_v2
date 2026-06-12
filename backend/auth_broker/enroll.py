@@ -428,7 +428,16 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
     initial_sync = _kickoff_initial_sync(ctx.unit_number)
     base["stored"] = True
     base["initial_sync"] = initial_sync
-    _notify_enrolled(identity, ctx, coverage, initial_sync)
+    # Only email the "daily sync enabled" confirmation when this enroll ESTABLISHES sync that wasn't
+    # there before (no usable credential, or the prior one was revoked → active is None). A redundant
+    # re-auth of an existing/stale credential is silent — the in-app toast already confirms it. This
+    # stopped the 3-emails-in-40-min spam when an OTP enroll kept failing to sync and the leader
+    # re-authorized over and over (Ken Packer + the secretary, 2026-06-12).
+    if active is None:
+        _notify_enrolled(identity, ctx, coverage, initial_sync)
+    else:
+        logger.info("enroll: re-authorization of an existing credential for stake %s — "
+                    "skipping the (redundant) confirmation email", ctx.unit_number)
     _audit("enrolled")
     return base
 

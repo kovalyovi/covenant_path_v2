@@ -1598,6 +1598,14 @@ def test_friendly_okta_errors() -> None:
     e2 = okta_flow.friendly_auth_error(LoginError("IDX step answer failed: Your account is locked."))
     check("locked: classified", getattr(e2, "kind", "") == "account_locked")
     check("locked: friendly names the unlock path", "churchofjesuschrist.org" in str(e2))
+    # 2026-06-12 (Ken Packer): Okta's "Password requirements were not met" rejected his password and
+    # read as a confusing dead-end (he fell back to the emailed-code lane that can't set up sync). It
+    # must classify with an actionable reset path, not surface raw.
+    e4 = okta_flow.friendly_auth_error(LoginError("IDX step answer failed: Password requirements were not met."))
+    check("password_rejected: classified", getattr(e4, "kind", "") == "password_rejected")
+    check("password_rejected: names the reset path", "churchofjesuschrist.org" in str(e4))
+    check("password_rejected: not raw", "requirements were not met" not in str(e4))
+    check("password_rejected: raw kept as root_cause", "requirements were not met" in e4.root_cause)
     e3 = okta_flow.friendly_auth_error(RuntimeError("weird transport thing"))
     check("unknown: keeps the raw text", "weird transport thing" in str(e3))
     check("unknown: kind other", getattr(e3, "kind", "") == "other")
