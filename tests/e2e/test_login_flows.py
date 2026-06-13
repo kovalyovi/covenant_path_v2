@@ -44,7 +44,12 @@ def test_ward_leader_partial_access_reports_missing_with_who_to_ask(stack):
     enroll = res.json()["enroll"]
     assert enroll["authorized"] is True       # some access -> in (rank > 0)
     assert enroll["complete"] is False        # ...but not the full covenant-path dataset
-    assert enroll["can_enroll"] is True
+    # A WARD-level leader (Bishop) is NEVER offered enrollment — daily sync is a STAKE concept, and a
+    # ward leader's Member Tools token would point at the parent stake (the Green Level Ward incident,
+    # 2026-06-13). They see their unit via their provisioned ward_leader role; no setup.
+    assert enroll["can_enroll"] is False
+    assert enroll["ward_scoped"] is True
+    # ...but the coverage / who-to-ask is still reported (informational).
     missing = {m["feature"]: m for m in enroll["missing"]}
     temple = missing.get("Temple recommend status")
     assert temple, f"temple recommend must be missing for a bishop; got {sorted(missing)}"

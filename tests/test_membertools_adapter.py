@@ -198,6 +198,44 @@ def test_adapt_sync_no_directory_keeps_sentinels():
     assert m.temple_recommend == NEEDS_PROFILE
     assert m.aaronic_priesthood == NEEDS_PROFILE
     assert m.patriarchal_blessing == NEEDS_PROFILE
+    # temple experiences absent (no otherCommitments) → sentinel, not a false "No".
+    assert m.family_name_prepared == NEEDS_PROFILE
+    assert m.first_temple_visit == NEEDS_PROFILE
+
+
+def test_adapt_sync_rescues_temple_experiences_from_other_commitments():
+    # family_name_prepared / first_temple_visit come from the bulk person `otherCommitments`
+    # ({title, interested}) — NOT the one-work `newMemberOtherCommitments` ({name, isKeeping}). They
+    # used to leak the NEEDS_PROFILE sentinel forever once the LCR session died (the Green Level Ward
+    # incident, 2026-06-13). adapt_person now extracts them, with report._apply_profile's age gate.
+    FAM = "Prepare a Family Name for the Temple"
+    VISIT = "Perform Baptisms for Deceased Ancestors"
+    payload = {
+        "units": [{"unitNumber": 999, "name": "S", "unitType": "STAKE",
+                   "childUnits": [{"unitNumber": 100, "name": "W", "unitType": "WARD"}]}],
+        "covenantPathMembers": [
+            # adult convert: family-name kept (Yes), temple visit not yet (No) — no age gate at 40+.
+            {"id": "a", "memberUuid": "u-adult", "names": {"listed": "Adult, A"}, "unitNumber": 100,
+             "confirmationDate": "2024-01-01", "birthDate": "1985-06-01",
+             "otherCommitments": [{"title": FAM, "interested": True},
+                                  {"title": VISIT, "interested": False}]},
+            # child convert (under 12): an ineligible "No" → N/A (can't go yet); a genuine "Yes" kept.
+            {"id": "c", "memberUuid": "u-child", "names": {"listed": "Child, C"}, "unitNumber": 100,
+             "confirmationDate": "2024-01-01", "birthDate": "2020-06-01",
+             "otherCommitments": [{"title": FAM, "interested": False},
+                                  {"title": VISIT, "interested": True}]},
+            # no otherCommitments list → sentinel preserved for the /mlt merge / last-good.
+            {"id": "n", "memberUuid": "u-none", "names": {"listed": "None, N"}, "unitNumber": 100,
+             "confirmationDate": "2024-01-01", "birthDate": "1990-01-01"},
+        ],
+    }
+    m = {x.person_uuid: x for x in adapt_sync(payload)}
+    assert m["u-adult"].family_name_prepared == "Yes"
+    assert m["u-adult"].first_temple_visit == "No"
+    assert m["u-child"].family_name_prepared == NA      # ineligible "No" gated to N/A
+    assert m["u-child"].first_temple_visit == "Yes"     # a genuine "Yes" is always kept
+    assert m["u-none"].family_name_prepared == NEEDS_PROFILE
+    assert m["u-none"].first_temple_visit == NEEDS_PROFILE
 
 
 def test_ministering_index_absent_when_no_org():
