@@ -4,6 +4,14 @@ Living doc tracking what's built, what works, and what doesn't. Goal: collect
 covenant-path data for new members across every unit, aggregated at the stake
 level — ideally via **pure API calls** (no Selenium/Playwright DOM scraping).
 
+> **Historical note (client stack changed).** Entries dated before the 2026-06-08 web cutover
+> describe the original **single Flutter app** (`apps/viewer`). That app was **deprecated 2026-06-08
+> and deleted from the repo 2026-06-13**: the web app is now **React (`apps/web`)** and the mobile
+> apps are **native Swift (`native/ios`) + Kotlin (`native/android`)**. Older entries below mention
+> Flutter files (`apps/viewer/lib/*.dart`, `flutter test`, `--dart-define`, etc.) — those are kept
+> as an accurate record of what was true at the time, **not** the current structure. For current
+> architecture see `CLAUDE.md`; for the React app `apps/web/README.md`; for native `native/PARITY.md`.
+
 Stake under test: Raleigh North Carolina Stake (unit 503991), 9 wards/branches,
 ~112 new covenant-path members. Account is password-only (no 2FA).
 Second live stake: Санкт-Петербургский (unit 615145), delegated credential.

@@ -7,8 +7,8 @@ Durable instructions for AI agents (and humans) working in this repo. This **com
 ## Files
 
 - **[`CROSS_SURFACE_UI.md`](CROSS_SURFACE_UI.md)** — THE cardinal rule: **every UI-facing
-  change must land in all three client codebases (Flutter, native iOS, native Android) and
-  stay in parity.** Read it before touching any UI.
+  change must land in all three client codebases (React web, native iOS, native Android) and
+  stay in parity.** Read it before touching any UI. (The old Flutter app was deleted 2026-06-13.)
 - **[`ROADMAP.md`](ROADMAP.md)** — the consolidated user-feedback roadmap currently in
   flight, with per-item status and the surfaces each item touches.
 

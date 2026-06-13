@@ -4,19 +4,18 @@
 > A change that lands in only one surface is INCOMPLETE and must not be merged.**
 
 The product ships as **three independent client codebases** that must look and behave the
-same. CLAUDE.md's "one Flutter codebase" is true *within Flutter* — but there are also two
-hand-written native ports that must mirror it feature-for-feature.
+same. (The old single Flutter app, `apps/viewer`, was deprecated 2026-06-08 and **deleted
+2026-06-13** — there is no Flutter surface anymore. The React web app is now the reference
+implementation; the two hand-written native ports mirror it feature-for-feature.)
 
 | Surface | Path | Stack | Ships to |
 |---|---|---|---|
-| **Flutter** (reference impl) | `apps/viewer/lib/` | Dart / Flutter | web · iOS · macOS · Android |
+| **React web** (reference impl) | `apps/web/` | Vite + React + TypeScript | web |
 | **Native iOS** | `native/ios/` | Swift / SwiftUI (`CovenantPathKit`) | iOS |
 | **Native Android** | `native/android/` | Kotlin / Jetpack Compose | Android |
-| **React web** (web rebuild) | `apps/web/` | Vite + React + TypeScript | web |
 
-So a UI change is **four edits**: `apps/viewer/lib` → `native/ios` → `native/android` → `apps/web`.
-(`apps/web` is the standalone React rebuild of the **web** UI — keep web-facing changes in parity
-there too. It reads Supabase + the broker exactly like Flutter; web-only, so no iOS/macOS concerns.)
+So a UI change is **three edits**: `apps/web` → `native/ios` → `native/android`. All three read
+Supabase + the broker the same way (CORS-free; RLS is the access gate).
 
 ## What counts as "UI-facing"
 
@@ -27,20 +26,20 @@ new filter rule, a new stat), the client change is still three edits.
 
 ## Parity map (where the same concept lives)
 
-| Concept | Flutter | Native iOS | Native Android |
+| Concept | React web | Native iOS | Native Android |
 |---|---|---|---|
-| Disclaimer / privacy copy | `lib/disclaimer.dart` | `Sources/CovenantPathKit/Logic/Disclaimer.swift` | `ui/components/Dialogs.kt`, `ui/screens/LoginScreen.kt` |
-| Login / auth gate | `lib/login_page.dart`, `lib/views/dashboard_shell.dart` | `Views/LoginView.swift`, `…/SessionStore.swift` | `ui/screens/LoginScreen.kt`, `viewmodel/AuthViewModel.kt`, `ui/App.kt` |
-| No-access / empty states | `lib/views/dashboard_shell.dart` | `Views/EmptyStateView.swift` | `ui/screens/StatusScreens.kt` (EnrollmentEmptyState) |
-| Syncing banner | dashboard (`lib/dashboard_page.dart`) | `SyncingBanner` | `ui/components/Banners.kt`, `viewmodel/DashboardViewModel.kt` |
-| Milestones / Golden Hour | `lib/golden_hour.dart` | `Logic/…` | `logic/Milestones.kt`, `logic/OrgBucket.kt`, `ui/screens/tabs/GoldenHourScreen.kt` |
-| Tables / master lists | `lib/views/table_view.dart` | port | `ui/screens/tabs/TableScreen.kt` |
-| Baptisms / Being-taught | `lib/views/baptisms_view.dart` | port | `ui/screens/tabs/BaptismsScreen.kt` |
-| Needs | `lib/views/needs_view.dart` | port | `ui/screens/tabs/NeedsScreen.kt` |
-| KPIs / stats | `lib/views/kpis_view.dart` | port | `logic/Kpis.kt`, `ui/screens/tabs/KpisScreen.kt` |
-| Member model / Supabase select | `lib/dashboard_page.dart` (`_columns`) | model | `model/Member.kt`, `data/MembersRepository.kt` |
-| Bottom nav / scaffold | `lib/views/dashboard_shell.dart` | scaffold | `ui/screens/DashboardScaffold.kt` |
-| Settings / About | `lib/settings_page.dart` | `Views/SettingsView.swift` | `ui/screens/SettingsScreen.kt` |
+| Disclaimer / privacy copy | `src/lib/disclaimer.ts`, `src/components/Disclaimer.tsx` | `Sources/CovenantPathKit/Logic/Disclaimer.swift` | `ui/components/Dialogs.kt`, `ui/screens/LoginScreen.kt` |
+| Login / auth gate | `src/pages/LoginPage.tsx`, `src/hooks/useAuth`, `src/router.tsx` | `Views/LoginView.swift`, `…/SessionStore.swift` | `ui/screens/LoginScreen.kt`, `viewmodel/AuthViewModel.kt`, `ui/App.kt` |
+| No-access / empty states | `src/components/EmptyState.tsx` | `Views/EmptyStateView.swift` | `ui/screens/StatusScreens.kt` (EnrollmentEmptyState) |
+| Syncing banner | `src/components/dashboard.tsx` / `src/pages/DashboardShell.tsx` | `SyncingBanner` | `ui/components/Banners.kt`, `viewmodel/DashboardViewModel.kt` |
+| Milestones / Golden Hour | `src/logic/milestones.ts`, `src/pages/tabs/GoldenHourTab.tsx` | `Logic/Milestones.swift`, `Logic/OrgBucket.swift` | `logic/Milestones.kt`, `logic/OrgBucket.kt`, `ui/screens/tabs/GoldenHourScreen.kt` |
+| Tables / master lists | `src/pages/tabs/TableTab.tsx` | port | `ui/screens/tabs/TableScreen.kt` |
+| Baptisms / Being-taught | `src/pages/tabs/BaptismsTab.tsx` | port | `ui/screens/tabs/BaptismsScreen.kt` |
+| Needs | `src/pages/tabs/NeedsTab.tsx` | port | `ui/screens/tabs/NeedsScreen.kt` |
+| KPIs / stats | `src/logic/kpis.ts`, `src/pages/tabs/KpisTab.tsx` | `Logic/Kpis.swift`, `Views/Tabs/KPIsView.swift` | `logic/Kpis.kt`, `ui/screens/tabs/KpisScreen.kt` |
+| Member model / Supabase select | `src/lib/member.ts` | `Models/Member.swift` | `model/Member.kt`, `data/MembersRepository.kt` |
+| Bottom nav / scaffold | `src/pages/DashboardShell.tsx` | scaffold | `ui/screens/DashboardScaffold.kt` |
+| Settings / About | `src/pages/SettingsPage.tsx` | `Views/SettingsView.swift` | `ui/screens/SettingsScreen.kt` |
 
 Authoritative parity trackers — **update these when you add/change a feature**:
 `native/PARITY.md`, `native/SPEC.md`, `native/ios/PARITY_STATUS.md`,
@@ -48,16 +47,17 @@ Authoritative parity trackers — **update these when you add/change a feature**
 
 ## Verify each surface
 
-- **Flutter**: `D:/dev/flutter/bin/flutter analyze` (must be "No issues found") + `flutter build web`.
-- **iOS**: SwiftUI; compiles via the CI workflow (`.github/workflows/*ios*`).
-- **Android**: APK builds via CI (Supabase/broker config injected as **secrets, not vars**);
-  verify on the **Pixel_10 AVD** by signing in with a Gmail OTP. See `native/android/README.md`.
-- **React web**: `cd apps/web` → `npm run typecheck` (0 errors) + `npm run lint` (ESLint + jsx-a11y,
-  0 errors) + `npm run test` (vitest) + `npm run build` (clean). See `apps/web/README.md`.
+- **React web** (reference): `cd apps/web` → `npm run typecheck` (0 errors) + `npm run lint`
+  (ESLint + jsx-a11y, 0 errors) + `npm run test` (vitest) + `npm run build` (clean) +
+  `npm run e2e` (Playwright). See `apps/web/README.md`.
+- **iOS**: SwiftUI; compiles via the CI workflow (`build-native-ios.yml`).
+- **Android**: APK builds via CI (`build-native-android.yml`; Supabase/broker config injected as
+  **secrets, not vars**); verify on the **Pixel_10 AVD** by signing in with a Gmail OTP. See
+  `native/android/README.md`.
 
 ## Workflow for any UI change
 
-1. Implement in `apps/viewer/lib` first (reference).
+1. Implement in `apps/web` first (reference).
 2. Mirror in `native/ios`, then `native/android`.
 3. Update the relevant `PARITY_STATUS.md` rows.
 4. Run the per-surface checks above.

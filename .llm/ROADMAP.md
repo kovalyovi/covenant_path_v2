@@ -2,9 +2,15 @@
 
 Consolidated from two rounds of user feedback (2026-06-01). Branch: `feedback-round3`.
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done. Surfaces: **F**=Flutter,
-**iOS**=native iOS, **A**=native Android, **be**=backend, **web**=Flutter web.
+**iOS**=native iOS, **A**=native Android, **be**=backend, **web**=web app.
 
-> **Every UI item below must land in F + iOS + A** (see [`CROSS_SURFACE_UI.md`](CROSS_SURFACE_UI.md)).
+> **Historical doc (2026-06-01).** When this roadmap was written the client was the single
+> **Flutter** app (surface **F** = `apps/viewer`, including Flutter web). That app was deprecated
+> 2026-06-08 and **deleted 2026-06-13** — Phase 5 below tracked rebuilding the **web** UI in
+> **React (`apps/web`)**, which is now the only web surface. The **F ✓** markers on completed rows
+> are an accurate record of what shipped on Flutter at the time; the maintained surfaces today are
+> **React web + native iOS + native Android**. See `CLAUDE.md` and
+> [`CROSS_SURFACE_UI.md`](CROSS_SURFACE_UI.md) for the current rule.
 
 ## Decisions locked with the user
 - Native: edit **all** surfaces incl. `native/android` this pass.

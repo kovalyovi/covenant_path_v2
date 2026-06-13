@@ -2,8 +2,8 @@
 
 Collects each new member's **covenant-path progress** from the Church's LCR portal,
 aggregates it at stake level into Supabase (Postgres + Row-Level Security), and presents
-it in one Flutter app (web / iOS / macOS / Android). Leaders sign in with their **Church
-account** (or an email code) and see exactly the units their calling allows.
+it across a **React web app** (`apps/web`) and **native iOS + Android** apps. Leaders sign
+in with their **Church account** (or an email code) and see exactly the units their calling allows.
 
 > New here? Read **[CLAUDE.md](CLAUDE.md)** (how to make changes safely) and
 > **[PROGRESS.md](PROGRESS.md)** (what's built / what works). This file is the **map of how
@@ -21,7 +21,7 @@ LCR (church data)                          ← scraped ONLY by the backend (neve
        sheets_sync/     Google Sheet mirror
        backend/         migrations, db, sync, roles, mailer, auth_broker
                                    │  reads (RLS-scoped by signed-in email)
-  Flutter viewer (apps/viewer) ────┘   ONE codebase → web + iOS + macOS + Android
+  Clients ─────────────────────────┘   React web (apps/web) · native iOS (native/ios) · native Android (native/android)
        │  "Sign in with Church account" (web can't call Okta directly: CORS)
        └─────────────► auth broker (FastAPI on Render) ──► Supabase session OTP
 ```
@@ -37,11 +37,11 @@ things are defined").
 
 | Piece | Where it lives | URL | Notes |
 |---|---|---|---|
-| **Viewer** (Flutter web) | Cloudflare Pages | `app.membercovenantpath.org` · `covenant-path-app.pages.dev` | Built with `--dart-define`; deployed via `wrangler pages deploy` or dashboard upload |
+| **Web app** (React/Vite) | Cloudflare Pages | `app.membercovenantpath.org` · `covenant-path-app.pages.dev` | Built with `VITE_*` build-time env (`npm run build` in `apps/web`); deployed via `wrangler pages deploy dist` |
 | **Auth broker** (FastAPI) | Render (free) | `covenant-path-broker.onrender.com` | Server-side Church login + admin/ops API; free tier sleeps → kept warm |
 | **Database + Auth** | Supabase | `ntbrzjihhyvzvvzvwowq.supabase.co` | Postgres + RLS + GoTrue auth + (future) Storage for photos |
 | **Daily sync** | GitHub Actions | repo `kovalyovi/covenant_path_v2` | `daily-sync.yml` 09:00 UTC: LCR → report → Sheets + Supabase |
-| **Keep-warm** | GitHub Actions + UptimeRobot | — | Pings broker `/health` so logins don't hit a cold start |
+| **Keep-warm** | Supabase pg_cron (+ optional UptimeRobot) | — | Pings broker `/health` every few min so logins don't hit a cold start (see DEPLOYMENT.md) |
 | **Spreadsheet mirror** | Google Sheets | (per `SPREADSHEET_ID`) | Flat 15-column mirror, manual columns preserved on merge |
 
 Full deploy runbook (Render blueprint, Cloudflare steps, keep-warm, admin console):
@@ -65,12 +65,12 @@ settings.
 | `GITHUB_TOKEN` | *optional* — fine-grained PAT for the admin console's Actions panel (see below) |
 | `GITHUB_REPO` | *optional* — defaults to `kovalyovi/covenant_path_v2` |
 
-**Viewer build → `--dart-define`** (anon key is publishable, safe on clients; RLS gates data):
+**Web build → `VITE_*` build-time env** (anon key is publishable, safe on clients; RLS gates data):
 
 ```
-SUPABASE_URL=https://ntbrzjihhyvzvvzvwowq.supabase.co
-SUPABASE_ANON_KEY=sb_publishable_hiAGDv7bMCm5C5O_RbGP5A_8tskAiBF
-BROKER_URL=https://covenant-path-broker.onrender.com
+VITE_SUPABASE_URL=https://ntbrzjihhyvzvvzvwowq.supabase.co
+VITE_SUPABASE_ANON_KEY=sb_publishable_hiAGDv7bMCm5C5O_RbGP5A_8tskAiBF
+VITE_BROKER_URL=https://covenant-path-broker.onrender.com
 ```
 
 **Daily sync → GitHub Actions secrets:** `LCR_LOGIN`, `LCR_PASSWORD`, `CP_TOKEN_KEY`,
@@ -100,21 +100,21 @@ a side rail with text-labelled items + multi-column cards on tablet/desktop.
 | **Upcoming** | Prospective baptisms as a date-rail timeline; dates already passed surface in a "needs attention" block on top. Per-unit toggle shows each ward/branch's **assigned full-time missionaries** (name chips → phone/email). |
 | **Golden Hour** | **Being Taught** (investigators) + **New Members** (first-year integration milestone chips, next step highlighted). An org-responsibility filter splits converts into three colored chips — Missionaries/WML (teal), Elders Quorum (blue), Relief Society (rose) — with a responsibility subtitle when one is selected. Eligible-only completion % (ineligible members never drag the number down), tappable per category. Baptism date shows tenure — "Feb 6, 2026 (2 months 3 days)". Unit/Date grouping + asc/desc sort. |
 | **Needs** | One selectable category tab per integration milestone (each with its own icon + outstanding count); the *eligible* members still missing it, with a per-unit summary, sorted by baptism date → unit. |
-| **KPIs** | `fl_chart` line cards over rolling windows anchored to today — **Month** (5 weeks), **Year** (12 months), **All** (every month, then by year past ~3 years); Month/Year show a date-range pill. Hover a point → that bucket's per-unit breakdown; tap → who. A "Golden Hour by unit" ranked card shows which unit integrates converts best. |
+| **KPIs** | Line-chart cards over rolling windows anchored to today — **Month** (5 weeks), **Year** (12 months), **All** (every month, then by year past ~3 years); Month/Year show a date-range pill. Hover a point → that bucket's per-unit breakdown; tap → who. A "Golden Hour by unit" ranked card shows which unit integrates converts best. |
 | **Table** | Every covenant-path field, color-coded like the master sheet: gender pill, row numbers, **per-column filters** (all/has/missing), sortable text columns. |
 
-- **LCR-style member detail** (`person_detail_page.dart`) — sacrament dots, friends (names + ward),
-  priesthood / calling / ministering names, temple ordinances, principles-taught, self-reliance,
-  a deep-link back to the person's LCR profile. Driven by the `members.details` JSONB subtree
-  (contact PII deliberately excluded).
-- **Eligibility is one source of truth** — `golden_hour.dart` `milestones` (mirrored in
-  `backend/milestones.py`): Aaronic = male & turns-12-this-year; Melchizedek = male & 18-now &
-  member ≥ 1yr; ministering-assignment = turns-14; calling = turns-12. Stats divide by *eligible*,
-  not everyone.
+- **LCR-style member detail** (`apps/web/src/pages/PersonDetailPage.tsx`; native equivalents) —
+  sacrament dots, friends (names + ward), priesthood / calling / ministering names, temple
+  ordinances, principles-taught, self-reliance, a deep-link back to the person's LCR profile. Driven
+  by the `members.details` JSONB subtree (contact PII deliberately excluded).
+- **Eligibility is one source of truth** — `apps/web/src/logic/milestones.ts` `milestones` (mirrored
+  in `backend/milestones.py` + the native `Logic/Milestones`): Aaronic = male & turns-12-this-year;
+  Melchizedek = male & 18-now & member ≥ 1yr; ministering-assignment = turns-14; calling = turns-12.
+  Stats divide by *eligible*, not everyone.
 - **Settings screen** — appearance (theme), security (passkey, biometric app lock), support
   (contact / feedback), about & privacy, account (sign out). The app bar stays to ≤3 items + a
   hamburger menu of ≤5 primary actions.
-- **Admin / ops console** (`admin_page.dart`, admins only) — health, freshness + counts, GitHub
+- **Admin / ops console** (`apps/web/src/pages/AdminPage.tsx`, admins only) — health, freshness + counts, GitHub
   Actions runs + changelog, maintenance flows (`daily-sync.yml` dispatch), a **Diagnostics** panel
   (request success %, failing units, field parity, endpoint latency) with **"Copy for Claude"**,
   and the **Enrolled-stakes** cross-stake view with **per-stake Sync now / revoke**. Gated by
@@ -176,19 +176,18 @@ python scripts/daily_sync.py --mode self --with-profile --supabase
 # 4. Broker locally
 uvicorn backend.auth_broker.app:app --reload --port 8787
 
-# 5. Viewer locally
-cd apps/viewer
-D:/dev/flutter/bin/flutter run -d chrome `
-  --dart-define=SUPABASE_URL=https://ntbrzjihhyvzvvzvwowq.supabase.co `
-  --dart-define=SUPABASE_ANON_KEY=sb_publishable_hiAGDv7bMCm5C5O_RbGP5A_8tskAiBF `
-  --dart-define=BROKER_URL=http://localhost:8787
+# 5. Web app locally (React + Vite). Put the VITE_* values in apps/web/.env.local:
+#   VITE_SUPABASE_URL=https://ntbrzjihhyvzvvzvwowq.supabase.co
+#   VITE_SUPABASE_ANON_KEY=sb_publishable_hiAGDv7bMCm5C5O_RbGP5A_8tskAiBF
+#   VITE_BROKER_URL=http://localhost:8787
+cd apps/web
+npm install
+npm run dev            # Vite dev server (http://localhost:5173)
+npm run build          # production bundle → apps/web/dist/ (what Cloudflare Pages serves)
 
-# 6. Android APK (installable build) — same dart-defines, pointed at prod broker
-D:/dev/flutter/bin/flutter build apk --release `
-  --dart-define=SUPABASE_URL=https://ntbrzjihhyvzvvzvwowq.supabase.co `
-  --dart-define=SUPABASE_ANON_KEY=sb_publishable_hiAGDv7bMCm5C5O_RbGP5A_8tskAiBF `
-  --dart-define=BROKER_URL=https://covenant-path-broker.onrender.com
-# -> apps/viewer/build/app/outputs/flutter-apk/app-release.apk  (sideload on Android)
+# 6. Native apps (iOS Swift / Android Kotlin) build in CI — see native/PARITY.md.
+#    The build contracts run in build-native-ios.yml / build-native-android.yml; locally
+#    open native/ios in Xcode or native/android in Android Studio.
 ```
 
 ### Tests (run before committing)
@@ -199,8 +198,9 @@ python -m backend.test_rls            # RLS scoping
 python -m backend.test_power_users    # invite/clone/revoke
 python -m backend.test_admins         # app_admins model
 python -m backend.test_broker         # CORS + broker + admin API units
-cd apps/viewer && D:/dev/flutter/bin/flutter analyze   # must be "No issues found"
-cd apps/viewer && D:/dev/flutter/bin/flutter test
+cd apps/web && npm run typecheck      # web type check
+cd apps/web && npm run test           # web unit tests (vitest)
+cd apps/web && npm run e2e            # web end-to-end (Playwright, mocked edges)
 ```
 
 ---
@@ -212,7 +212,7 @@ cd apps/viewer && D:/dev/flutter/bin/flutter test
   locked in by `backend/test_broker.py`. Adding a new origin? It probably already matches.
 - **Render cold start**: free tier sleeps after ~15 min; the first login then fails "Failed
   to fetch" (holding page has no CORS header). Mitigated by in-app retry (~60s, "waking up…")
-  + keep-warm (GitHub workflow + UptimeRobot on `/health`).
+  + keep-warm (Supabase pg_cron, optional UptimeRobot, on `/health`).
 - **Supabase JWTs are asymmetric** here, so we can't mint custom JWTs. The broker uses the
   Admin API `generate_link` → an 8-char `email_otp` the app verifies with `OtpType.email`.
 - **`is_admin()` must be `SECURITY DEFINER`** — otherwise the `app_admins` RLS policy that
@@ -240,11 +240,12 @@ cd apps/viewer && D:/dev/flutter/bin/flutter test
 |---|---|
 | [CLAUDE.md](CLAUDE.md) | Rules + architecture; read before editing |
 | [PROGRESS.md](PROGRESS.md) | Living status log (what's built / works / doesn't) |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Broker + viewer + keep-warm + admin-console deploy runbook |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Broker + web app + keep-warm + admin-console deploy runbook |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | ADR log — the *why* behind the design |
 | [docs/DELEGATED_ACCESS.md](docs/DELEGATED_ACCESS.md) | Power users + delegated-access + security model |
 | [docs/CUSTOM_API_KEYS.md](docs/CUSTOM_API_KEYS.md) | Per-stake custom API keys |
 | [docs/LOGGING_SETUP.md](docs/LOGGING_SETUP.md) | Axiom + Sentry setup (free tiers, PII-safe) |
 | [docs/M7_OAUTH_DRIVE.md](docs/M7_OAUTH_DRIVE.md) | Per-stake Google OAuth Drive — design + GCP prereq |
 | [backend/auth_broker/README.md](backend/auth_broker/README.md) | Broker internals + security notes |
-| [apps/viewer/ARCHITECTURE.md](apps/viewer/ARCHITECTURE.md) | Viewer structure + shared widgets |
+| [apps/web/README.md](apps/web/README.md) | React web app structure + shared logic |
+| [native/PARITY.md](native/PARITY.md) | Native iOS/Android parity map + build contracts |

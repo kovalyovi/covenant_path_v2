@@ -1,16 +1,17 @@
 # Covenant Path — React web app (`apps/web`)
 
-A **web-only** React rebuild of the Flutter web viewer (`apps/viewer`), with full UI + functionality
-parity. Like the Flutter app it is **CORS-free**: it reads **Supabase** directly (RLS-scoped to the
-signed-in user — the client does no access filtering) and the **auth broker** (`backend/auth_broker`)
-using the same endpoints. No backend changes.
+The web app. It began as a **web-only** React rebuild of the original Flutter web viewer
+(`apps/viewer`, **now deleted** — deprecated 2026-06-08, removed 2026-06-13), and is now the sole
+web client (the native iOS/Android apps live in `native/`). It is **CORS-free**: it reads
+**Supabase** directly (RLS-scoped to the signed-in user — the client does no access filtering) and
+the **auth broker** (`backend/auth_broker`) using the same endpoints. No backend changes.
 
 > Independent tool · not an official product of The Church of Jesus Christ of Latter-day Saints.
 
 ## Stack
 
 - **Vite + React 18 + TypeScript**
-- **React Router v7** (mirrors the Flutter `go_router` map)
+- **React Router v7** (the route map ported from the former Flutter `go_router` setup)
 - **@supabase/supabase-js** (auth + RLS-scoped reads)
 - **@tanstack/react-query** (client cache wrapper)
 - **Recharts** (KPI trend lines)
@@ -46,10 +47,10 @@ npm run preview           # preview the production build
 ```
 apps/web/
   index.html                 OG/Twitter/canonical meta (N1) + passkey.js
-  public/                    manifest, icons (copied from the Flutter app), passkey.js bridge
+  public/                    manifest, icons, passkey.js bridge
   src/
     main.tsx                 entry: Sentry, web-vitals, React Query, Theme/Toast providers, router
-    router.tsx               route map (auth guard) — mirrors the go_router contract
+    router.tsx               route map (auth guard)
     lib/                     config, supabase, member model + select, broker, passkey, admin,
                              disclaimer copy, error reporter
     logic/                   framework-free ported logic (unit-tested):
@@ -62,18 +63,23 @@ apps/web/
                              dashboard building blocks, drill/sync/report sheets, EmptyState, TrendLine
     pages/                   LoginPage, DashboardShell, tabs/*, PersonDetailPage, SettingsPage,
                              InvitePage, AdminPage, ConfigError
-    test/                    vitest tests mirroring the Flutter tests
+    test/                    vitest unit tests for the ported logic
 ```
 
 ## Parity notes
 
-- **Single source of truth** is preserved per concept (mirrored from the Flutter files):
+> Provenance: this app was ported 1:1 from the original Flutter app, which has since been **deleted**
+> (the `← *.dart` references below name the now-removed source files; today the web app and the two
+> native ports are kept in lockstep — see `.llm/CROSS_SURFACE_UI.md`).
+
+- **Single source of truth** is preserved per concept (ported from the former Flutter files):
   the member select (`lib/member.ts` ← `dashboard_page.dart _columns`), Golden Hour milestones /
   eligibility / OrgBucket (`logic/milestones.ts` ← `golden_hour.dart`), the KPI math
   (`logic/kpis.ts` ← `dashboard_common.dart`), and the disclaimer / rules copy
   (`lib/disclaimer.ts` ← `disclaimer.dart`).
 - **3-mode login** (Church + MFA, Email code with broker-relay fallback, passkey), the **N2**
-  no-access block, **#6** consent wording, and broker **warm-up (N5)** all mirror `login_page.dart`.
+  no-access block, **#6** consent wording, and broker **warm-up (N5)** all came from the former
+  `login_page.dart`.
 - **Syncing banner** auto-polls `sync_state` every ~5s and self-clears (**N3**); investigators show
   only in Baptisms / Golden-Hour "Being Taught" (**N7**); friends **count** (#3); baptisms-by-month
   + best month (#1/#2); Rules & definitions in Settings (#4).

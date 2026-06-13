@@ -52,7 +52,8 @@ Env required:
   secret still needed; minting fails without it)
 - `ALLOWED_ORIGINS` (e.g. `https://app.membercovenantpath.org`)
 
-Point the Flutter app at it with `--dart-define=BROKER_URL=https://broker.membercovenantpath.org`.
+Point the web app at it with the build-time env `VITE_BROKER_URL=https://broker.membercovenantpath.org`
+(the native apps carry the broker URL in their own build config).
 
 ## MFA factor handling (okta_flow)
 - `start_login` enumerates every selectable 2nd factor from the IDX `select-authenticator-authenticate`
