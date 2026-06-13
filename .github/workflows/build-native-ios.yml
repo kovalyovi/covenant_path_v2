@@ -50,8 +50,13 @@ jobs:
           BROKER_URL: ${{ secrets.BROKER_URL }}
         run: |
           set -o pipefail
+          # -configuration Release: a Debug build produces a thin stub binary + a separate
+          # *.debug.dylib, which (a) trips AltStore's resign/parse ("data couldn't be read… not in the
+          # correct format" / ServerError 2005) and (b) is unoptimized → slow on heavy screens. Release
+          # is a single optimized self-contained binary — sideload-friendly and fast.
           xcodebuild \
             -scheme CovenantPath \
+            -configuration Release \
             -destination 'generic/platform=iOS' \
             -skipPackagePluginValidation \
             -derivedDataPath build \

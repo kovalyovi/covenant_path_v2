@@ -27,23 +27,25 @@ struct DashboardView: View {
     }
 
     var body: some View {
-        // ONE NavigationStack around the TabView (was a NavigationStack per tab). This gives a single
-        // shared toolbar + title, so (a) the stake name is a real top-left navigation title instead of a
-        // cramped toolbar button, and (b) the freshness/refresh/menu buttons no longer rebuild — "blink" —
-        // when you switch tabs. Pushing a member detail covers the tab bar (standard iOS).
+        // ONE NavigationStack around the TabView (was a NavigationStack per tab): a single shared
+        // toolbar so the freshness/refresh/menu buttons no longer rebuild — "blink" — on tab switch.
+        // The stake name is a CUSTOM header (`stakeHeader`) above the tabs, not a nav title (those
+        // truncate with "…" and can't wrap). Pushing a member detail covers the tab bar (standard iOS).
         NavigationStack {
-            TabView(selection: $tab) {
-                ForEach(DashboardTab.allCases) { t in
-                    tabPage(t)
-                        .tabItem { Label(t.title, systemImage: t.symbol) }
-                        .tag(t)
+            VStack(spacing: 0) {
+                stakeHeader
+                TabView(selection: $tab) {
+                    ForEach(DashboardTab.allCases) { t in
+                        tabPage(t)
+                            .tabItem { Label(t.title, systemImage: t.symbol) }
+                            .tag(t)
+                    }
                 }
+                .tint(tab.accent)
+                .cpTabBarMinimizeOnScroll()   // iOS 26: glass tab bar minimizes on scroll (no-op below)
             }
-            .tint(tab.accent)
-            .cpTabBarMinimizeOnScroll()   // iOS 26: glass tab bar minimizes on scroll (no-op below)
-            .navigationTitle(store.stakeName)
-            .navigationBarTitleDisplayMode(.large)
-            .toolbarTitleMenu { stakeSwitcherItems }   // tap the title to switch stakes (when >1)
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: Member.self) { member in
                 PersonDetailView(member: member)
             }
@@ -151,23 +153,51 @@ struct DashboardView: View {
         }
     }
 
-    /// Items for the navigation-title menu — tapping the stake-name title switches stakes (only when
-    /// the user can see more than one; otherwise the title is a plain, non-interactive label).
+    /// The stake-name header above the tabs — full name (wraps to 2 lines, scales down), left-aligned,
+    /// always visible. When the user can see more than one stake it's a tappable Menu (switch stakes);
+    /// otherwise a plain label. Replaces the truncating nav title + its dead title-menu carrot.
     @ViewBuilder
-    private var stakeSwitcherItems: some View {
+    private var stakeHeader: some View {
         if store.stakes.count > 1 {
-            ForEach(store.stakes) { s in
-                Button {
-                    Task { await store.selectStake(s.id) }
-                } label: {
-                    if s.id == store.currentStakeID {
-                        Label(s.name ?? "—", systemImage: "checkmark")
-                    } else {
-                        Text(s.name ?? "—")
+            Menu {
+                ForEach(store.stakes) { s in
+                    Button {
+                        Task { await store.selectStake(s.id) }
+                    } label: {
+                        if s.id == store.currentStakeID {
+                            Label(s.name ?? "—", systemImage: "checkmark")
+                        } else {
+                            Text(s.name ?? "—")
+                        }
                     }
                 }
+            } label: {
+                stakeHeaderLabel(showChevron: true)
             }
+            .tint(.primary)
+        } else {
+            stakeHeaderLabel(showChevron: false)
         }
+    }
+
+    private func stakeHeaderLabel(showChevron: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(store.stakeName)
+                .font(.title2.weight(.bold))
+                .lineLimit(2)
+                .minimumScaleFactor(0.6)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+            if showChevron {
+                Image(systemName: "chevron.down").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.top, 2)
+        .padding(.bottom, 8)
+        .contentShape(Rectangle())
     }
 
     private func freshnessChip(_ iso: String) -> some View {
