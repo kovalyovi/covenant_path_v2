@@ -18,6 +18,14 @@ use the platform-standard equivalent — never drop the information.
 > `native/ios/Sources/CovenantPathKit/` and `native/android/.../`.
 
 ## A. Entry / auth  [main.dart, login_page.dart, broker_client.dart, passkey_client.dart, biometric_*]
+
+> **SUPERSEDED note (ADR-011, 2026-06-12):** the **passwordless Church-OTP lane** (`/auth/otp/*`,
+> the re-auth "Email code" mode) described in the dated sub-bullets below was **REMOVED** everywhere —
+> it couldn't mint the 45-day sync token. Church auth is **username + password only** (`/auth/web/*`
+> mints; `/auth/password` view-only). Native re-auth is already password-only (DONE). The "Email code"
+> in the 3-mode login is the SUPABASE relay (a different system) and stays. Ignore the OTP/email-code
+> build entries below as work-to-do; they're kept as dated history.
+
 1. **AuthGate**: no session → Login; session → (biometric app-lock gate) → Dashboard. Listen to auth state.
 2. **Config-error screen** when SUPABASE_URL/ANON_KEY missing [_ConfigError].
 3. **Login — 3 modes** (segmented when broker configured; else Email only):
