@@ -186,7 +186,17 @@ function CompletionCard({ rows, onDrill }: { rows: Member[]; onDrill: (d: Drill)
   if (rows.length === 0) return null;
   return (
     <SectionCard title="Golden Hour completion">
-      <div className="wrap" style={{ gap: 18 }}>
+      {/* Balanced 2-column grid that spans the FULL width (esp. on mobile). `grid-auto-rows: 1fr`
+          keeps sibling cells the SAME height even when one label wraps to two lines, so it reads as
+          a clean two-column flow; full label text — never truncated with "…". */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+          gridAutoRows: '1fr',
+          gap: 14,
+        }}
+      >
         {milestones.map((ms) => {
           // Expected-only: eligible AND not N/A (N/A ≠ not-done), so the % + drill exclude
           // not-applicable members entirely.
@@ -200,7 +210,17 @@ function CompletionCard({ rows, onDrill }: { rows: Member[]; onDrill: (d: Drill)
               key={ms.abbr}
               type="button"
               onClick={() => onDrill({ kind: 'category', label: ms.label, missing })}
-              style={{ width: 124, background: 'transparent', border: 'none', textAlign: 'left', color: 'inherit' }}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                width: '100%',
+                height: '100%',
+                background: 'transparent',
+                border: 'none',
+                textAlign: 'left',
+                color: 'inherit',
+                padding: 0,
+              }}
             >
               <div className="row" style={{ gap: 4, alignItems: 'baseline' }}>
                 <span style={{ fontSize: '1.25rem', fontWeight: 700 }}>{Math.round(pct * 100)}%</span>
@@ -208,7 +228,9 @@ function CompletionCard({ rows, onDrill }: { rows: Member[]; onDrill: (d: Drill)
                   {done.length}/{eligible.length}
                 </span>
               </div>
-              <div className="tiny muted" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {/* Full label, wraps to as many lines as needed (no ellipsis); flex-grow pushes the bar
+                  to the bottom so a one-line cell aligns its bar with a two-line sibling. */}
+              <div className="tiny muted" style={{ flex: 1 }}>
                 {ms.label}
               </div>
               <div style={{ marginTop: 4 }}>
