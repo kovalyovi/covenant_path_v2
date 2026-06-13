@@ -36,8 +36,17 @@ def run() -> int:
     try:
         cur.execute("select id from stakes where unit_number=503991")
         sid = cur.fetchone()[0]
-        cur.execute("select email from user_roles where role='stake_leader' and email is not null limit 1")
-        stake_email = cur.fetchone()[0]
+        # Pick a stake_leader OF THIS STAKE — not just any stake_leader. Once a second stake is
+        # enrolled (Springville joined Raleigh in prod), an unscoped `limit 1` can grab a leader of a
+        # DIFFERENT stake, and the unit-scoped invite below then correctly raises "not authorized to
+        # grant access to that unit", failing the suite on data shape rather than a real regression.
+        cur.execute("select email from user_roles where role='stake_leader' and stake_id=%s "
+                    "and email is not null limit 1", (sid,))
+        row = cur.fetchone()
+        if row is None:
+            print("  [skip] no stake_leader (with email) scoped to stake 503991 — nothing to clone")
+            return 0
+        stake_email = row[0]
         cur.execute("select id from units where stake_id=%s limit 1", (sid,))
         unit_id = cur.fetchone()[0]
         cur.execute("select count(*) from members where unit_id=%s", (unit_id,))

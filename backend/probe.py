@@ -22,7 +22,18 @@ logger = get_logger()
 def main() -> int:
     from lcr_client import LcrClient, metrics, okta_login
 
-    okta_login.login()
+    try:
+        okta_login.login()
+    except Exception as exc:  # noqa: BLE001 — any auth failure: skip, don't red-fail every 4h
+        # The operator account has MFA enabled, so a headless password login can't clear the second
+        # factor (Okta returns select-authenticator-authenticate). The daily sync is unaffected — it
+        # runs off the stored 45-day Member Tools token — but this probe needs a FRESH LCR session it
+        # can no longer obtain in CI. Skip cleanly (same posture as the sync's needs_reauth, which no
+        # longer red-fails the run) so a chronic, expected condition doesn't masquerade as a failure.
+        logger.warning("probe skipped — could not establish a fresh LCR session "
+                       "(operator login is likely MFA-walled): %s", exc)
+        print(f"[skip] probe: no LCR session ({exc})")
+        return 0
     metrics.reset()
     client = LcrClient()
     ctx = client.user_context()

@@ -268,7 +268,16 @@ def _norm_endpoint(ep: str) -> str:
         path = urlparse(ep).path or ep
     except (ValueError, TypeError):
         path = ep
-    return "/".join("{id}" if seg and _ID_SEG.match(seg) else seg for seg in path.split("/"))
+
+    def _seg(s: str) -> str:
+        # Collapse: an opaque id, an already-{id} segment, OR a HALF-normalized id left by the pre-fix
+        # metrics normalizer — its old substring sub mangled ids that start with digits into
+        # "{id}<hextail>" (e.g. ".../one-work/details/{id}c392993ba544f4abedeb596b7f6fc73"). Those
+        # rows otherwise survive forever as distinct "hot" endpoints in the trend; merging them on read
+        # (matches apps/web AdminPage.normEndpoint) fixes the "View all" list without a data migration.
+        return "{id}" if (s.startswith("{id}") or _ID_SEG.match(s)) else s
+
+    return "/".join(_seg(seg) if seg else seg for seg in path.split("/"))
 
 
 def _reauths_30d() -> dict:

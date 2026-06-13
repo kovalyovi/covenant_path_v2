@@ -335,6 +335,26 @@ def test_stale_first_unit_ordering():
     return "stale-first ordering: never-synced first, then oldest-data; empty=no-op"
 
 
+def test_endpoint_normalizer():
+    """admin._norm_endpoint collapses opaque ids AND the half-normalized "{id}<hextail>" artifacts
+    left by the pre-fix metrics normalizer, so the endpoint-health TREND groups every call to a route
+    into one row instead of dozens of stale per-id "hot" rows."""
+    from backend.auth_broker.admin import _norm_endpoint
+    DET = "/api/report/one-work/details"
+    # opaque ids (dashless 32-hex person id, dashed uuid, numeric) -> one route key
+    assert _norm_endpoint(f"{DET}/c392993ba544f4abedeb596b7f6fc73aa") == f"{DET}/{{id}}"
+    assert _norm_endpoint("/api/units/12345/report") == "/api/units/{id}/report"
+    # the regression: a row recorded by the OLD normalizer ("{id}" + leftover hex tail) must MERGE
+    # with the clean "{id}" route, not survive as its own endpoint.
+    assert _norm_endpoint(f"{DET}/{{id}}c392993ba544f4abedeb596b7f6fc73") == f"{DET}/{{id}}"
+    assert _norm_endpoint(f"{DET}/{{id}}") == f"{DET}/{{id}}"
+    # a query string never splinters the key
+    assert _norm_endpoint(f"{DET}/{{id}}?legacyCmisId=5") == f"{DET}/{{id}}"
+    # a genuine route word is left alone
+    assert _norm_endpoint("/api/dashboard/data") == "/api/dashboard/data"
+    return "endpoint normalizer: ids + legacy {id}<hex> artifacts collapse to one route key"
+
+
 def test_milestone_na_exclusion():
     """member_missing EXCLUDES N/A fields (N/A ≠ not-done): a woman's priesthood, a young child's
     age-gated steps. Mirrors the web `isMissing`/`expected` rule."""
@@ -810,7 +830,7 @@ def main() -> int:
     print("== OFFLINE tests ==")
     offline = [test_token_store_roundtrip, test_token_store_key_mismatch,
                test_report_degradation_helpers, test_stale_first_unit_ordering,
-               test_milestone_na_exclusion,
+               test_endpoint_normalizer, test_milestone_na_exclusion,
                test_membertools_auth, test_membertools_adapter, test_membertools_build_report,
                test_membertools_token_store, test_calling_union_and_neutralize,
                test_http_util_transient_classification, test_http_util_retry_and_breaker,
