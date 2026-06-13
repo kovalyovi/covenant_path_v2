@@ -4,6 +4,7 @@
 
 import { useState } from 'react';
 import { useDashboard } from '../../hooks/useDashboard';
+import { usePersistentState, setCodec } from '../../hooks/usePersistentState';
 import { useTier } from '../../hooks/useTier';
 import type { Member } from '../../lib/member';
 import { isInvestigator } from '../../lib/member';
@@ -32,11 +33,13 @@ export function GoldenHourTab() {
 function GoldenHourBody() {
   const d = useDashboard();
   const tier = useTier();
-  const [section, setSection] = useState<GhSection>('newMembers');
-  const [windowSel, setWindowSel] = useState<Window>('all');
-  const [byDate, setByDate] = useState(false);
-  const [asc, setAsc] = useState<boolean | null>(null);
-  const [orgs, setOrgs] = useState<Set<OrgBucket>>(new Set(ORG_BUCKETS));
+  // Persisted view state (item 9): section, recency window, sort mode/direction, org filter.
+  const [section, setSection] = usePersistentState<GhSection>('gh.section', 'newMembers');
+  const [windowSel, setWindowSel] = usePersistentState<Window>('gh.window', 'all');
+  const [byDate, setByDate] = usePersistentState<boolean>('gh.byDate', false);
+  const [asc, setAsc] = usePersistentState<boolean | null>('gh.asc', null);
+  const [orgs, setOrgs] = usePersistentState<Set<OrgBucket>>(
+    'gh.orgs', new Set(ORG_BUCKETS), setCodec as never);
   const [drill, setDrill] = useState<Drill | null>(null);
 
   const newMembers = d.members.filter((m) => !isInvestigator(m));

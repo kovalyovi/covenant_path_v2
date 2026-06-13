@@ -7,6 +7,8 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { signOut } from '../hooks/useAuth';
 import { useTheme } from '../hooks/useTheme';
+import { useDashboard } from '../hooks/useDashboard';
+import { getRemember, setRemember } from '../lib/prefs';
 import { passkey } from '../lib/passkey';
 import { Icon, type IconName } from '../components/Icon';
 import { IconButton } from '../components/ui';
@@ -18,11 +20,15 @@ export function SettingsPage() {
   const navigate = useNavigate();
   const theme = useTheme();
   const toast = useToast();
+  const { showNotes, setShowNotes } = useDashboard();
   const [aboutOpen, setAboutOpen] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [resolvedEmail, setResolvedEmail] = useState<string>('');
+  // The GLOBAL "remember my filters & view preferences" switch (item 9). Turning it off forgets
+  // everything persisted (lib/prefs.setRemember clears it) and stops persisting going forward.
+  const [remember, setRememberState] = useState<boolean>(() => getRemember());
 
   // Resolve the signed-in email once.
   useEffect(() => {
@@ -39,6 +45,26 @@ export function SettingsPage() {
         <div className="maxw" style={{ paddingBottom: 24 }}>
           <SectionHead>Appearance</SectionHead>
           <Tile icon="brightness" title="Theme" subtitle={theme.label} onClick={theme.cycle} chevron />
+          <hr className="divider" style={{ margin: 0 }} />
+
+          <SectionHead>Preferences</SectionHead>
+          <ToggleTile
+            icon="sort"
+            title="Remember my filters & view preferences"
+            subtitle="Keep your filters, sorts, and view choices between sessions on this device"
+            checked={remember}
+            onChange={(on) => {
+              setRemember(on); // persists / clears, then governs notes persistence too
+              setRememberState(on);
+            }}
+          />
+          <ToggleTile
+            icon="note"
+            title="Show notes on member lists"
+            subtitle="Display each member's note on the main screen"
+            checked={showNotes}
+            onChange={setShowNotes}
+          />
           <hr className="divider" style={{ margin: 0 }} />
 
           <SectionHead>Security</SectionHead>
@@ -129,4 +155,41 @@ function Tile({
     );
   }
   return <div className="list-tile">{content}</div>;
+}
+
+/** A settings row with a right-aligned on/off switch (item 9 preferences). */
+function ToggleTile({
+  icon,
+  title,
+  subtitle,
+  checked,
+  onChange,
+}: {
+  icon: IconName;
+  title: string;
+  subtitle?: string;
+  checked: boolean;
+  onChange: (on: boolean) => void;
+}) {
+  return (
+    <label className="list-tile" style={{ cursor: 'pointer' }}>
+      <Icon name={icon} size={22} />
+      <span className="list-tile__main">
+        <span>{title}</span>
+        {subtitle && (
+          <span className="small muted" style={{ display: 'block' }}>
+            {subtitle}
+          </span>
+        )}
+      </span>
+      <input
+        type="checkbox"
+        role="switch"
+        className="switch"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        aria-label={title}
+      />
+    </label>
+  );
 }

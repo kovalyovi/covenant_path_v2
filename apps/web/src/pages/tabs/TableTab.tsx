@@ -6,6 +6,7 @@
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { usePersistentState } from '../../hooks/usePersistentState';
 import { useDashboard } from '../../hooks/useDashboard';
 import type { Member } from '../../lib/member';
 import { isInvestigator } from '../../lib/member';
@@ -110,10 +111,20 @@ export function TableTab() {
 function TableBody({ members }: { members: Member[] }) {
   const navigate = useNavigate();
   const { notes, showNotes } = useDashboard();
-  const [sortCol, setSortCol] = useState<number | null>(null);
-  const [sortAsc, setSortAsc] = useState(true);
+  // Persisted view state (item 9): sort + per-column value filters survive a reload while the global
+  // "remember my filters" pref is on. `filterCol` is the transiently-open panel (not persisted).
+  const [sortCol, setSortCol] = usePersistentState<number | null>('table.sortCol', null);
+  const [sortAsc, setSortAsc] = usePersistentState<boolean>('table.sortAsc', true);
   // per column: the set of values the user UNCHECKED (hidden). Empty/absent = show everything.
-  const [excluded, setExcluded] = useState<Record<string, Set<string>>>({});
+  const [excluded, setExcluded] = usePersistentState<Record<string, Set<string>>>(
+    'table.excluded', {}, {
+      serialize: (v) => Object.fromEntries(Object.entries(v).map(([k, s]) => [k, [...s]])),
+      deserialize: (raw) => {
+        const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, string[]>;
+        return Object.fromEntries(Object.entries(o).map(([k, a]) => [k, new Set(a)]));
+      },
+    },
+  );
   const [filterCol, setFilterCol] = useState<Col | null>(null);
 
   const base = members.filter((m) => !isInvestigator(m));

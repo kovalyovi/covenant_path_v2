@@ -3,9 +3,9 @@
 // timelines (header toggle); dates already passed surface in a "needs attention — overdue" block
 // on top, genuinely upcoming dates follow. Investigators only (N7).
 
-import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDashboard } from '../../hooks/useDashboard';
+import { usePersistentState } from '../../hooks/usePersistentState';
 import { useTier, colsFor } from '../../hooks/useTier';
 import type { Member } from '../../lib/member';
 import { isInvestigator } from '../../lib/member';
@@ -32,7 +32,7 @@ export function BaptismsTab() {
 function BaptismsBody() {
   const d = useDashboard();
   const tier = useTier();
-  const [byUnit, setByUnit] = useState(false);
+  const [byUnit, setByUnit] = usePersistentState<boolean>('baptisms.byUnit', false); // item 9
 
   const today = dayOnly(new Date());
   const items: Dated[] = [];

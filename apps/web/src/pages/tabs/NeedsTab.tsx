@@ -2,8 +2,8 @@
 // with its own outstanding count), then the *eligible* members still missing that step, with a
 // per-unit colored breakdown. React port of needs_view.dart. New members only (N7); org-filtered.
 
-import { useState } from 'react';
 import { useDashboard } from '../../hooks/useDashboard';
+import { usePersistentState, setCodec } from '../../hooks/usePersistentState';
 import { useTier } from '../../hooks/useTier';
 import type { Member } from '../../lib/member';
 import { isInvestigator } from '../../lib/member';
@@ -31,10 +31,12 @@ export function NeedsTab() {
 function NeedsBody() {
   const d = useDashboard();
   const tier = useTier();
-  const [selected, setSelected] = useState<number | null>(null);
-  const [ascending, setAscending] = useState(true);
-  const [orgs, setOrgs] = useState<Set<OrgBucket>>(new Set(ORG_BUCKETS));
-  const [ward, setWard] = useState<string | null>(null); // null = Stake (all wards)
+  // Persisted view state (item 9): the selected category, sort direction, org + ward filters.
+  const [selected, setSelected] = usePersistentState<number | null>('needs.selected', null);
+  const [ascending, setAscending] = usePersistentState<boolean>('needs.ascending', true);
+  const [orgs, setOrgs] = usePersistentState<Set<OrgBucket>>(
+    'needs.orgs', new Set(ORG_BUCKETS), setCodec as never);
+  const [ward, setWard] = usePersistentState<string | null>('needs.ward', null); // null = all wards
 
   function toggleOrg(b: OrgBucket) {
     setOrgs((cur) => {

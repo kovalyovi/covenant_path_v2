@@ -7,6 +7,7 @@
 
 import { useState } from 'react';
 import { useDashboard } from '../../hooks/useDashboard';
+import { usePersistentState } from '../../hooks/usePersistentState';
 import { useTier, colsFor } from '../../hooks/useTier';
 import type { Member } from '../../lib/member';
 import { isInvestigator } from '../../lib/member';
@@ -36,9 +37,11 @@ export function KpisTab() {
 function KpisBody() {
   const d = useDashboard();
   const tier = useTier();
-  const [period, setPeriod] = useState<Period>('month');
-  const [unit, setUnit] = useState<string | null>(null);
-  const [compare, setCompare] = useState(false);
+  // Persisted view state (item 9): period, unit filter, compare toggle. (customRange holds Date
+  // objects + is a one-off power action → kept session-only.)
+  const [period, setPeriod] = usePersistentState<Period>('kpis.period', 'month');
+  const [unit, setUnit] = usePersistentState<string | null>('kpis.unit', null);
+  const [compare, setCompare] = usePersistentState<boolean>('kpis.compare', false);
   const [customRange, setCustomRange] = useState<DateRange | null>(null); // #7
   const [drill, setDrill] = useState<Drill | null>(null);
 
