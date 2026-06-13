@@ -17,7 +17,7 @@
 | **`access_audit`** table | Every role **grant/revoke** from provisioning: who, calling, role, scope, action | Supabase (admin-only RLS) | Admins (query/console) | `0034`, `roles.py` |
 | **`sync_diagnostics`** table | Per-sync run stats, field coverage, request metrics, failed units | Supabase | Admin console → Diagnostics | `0013`, `daily_sync.py` |
 | **Axiom** (structured) | PII-safe JSON events (IDs/counts/durations/status) across sync + broker; correlation-id per run | 30-day (free tier) | Axiom dashboard / in-app log views | `observability.py` |
-| **Sentry** | Client crashes/errors (Flutter + native) | Sentry | Sentry dashboard | `error_reporter.dart`, `config.dart` |
+| **Sentry** | Client crashes/errors (React web + native) | Sentry | Sentry dashboard | web: `@sentry/react` init in `apps/web/src/main.tsx` + `apps/web/src/lib/errorReporter.ts` (chains to broker `/log`); native handlers report to `/log` |
 | **`/log`** broker endpoint | Client-side errors/failed calls → forwarded to Axiom (PII-scrubbed, size-capped) | via Axiom | Axiom | `app.py` `client_log` |
 | **stderr → Render** | Broker `logger.*` lines (login eval, errors) | ephemeral (Render log viewer) | Operator | `logging_setup.py` |
 | **File logs** | `tools/output/logs/session_*.log` (sync runs) | local / CI artifact (14-day) | Operator | `logging_setup.py` |

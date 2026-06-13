@@ -3,7 +3,7 @@
 The platform runs entirely on free tiers. This is the "if a tier squeezes us" playbook: what each
 service does, its limit, **how to repoint it** (the one config to change), and the fallback. The
 design goal (already mostly true) is that **only Supabase is a hard dependency** — everything else
-is a config change, not a rewrite. See `docs/STRATEGY.md` §4 for the rationale.
+is a config change, not a rewrite. See `docs/STRATEGY.md` for the rationale.
 
 ## Providers at a glance
 
@@ -11,7 +11,7 @@ is a config change, not a rewrite. See `docs/STRATEGY.md` §4 for the rationale.
 |---|---|---|---|---|
 | **Supabase** | Postgres + Auth + RLS (system of record) | 500 MB DB; **pauses after ~1 wk idle** (daily sync keeps it warm) | `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL` | **High** |
 | **Render** | auth broker (FastAPI) | sleeps after 15 min idle | `BROKER_URL` (app) + redeploy container elsewhere | Low |
-| **Cloudflare Pages** | viewer hosting | 500 builds/mo | `CLOUDFLARE_*` secrets + `projectName` | Low |
+| **Cloudflare Pages** | web app hosting | 500 builds/mo | `CLOUDFLARE_*` secrets + `projectName` | Low |
 | **GitHub Actions** | daily sync + deploy CI | 2,000 min/mo private | move workflows to any cron/CI | Low |
 | **Resend** | email (digests, invites, reports, handoffs) | 3,000/mo, 100/day | `RESEND_API_KEY` **or** `SMTP_*` | Low (SMTP fallback built in) |
 | **Google Sheets** | coarse per-stake export (optional) | free | `SPREADSHEET_ID` + service account | Low (optional) |
@@ -26,21 +26,22 @@ vars are read by the daily-sync and weekly-reminders workflows and the broker.
 
 ### Auth broker — Render → Fly/Railway/any container host
 The broker is a plain FastAPI container (`Dockerfile` at repo root, no browser, no DB). Deploy it
-anywhere, then set the app's **`BROKER_URL`** (`--dart-define` for the viewer build; the GitHub
-repo variable `BROKER_URL` for keep-warm). Its env: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
+anywhere, then set the app's **`BROKER_URL`** (`VITE_BROKER_URL` build-time env for the React web
+build; the GitHub repo variable `BROKER_URL` for keep-warm). Its env: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
 `CP_TOKEN_KEY` (now required — enrollment encryption), `ALLOWED_ORIGINS`, `GITHUB_TOKEN`,
 `RESEND_API_KEY`. CORS already allows `*.pages.dev`, `*.membercovenantpath.org`, localhost.
 
-### Viewer host — Cloudflare Pages → any static host
-`flutter build web` output is plain static files. Any host (Netlify, GitHub Pages, S3+CloudFront)
-serves it. Keep the `web/_headers` cache rules (or replicate them) so `index.html` /
-`flutter_service_worker.js` revalidate. Update `deploy-web.yml` (or replace it) for the new host.
+### Web host — Cloudflare Pages → any static host
+The React web build (`npm run build` in `apps/web`) emits plain static files to `apps/web/dist/`.
+Any host (Netlify, GitHub Pages, S3+CloudFront) serves it. Keep the `public/_headers` cache rules
+(or replicate them) so `index.html` / hashed assets revalidate correctly. Update `deploy-web.yml`
+(or replace it) for the new host — today it runs the Vite build and `wrangler pages deploy dist/`.
 
 ### CI — GitHub Actions → any scheduler
 Three workflows: `daily-sync.yml` (the only one that needs the LCR/Supabase/Sheets secrets +
 runs the scrape), `weekly-reminders.yml`, `deploy-web.yml`. Each is a thin wrapper around a
-`python scripts/*.py` or `flutter build`. Port to any cron host with the same env (the secrets
-checklist is in `DEPLOYMENT.md`).
+`python scripts/*.py` or the web build (`npm run build` in `apps/web`). Port to any cron host with
+the same env (the secrets checklist is in `DEPLOYMENT.md`).
 
 ## The hard one — Supabase (Postgres + Auth + RLS)
 
@@ -55,8 +56,9 @@ path if we ever must move:
   + `pgcrypto`). It applies to any Postgres. The access model is standard RLS policies. So a move to
   **self-hosted Supabase (OSS)** or **bare Postgres + PostgREST + an auth shim** is a re-point, not a
   redesign: change `SUPABASE_URL`/keys/`SUPABASE_DB_URL`, re-run `python -m backend.apply`, re-seed
-  the owner admin row. The viewer talks to Supabase only through `supabase_flutter` + the broker's
-  REST calls — concentrated enough to swap the base URL.
+  the owner admin row. The web app talks to Supabase only through `@supabase/supabase-js` (and the
+  native apps through their own Supabase clients) + the broker's REST calls — concentrated enough to
+  swap the base URL.
 - **Auth is the stickiest piece:** GoTrue (Supabase Auth) issues the JWT RLS keys off. Self-hosting
   Supabase keeps GoTrue; going fully bare-Postgres would need an auth replacement that mints
   RLS-compatible JWTs. Defer until actually forced.

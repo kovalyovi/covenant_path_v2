@@ -5,8 +5,8 @@ tenure), **who can see covenant-path data** (calling → access), and **who owns
 (by tenure) — in one place. Each rule has a single source of truth in code (linked below); this
 doc explains them and is surfaced in-app under **Settings → Rules & definitions** (and via ⓘ icons).
 
-> One-source-of-truth note: change a rule in the file named, and every view follows. The Flutter
-> app and the two native ports (`native/ios`, `native/android`) mirror these — see
+> One-source-of-truth note: change a rule in the file named, and every view follows. The React web
+> app (`apps/web`) and the two native ports (`native/ios`, `native/android`) mirror these — see
 > `.llm/CROSS_SURFACE_UI.md`.
 
 ---
@@ -17,9 +17,10 @@ A milestone is only counted for the people it can actually apply to, so completi
 penalize someone who isn't eligible. **Eligibility ≠ completion** — eligibility decides whether the
 row is even asked; completion is whether they've done it.
 
-Source: `apps/viewer/lib/golden_hour.dart` (`milestones`, eligibility predicates) and the backend
+Source: `apps/web/src/logic/milestones.ts` (`milestones`, eligibility predicates) and the backend
 mirror `backend/milestones.py` (`turns_at_least` / `is_at_least_now` / `member_one_year`), applied
-in `covenant_path/report.py` (`_apply_profile`). Native: `native/*/…/Milestones`.
+in `covenant_path/report.py` (`_apply_profile`). Native mirrors:
+`native/ios/Sources/CovenantPathKit/Logic/Milestones.swift` + `native/android/.../logic/Milestones.kt`.
 
 | Milestone / field | Who is eligible | Rule |
 |---|---|---|
@@ -85,7 +86,8 @@ Executive Secretary / Assistant, High Council.
 ## 3. Who owns a convert's care (by tenure)
 
 The stake's hand-off policy for a new member's integration. Single source:
-`apps/viewer/lib/golden_hour.dart` (`responsibleOrg` / `orgInfo`). Native: `native/*/…/OrgBucket`.
+`apps/web/src/logic/milestones.ts` (`responsibleOrg` / `orgInfo` / `OrgBucket`). Native mirrors:
+`native/ios/Sources/CovenantPathKit/Logic/OrgBucket.swift` + `native/android/.../logic/OrgBucket.kt`.
 
 | Time since baptism | Responsible org | Who |
 |---|---|---|

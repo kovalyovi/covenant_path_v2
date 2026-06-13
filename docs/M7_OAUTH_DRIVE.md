@@ -31,9 +31,10 @@ in as Editor so the existing `SheetsSync` writes the data unchanged. The platfor
    (`gdrive_status_for`, `store_gdrive_token`, `disconnect_gdrive`).
 4. **Sheet provisioning** — `sheets_sync/oauth_drive.py` (`ensure_sheet`: create-on-first-use in the
    leader's Drive, write headers, share Editor→service account + reader→leadership; idempotent).
-5. **Viewer UI** — `_GoogleDriveSection` in `apps/viewer/lib/views/dashboard_shell.dart` (Sync
+5. **Web UI** — `GoogleDriveSection` in `apps/web/src/components/SyncSettingsSheet.tsx` (Sync
    settings): provider-only "Connect Google Drive", shows the connected email + the sheet link +
    last-refresh, and a Disconnect; self-gates (hidden) when the broker has no OAuth configured.
+   Mirrored on the native Sync-settings screens (`native/ios`, `native/android`).
 6. **Daily-sync wiring** — `scripts/daily_sync.py` `_resolve_stake_sheet`: if the stake has a
    `gdrive_token`, mint an access token (`google_oauth.access_token_for`) and use / `ensure_sheet`
    the per-stake file; else fall back (operator's own stake → master sheet; other stakes →
