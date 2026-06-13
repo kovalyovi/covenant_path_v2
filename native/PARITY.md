@@ -1,14 +1,21 @@
 # Covenant Path — Native FEATURE PARITY checklist (iOS + Android)
 
 Read `native/SPEC.md` first (data contract, auth, core logic). THIS doc is the **100% feature list**:
-the native apps must cover EVERYTHING the Flutter app (`apps/viewer/lib/`) does. The PoC skipped a lot
+the native apps must cover EVERYTHING the web client does. The PoC skipped a lot
 (KPIs charts, 3 login modes, settings, admin, reports, invites, comments, schedule, Drive UI, app-lock,
 dark mode) — all of that is now IN SCOPE. Same information + context on every screen; only the
 **placement/controls** adapt to native idioms (iOS: TabView/NavigationStack/Form/.sheet/SF Symbols;
-Android: NavigationBar/Scaffold/Material3/bottom sheets). When a Flutter widget has no native analog,
+Android: NavigationBar/Scaffold/Material3/bottom sheets). When a widget has no native analog,
 use the platform-standard equivalent — never drop the information.
 
-Reference each behavior against the Flutter source noted in [brackets]. Translate logic exactly.
+> **Reference source.** The `[brackets]` below name the **original Flutter files** (`apps/viewer/lib/`),
+> which was the reference impl when this checklist was written. That app was **deleted 2026-06-13** —
+> the live reference is now the **React web app** (`apps/web/src/`): shared logic in
+> `src/logic/` (`milestones.ts`, `kpis.ts`, `dates.ts`), screens in `src/pages/` (+ `tabs/`),
+> components in `src/components/`, broker/config/disclaimer in `src/lib/`. The bracketed Flutter names
+> still serve as the *concept* label for each item (e.g. `[baptisms_view.dart]` = the Baptisms tab);
+> read the matching `apps/web` file for exact logic and translate it. Native logic mirrors live in
+> `native/ios/Sources/CovenantPathKit/` and `native/android/.../`.
 
 ## A. Entry / auth  [main.dart, login_page.dart, broker_client.dart, passkey_client.dart, biometric_*]
 1. **AuthGate**: no session → Login; session → (biometric app-lock gate) → Dashboard. Listen to auth state.
@@ -56,7 +63,7 @@ Reference each behavior against the Flutter source noted in [brackets]. Translat
 12. **Baptisms** [upcoming/baptisms_view.dart]: investigators w/ planned baptism_goal_date as a date timeline — **overdue** ("date passed") block then **Scheduled** block; combined OR per-unit (toggle); per-unit cards show the assigned full-time **missionaries** strip (name chips → tap shows phone/email) [_MissionaryStrip, stakes.missionaries].
 13. **Golden Hour** [golden_hour_view.dart]: New Members / Being Taught **segmented**; **completion card** (% per milestone, eligible-only, tap → who's missing); **org filter** = 3 colored toggles WML/EQ/RS all-on + "Clear filters", responsibility subtitle when one selected; **Week/Month/Year/All** window + **date-range pill**; **Unit/Date** layout toggle + **Oldest/Newest** sort; member rows show milestone chips + responsibility chip; drill sheets list people.
 14. **Needs** [needs_view.dart]: per-milestone **category chips** (each milestone's color + outstanding count); selected → the eligible members still missing it; **per-unit colored chips** breakdown; **org filter** (same as GH); baptism-date↕ sort; member rows.
-15. **KPIs** [kpis_view.dart]: this is the big PoC gap — build it. Metric **line charts** (use a native chart lib: iOS **Swift Charts**; Android a Compose chart — Vico, or hand-drawn Canvas if simpler) for: Investigators-at-Sacrament, New-Members-at-Sacrament, New-Friends-being-taught, each current-window vs previous overlay; **Month/Year/All** period + date-range pill + **Compare** toggle; an **Overview** stat grid (Being taught now, Lessons w/ member present, New members tracked, Golden Hour %); **Golden Hour by unit** ranked bars; tap a point/stat → drill sheet of the people. Bucketing/series math: port `dashboard_common.dart` (_metricData, _bucketKey, _windowBuckets, allByYear) + `kpis_view.dart` exactly.
+15. **KPIs** [kpis_view.dart]: this is the big PoC gap — build it. Metric **line charts** (use a native chart lib: iOS **Swift Charts**; Android a Compose chart — Vico, or hand-drawn Canvas if simpler) for: Investigators-at-Sacrament, New-Members-at-Sacrament, New-Friends-being-taught, each current-window vs previous overlay; **Month/Year/All** period + date-range pill + **Compare** toggle; an **Overview** stat grid (Being taught now, Lessons w/ member present, New members tracked, Golden Hour %); **Golden Hour by unit** ranked bars; tap a point/stat → drill sheet of the people. Bucketing/series math: port `apps/web/src/logic/kpis.ts` (`metricData`, `bucketKey`, `windowBuckets`, `allByYear`) exactly (was the Flutter `dashboard_common.dart` + `kpis_view.dart`).
 16. **Table** [table_view.dart]: every covenant-path field in a sortable, per-column-value-filterable grid, color-coded Yes(green)/No(red)/N-A(grey)/recommend; row→detail; full-page scroll; "N members (filtered)" + clear-filters. Use a native data-grid pattern (iOS: a horizontally-scrollable Grid/Table; Android: LazyColumn+LazyRow or a table composable). Keep sort (3-state) + the value-picker filter dialog per column.
     - *2026-06-10 (ALL surfaces — verify native via CI builds + AVD spot-check):* two new tracked covenant-path fields from LCR's Temple Ordinances and Experiences commitments — **Family name prepared** (`family_name_prepared`, "Prepare a Family Name for the Temple") and **First temple visit** (`first_temple_visit`, "Perform Baptisms for Deceased Ancestors"). Both are **core Golden Hour milestones** (abbr FN / FT, eligible from the year someone turns 12 — same by-year rule as Calling) AND table columns (display gates an under-12 "No" to N/A). Completion reads the flat column first, falling back to `details.templeExperiences` for rows not yet re-synced (`templeExperienceValue` in web milestones.ts; `Milestones.familyNameValue/firstTempleVisitValue` in Swift + Kotlin). Mirrored unit tests in all three logic suites.
 

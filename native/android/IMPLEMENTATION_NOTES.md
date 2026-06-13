@@ -1,7 +1,10 @@
 # Implementation Notes — files & purpose
 
-Root package: `org.membercovenantpath.viewer`. One module: `:app`. Feature parity with the Flutter
-viewer (`apps/viewer/lib`); see `PARITY_STATUS.md`.
+Root package: `org.membercovenantpath.viewer`. One module: `:app`. Feature parity with the web client
+(see `PARITY_STATUS.md`). The `.dart` filenames below are the **original Flutter sources** this app was
+ported from; that Flutter app (`apps/viewer`) was **deleted 2026-06-13** — the live equivalents now
+live in the React web app (`apps/web/src/`: logic in `src/logic/`, clients in `src/lib/`, screens in
+`src/pages/`).
 
 ## Gradle / config
 | File | Purpose |

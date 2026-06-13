@@ -1,7 +1,9 @@
 # Covenant Path — Native iOS (SwiftUI)
 
-A native iOS rebuild of the Flutter `apps/viewer`, at **100% feature parity** (see
-`PARITY_STATUS.md`). Read-only dashboard for stake/ward leaders tracking new-member ("Golden Hour")
+A native iOS app at **100% feature parity** with the web client (see `PARITY_STATUS.md`). It was
+originally ported from the Flutter `apps/viewer` app, which has since been **deleted (2026-06-13)** —
+the live cross-surface reference is now the React web app (`apps/web`). Read-only dashboard for
+stake/ward leaders tracking new-member ("Golden Hour")
 integration. The app **only reads Supabase**, scoped by the signed-in user's role (Row-Level
 Security does all gating); it talks to the **auth broker** for Church login / sync ops / reports /
 admin, and never touches the church system directly.

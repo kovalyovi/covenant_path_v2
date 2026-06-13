@@ -1,6 +1,13 @@
 # Covenant Path — Native App Spec (shared context for the iOS + Android PoCs)
 
-This is the single shared brief for two **proof-of-concept** native rebuilds of the existing Flutter
+> **Historical brief.** This was the original kickoff spec for two **proof-of-concept** native
+> rebuilds, written when the client was the Flutter app (`apps/viewer`). The native apps have since
+> reached **full parity** (`native/PARITY.md`, `native/*/PARITY_STATUS.md`) and the Flutter app was
+> **deleted 2026-06-13**. The behavioral spec below (data contract, milestones, org logic) is still
+> accurate; the live **reference implementation** to mirror today is the React web app
+> (`apps/web/src/`, esp. `logic/milestones.ts`), not the removed Flutter source. Kept for context.
+
+This is the single shared brief for two **proof-of-concept** native rebuilds of the (then) Flutter
 viewer (`apps/viewer`). Goal: compare Flutter vs. native architecture/feel. Build the CORE, idiomatic
 and clean — not 100% parity. Two independent apps:
 - **iOS**: Swift + SwiftUI (latest: `@Observable`/Observation, `async/await`, `NavigationStack`,
@@ -49,7 +56,7 @@ broker, and passkeys — OUT OF SCOPE for the PoC; implement email-OTP only.)
 `stakes` — `id`, `name`, `unit_number`, `last_synced_at`, `missionaries` (jsonb: unit→[{name,phone,email}]).
 `units` — `id`, `stake_id`, `name`, `unit_type`. `user_roles` — drives RLS; app doesn't query directly.
 
-Select string the Flutter app uses for the dashboard (mirror it):
+Select string for the dashboard (mirror it; see `apps/web/src/lib/member.ts`):
 `person_uuid, stake_id, unit_id, name, unit_name, baptism_date, birth_date, membership_duration,
 sex, friends, aaronic_priesthood, melchizedek_priesthood, calling, ministering_brothers_sisters,
 ministering_assignment, temple_recommend, patriarchal_blessing, living_ordinance, details, photo_url,
@@ -119,7 +126,8 @@ pipeline (just show photo_url if present, else initials).
   what's implemented, what's stubbed, and any compile caveats (you can't assume a compiler here).
 - Do NOT hardcode any secret. Do NOT run git. Stay entirely within your assigned directory.
 
-Reference implementation to mirror behavior: the Flutter app in `apps/viewer/lib/` — especially
-`golden_hour.dart` (milestones, OrgBucket/orgInfo/responsibleOrg, date parsing), `dashboard_page.dart`
-(_columns, tabs), `views/*.dart` (each tab), `person_detail_page.dart`, `broker_client.dart` +
-`config.dart` (auth/config). Read them for exact logic; translate, don't transliterate.
+Reference implementation to mirror behavior (the original Flutter source was deleted 2026-06-13 — use
+the React web app instead): `apps/web/src/` — especially `logic/milestones.ts` (milestones,
+OrgBucket/orgInfo/responsibleOrg), `logic/dates.ts` (date parsing), `lib/member.ts` (the select),
+`pages/tabs/*` (each tab), `pages/PersonDetailPage.tsx`, `lib/broker.ts` + `lib/config.ts`
+(auth/config). Read them for exact logic; translate, don't transliterate.

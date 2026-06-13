@@ -1,7 +1,8 @@
 # Android — PARITY_STATUS
 
 Maps every numbered item in `../PARITY.md` (sections A–F) to **Done / Partial / Stub** for the
-native **Android** app. Reference Flutter source in brackets in PARITY.md. Build contract: standard
+native **Android** app. Reference: the React web app (`apps/web/src/`) — the bracketed `*.dart` names
+in PARITY.md are the original (now-deleted, 2026-06-13) Flutter sources. Build contract: standard
 Gradle, `./gradlew :app:assembleDebug` (+ `:app:testDebugUnitTest`).
 
 | # | Item | Status | Note |
@@ -38,8 +39,8 @@ Gradle, `./gradlew :app:assembleDebug` (+ `:app:testDebugUnitTest`).
 
 ## Partial / Stub — and why
 - **#16 Table per-column value-filter dialogs — Partial.** The grid is sortable (3-state) and fully
-  color-coded, and shows the row count, but the per-column "pick which values to show" popup from
-  `table_view.dart` is not ported. Sorting + color-coding + row→detail are present; this is the one
+  color-coded, and shows the row count, but the per-column "pick which values to show" popup (see the
+  web `apps/web/src/pages/tabs/TableTab.tsx`) is not ported. Sorting + color-coding + row→detail are present; this is the one
   deliberate gap (it was already omitted in the original PoC). Everything else in Table is Done.
 
 Everything else in A–F is **Done**.

@@ -1,9 +1,12 @@
 # Implementation Notes — file-by-file
 
-Every file in `native/ios/` and what it does. Logic files are pure ports of `apps/viewer/lib/
-golden_hour.dart` + `views/dashboard_common.dart` + `views/kpis_view.dart`; Service files port
-`broker_client.dart` / `admin_client.dart` / `passkey_client.dart` / `error_reporter.dart`; UI files
-mirror the Flutter widgets. See `PARITY_STATUS.md` for the item-by-item parity map.
+Every file in `native/ios/` and what it does. The `.dart` filenames below are the **original Flutter
+sources** these files were ported from; that Flutter app (`apps/viewer`) was **deleted 2026-06-13**,
+so the live equivalents now live in the React web app (`apps/web/src/`): logic in `src/logic/`
+(`milestones.ts`, `kpis.ts`, `dates.ts`), broker/admin/passkey/error-reporter in `src/lib/`, screens
+in `src/pages/`. The Swift logic files are pure ports of the Golden-Hour milestones + KPI/date math;
+Service files port the broker/admin/passkey/error-reporter clients; UI files mirror those screens.
+See `PARITY_STATUS.md` for the item-by-item parity map.
 
 ## Manifest, project & app target
 

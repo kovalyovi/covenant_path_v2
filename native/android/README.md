@@ -1,14 +1,16 @@
 # Covenant Path — Native Android
 
-A full-feature native Android build of the Flutter viewer (`apps/viewer`), at **100% feature parity**
-with it (see `PARITY_STATUS.md`). **Kotlin + Jetpack Compose (Material 3)**, MVVM (ViewModel +
+A full-feature native Android app at **100% feature parity** with the web client (see
+`PARITY_STATUS.md`). It was originally ported from the Flutter viewer (`apps/viewer`), which has since
+been **deleted (2026-06-13)** — the live cross-surface reference is now the React web app (`apps/web`).
+**Kotlin + Jetpack Compose (Material 3)**, MVVM (ViewModel +
 StateFlow), coroutines/Flow, navigation-compose, single-Activity. Supabase via **supabase-kt 3.x**
 (auth + postgrest, kotlinx-serialization). Read-only against Supabase (RLS-scoped); the broker
 (`backend/auth_broker`) is used for Church login, passkeys, sync settings, reports and the admin
-console — exactly as the Flutter clients use it.
+console — exactly as the other clients use it.
 
 > The authoritative checklist is `../PARITY.md`; the per-item status is `PARITY_STATUS.md`.
-> Business logic mirrors `apps/viewer/lib/` (ported, not transliterated) and is unit-tested.
+> Business logic mirrors the React web app `apps/web/src/` (ported, not transliterated) and is unit-tested.
 
 ## Architecture
 

@@ -1,7 +1,8 @@
 # Native iOS — PARITY_STATUS
 
 Maps every numbered item in `native/PARITY.md` (A–F, 1–29) to **Done / Partial / Stub** with a
-one-line note. Reference: the Flutter app in `apps/viewer/lib/`. Logic is ported exactly; only the
+one-line note. Reference: the React web app (`apps/web/src/`) — the original Flutter app the bracketed
+`*.dart` names point to was deleted 2026-06-13. Logic is ported exactly; only the
 UI placement adapts to native idioms (TabView / NavigationStack / Form / .sheet / SF Symbols /
 Swift Charts).
 
