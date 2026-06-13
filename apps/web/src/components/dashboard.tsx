@@ -9,7 +9,7 @@ import {
   ageOf, responsibleParty, orgInfo, orgResponsibilityNote, type OrgBucket, ORG_BUCKETS,
 } from '../logic/milestones';
 import {
-  parseMemberDate, fmtLong, fmtMonthDayYear, monthsDaysAgo, ago, staleness, fmtDateTime,
+  parseMemberDate, fmtLong, fmtMonthDayYear, baptismElapsed, ago, staleness, fmtDateTime,
 } from '../logic/dates';
 import { hexA } from '../theme/tokens';
 import { Icon, type IconName } from './Icon';
@@ -347,7 +347,7 @@ export function MemberRow({ m, chips = false, showUnit = false, showResp = false
             <Icon name={isBaptism ? 'water_drop' : 'event'} size={13} color={isBaptism ? '#29b6f6' : 'var(--on-surface-variant)'} />
             <span className="muted">
               {isBaptism
-                ? `${fmtMonthDayYear(date)}${monthsDaysAgo(date) ? ` (${monthsDaysAgo(date)})` : ''}`
+                ? `${fmtMonthDayYear(date)}${baptismElapsed(date) ? ` (${baptismElapsed(date)})` : ''}`
                 : fmtLong(date)}
             </span>
           </span>

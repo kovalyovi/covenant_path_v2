@@ -2,7 +2,9 @@
 // part most likely to silently misbehave, so the same cases are pinned here.
 
 import { describe, it, expect } from 'vitest';
-import { parseMemberDate, fmtLong, monthsDaysAgo, etHourToday, fmtEtHourLocal } from '../logic/dates';
+import {
+  parseMemberDate, fmtLong, monthsDaysAgo, baptismElapsed, etHourToday, fmtEtHourLocal,
+} from '../logic/dates';
 
 describe('parseMemberDate', () => {
   it('parses "6 Feb 2026" and "06 Feb 2026"', () => {
@@ -56,6 +58,37 @@ describe('monthsDaysAgo', () => {
     expect(monthsDaysAgo(d)).toContain('month');
     // exactly today reads "0 days" (never empty/negative)
     expect(monthsDaysAgo(new Date())).toContain('day');
+  });
+});
+
+describe('baptismElapsed', () => {
+  it('drops the trailing days once there is at least one month', () => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 3);
+    d.setDate(d.getDate() - 12); // 3 months + ~12 days
+    const r = baptismElapsed(d);
+    expect(r).toBe('3 months');
+    expect(r).not.toContain('day');
+  });
+
+  it('shows days when under a month', () => {
+    const d = new Date();
+    d.setDate(d.getDate() - 5);
+    expect(baptismElapsed(d)).toBe('5 days');
+  });
+
+  it('singular month keeps its label and still drops days', () => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 1);
+    d.setDate(d.getDate() - 3);
+    expect(baptismElapsed(d)).toBe('1 month');
+  });
+
+  it('null and future dates return empty', () => {
+    expect(baptismElapsed(null)).toBe('');
+    const future = new Date();
+    future.setDate(future.getDate() + 10);
+    expect(baptismElapsed(future)).toBe('');
   });
 });
 

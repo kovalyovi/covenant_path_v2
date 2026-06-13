@@ -178,6 +178,21 @@ export function monthsDaysAgo(d: Date | null): string {
   return parts.join(' ');
 }
 
+/**
+ * Coarse elapsed time since a past date for the BAPTISM display: months only once a member is at
+ * least a month in (e.g. "3 months", not "3 months 12 days"); days only under a month ("5 days").
+ * Empty for a future/unknown date. Built on `monthsDaysAgo` so the month/day-borrow math stays in
+ * one place; this just drops the trailing days once the month count is non-zero (#baptism-display).
+ */
+export function baptismElapsed(d: Date | null): string {
+  const full = monthsDaysAgo(d);
+  if (full === '') return '';
+  // monthsDaysAgo emits "N month(s) M day(s)" once N>0; "M day(s)" under a month. Keep only the
+  // months segment when present, otherwise keep the days segment unchanged.
+  const monthsMatch = /^(\d+ months?)/.exec(full);
+  return monthsMatch ? monthsMatch[1] : full;
+}
+
 /** "2h ago" relative label for a last-synced ISO. Mirrors `_ago`. */
 export function ago(iso: unknown): string {
   if (iso == null) return String(iso);
