@@ -28,14 +28,24 @@ test.describe('person views', () => {
     await expect(page.getByRole('heading', { name: 'Avery Example' }).first()).toBeVisible();
     await expect(page.getByText('Covenant Path', { exact: true })).toBeVisible();
     // Labeled milestone chips from the shared logic (Friends/Calling/… for an adult male convert).
-    await expect(page.getByText('Friends', { exact: true })).toBeVisible();
-    await expect(page.getByText('Aaronic Priesthood', { exact: true })).toBeVisible();
+    // The chips are buttons (each carries a hover/click tooltip explaining the step).
+    await expect(page.getByRole('button', { name: /Friends/ }).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: /Aaronic Priesthood/ }).first()).toBeVisible();
     // Rich-details sections render.
     await expect(page.getByText('Sacrament Attendance')).toBeVisible();
     // Attendance is the last-8-weeks window (3 fixture records, 2 attended) — never a whole-history
     // "missed of N" count.
     await expect(page.getByText(/Attended\s*2\s*of\s*3/)).toBeVisible();
     await expect(page.getByText('Casey Sample')).toBeVisible(); // friend name from details
+  });
+
+  test('clicking a Golden Hour chip shows a tooltip explaining the step', async ({ page }) => {
+    await openDashboard(page, { path: `/person/${AVERY_UUID}` });
+
+    // The labeled chips are buttons; clicking one pins its explanation tooltip (role=tooltip).
+    const friendsChip = page.getByRole('button', { name: /Friends/ }).first();
+    await friendsChip.click();
+    await expect(page.getByText(/at least one friend in the ward/)).toBeVisible();
   });
 
   test('the completion ring reflects eligible-only milestone progress', async ({ page }) => {

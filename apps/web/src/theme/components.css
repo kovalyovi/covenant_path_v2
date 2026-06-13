@@ -368,6 +368,53 @@ button.card--tappable:hover {
   font-size: 0.8rem;
   font-weight: 500;
 }
+/* Detail-view Golden Hour chips are interactive (hover/click → tooltip). */
+.gh-chip-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.gh-chip--tip {
+  cursor: pointer;
+  font: inherit;
+  background: none;
+}
+.gh-tip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  width: max-content;
+  max-width: 260px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--surface, #fff);
+  color: var(--on-surface, #1a1a1a);
+  border: 1px solid var(--outline, #ddd);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.35;
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
+  transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s;
+  pointer-events: none;
+}
+.gh-tip__body {
+  display: block;
+  margin-top: 3px;
+  color: var(--on-surface-variant, #555);
+  font-weight: 400;
+}
+/* Show on hover (pointer devices) or when click-pinned open. */
+.gh-chip-wrap:hover .gh-tip,
+.gh-chip--tip:focus-visible + .gh-tip,
+.gh-tip--open {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
 
 /* ---- Avatar ---------------------------------------------------------------------------------- */
 .avatar {

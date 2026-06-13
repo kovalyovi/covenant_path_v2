@@ -23,6 +23,9 @@ export interface Milestone {
    *  "missing/incomplete" lists (N/A ≠ not-done). Optional: a milestone derived from logic rather than
    *  a single column (none today) can omit it. */
   field?: string;
+  /** One-sentence explanation of what this integration step means — the SINGLE source the detail
+   *  view's Golden Hour tooltip reads (hover + click/tap). LDS context. */
+  description: string;
 }
 
 const everyone = (_m: Member) => true;
@@ -135,30 +138,36 @@ export function templeExperienceValue(m: Member, key: string): string {
 export const milestones: Milestone[] = [
   {
     label: 'Friends', abbr: 'F', icon: 'handshake', color: '#D81B60', field: 'friends',
+    description: 'The new member has at least one friend in the ward — someone who reaches out, sits with them, and helps them feel they belong.',
     complete: (m) => m['friends'] === 'Yes', eligible: everyone,
   },
   {
     label: 'Calling', abbr: 'C', icon: 'badge', color: '#6A1B9A', field: 'calling',
+    description: 'The member has been given a responsibility (a calling) in the ward — a meaningful way to serve and stay engaged.',
     complete: (m) => m['calling'] === 'Yes', eligible: (m) => turnsAtLeast(m, 12),
   },
   {
     label: 'Has ministers', abbr: 'M', icon: 'support', color: '#00838F',
     field: 'ministering_brothers_sisters',
+    description: 'Ministering brothers or sisters are assigned to watch over this member and visit them regularly.',
     complete: (m) => m['ministering_brothers_sisters'] === 'Yes', eligible: everyone,
   },
   {
     label: 'Ministering assignment', abbr: 'MA', icon: 'volunteer', color: '#EF6C00',
     field: 'ministering_assignment',
+    description: 'The member has been given others to minister to — serving alongside the ward as a minister themselves.',
     complete: (m) => m['ministering_assignment'] === 'Yes', eligible: (m) => turnsAtLeast(m, 14),
   },
   {
     label: 'Aaronic Priesthood', abbr: 'AP', icon: 'medal', color: '#1565C0', field: 'aaronic_priesthood',
+    description: 'A worthy male member age 12+ has received the Aaronic Priesthood (ordained a deacon, teacher, or priest).',
     complete: (m) => m['aaronic_priesthood'] === 'Yes',
     eligible: (m) => male(m) && turnsAtLeast(m, 12),
   },
   {
     label: 'Melchizedek Priesthood', abbr: 'MP', icon: 'premium', color: '#2E7D32',
     field: 'melchizedek_priesthood',
+    description: 'A worthy adult man (18+, a member about a year) has received the Melchizedek Priesthood (ordained an elder) — a step toward the temple.',
     complete: (m) => m['melchizedek_priesthood'] === 'Yes',
     eligible: (m) => male(m) && ageNowAtLeast(m, 18) && memberOneYearPlus(m),
   },
@@ -167,12 +176,14 @@ export const milestones: Milestone[] = [
   {
     label: 'Family name prepared', abbr: 'FN', icon: 'menu_book', color: '#6D4C41',
     field: 'family_name_prepared',
+    description: 'The member has found and prepared a family name through family history, ready to take to the temple.',
     complete: (m) => templeExperienceValue(m, 'family_name_prepared') === 'Yes',
     eligible: (m) => turnsAtLeast(m, 12),
   },
   {
     label: 'First temple visit', abbr: 'FT', icon: 'account_balance', color: '#00897B',
     field: 'first_temple_visit',
+    description: 'The member has made their first temple visit to perform baptisms for deceased ancestors.',
     complete: (m) => templeExperienceValue(m, 'first_temple_visit') === 'Yes',
     eligible: (m) => turnsAtLeast(m, 12),
   },
@@ -225,11 +236,13 @@ export const needsCategories: Milestone[] = [
   ...milestones,
   {
     label: 'Temple Recommend', abbr: 'TR', icon: 'premium', color: '#5E35B1', field: 'temple_recommend',
+    description: 'The member holds a current temple recommend (limited-use or full), allowing them to enter the temple.',
     complete: (m) => m['temple_recommend'] === 'Active',
     eligible: templeRecommendEligible,
   },
   {
     label: 'Endowment', abbr: 'EN', icon: 'premium', color: '#00695C', field: 'living_ordinance',
+    description: 'The member has received their own temple endowment — a key covenant ordinance for adults.',
     complete: (m) => m['living_ordinance'] === 'Yes',
     eligible: endowmentEligible,
   },
@@ -238,6 +251,7 @@ export const needsCategories: Milestone[] = [
   {
     label: 'Patriarchal Blessing', abbr: 'PB', icon: 'menu_book', color: '#AD1457',
     field: 'patriarchal_blessing',
+    description: 'The member has received a patriarchal blessing — personal guidance and a declaration of lineage from a stake patriarch.',
     complete: (m) => m['patriarchal_blessing'] === 'Yes',
     eligible: patriarchalEligible,
   },
