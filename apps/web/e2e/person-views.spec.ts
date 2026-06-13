@@ -48,6 +48,17 @@ test.describe('person views', () => {
     await expect(page.getByText(/at least one friend in the ward/)).toBeVisible();
   });
 
+  test('principles taught render as bordered dots with a click tooltip', async ({ page }) => {
+    await openDashboard(page, { path: `/person/${AVERY_UUID}` });
+
+    await expect(page.getByText('Principles Taught')).toBeVisible();
+    await expect(page.getByText('The Restoration')).toBeVisible(); // the lesson label
+    // each principle is a bordered circle button; clicking one shows what it is.
+    const dot = page.getByRole('button', { name: /The First Vision/ });
+    await dot.click();
+    await expect(page.getByText(/member was present/)).toBeVisible();
+  });
+
   test('the completion ring reflects eligible-only milestone progress', async ({ page }) => {
     // Riley: 6 applicable milestones (F, C, M, MA, FN, FT), 2 complete (F + M) → 33%.
     await openDashboard(page, { path: '/person/e2e-person-riley' });

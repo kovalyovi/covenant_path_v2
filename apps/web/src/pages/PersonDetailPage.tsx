@@ -4,6 +4,7 @@
 // calling / ministering, temple ordinances & experiences, principles taught, self-reliance, flags,
 // plus leader notes (RLS-scoped). The member is read from the loaded dashboard data by person_uuid.
 
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useDashboard } from '../hooks/useDashboard';
 import type { Member } from '../lib/member';
@@ -380,44 +381,96 @@ function PrinciplesSection({ d }: { d: Record<string, unknown> }) {
       title="Principles Taught"
       icon="menu_book"
       trailing={
-        <span className="row tiny" style={{ gap: 4, color: GREEN }}>
-          <Icon name="account" size={16} color={GREEN} />= Member Present
+        <span className="row tiny" style={{ gap: 8 }}>
+          <span className="row" style={{ gap: 4 }}>
+            <span className="principle-dot principle-dot--legend principle-dot--filled" /> taught
+          </span>
+          <span className="row" style={{ gap: 4 }}>
+            <span className="principle-dot principle-dot--legend" /> not yet
+          </span>
+          <span className="row" style={{ gap: 4, color: GREEN }}>
+            <Icon name="account" size={14} color={GREEN} /> present
+          </span>
         </span>
       }
     >
-      <div className="stack" style={{ gap: 12 }}>
-        {lessons.map((l, li) => (
-          <div key={li}>
-            <div style={{ color: GREEN, fontWeight: 500 }}>{String(l['name'] ?? '')}</div>
-            <div className="wrap" style={{ gap: 6, marginTop: 6 }}>
-              {((l['principles'] as Array<Record<string, unknown>>) ?? []).map((p, pi) => {
-                const taught = principleTaught(p['taughtLevel']);
-                const present = p['memberPresent'] === true;
-                return (
-                  <span
-                    key={pi}
-                    title={`${String(p['name'] ?? '')} — ${taught ? 'taught' : 'not yet'}${present ? ' (member present)' : ''}`}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      width: 22,
-                      height: 22,
-                      borderRadius: '50%',
-                      background: taught ? GREEN : 'transparent',
-                      border: `1.4px solid ${GREEN}`,
-                      color: taught ? '#fff' : GREEN,
-                    }}
-                  >
-                    {present && <Icon name="account" size={13} />}
-                  </span>
-                );
-              })}
+      <div className="stack" style={{ gap: 0 }}>
+        {lessons.map((l, li) => {
+          const principles = (l['principles'] as Array<Record<string, unknown>>) ?? [];
+          const taughtCount = principles.filter((p) => principleTaught(p['taughtLevel'])).length;
+          return (
+            <div
+              key={li}
+              className="lesson-block"
+              style={li > 0 ? { borderTop: '1px solid var(--outline)' } : undefined}
+            >
+              <div className="row" style={{ justifyContent: 'space-between', gap: 8 }}>
+                <span style={{ fontWeight: 600 }}>{String(l['name'] ?? `Lesson ${li + 1}`)}</span>
+                {principles.length > 0 && (
+                  <span className="tiny muted">{taughtCount}/{principles.length} taught</span>
+                )}
+              </div>
+              {principles.length > 0 && (
+                <div className="principle-row">
+                  {principles.map((p, pi) => (
+                    <PrincipleDot
+                      key={pi}
+                      name={String(p['name'] ?? '')}
+                      taught={principleTaught(p['taughtLevel'])}
+                      present={p['memberPresent'] === true}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </SectionCard>
+  );
+}
+
+/** One principle within a lesson: a bordered circle (empty = not taught, filled = taught), with a
+ *  member-present marker. Hover OR click/tap reveals what the principle is (its name) + status. */
+function PrincipleDot({ name, taught, present }: { name: string; taught: boolean; present: boolean }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+  const status = taught ? 'Taught' : 'Not yet taught';
+  const label = name || 'Principle';
+
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <span ref={ref} className="principle-dot-wrap">
+      <button
+        type="button"
+        className={`principle-dot principle-dot--btn${taught ? ' principle-dot--filled' : ''}`}
+        aria-expanded={open}
+        aria-label={`${label} — ${status}${present ? ', member present' : ''}`}
+        title={`${label} — ${status}${present ? ' (member present)' : ''}`}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {present && <Icon name="account" size={12} />}
+      </button>
+      <span role="tooltip" className={`gh-tip${open ? ' gh-tip--open' : ''}`}>
+        <b>{label}</b> · {status}
+        {present && <span className="gh-tip__body">The member was present when this was taught.</span>}
+      </span>
+    </span>
   );
 }
 

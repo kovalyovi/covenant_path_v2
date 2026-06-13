@@ -410,10 +410,64 @@ button.card--tappable:hover {
 /* Show on hover (pointer devices) or when click-pinned open. */
 .gh-chip-wrap:hover .gh-tip,
 .gh-chip--tip:focus-visible + .gh-tip,
+.principle-dot-wrap:hover .gh-tip,
+.principle-dot--btn:focus-visible + .gh-tip,
 .gh-tip--open {
   opacity: 1;
   visibility: visible;
   transform: translateY(0);
+}
+
+/* ---- Principles taught (lesson blocks + bordered principle dots) ----------------------------- */
+.lesson-block {
+  padding: 12px 0;
+}
+.lesson-block:first-child {
+  padding-top: 2px;
+}
+.lesson-block:last-child {
+  padding-bottom: 2px;
+}
+.principle-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.principle-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1.6px solid var(--cp-green, #2e7d32);
+  background: transparent;
+  color: var(--cp-green, #2e7d32);
+  flex: 0 0 auto;
+}
+.principle-dot--filled {
+  background: var(--cp-green, #2e7d32);
+  color: #fff;
+}
+.principle-dot--legend {
+  width: 13px;
+  height: 13px;
+  border-width: 1.4px;
+  vertical-align: middle;
+}
+.principle-dot--btn {
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+.principle-dot--btn:hover {
+  transform: scale(1.12);
+  box-shadow: 0 0 0 3px rgba(46, 125, 50, 0.16);
+}
+.principle-dot-wrap {
+  position: relative;
+  display: inline-flex;
 }
 
 /* ---- Avatar ---------------------------------------------------------------------------------- */
