@@ -10,6 +10,7 @@ import {
 import { supabase } from '../lib/supabase';
 import { MEMBER_COLUMNS, type Member } from '../lib/member';
 import { buildNotesIndex, type NoteRow, type MemberNoteRow, type NoteSummary } from '../logic/notes';
+import { mergedNote, type ManualMember, type MergePlan } from '../logic/manualMembers';
 import { broker, type EnrollmentStatus } from '../lib/broker';
 import { getShowNotes, setShowNotes as persistShowNotes } from '../lib/prefs';
 
@@ -38,6 +39,15 @@ interface DashboardState {
   /** Whether the main screen shows member notes (default true; persisted per the global pref). */
   showNotes: boolean;
   setShowNotes: (on: boolean) => void;
+  /** Leader-added people being taught (manual_members), not yet merged into a real record (item 11). */
+  manualMembers: ManualMember[];
+  reloadManualMembers: () => Promise<void>;
+  /** Add a manual person being taught to a unit (name + custom notes). */
+  addManualMember: (input: { unitId: string | null; unitName: string | null; name: string; notes: string }) => Promise<void>;
+  /** Merge a manual member into the matched real record: remote fully overrides, notes preserved. */
+  mergeManualMember: (plan: MergePlan) => Promise<void>;
+  /** Remove a manual member (the leader added them by mistake / they're gone). */
+  deleteManualMember: (id: string) => Promise<void>;
   stakes: StakeRow[];
   currentStakeId: string | null;
   stakeName: string | null;
@@ -103,6 +113,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const [isAdmin, setIsAdmin] = useState(false);
   const [enrollStatus, setEnrollStatus] = useState<EnrollmentStatus | null>(null);
   const [showNotes, setShowNotesState] = useState<boolean>(() => getShowNotes());
+  const [manualMembers, setManualMembers] = useState<ManualMember[]>([]);
 
   const setShowNotes = useCallback((on: boolean) => {
     setShowNotesState(on);
@@ -150,6 +161,92 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const reloadNotes = useCallback(async () => {
     setNotes(await loadNotes(currentIdRef.current));
   }, [loadNotes]);
+
+  const loadManualMembers = useCallback(async (stakeId: string | null): Promise<ManualMember[]> => {
+    // Not-yet-merged manual people being taught, scoped to the stake (RLS-gated server-side too).
+    try {
+      const base = supabase
+        .from('manual_members')
+        .select('id, stake_id, unit_id, unit_name, name, custom_notes, created_by, merged_at, merged_into_uuid')
+        .is('merged_at', null);
+      const scoped = stakeId != null ? base.eq('stake_id', stakeId) : base;
+      const { data } = await scoped;
+      return (data ?? []) as ManualMember[];
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const reloadManualMembers = useCallback(async () => {
+    setManualMembers(await loadManualMembers(currentIdRef.current));
+  }, [loadManualMembers]);
+
+  const addManualMember = useCallback(
+    async (input: { unitId: string | null; unitName: string | null; name: string; notes: string }) => {
+      const stakeId = currentIdRef.current;
+      const email = (await supabase.auth.getUser()).data.user?.email ?? '';
+      const { error } = await supabase.from('manual_members').insert({
+        stake_id: stakeId,
+        unit_id: input.unitId,
+        unit_name: input.unitName,
+        name: input.name.trim(),
+        custom_notes: input.notes.trim(),
+        created_by: email,
+      });
+      if (error) throw error;
+      await reloadManualMembers();
+    },
+    [reloadManualMembers],
+  );
+
+  const mergeManualMember = useCallback(
+    async (plan: MergePlan) => {
+      // Remote fully overrides (the real member is already authoritative); we ONLY preserve the manual
+      // member's custom notes onto the real member's single note, then mark the manual row merged.
+      const email = (await supabase.auth.getUser()).data.user?.email ?? '';
+      // member object (for stake_id/unit_id needed by the member_notes RLS bind)
+      const real = members.find((m) => String(m['person_uuid'] ?? '') === plan.personUuid);
+      if (plan.preservedNote && real) {
+        const { data: existing } = await supabase
+          .from('member_notes')
+          .select('note')
+          .eq('member_person_uuid', plan.personUuid)
+          .maybeSingle();
+        const combined = mergedNote(
+          existing && typeof existing.note === 'string' ? existing.note : '',
+          plan.preservedNote,
+        );
+        const { error: noteErr } = await supabase.from('member_notes').upsert(
+          {
+            stake_id: real['stake_id'],
+            unit_id: real['unit_id'],
+            member_person_uuid: plan.personUuid,
+            note: combined,
+            updated_by: email,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'stake_id,member_person_uuid' },
+        );
+        if (noteErr) throw noteErr;
+      }
+      const { error } = await supabase
+        .from('manual_members')
+        .update({ merged_at: new Date().toISOString(), merged_into_uuid: plan.personUuid })
+        .eq('id', plan.manualId);
+      if (error) throw error;
+      await Promise.all([reloadManualMembers(), reloadNotes()]);
+    },
+    [members, reloadManualMembers, reloadNotes],
+  );
+
+  const deleteManualMember = useCallback(
+    async (id: string) => {
+      const { error } = await supabase.from('manual_members').delete().eq('id', id);
+      if (error) throw error;
+      await reloadManualMembers();
+    },
+    [reloadManualMembers],
+  );
 
   const applyCurrentStake = useCallback((list: StakeRow[], id: string | null) => {
     if (list.length === 0) return;
@@ -240,12 +337,14 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       setError(null);
       await reloadStakes();
       try {
-        const [rows, nts] = await Promise.all([
+        const [rows, nts, manuals] = await Promise.all([
           loadMembers(currentIdRef.current), loadNotes(currentIdRef.current),
+          loadManualMembers(currentIdRef.current),
         ]);
         if (!active) return;
         setMembers(rows);
         setNotes(nts);
+        setManualMembers(manuals);
         // Not awaited — never delays first paint; caches enrollStatus for the Sync-settings sheet (#11).
         void reloadEnrollStatus();
       } catch (e) {
@@ -267,16 +366,18 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     setError(null);
     try {
-      const [rows, nts] = await Promise.all([
+      const [rows, nts, manuals] = await Promise.all([
         loadMembers(currentIdRef.current), loadNotes(currentIdRef.current),
+        loadManualMembers(currentIdRef.current),
       ]);
       setMembers(rows);
       setNotes(nts);
+      setManualMembers(manuals);
       if (rows.length === 0) void reloadEnrollStatus();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [loadMembers, loadNotes, reloadEnrollStatus]);
+  }, [loadMembers, loadNotes, loadManualMembers, reloadEnrollStatus]);
 
   const switchStake = useCallback(
     (id: string) => {
@@ -289,16 +390,17 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         /* ignore */
       }
       setLoading(true);
-      Promise.all([loadMembers(id), loadNotes(id)])
-        .then(([rows, nts]) => {
+      Promise.all([loadMembers(id), loadNotes(id), loadManualMembers(id)])
+        .then(([rows, nts, manuals]) => {
           setMembers(rows);
           setNotes(nts);
+          setManualMembers(manuals);
           if (rows.length === 0) void reloadEnrollStatus();
         })
         .catch((e) => setError(e instanceof Error ? e.message : String(e)))
         .finally(() => setLoading(false));
     },
-    [applyCurrentStake, loadMembers, loadNotes, reloadEnrollStatus],
+    [applyCurrentStake, loadMembers, loadNotes, loadManualMembers, reloadEnrollStatus],
   );
 
   const markSyncing = useCallback(() => {
@@ -315,6 +417,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const value = useMemo<DashboardState>(
     () => ({
       loading, error, members, notes, reloadNotes, showNotes, setShowNotes,
+      manualMembers, reloadManualMembers, addManualMember, mergeManualMember, deleteManualMember,
       stakes, currentStakeId, stakeName, lastSynced,
       syncing, syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,
       reloadStakes, reloadEnrollStatus, setEnrollStatus,
@@ -322,6 +425,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     }),
     [
       loading, error, members, notes, reloadNotes, showNotes, setShowNotes,
+      manualMembers, reloadManualMembers, addManualMember, mergeManualMember, deleteManualMember,
       stakes, currentStakeId, stakeName, lastSynced,
       syncing, syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,
       reloadStakes, reloadEnrollStatus, reauthOpen, openReauth, closeReauth,

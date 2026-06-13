@@ -104,17 +104,23 @@ export interface SupabaseFixtures {
   comments?: Row[];
   /** Rows for `member_notes` (the single-note model, item 8; default: none). Upserts append/replace. */
   notes?: Row[];
+  /** Rows for `manual_members` (leader-added people being taught, item 11; default: none). */
+  manualMembers?: Row[];
   /** rpc/is_admin result (default false). */
   isAdmin?: boolean;
 }
 
-/** Apply PostgREST-style `<col>=eq.<value>` query filters to fixture rows. */
+/** Apply PostgREST-style `<col>=eq.<value>` / `<col>=is.null` query filters to fixture rows. */
 function applyEqFilters(rows: Row[], url: URL): Row[] {
   let out = rows;
   for (const [key, value] of url.searchParams.entries()) {
     if (value.startsWith('eq.')) {
       const want = value.slice(3);
       out = out.filter((r) => String(r[key]) === want);
+    } else if (value === 'is.null') {
+      out = out.filter((r) => r[key] == null);
+    } else if (value === 'is.notnull') {
+      out = out.filter((r) => r[key] != null);
     }
   }
   return out;
@@ -125,6 +131,7 @@ export async function mockSupabase(page: Page, fixtures: SupabaseFixtures = {}):
   const members = fixtures.members ?? defaultMembers();
   const comments = [...(fixtures.comments ?? defaultComments())]; // mutable: POSTs append
   const notes = [...(fixtures.notes ?? [])]; // mutable: upserts append/replace (single-note model)
+  const manualMembers = [...(fixtures.manualMembers ?? [])]; // mutable: insert/merge/delete (item 11)
   const isAdmin = fixtures.isAdmin === true;
   const recorder = makeRecorder();
 
@@ -191,6 +198,29 @@ export async function mockSupabase(page: Page, fixtures: SupabaseFixtures = {}):
         return fulfillJson(route, 200, matched[0] ?? null);
       }
       return fulfillJson(route, 200, matched);
+    }
+    if (path === '/rest/v1/manual_members') {
+      // Leader-added people being taught (item 11): insert / update (merge) / delete + filtered GET.
+      if (method === 'POST') {
+        const body = parseBody(request);
+        const rows = Array.isArray(body) ? (body as Row[]) : body ? [body] : [];
+        for (const r of rows) {
+          manualMembers.push({ id: `mm-${manualMembers.length + 1}`, merged_at: null, ...r });
+        }
+        return fulfillJson(route, 201);
+      }
+      if (method === 'PATCH') {
+        const body = parseBody(request) as Row;
+        for (const r of applyEqFilters(manualMembers, url)) Object.assign(r, body);
+        return fulfillJson(route, 204);
+      }
+      if (method === 'DELETE') {
+        const keep = manualMembers.filter((r) => !applyEqFilters([r], url).length);
+        manualMembers.length = 0;
+        manualMembers.push(...keep);
+        return fulfillJson(route, 204);
+      }
+      return fulfillJson(route, 200, applyEqFilters(manualMembers, url));
     }
 
     return fulfillJson(route, 404, { message: `e2e: no Supabase mock for ${method} ${path}` });

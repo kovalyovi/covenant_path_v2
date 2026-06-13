@@ -18,6 +18,7 @@ import {
 import { Segmented, SectionCard, RangePill, Progress } from '../../components/ui';
 import { TabGate } from '../../components/TabGate';
 import { DrillHost, type Drill } from '../../components/DrillSheet';
+import { ManualMembersSection } from '../../components/ManualMembers';
 
 type Window = 'week' | 'month' | 'year' | 'all';
 type GhSection = 'newMembers' | 'beingTaught';
@@ -108,8 +109,11 @@ function GoldenHourBody() {
             </div>
           }
         >
+          {/* Leader-added people being taught + merge suggestions (item 11) — always available so a
+              leader can track friends/investigators before LCR has a record. */}
+          <ManualMembersSection />
           {beingTaught.length === 0 ? (
-            <p style={{ textAlign: 'center', padding: 32 }}>No one currently being taught.</p>
+            <p style={{ textAlign: 'center', padding: 32 }}>No one currently being taught from the Church records yet.</p>
           ) : byDate ? (
             <DateList rows={beingTaught} chips={false} dateField="baptism_goal_date" ascending={ascending} />
           ) : (

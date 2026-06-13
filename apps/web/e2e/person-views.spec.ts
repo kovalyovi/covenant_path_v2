@@ -4,7 +4,7 @@
 // the notes section reads + writes rest/v1/member_comments.
 
 import { test, expect } from '@playwright/test';
-import { openDashboard, AVERY_UUID, BLANK_UUID } from './support';
+import { openDashboard, AVERY_UUID, BLANK_UUID, JORDAN_UUID, STAKE_ID } from './support';
 
 test.describe('person views', () => {
   test('the table renders every member variant (and excludes investigators)', async ({ page }) => {
@@ -115,5 +115,54 @@ test.describe('person views', () => {
 
     await expect(page).toHaveURL(/editNote=1/);
     await expect(page.getByPlaceholder('Write a note about this member…')).toBeVisible();
+  });
+});
+
+test.describe('manual members (item 11)', () => {
+  test('add a person being taught, then it appears in the Being Taught view', async ({ page }) => {
+    const { supabase } = await openDashboard(page, { path: '/golden-hour' });
+
+    // Switch to the Being Taught section, open the add dialog, fill, save.
+    await page.getByRole('button', { name: /Being Taught/ }).first().click();
+    await page.getByRole('button', { name: 'Add a person being taught' }).click();
+    await page.getByPlaceholder('Given Surname').fill('Pat Newcomer');
+    await page.getByPlaceholder(/want to remember/).fill('Met at a service project.');
+    await page.getByRole('button', { name: 'Add', exact: true }).click();
+
+    // It was inserted into manual_members and renders as a card.
+    await expect.poll(() =>
+      supabase.callsTo('/rest/v1/manual_members').filter((c) => c.method === 'POST').length,
+    ).toBe(1);
+    await expect(page.getByText('Pat Newcomer', { exact: true })).toBeVisible();
+  });
+
+  test('a manual member matching a synced record offers Merge (notes preserved)', async ({ page }) => {
+    // A manual member with the SAME name as the synced investigator "Jordan Sample" in the same unit.
+    const { supabase } = await openDashboard(page, {
+      path: '/golden-hour',
+      supabase: {
+        manualMembers: [{
+          id: 'mm-jordan', stake_id: STAKE_ID, unit_name: 'Testvale 2nd Ward',
+          name: 'Sample, Jordan', custom_notes: 'Loves family history.', merged_at: null,
+        }],
+      },
+    });
+
+    await page.getByRole('button', { name: /Being Taught/ }).first().click();
+    // The suggestion + Merge button appear because the names match within the unit.
+    await expect(page.getByText(/matching record arrived/)).toBeVisible();
+    await page.getByRole('button', { name: 'Merge', exact: true }).click();
+
+    // Merge: the manual row is marked merged (PATCH) AND the preserved note is upserted to the real
+    // member's single note (member_notes POST keyed to Jordan's uuid).
+    await expect.poll(() =>
+      supabase.callsTo('/rest/v1/manual_members').filter((c) => c.method === 'PATCH').length,
+    ).toBe(1);
+    const noteUpserts = supabase.callsTo('/rest/v1/member_notes').filter((c) => c.method === 'POST');
+    expect(noteUpserts.length).toBe(1);
+    expect(noteUpserts[0].body).toMatchObject({
+      member_person_uuid: JORDAN_UUID,
+      note: 'Loves family history.',
+    });
   });
 });

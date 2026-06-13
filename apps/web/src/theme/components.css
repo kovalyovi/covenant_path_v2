@@ -507,6 +507,33 @@ button.card--tappable:active {
   word-break: break-word;
 }
 
+/* ---- Manual (leader-added) people being taught + merge suggestion (item 11) ------------------ */
+.manual-member {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  border-radius: var(--radius-md);
+}
+.manual-member + .manual-member {
+  border-top: 1px solid var(--outline-variant);
+}
+.manual-member__main {
+  flex: 1;
+  min-width: 0;
+}
+.manual-member__suggest {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  color: var(--primary);
+}
+
 /* ---- On/off switch (Settings preferences, item 9) ------------------------------------------- */
 .switch {
   -webkit-appearance: none;
