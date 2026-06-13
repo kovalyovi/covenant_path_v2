@@ -31,11 +31,13 @@ function answerDialogs(page: Page, acceptConfirm: boolean): string[] {
 test.beforeAll(async () => {
   await deleteTestCredential(); // deterministic enroll offers
   await svcDelete(`member_comments?body=like.${encodeURIComponent('fullstack-e2e:%')}`);
+  await svcDelete(`member_notes?note=like.${encodeURIComponent('fullstack-e2e:%')}`);
 });
 
 test.afterAll(async () => {
   await deleteTestCredential();
   await svcDelete(`member_comments?body=like.${encodeURIComponent('fullstack-e2e:%')}`);
+  await svcDelete(`member_notes?note=like.${encodeURIComponent('fullstack-e2e:%')}`);
 });
 
 test('stake president signs in through the real broker and sees ALL seeded members (live RLS)', async ({ page }) => {
@@ -129,7 +131,7 @@ test('enroll → revoke → re-enroll, end to end in the browser against real Po
   await expect(page).not.toHaveURL(/\/login/);
 });
 
-test('notes round-trip lands in the real member_comments table', async ({ page }) => {
+test('note round-trip lands in the real member_notes table', async ({ page }) => {
   answerDialogs(page, false);
   await page.goto('/login');
   await submitChurchLogin(page, 'president.complete', 'pw-president');
@@ -137,16 +139,23 @@ test('notes round-trip lands in the real member_comments table', async ({ page }
 
   await page.goto('/table');
   await page.getByText('Avery Example').first().click();
-  const noteBox = page.getByPlaceholder('Add a note…');
+
+  // ONE editable note (item 8): tap the note surface ("Add a note" when empty, "Edit note" when a
+  // legacy thread folded in) → textarea → Save. Writes the single member_notes field, not a thread.
+  await page.getByRole('button', { name: /^(Add a note|Edit note)$/ }).click();
+  const noteBox = page.getByPlaceholder('Write a note about this member…');
   await expect(noteBox).toBeVisible({ timeout: 20_000 });
   await noteBox.fill(NOTE_MARKER);
-  await page.getByRole('button', { name: 'Post note' }).click();
-  await expect(noteBox).toHaveValue('', { timeout: 20_000 }); // post-success signal
-  await expect(page.getByText(NOTE_MARKER)).toBeVisible();
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
 
-  const rows = await svcRows(
-    `member_comments?select=body,author_email&body=like.${encodeURIComponent('fullstack-e2e:%')}`,
+  // Read-after-write: the saved note renders in full and the surface flips to "Edit note".
+  await expect(page.getByText(NOTE_MARKER)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('button', { name: 'Edit note' })).toBeVisible();
+
+  // It was upserted to the REAL member_notes table, attributed to the signed-in leader.
+  const rows = await svcRows<{ note: string; updated_by: string }>(
+    `member_notes?select=note,updated_by&note=like.${encodeURIComponent('fullstack-e2e:%')}`,
   );
   expect(rows.length).toBe(1);
-  expect(rows[0].author_email).toBe('rls.president@example.org');
+  expect(rows[0].updated_by).toBe('rls.president@example.org');
 });
