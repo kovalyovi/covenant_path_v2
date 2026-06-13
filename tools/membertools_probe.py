@@ -43,6 +43,7 @@ UA = "MLTools 5.5.2-(13763) / iOS 17.0 / iPhone"
 OUR_FIELDS = {
     "person_uuid": ["uuid", "personUuid", "legacyCmisId", "cmisId"],
     "name": ["name", "nameFormats", "displayName", "spokenName"],
+    "birth_date": ["birthDate", "birthdate", "dateOfBirth", "birthDateString", "birth"],
     "baptism_date": ["confirmationDate", "baptismDate", "baptismGoalDate"],
     "baptism_goal_date": ["baptismGoalDate"],
     "first_lesson": ["firstTaught", "firstLessonDate"],
@@ -222,6 +223,7 @@ def main() -> int:
         print(f"  name            : {sum(1 for m in members if m.name)}/{n}")
         print(f"  unit mapped     : {sum(1 for m in members if m.unit)}/{n}")
         print(f"  baptism_date    : {sum(1 for m in members if m.baptism_date not in (None, NEEDS_PROFILE))}/{n}")
+        print(f"  birth_date      : {sum(1 for m in members if m.birth_date)}/{n}  (0 ⇒ payload has no birth field; confirm key above)")
         print(f"  baptism_goal    : {sum(1 for m in members if m.baptism_goal_date)}/{n}")
         print(f"  weeks_since_att : {sum(1 for m in members if m.weeks_since_last_attendance is not None)}/{n}")
         print(f"  friends=Yes     : {sum(1 for m in members if m.friends == 'Yes')}/{n}")

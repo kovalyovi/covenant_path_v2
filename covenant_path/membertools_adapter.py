@@ -64,6 +64,36 @@ def _sex(p: dict) -> str | None:
     return "F" if s.startswith("F") else "M" if s.startswith("M") else None
 
 
+def _birth_date(p: dict) -> str | None:
+    """A birth date out of a Member Tools person/household record, tolerant of the field's exact
+    name/shape (the bulk payload was reverse-engineered, so be defensive). Returns a display string
+    (whatever shape the payload carries — the web's parseMemberDate handles ISO, "6 Feb 2026", and
+    MM/dd/yy). None when absent, so the /mlt profile merge (covenant_path.report._apply_profile) still
+    fills it from the LCR profile record exactly as before — this is purely an ADDITIVE rescue so the
+    birth date (and thus every age-gated milestone/eligibility) survives when the LCR session is dead
+    but the 45-day Member Tools token is alive (the steady-state daily-sync path)."""
+    # Flat candidates first (the common Member Tools shape).
+    for k in ("birthDate", "birthdate", "dateOfBirth", "birthDateString"):
+        v = p.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    # Nested LCR-style `birth` object ({date|dateDisplay|displayDate: ...}) — the convention the LCR
+    # member-list + member-profile records use (see member_profile.extract_fields / _build_member_maps).
+    birth = p.get("birth")
+    if isinstance(birth, dict):
+        for k in ("dateDisplay", "displayDate", "date", "display"):
+            v = birth.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        d = birth.get("date")
+        if isinstance(d, dict):
+            for k in ("display", "dateDisplay", "value"):
+                v = d.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+    return None
+
+
 def _parse_date(s: Any) -> date | None:
     if not isinstance(s, str) or not s:
         return None
@@ -162,13 +192,19 @@ def context_from_sync(payload: dict):
 
 
 def adapt_person(p: dict, kind: str, unit_name_by_number: dict[int, str],
-                 name_by_uuid: dict[str, str]) -> CovenantPathMember:
+                 name_by_uuid: dict[str, str], birth_by_uuid: dict[str, str] | None = None) -> CovenantPathMember:
     """One Member Tools covenant-path person → CovenantPathMember. Covenant-path PROGRESS fields are
     filled from the bulk payload; PROFILE fields use the NEEDS_PROFILE sentinel so the /mlt merge (in
-    covenant_path.report) fills them from the reliable cluster — preserving the existing behaviour."""
+    covenant_path.report) fills them from the reliable cluster — preserving the existing behaviour.
+
+    EXCEPTION (#data-gap): birth_date is now ALSO read from the bulk payload when present (the person
+    record, else the household roster) so age-gated milestones/eligibility survive a dead LCR session.
+    It stays None when the payload lacks it → the /mlt merge fills it as before (no regression)."""
     unum = p.get("unitNumber")
     friend_uuids = _friend_uuids(p)
     friend_names = [name_by_uuid[u] for u in friend_uuids if name_by_uuid.get(u)]
+    uuid = _person_uuid(p)
+    birth = _birth_date(p) or ((birth_by_uuid or {}).get(uuid) if uuid else None)
     return CovenantPathMember(
         name=_name(p),
         unit=unit_name_by_number.get(int(unum)) if unum is not None else None,
@@ -184,8 +220,9 @@ def adapt_person(p: dict, kind: str, unit_name_by_number: dict[int, str],
         friends_summary=", ".join(friend_names) or None,
         weeks_since_last_attendance=_weeks_since_attendance(p.get("sacramentAttendance")),
         details=_details_subtree(p, name_by_uuid),
+        # birth_date: rescued from the bulk payload when present (else None → /mlt merge, as before).
+        birth_date=birth,
         # PROFILE-sourced fields — left for the /mlt merge (reliable cluster), exactly as before.
-        birth_date=None,
         aaronic_priesthood=NEEDS_PROFILE,
         melchizedek_priesthood=NEEDS_PROFILE,
         calling=NEEDS_PROFILE,
@@ -212,6 +249,7 @@ def adapt_sync(payload: dict, include_returning: bool = True) -> list[CovenantPa
     arrays); a real person_uuid is required (else the DB upsert key is meaningless)."""
     units = unit_names(payload)
     name_by_uuid = _name_index(payload)
+    birth_by_uuid = _birth_index(payload)
     out: list[CovenantPathMember] = []
     seen: set[str] = set()
     for arr, kind in _ARRAYS.items():
@@ -222,8 +260,29 @@ def adapt_sync(payload: dict, include_returning: bool = True) -> list[CovenantPa
             if not uuid or uuid in seen:
                 continue
             seen.add(uuid)
-            out.append(adapt_person(p, kind, units, name_by_uuid))
+            out.append(adapt_person(p, kind, units, name_by_uuid, birth_by_uuid))
     return out
+
+
+def _birth_index(payload: dict) -> dict[str, str]:
+    """uuid → birth-date display, from the covenant persons + every household member — so a covenant
+    person whose own record omits the birth date can still resolve it from their household roster
+    record (the same fallback the name index uses). Best-effort; empty when the payload has no birth
+    info (then birth_date stays None and the /mlt merge fills it, exactly as before)."""
+    idx: dict[str, str] = {}
+    for arr in _ARRAYS:
+        for p in (payload.get(arr) or []):
+            u, b = _person_uuid(p), _birth_date(p)
+            if u and b:
+                idx[u] = b
+    for hh in (payload.get("households") or []):
+        for m in (hh.get("members") or []):
+            if isinstance(m, dict):
+                u = m.get("uuid") or m.get("memberUuid") or m.get("id")
+                b = _birth_date(m)
+                if u and b:
+                    idx.setdefault(u, b)
+    return idx
 
 
 def _name_index(payload: dict) -> dict[str, str]:

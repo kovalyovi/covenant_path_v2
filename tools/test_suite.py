@@ -132,9 +132,12 @@ def test_membertools_adapter():
     payload = {
         "units": [{"unitNumber": 100, "name": "Alpha Ward",
                    "childUnits": [{"unitNumber": 101, "name": "Beta Branch"}]}],
-        # friends are uuid REFERENCES; names resolve from the household roster (the real shapes)
+        # friends are uuid REFERENCES; names resolve from the household roster (the real shapes).
+        # The investigator's BIRTH DATE also resolves from the household record (its own record omits
+        # it) — the #data-gap rescue so age gates survive a dead LCR session.
         "households": [{"members": [{"uuid": "FRIEND-A", "names": {"listed": "Apple, Ann"}},
-                                    {"uuid": "FRIEND-B", "names": {"listed": "Berry, Bob"}}]}],
+                                    {"uuid": "FRIEND-B", "names": {"listed": "Berry, Bob"}},
+                                    {"uuid": "INV-UUID", "birth": {"dateDisplay": "5 Feb 2010"}}]}],
         "covenantPathInvestigators": [{
             "id": "INV-UUID", "unitNumber": 101, "sex": "FEMALE", "baptismGoalDate": "2026-07-01",
             "names": {"listed": "Investigator, Ivy"}, "firstTaught": "2026-05-01",
@@ -149,6 +152,7 @@ def test_membertools_adapter():
         "covenantPathMembers": [{
             "id": "MEMBER-INTERNAL-ID", "memberUuid": "MEMBER-PERSON-UUID", "unitNumber": 100,
             "names": {"listed": "Member, Max"}, "sex": "MALE", "confirmationDate": "2026-03-15",
+            "birthDate": "1998-06-20",  # flat birth date carried on the person record
             "friends": [], "sacramentAttendance": [], "teachingRecords": [],
         }],
         # a duplicate of the member under returning — must de-dupe by person_uuid
@@ -164,6 +168,7 @@ def test_membertools_adapter():
     assert inv.friends == "Yes" and inv.friends_count == 2  # two uuid refs
     assert inv.friends_summary == "Apple, Ann, Berry, Bob", inv.friends_summary  # resolved from households
     assert inv.weeks_since_last_attendance == 2, inv.weeks_since_last_attendance
+    assert inv.birth_date == "5 Feb 2010", inv.birth_date  # resolved from the household roster
     assert inv.details["lessons"][0]["name"] == "Restoration"
     assert inv.details["lessons"][0]["principles"][0]["memberPresent"] is True
     assert inv.details["firstLesson"] == "2026-05-01" and inv.details["source"] == "membertools"
@@ -174,6 +179,7 @@ def test_membertools_adapter():
     assert mem.kind == "new_member" and mem.unit == "Alpha Ward" and mem.sex == "M"
     assert mem.name == "Member, Max"
     assert mem.baptism_date == "2026-03-15"  # confirmationDate = the precise baptism date
+    assert mem.birth_date == "1998-06-20", mem.birth_date  # flat birthDate on the person record
     assert mem.friends == "No" and mem.friends_count == 0
     assert mem.weeks_since_last_attendance is None  # no attended record
     return "membertools adapter: uuid mapping, progress fields, lessons, weeks, kind, de-dup ok"
