@@ -28,6 +28,7 @@ function status(cred: Partial<CredentialInfo>): EnrollmentStatus {
     lastSyncedAt: null,
     memberCount: 42,
     hasData: true,
+    patriarchalPending: 0,
     noRole: false,
     credential: {
       state: 'active',

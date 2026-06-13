@@ -63,6 +63,8 @@ export interface CredentialInfo {
   enrolledAt?: string | null;
   /** When state === 'stale', the last sync error (e.g. "SSO did not complete…"). */
   lastError?: string | null;
+  /** This calling can read the member-profile patriarchal flag — gates the "refresh patriarchal" banner. */
+  canRefreshPatriarchal?: boolean;
 }
 
 export interface EnrollmentStatus {
@@ -73,6 +75,9 @@ export interface EnrollmentStatus {
   lastSyncedAt?: string | null;
   memberCount: number;
   hasData: boolean;
+  /** Real (baptized, in-directory) members still missing the patriarchal blessing flag — the one field
+   *  absent from the daily Member Tools sync. >0 ⇒ a re-authorize-to-refresh nudge is worthwhile. */
+  patriarchalPending: number;
   noRole: boolean;
   credential: CredentialInfo;
 }
@@ -93,6 +98,7 @@ function credFromJson(j: Record<string, unknown>): CredentialInfo {
     isProvider: j['is_provider'] === true,
     enrolledAt: (j['enrolled_at'] as string) ?? null,
     lastError: (j['last_error'] as string) ?? null,
+    canRefreshPatriarchal: j['can_refresh_patriarchal'] === true,
   };
 }
 
@@ -104,6 +110,7 @@ function enrollmentFromJson(j: Record<string, unknown>): EnrollmentStatus {
     lastSyncedAt: (j['last_synced_at'] as string) ?? null,
     memberCount: Number(j['member_count'] ?? 0) || 0,
     hasData: j['has_data'] === true,
+    patriarchalPending: Number(j['patriarchal_pending'] ?? 0) || 0,
     noRole: j['status'] === 'no_role',
     credential: credFromJson((j['credential'] as Record<string, unknown>) ?? {}),
   };

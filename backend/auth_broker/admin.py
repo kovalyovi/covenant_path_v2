@@ -413,6 +413,16 @@ def enrollment_status(email: str, auth_id: str) -> dict:
             if total not in ("*", ""):
                 member_count = int(total)
 
+    # 3b. Patriarchal blessing is the ONE covenant-path field absent from the daily Member Tools sync
+    # (covenant_path/membertools_adapter.py) — it only fills from the per-member LCR profile fetch during
+    # a sync with a LIVE session, i.e. right after a re-auth. Count the REAL members (those with a real
+    # baptism date → in the directory, profile-fetchable) still on the NEEDS_PROFILE sentinel, so the app
+    # can offer a leader with profile access a "re-authorize to refresh" banner. Investigators (no profile
+    # record, hence no baptism) are excluded so the count can actually reach zero.
+    patriarchal_pending = _count_where("members", {
+        "stake_id": f"eq.{stake_id}", "patriarchal_blessing": "eq.needs-profile-api",
+        "and": "(baptism_date.not.is.null,baptism_date.neq.needs-profile-api)"}) or 0
+
     # 4. Get credential state
     cred_r = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=headers,
                           params={"select": "principal_name,principal_email,revoked,coverage,access_rank,"
@@ -436,6 +446,9 @@ def enrollment_status(email: str, auth_id: str) -> dict:
             "principal_name": cred.get("principal_name"),
             # Match on the stored email (principal_name is just a display name).
             "is_provider": (cred.get("principal_email") or "").lower() == email.lower(),
+            # Can THIS credential's calling pull the patriarchal blessing flag (the member-profile
+            # read)? Drives the "refresh patriarchal" banner alongside is_provider + patriarchal_pending.
+            "can_refresh_patriarchal": "menu.view.member.profiles" in (coverage.get("features") or []),
             "enrolled_at": cred.get("updated_at"),
             "last_failed_at": cred.get("last_failed_at"),
             "last_error": cred.get("last_error"),
@@ -447,6 +460,7 @@ def enrollment_status(email: str, auth_id: str) -> dict:
         "last_synced_at": stake.get("last_synced_at"),
         "member_count": member_count,
         "has_data": member_count > 0,
+        "patriarchal_pending": patriarchal_pending,
         "credential": cred_info,
     }
 

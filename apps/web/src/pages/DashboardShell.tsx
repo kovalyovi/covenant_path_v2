@@ -17,7 +17,7 @@ import { Icon, type IconName } from '../components/Icon';
 import { IconButton } from '../components/ui';
 import { Menu, type MenuItem } from '../components/Menu';
 import {
-  SyncingBanner, StaleBanner, LastUpdatedChip,
+  SyncingBanner, StaleBanner, PatriarchalBanner, LastUpdatedChip,
 } from '../components/dashboard';
 import { SyncSettingsSheet } from '../components/SyncSettingsSheet';
 import { ReauthDialog } from '../components/ReauthDialog';
@@ -42,6 +42,17 @@ export function DashboardShell() {
   const credState = d.enrollStatus?.credential.state;
   // Show the banner for a REVOKED credential or a STALE one (its delegated session died → sync failing).
   const showStaleBanner = credState === 'revoked' || credState === 'stale';
+  // For a HEALTHY credential, nudge the provider (whose calling can read profiles) to re-authorize and
+  // refresh patriarchal blessing — the one field the daily sync can't pull. Suppressed when the
+  // stale/revoked banner already prompts re-auth (which refreshes it too).
+  const cred = d.enrollStatus?.credential;
+  const showPatriarchalBanner =
+    !showStaleBanner &&
+    !d.syncing &&
+    broker.available &&
+    cred?.isProvider === true &&
+    cred?.canRefreshPatriarchal === true &&
+    (d.enrollStatus?.patriarchalPending ?? 0) > 0;
 
   // ---- Menu actions (mirror _appBarActions + the dashboard handlers) --------------------------
   function openSyncSettings() {
@@ -177,6 +188,12 @@ export function DashboardShell() {
           // In-app re-auth modal — never bounce a signed-in user back to the login screen.
           onReenroll={broker.available ? d.openReauth : () => void signOut()}
           onSyncNow={broker.available ? syncNow : undefined}
+        />
+      )}
+      {showPatriarchalBanner && (
+        <PatriarchalBanner
+          pending={d.enrollStatus?.patriarchalPending ?? 0}
+          onRefresh={d.openReauth}
         />
       )}
     </>

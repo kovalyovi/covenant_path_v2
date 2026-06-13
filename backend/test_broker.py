@@ -229,6 +229,61 @@ def test_enrolled_stakes_self_renewing_from_membertools() -> None:
             setattr(admin, k, v)
 
 
+def test_enrollment_status_patriarchal_signal() -> None:
+    """enrollment_status exposes the two signals that gate the 'refresh patriarchal blessing' banner:
+    patriarchal_pending (real, baptized members still missing the profile-only patriarchal flag) and
+    credential.can_refresh_patriarchal (this calling can read the member-profile flag). Fails pre-fix:
+    neither field existed."""
+    from backend.auth_broker import admin
+
+    class _Resp:
+        def __init__(self, payload, status=200, content_range=None):
+            self._p, self.status_code = payload, status
+            self.headers = {"Content-Range": content_range} if content_range else {}
+
+        def json(self):
+            return self._p
+
+    def make_get(features):
+        def _get(url, headers=None, params=None, timeout=None):
+            p = params or {}
+            if url.endswith("/user_roles"):
+                return _Resp([{"stake_id": "stake-1"}])
+            if url.endswith("/stakes"):
+                return _Resp([{"name": "Test Stake", "unit_number": 503991, "last_synced_at": None}])
+            if url.endswith("/members"):
+                # the patriarchal-pending count is distinguished by its filter
+                if "patriarchal_blessing" in p:
+                    return _Resp([], status=206, content_range="0-0/3")
+                return _Resp([], status=206, content_range="0-0/42")
+            if url.endswith("/stake_credentials"):
+                return _Resp([{"coverage": {"complete": True, "features": features},
+                               "principal_email": "leader@example.org", "principal_name": "Leader",
+                               "revoked": False, "last_failed_at": None, "updated_at": None}])
+            return _Resp([])
+        return _get
+
+    saved_get = admin.requests.get
+    saved_cfg = (admin.SUPABASE_URL, admin.SERVICE_KEY)
+    try:
+        admin.SUPABASE_URL = admin.SUPABASE_URL or "https://test.supabase.co"
+        admin.SERVICE_KEY = admin.SERVICE_KEY or "test-key"
+
+        admin.requests.get = make_get(["menu.view.member.profiles", "menu.covenant.path"])
+        out = admin.enrollment_status("leader@example.org", "")
+        assert out["patriarchal_pending"] == 3, out
+        assert out["credential"]["can_refresh_patriarchal"] is True, out
+
+        # a calling WITHOUT profile access can't refresh patriarchal → the banner stays hidden
+        admin.requests.get = make_get(["menu.covenant.path"])
+        out2 = admin.enrollment_status("leader@example.org", "")
+        assert out2["credential"]["can_refresh_patriarchal"] is False, out2
+    finally:
+        admin.requests.get = saved_get
+        admin.SUPABASE_URL, admin.SERVICE_KEY = saved_cfg
+    print("  ok enrollment_status exposes patriarchal_pending + can_refresh_patriarchal")
+
+
 def test_endpoint_health_trend() -> None:
     """The passive cross-run endpoint trend: aggregate sync_diagnostics across runs into per-endpoint
     calls/errors/error_pct + by-hour error rate, with route-pattern grouping and a verdict."""
@@ -1848,6 +1903,7 @@ def main() -> int:
     test_enrolled_stakes_object_embed()
     test_enrolled_stakes_self_renewing_from_membertools()
     test_endpoint_health_trend()
+    test_enrollment_status_patriarchal_signal()
     test_mint_misconfig()
     test_mint_empty_email()
     test_mfa_expiry()

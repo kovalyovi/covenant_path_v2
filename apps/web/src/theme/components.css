@@ -690,6 +690,11 @@ button.card--tappable:active {
   color: var(--on-surface);
   justify-content: space-between;
 }
+.banner--info {
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+  color: var(--on-surface);
+  justify-content: space-between;
+}
 
 /* ---- Spinner --------------------------------------------------------------------------------- */
 .spinner {
