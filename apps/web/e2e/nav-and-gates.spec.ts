@@ -11,7 +11,7 @@ test.describe('navigation and gates', () => {
     const rail = page.getByRole('navigation', { name: 'Primary' });
 
     await expect(page).toHaveURL(/\/baptisms$/);
-    await expect(page.getByText('Prospective Baptisms')).toBeVisible();
+    await expect(page.getByText('Upcoming Baptisms')).toBeVisible();
     await expect(page.getByText('Jordan Sample')).toBeVisible(); // the goal-date investigator
 
     await rail.getByRole('link', { name: 'Golden Hour' }).click();
@@ -20,7 +20,7 @@ test.describe('navigation and gates', () => {
 
     await rail.getByRole('link', { name: 'Needs' }).click();
     await expect(page).toHaveURL(/\/needs$/);
-    await expect(page.getByText('Needs Action')).toBeVisible();
+    await expect(page.getByText('Action Needed')).toBeVisible();
 
     await rail.getByRole('link', { name: 'KPIs' }).click();
     await expect(page).toHaveURL(/\/kpis$/);

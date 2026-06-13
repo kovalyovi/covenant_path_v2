@@ -113,7 +113,7 @@ function GoldenHourBody() {
               leader can track friends/investigators before LCR has a record. */}
           <ManualMembersSection />
           {beingTaught.length === 0 ? (
-            <p style={{ textAlign: 'center', padding: 32 }}>No one currently being taught from the Church records yet.</p>
+            <p style={{ textAlign: 'center', padding: 32 }}>No one is being taught in the Church records yet.</p>
           ) : byDate ? (
             <DateList rows={beingTaught} chips={false} dateField="baptism_goal_date" ascending={ascending} />
           ) : (

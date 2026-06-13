@@ -112,7 +112,7 @@ function KpisBody() {
   const cards: React.ReactNode[] = [
     <MetricCard
       key="friends-sac"
-      title="Investigators at Sacrament"
+      title="Being Taught at Sacrament"
       icon="groups"
       color="#fb8c00"
       series={friendsAtSac.series}
@@ -162,7 +162,7 @@ function KpisBody() {
             setDrill({ kind: 'metric', title: 'Being taught now', events: evs(investigators, 'baptism_goal_date'), allUnits }),
         },
         {
-          label: 'Lessons w/ member present',
+          label: 'Lessons with a member present',
           value: String(lessons),
           onClick: () => setDrill({ kind: 'lessons', people: membersWithMemberLessons(rows) }),
         },

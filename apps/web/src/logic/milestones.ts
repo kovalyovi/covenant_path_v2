@@ -147,7 +147,7 @@ export const milestones: Milestone[] = [
     complete: (m) => m['calling'] === 'Yes', eligible: (m) => turnsAtLeast(m, 12),
   },
   {
-    label: 'Has ministers', abbr: 'M', icon: 'support', color: '#00838F',
+    label: 'Ministers assigned', abbr: 'M', icon: 'support', color: '#00838F',
     field: 'ministering_brothers_sisters',
     description: 'Ministering brothers or sisters are assigned to watch over this member and visit them regularly.',
     complete: (m) => m['ministering_brothers_sisters'] === 'Yes', eligible: everyone,
@@ -155,7 +155,7 @@ export const milestones: Milestone[] = [
   {
     label: 'Ministering assignment', abbr: 'MA', icon: 'volunteer', color: '#EF6C00',
     field: 'ministering_assignment',
-    description: 'The member has been given others to minister to — serving alongside the ward as a minister themselves.',
+    description: 'The member has people of their own to minister to — serving alongside the ward as a minister themselves.',
     complete: (m) => m['ministering_assignment'] === 'Yes', eligible: (m) => turnsAtLeast(m, 14),
   },
   {
@@ -174,14 +174,14 @@ export const milestones: Milestone[] = [
   // Temple Ordinances and Experiences (#first-temple-visit): genealogy + proxy baptisms, both from
   // the year someone turns 12 (limited-use recommend age — same by-year rule as calling/Aaronic).
   {
-    label: 'Family name prepared', abbr: 'FN', icon: 'menu_book', color: '#6D4C41',
+    label: 'Family Name Prepared', abbr: 'FN', icon: 'menu_book', color: '#6D4C41',
     field: 'family_name_prepared',
     description: 'The member has found and prepared a family name through family history, ready to take to the temple.',
     complete: (m) => templeExperienceValue(m, 'family_name_prepared') === 'Yes',
     eligible: (m) => turnsAtLeast(m, 12),
   },
   {
-    label: 'First temple visit', abbr: 'FT', icon: 'account_balance', color: '#00897B',
+    label: 'First Temple Visit', abbr: 'FT', icon: 'account_balance', color: '#00897B',
     field: 'first_temple_visit',
     description: 'The member has made their first temple visit to perform baptisms for deceased ancestors.',
     complete: (m) => templeExperienceValue(m, 'first_temple_visit') === 'Yes',
@@ -290,7 +290,7 @@ export interface OrgInfo {
 export function orgInfo(b: OrgBucket): OrgInfo {
   switch (b) {
     case 'wml':
-      return { label: 'Missionaries / WML', short: 'WML', icon: 'volunteer', color: '#00897B' };
+      return { label: 'Missionaries & ward mission leader', short: 'WML', icon: 'volunteer', color: '#00897B' };
     case 'eq':
       return { label: 'Elders Quorum', short: 'EQ', icon: 'groups', color: '#1565C0' };
     case 'rs':

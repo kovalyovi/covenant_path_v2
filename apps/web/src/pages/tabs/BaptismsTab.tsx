@@ -48,7 +48,7 @@ function BaptismsBody() {
       tier={tier}
       header={
         <SectionTitle
-          title="Prospective Baptisms"
+          title="Upcoming Baptisms"
           count={items.length}
           byDate={!byUnit}
           onToggle={(v) => setByUnit(!v)}
@@ -56,7 +56,7 @@ function BaptismsBody() {
       }
     >
       {items.length === 0 ? (
-        <p style={{ textAlign: 'center', padding: 32 }}>No prospective baptisms with a planned date.</p>
+        <p style={{ textAlign: 'center', padding: 32 }}>No baptisms scheduled yet.</p>
       ) : byUnit ? (
         <PerUnit items={items} today={today} tier={tier} missionaries={d.missionaries} />
       ) : (
@@ -110,7 +110,7 @@ function Timeline({ items, today, embedded = false }: { items: Dated[]; today: D
     <div className="stack">
       {overdue.length > 0 && (
         <DateSection
-          title="Needs attention — date passed"
+          title="Needs attention — date has passed"
           icon="warning"
           color="var(--warning)"
           items={overdue}

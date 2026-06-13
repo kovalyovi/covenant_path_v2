@@ -49,7 +49,7 @@ export function ManualMembersSection() {
     >
       {d.manualMembers.length === 0 ? (
         <p className="muted" style={{ margin: 0 }}>
-          Add a friend or investigator you're teaching before they appear in the Church records.
+          Add someone you're teaching before they appear in the Church records.
         </p>
       ) : (
         <div className="stack" style={{ gap: 4 }}>

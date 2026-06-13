@@ -63,7 +63,7 @@ export const rulesSections: RulesSection[] = [
     title: 'Who shows where',
     points: [
       'People being taught (not yet baptized) appear only in Baptisms and Golden Hour\'s "Being Taught".',
-      "Baptised & confirmed counts use the convert's baptism month.",
+      "Baptized & confirmed counts use the convert's baptism month.",
     ],
   },
 ];

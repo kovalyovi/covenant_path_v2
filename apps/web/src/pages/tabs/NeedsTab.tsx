@@ -92,7 +92,7 @@ function NeedsBody() {
         tier={tier}
         header={
           <div className="stack" style={{ gap: 0 }}>
-            <BigHeader text="Needs Action" subtitle="Eligible members still missing each integration step" />
+            <BigHeader text="Action Needed" subtitle="Eligible members still working toward each step" />
             {filters}
           </div>
         }
@@ -115,7 +115,7 @@ function NeedsBody() {
       tier={tier}
       header={
         <div className="stack" style={{ gap: 0 }}>
-          <BigHeader text="Needs Action" subtitle="Eligible members still missing each integration step" />
+          <BigHeader text="Action Needed" subtitle="Eligible members still working toward each step" />
           {filters}
           <div style={{ height: 12 }} />
           <div className="wrap">
@@ -159,7 +159,7 @@ function CategorySection({
   }
   const units = [...byUnit.entries()].sort((a, b) => b[1] - a[1]);
   return (
-    <SectionCard title={`Needs ${ms.label}`} icon={ms.icon as IconName} iconColor={ms.color} trailing={<CountBadge n={missing.length} />}>
+    <SectionCard title={`Still working toward: ${ms.label}`} icon={ms.icon as IconName} iconColor={ms.color} trailing={<CountBadge n={missing.length} />}>
       {missing.length === 0 ? (
         <p style={{ padding: '16px 0' }}>Everyone eligible has this. 🎉</p>
       ) : (

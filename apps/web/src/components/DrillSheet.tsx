@@ -186,7 +186,7 @@ function LessonsDrillBody({ drill, onClose }: { drill: LessonsDrill; onClose: ()
       </p>
       <hr className="divider" />
       {drill.people.length === 0 ? (
-        <p style={{ textAlign: 'center', padding: 20 }}>No member-present lessons recorded yet.</p>
+        <p style={{ textAlign: 'center', padding: 20 }}>No lessons with a member present recorded yet.</p>
       ) : (
         drill.people.map((p, i) => (
           <PersonTile
@@ -253,7 +253,7 @@ export function DrillHost({ drill, onClose }: { drill: Drill | null; onClose: ()
       body = <LessonsDrillBody drill={drill} onClose={onClose} />;
       break;
     case 'category':
-      title = `Still need: ${drill.label}`;
+      title = `Still working toward: ${drill.label}`;
       body = <CategoryDrillBody drill={drill} onClose={onClose} />;
       break;
   }

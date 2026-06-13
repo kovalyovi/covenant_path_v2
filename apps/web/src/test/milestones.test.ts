@@ -96,7 +96,7 @@ describe('milestonesFor (eligibility filtering)', () => {
     expect(aM.has('MP')).toBe(true);
   });
 
-  it('a young child only has the everyone milestones (friends, has-ministers)', () => {
+  it('a young child only has the everyone milestones (friends, ministers-assigned)', () => {
     const child = member({ sex: 'M', birth_date: `1 Jan ${thisYear - 8}` });
     expect(abbrs(child)).toEqual(new Set(['F', 'M']));
   });
@@ -177,7 +177,7 @@ describe('N/A exclusion + patriarchal/temple-name gate (item 4)', () => {
   });
 
   it('completion ring + milestonesFor exclude an N/A milestone from the denominator', () => {
-    // adult woman, 1yr member: applicable = Friends, Calling, Has-ministers, Ministering-assignment,
+    // adult woman, 1yr member: applicable = Friends, Calling, Ministers-assigned, Ministering-assignment,
     // Family name, First temple visit = 6. If calling is N/A, applicable drops to 5.
     const base = member({ sex: 'F', baptism_date: '1 Jan 2000' });
     expect(milestonesFor(base).length).toBe(6);
@@ -211,7 +211,7 @@ describe('completionOf (detail-page ring) + detail eligibility gates', () => {
   it('0 when nothing applicable is done, 1.0 when all applicable are done (→ green)', () => {
     const none = member({ sex: 'F', baptism_date: '1 Jan 2000' });
     expect(completionOf(none)).toBe(0);
-    // F adult, 1yr member: applicable = Friends, Calling, Has-ministers, Ministering-assignment.
+    // F adult, 1yr member: applicable = Friends, Calling, Ministers-assigned, Ministering-assignment.
     const allDone = member({
       sex: 'F', baptism_date: '1 Jan 2000', friends: 'Yes', calling: 'Yes',
       ministering_brothers_sisters: 'Yes', ministering_assignment: 'Yes',

@@ -145,7 +145,7 @@ function RichBody({ member, d }: { member: Member; d: Record<string, unknown> })
           title="Calling"
           icon="badge"
           lines={callingLines}
-          emptyText="Not yet been given a calling."
+          emptyText="No calling yet."
           emptyIsAlert
           recordedYes={member['calling'] === 'Yes'}
         />
@@ -155,7 +155,7 @@ function RichBody({ member, d }: { member: Member; d: Record<string, unknown> })
           title="Ministering Assignment"
           icon="volunteer"
           lines={maLines}
-          emptyText="Not yet received a ministering assignment."
+          emptyText="No ministering assignment yet."
           recordedYes={member['ministering_assignment'] === 'Yes'}
         />
       )}
