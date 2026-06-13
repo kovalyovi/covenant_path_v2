@@ -62,6 +62,9 @@ export class AdminClient {
   syncStake = (stakeId: string) => this.postReq(`/admin/stakes/${stakeId}/sync`);
   wipeStakeData = (stakeId: string) => this.postReq(`/admin/stakes/${stakeId}/wipe-data`);
   removeStake = (stakeId: string) => this.postReq(`/admin/stakes/${stakeId}/remove`);
+  // B3: email the stake's credential provider a re-authorization nudge (the day-40 template + the
+  // /reauth deep link), on demand from the ops worklist.
+  reauthEmail = (stakeId: string) => this.postReq(`/admin/stakes/${stakeId}/reauth-email`);
   run = (workflow: string, inputs?: Record<string, unknown>) =>
     this.postReq('/admin/actions/run', inputs ? { workflow, inputs } : { workflow });
   rerun = (runId: number) => this.postReq(`/admin/actions/${runId}/rerun`);

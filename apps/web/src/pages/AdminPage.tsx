@@ -1,9 +1,10 @@
 // Admin · Ops console — React port of admin_page.dart. One place to monitor and operate the
 // platform, gated server-side by app_admins (the broker checks with the service-role key). Panels
 // load independently so a slow/failed section (e.g. GitHub Actions) only errors in its own card.
-// Panels, in order: system health, data freshness, maintenance (dispatch a rescrape), diagnostics,
-// admin management, enrolled stakes (cross-stake ops + per-stake sync/revoke), recent logins,
-// endpoint health trend, recent Actions runs, changelog, calling overrides.
+// Panels, in order (day-to-day ops first): system health/freshness/maintenance, enrolled stakes
+// (cross-stake ops + per-stake sync/revoke, with re-auth + visibility worklists), recent logins,
+// admin management, diagnostics, endpoint health trend, recent Actions runs, changelog, calling
+// overrides.
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -115,6 +116,14 @@ export function AdminPage() {
     );
   }
 
+  function sendReauth(stakeId: string, name: string) {
+    void guard(async () => {
+      const res = await admin.reauthEmail(stakeId);
+      const to = res['to'] ? ` to ${String(res['to'])}` : '';
+      toast.show({ message: `Re-authorization email sent${to} for ${name}.` });
+    });
+  }
+
   async function inviteAdmin(emailVal: string) {
     await guard(async () => {
       const res = await admin.invite(emailVal);
@@ -177,32 +186,28 @@ export function AdminPage() {
               </>
             )}
           </Panel>
-          <Panel key={`diag-${nonce}`} title="Diagnostics" load={() => admin.diagnostics()}>
-            {(s) => <DiagnosticsCard diag={s} onCopy={(t) => navigator.clipboard.writeText(t)} toast={toast} />}
-          </Panel>
-          <Panel
-            key={`admins-${nonce}`}
-            title="Admins"
-            load={async () => {
-              const { data } = await supabase.from('app_admins').select('email, invited_by_email');
-              return { admins: (data ?? []) as Json[] };
-            }}
-          >
-            {(s) => (
-              <AdminsCard admins={(s['admins'] as Json[]) ?? []} busy={busy} onInvite={inviteAdmin} onRevoke={revokeAdmin} />
-            )}
-          </Panel>
+          {/* Day-to-day ops surfaces lead: enrolled stakes (+ re-auth/visibility worklists) and recent
+              logins sit ABOVE the deeper Diagnostics so the "did sync run? who can't see anything?"
+              signals are the first thing an admin sees (A4). */}
           <Panel key={`stakes-${nonce}`} title="Enrolled stakes" load={() => admin.enrolledStakes()}>
-            {(s) => (
-              <EnrolledStakesCard
-                stakes={((s['stakes'] as Json[]) ?? [])}
-                busy={busy}
-                onRevoke={revokeStake}
-                onSync={syncStake}
-                onWipe={wipeStakeData}
-                onRemove={removeStake}
-              />
-            )}
+            {(s) => {
+              const stakes = (s['stakes'] as Json[]) ?? [];
+              return (
+                <>
+                  {/* B2: a worklist of stakes needing action, derived from the SAME fetched array. */}
+                  <ReauthWorklistCard stakes={stakes} busy={busy} onReauth={sendReauth} />
+                  <EnrolledStakesCard
+                    stakes={stakes}
+                    busy={busy}
+                    onRevoke={revokeStake}
+                    onSync={syncStake}
+                    onWipe={wipeStakeData}
+                    onRemove={removeStake}
+                    onReauth={sendReauth}
+                  />
+                </>
+              );
+            }}
           </Panel>
           <Panel
             key={`logins-${nonce}`}
@@ -218,6 +223,39 @@ export function AdminPage() {
             errorHint="login_audit is admin-only (RLS) — rows appear once the broker records logins after its next deploy."
           >
             {(s) => <LoginAuditCard logins={(s['logins'] as Json[]) ?? []} />}
+          </Panel>
+          {/* B4: leaders who signed in but resolve to NO scope (empty app) — the exact people to bind. */}
+          <Panel
+            key={`visibility-${nonce}`}
+            title="Signed in but sees nothing"
+            load={async () => {
+              const { data } = await supabase
+                .from('login_audit')
+                .select('at, email, name, stake_name, callings, role_scope, outcome')
+                .eq('outcome', 'allowed')
+                .eq('role_scope', 'none')
+                .order('at', { ascending: false })
+                .limit(100);
+              return { rows: (data ?? []) as Json[] };
+            }}
+            errorHint="login_audit is admin-only (RLS) — rows appear once the broker records logins after its next deploy."
+          >
+            {(s) => <VisibilityWorklistCard rows={(s['rows'] as Json[]) ?? []} />}
+          </Panel>
+          <Panel
+            key={`admins-${nonce}`}
+            title="Admins"
+            load={async () => {
+              const { data } = await supabase.from('app_admins').select('email, invited_by_email');
+              return { admins: (data ?? []) as Json[] };
+            }}
+          >
+            {(s) => (
+              <AdminsCard admins={(s['admins'] as Json[]) ?? []} busy={busy} onInvite={inviteAdmin} onRevoke={revokeAdmin} />
+            )}
+          </Panel>
+          <Panel key={`diag-${nonce}`} title="Diagnostics" load={() => admin.diagnostics()}>
+            {(s) => <DiagnosticsCard diag={s} onCopy={(t) => navigator.clipboard.writeText(t)} toast={toast} />}
           </Panel>
           <Panel key={`ephealth-${nonce}`} title="Endpoint health (trend)" load={() => admin.endpointHealth(14)}>
             {(s) => <EndpointHealthCard data={s} />}
@@ -334,7 +372,9 @@ function Panel<T extends Json>({
       <Card title={title}>
         <p className="small">
           Couldn't load: {state.error}
-          {errorHint ? `\n\n${errorHint}` : ''}
+          {/* A5: a hint joined with "\n\n" collapses to a single space in HTML — render it as its
+              own block so it actually reads as a separate line. */}
+          {errorHint ? <span style={{ display: 'block', marginTop: 6 }}>{errorHint}</span> : null}
         </p>
       </Card>
     );
@@ -420,11 +460,14 @@ function HealthCard({ summary }: { summary: Json }) {
 
 function FreshnessCard({ summary }: { summary: Json }) {
   const sb = (summary['supabase'] as Json) ?? {};
+  // A6: the two timestamps are the urgent "did sync actually run?" signal — lead with them, emphasized.
+  // The row counts are background context, so demote them under a quiet "Counts" sublabel.
   return (
     <Card title="Data freshness">
-      <Kv k="Last member update" v={agoOrNever(sb['last_member_update'])} />
-      <Kv k="Last stake sync" v={agoOrNever(sb['last_stake_sync'])} />
+      <BigKv k="Last member update" v={agoOrNever(sb['last_member_update'])} />
+      <BigKv k="Last stake sync" v={agoOrNever(sb['last_stake_sync'])} />
       <hr className="divider" />
+      <p className="small muted" style={{ margin: '0 0 8px', fontWeight: 600 }}>Counts</p>
       <div className="wrap" style={{ gap: 18 }}>
         <Stat label="Members" v={sb['members']} />
         <Stat label="Units" v={sb['units']} />
@@ -435,11 +478,13 @@ function FreshnessCard({ summary }: { summary: Json }) {
   );
 }
 
-function Kv({ k, v }: { k: string; v: string }) {
+// A6: the freshness timestamps, emphasized — bigger value than a plain Kv since they answer the most
+// urgent ops question (did the sync run?).
+function BigKv({ k, v }: { k: string; v: string }) {
   return (
-    <div className="row" style={{ padding: '3px 0', justifyContent: 'space-between' }}>
+    <div className="row" style={{ padding: '5px 0', justifyContent: 'space-between' }}>
       <span>{k}</span>
-      <strong>{v}</strong>
+      <strong style={{ fontSize: '1.05rem' }}>{v}</strong>
     </div>
   );
 }
@@ -746,13 +791,121 @@ function ParityRow({ field, c }: { field: string; c: Json }) {
   );
 }
 
-function EnrolledStakesCard({
+// --- enrolled-stakes shared derivations (B1/B2/B5) ---------------------------------------------
+
+/** The 45-day Member Tools token countdown for a stake's credential: null when there's no token
+ *  (manual re-auth), a green/amber/red number of days left otherwise. (B1) */
+function tokenExpiry(cred: Json | undefined): { days: number; color: string; label: string } | null {
+  if (!cred) return null;
+  const raw = cred['token_expires_in_days'];
+  if (raw == null) return null; // no self-renewing token on file
+  const days = Number(raw);
+  if (!Number.isFinite(days)) return null;
+  if (days < 0) return { days, color: statusColors.danger, label: '45-day token: expired' };
+  const color = days > 10 ? statusColors.success : statusColors.warning;
+  return { days, color, label: `45-day token: ${days} day${days === 1 ? '' : 's'} left` };
+}
+
+/** A stake needs admin action when its credential is stale/revoked, the sync is flagged
+ *  needs_reauth, or the 45-day token is expired/absent (no self-renewal). (B2) */
+function stakeNeedsAction(s: Json): { reason: string } | null {
+  const cred = s['credential'] as Json | undefined;
+  const state = cred ? String(cred['state'] ?? '') : 'none';
+  if (s['sync_state'] === 'needs_reauth') return { reason: 'Sync flagged needs re-authorization' };
+  if (state === 'revoked') return { reason: 'Credential revoked' };
+  if (state === 'stale') return { reason: 'Last sync failed — session needs re-auth' };
+  if (!cred) return null; // never enrolled — not an action item (it shows in the main list)
+  const exp = tokenExpiry(cred);
+  if (exp && exp.days < 0) return { reason: '45-day sync token expired' };
+  if (!exp && cred['self_renewing'] !== true) return { reason: 'No self-renewing token — session will need re-auth' };
+  return null;
+}
+
+/** Sort key: soonest-to-expire first. Expired/absent tokens (the most urgent) sort ahead of
+ *  long-lived ones; a stake with no countdown at all goes last. (B1) */
+function expirySortKey(s: Json): number {
+  const cred = s['credential'] as Json | undefined;
+  const raw = cred?.['token_expires_in_days'];
+  if (raw == null) return Number.POSITIVE_INFINITY; // no token info → bottom
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
+}
+
+/** B5: a one-line rollup over the fetched stakes — self-renewing vs manual vs expiring within 7d. */
+function selfRenewingRollup(stakes: Json[]): { renewing: number; manual: number; expiring: number } {
+  let renewing = 0;
+  let manual = 0;
+  let expiring = 0;
+  for (const s of stakes) {
+    const cred = s['credential'] as Json | undefined;
+    if (!cred) continue; // not enrolled
+    if (cred['self_renewing'] === true) renewing += 1;
+    else manual += 1;
+    const exp = tokenExpiry(cred);
+    if (exp && exp.days >= 0 && exp.days <= 7) expiring += 1;
+  }
+  return { renewing, manual, expiring };
+}
+
+// B2: a compact worklist of stakes needing admin action, derived from the SAME fetched array — no
+// new endpoint. Shows name + reason + provider email + the "Send re-auth email" button.
+function ReauthWorklistCard({
   stakes,
+  busy,
+  onReauth,
+}: {
+  stakes: Json[];
+  busy: boolean;
+  onReauth: (id: string, name: string) => void;
+}) {
+  const needs = stakes
+    .map((s) => ({ s, action: stakeNeedsAction(s) }))
+    .filter((x): x is { s: Json; action: { reason: string } } => x.action != null)
+    .sort((a, b) => expirySortKey(a.s) - expirySortKey(b.s));
+  if (needs.length === 0) return null; // nothing to do → the card hides itself
+  return (
+    <Card title={`Needs re-authorization (${needs.length})`}>
+      {needs.map(({ s, action }, i) => {
+        const cred = s['credential'] as Json | undefined;
+        const name = String(s['name'] ?? '—');
+        const stakeId = String(s['stake_id']);
+        const provider = cred?.['principal_email'] != null ? String(cred['principal_email']) : '';
+        return (
+          <div key={i} style={{ padding: '6px 0', borderBottom: '1px solid rgba(128,128,128,0.2)' }}>
+            <div className="row" style={{ justifyContent: 'space-between', gap: 8 }}>
+              <strong>{name}</strong>
+              {provider && (
+                <Button
+                  variant="outlined"
+                  icon="mail"
+                  disabled={busy}
+                  onClick={() => onReauth(stakeId, name)}
+                >
+                  Send re-auth email
+                </Button>
+              )}
+            </div>
+            <div className="small" style={{ color: statusColors.warning }}>{action.reason}</div>
+            {provider ? (
+              <div className="small muted">Provider: {provider}</div>
+            ) : (
+              <div className="small muted">No provider email on file — a leader must re-enroll.</div>
+            )}
+          </div>
+        );
+      })}
+    </Card>
+  );
+}
+
+function EnrolledStakesCard({
+  stakes: rawStakes,
   busy,
   onRevoke,
   onSync,
   onWipe,
   onRemove,
+  onReauth,
 }: {
   stakes: Json[];
   busy: boolean;
@@ -760,10 +913,19 @@ function EnrolledStakesCard({
   onSync: (unit: string, name: string) => void;
   onWipe: (id: string, name: string) => void;
   onRemove: (id: string, name: string) => void;
+  onReauth: (id: string, name: string) => void;
 }) {
-  if (stakes.length === 0) return <Card title="Enrolled stakes">No stakes yet.</Card>;
+  if (rawStakes.length === 0) return <Card title="Enrolled stakes">No stakes yet.</Card>;
+  // B1: soonest-to-expire first so the stakes about to stop syncing are at the top.
+  const stakes = [...rawStakes].sort((a, b) => expirySortKey(a) - expirySortKey(b));
+  // B5: a one-line self-renewing rollup under the title.
+  const roll = selfRenewingRollup(rawStakes);
   return (
-    <Card title={`Enrolled stakes (${stakes.length})`}>
+    <Card title={`Enrolled stakes (${rawStakes.length})`}>
+      <p className="small muted" style={{ marginTop: 0 }}>
+        {roll.renewing} self-renewing · {roll.manual} manual
+        {roll.expiring > 0 ? ` · ${roll.expiring} expiring within 7 days` : ''}
+      </p>
       {stakes.map((s, i) => {
         const cred = s['credential'] as Json | undefined;
         const name = String(s['name'] ?? '—');
@@ -782,7 +944,7 @@ function EnrolledStakesCard({
           credColor = statusColors.warning;
         } else if (cred['state'] === 'stale') {
           credLabel = 'Stale · needs re-auth';
-          credColor = '#e53935';
+          credColor = statusColors.danger;
         } else if (cred['complete'] === true) {
           credLabel = 'Active · full coverage';
           credColor = statusColors.success;
@@ -793,39 +955,54 @@ function EnrolledStakesCard({
         const credState = cred ? String(cred['state'] ?? '') : 'none';
         const lastError = cred?.['last_error'] != null ? String(cred['last_error']) : '';
         const missing = (cred?.['missing'] as unknown[]) ?? [];
+        const exp = tokenExpiry(cred);
+        const canReauth = !!cred && (credState === 'active' || credState === 'stale');
         return (
           <div key={i} style={{ padding: '6px 0' }}>
-            <div className="row">
+            {/* A2: name + ID on their own line so they never get clipped on a phone. */}
+            <div className="row" style={{ gap: 8 }}>
               <strong>{name}</strong>
               {/* Stable LCR stake ID — stakes get renamed, so the ID is how you identify them (#9). */}
               {unitNumber && unitNumber !== 'null' && (
-                <span className="small muted" style={{ fontFamily: 'monospace', marginLeft: 8, flex: 1 }}>
-                  ID {unitNumber}
-                </span>
+                <span className="small muted" style={{ fontFamily: 'monospace' }}>ID {unitNumber}</span>
               )}
-              {(!unitNumber || unitNumber === 'null') && <span style={{ flex: 1 }} />}
               {running && <span className="spinner" aria-hidden="true" style={{ width: 14, height: 14 }} />}
+            </div>
+            {/* A2: actions in a wrapping container so they flow to a second line on narrow screens.
+                A3: the destructive Wipe/Remove are separated and use the danger token (dark-mode-safe). */}
+            <div className="wrap" style={{ gap: 4, marginTop: 2 }}>
               {!running && credState !== 'revoked' && credState !== 'none' && (
                 <IconButton icon="sync" label="Sync this stake now" size={18} disabled={busy} onClick={() => onSync(unitNumber, name)} />
               )}
               {(credState === 'active' || credState === 'stale') && (
                 <IconButton icon="link_off" label="Revoke sync credential" size={18} disabled={busy} onClick={() => onRevoke(stakeId, name)} />
               )}
-              <button type="button" disabled={busy} onClick={() => onWipe(stakeId, name)}
+              {canReauth && (
+                <IconButton icon="mail" label="Send re-authorization email" size={18} disabled={busy} onClick={() => onReauth(stakeId, name)} />
+              )}
+              {/* A small spacer divider before the destructive actions so they read as a distinct group. */}
+              <span aria-hidden="true" style={{ width: 1, alignSelf: 'stretch', margin: '0 4px', background: 'var(--outline-variant)' }} />
+              <button type="button" className="btn btn--text btn--danger" disabled={busy} onClick={() => onWipe(stakeId, name)}
                 title="Wipe member data (keeps the stake + roles + credential)"
-                style={{ background: 'none', border: 'none', color: '#e65100', cursor: 'pointer', fontSize: 12, padding: '2px 6px', fontWeight: 600 }}>
+                style={{ fontSize: 12, padding: '2px 8px', fontWeight: 600 }}>
                 Wipe
               </button>
-              <button type="button" disabled={busy} onClick={() => onRemove(stakeId, name)}
+              <button type="button" className="btn btn--text btn--danger" disabled={busy} onClick={() => onRemove(stakeId, name)}
                 title="Remove stake completely (irreversible)"
-                style={{ background: 'none', border: 'none', color: '#c62828', cursor: 'pointer', fontSize: 12, padding: '2px 6px', fontWeight: 600 }}>
+                style={{ fontSize: 12, padding: '2px 8px', fontWeight: 600 }}>
                 Remove
               </button>
             </div>
-            <div className="wrap" style={{ gap: 8, alignItems: 'center' }}>
+            <div className="wrap" style={{ gap: 8, alignItems: 'center', marginTop: 4 }}>
               <span className="chip" style={{ borderColor: credColor, color: credColor, background: `${credColor}1f`, fontSize: 12 }}>
                 {credLabel}
               </span>
+              {/* B1: 45-day token countdown chip — green >10, amber ≤10, red expired. */}
+              {exp && (
+                <span className="chip" style={{ borderColor: exp.color, color: exp.color, background: `${exp.color}1f`, fontSize: 12 }}>
+                  {exp.label}
+                </span>
+              )}
               <span className="small muted">{String(members)} members</span>
               <span className="small muted">· synced {agoOrNever(s['last_synced_at'])}</span>
               {/* Sync jobs that actually ran for this stake in the last 7 days (#9). Amber when zero. */}
@@ -848,7 +1025,7 @@ function EnrolledStakesCard({
               </div>
             )}
             {credState === 'stale' && (
-              <p className="tiny" style={{ marginTop: 2, color: '#e53935' }}>
+              <p className="tiny" style={{ marginTop: 2, color: statusColors.danger }}>
                 Last sync failed{lastError ? `: ${lastError.slice(0, 120)}` : ''} — a leader must re-authorize (or take over).
               </p>
             )}
@@ -858,6 +1035,46 @@ function EnrolledStakesCard({
               </p>
             )}
             <hr className="divider" style={{ margin: '8px 0 0' }} />
+          </div>
+        );
+      })}
+    </Card>
+  );
+}
+
+// B4: leaders who signed in but resolve to NO scope — the exact people to invite/bind (a missing
+// email binding). De-duped by email; shows email + stake + callings.
+function VisibilityWorklistCard({ rows: all }: { rows: Json[] }) {
+  // De-dupe by email, keeping the most recent (the query is already newest-first).
+  const seen = new Set<string>();
+  const rows: Json[] = [];
+  for (const r of all) {
+    const email = String(r['email'] ?? '').toLowerCase();
+    if (!email || seen.has(email)) continue;
+    seen.add(email);
+    rows.push(r);
+  }
+  if (rows.length === 0)
+    return (
+      <Card title="Signed in but sees nothing">
+        <p className="small muted">None recently — every signed-in leader resolves to a scope.</p>
+      </Card>
+    );
+  const shown = rows.slice(0, 12);
+  return (
+    <Card title={`Signed in but sees nothing (${rows.length})`}>
+      <p className="small muted" style={{ marginTop: 0 }}>
+        Signed in successfully but resolve to no scope (empty app) — usually a missing email binding.
+        Invite or bind these leaders.
+      </p>
+      {shown.map((r, i) => {
+        const callings = (Array.isArray(r['callings']) ? (r['callings'] as unknown[]) : []).join(', ');
+        return (
+          <div key={i} style={{ padding: '6px 0', borderBottom: '1px solid rgba(128,128,128,0.2)' }}>
+            <MaskedEmail email={r['email']} />
+            {r['stake_name'] ? <div className="small muted">{String(r['stake_name'])}</div> : null}
+            {callings ? <div className="small muted">Callings: {callings}</div> : null}
+            <div className="tiny muted">{fmtDateTime(String(r['at'] ?? ''))}</div>
           </div>
         );
       })}
