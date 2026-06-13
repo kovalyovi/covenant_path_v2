@@ -1,7 +1,8 @@
 """Enrollment scenarios: consented store (g), re-enroll over a REVOKED credential — the
 2026-06-10 regression (h) — and the plain-login can_enroll offer (i). Asserts against the
 stub's stake_credentials rows, i.e. the 0041 RPC semantics end to end.
-(Passwordless email-code enrollment lives in test_otp_flows.py.)"""
+(The passwordless Church email-code lane was removed 2026-06-12 — ADR-011 — so enrollment is
+username+password only; see tests/test_web_session.py for the token-minting capture flow.)"""
 
 from __future__ import annotations
 
