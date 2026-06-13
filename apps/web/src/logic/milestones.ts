@@ -251,7 +251,8 @@ export const needsCategories: Milestone[] = [
   {
     label: 'Patriarchal Blessing', abbr: 'PB', icon: 'menu_book', color: '#AD1457',
     field: 'patriarchal_blessing',
-    description: 'The member has received a patriarchal blessing — personal guidance and a declaration of lineage from a stake patriarch.',
+    description: 'The member has received a patriarchal blessing — personal guidance and a declaration of lineage from a stake patriarch. '
+      + 'Note: this is the one field not available from the daily sync — it refreshes when a leader re-authorizes (about every 45 days).',
     complete: (m) => m['patriarchal_blessing'] === 'Yes',
     eligible: patriarchalEligible,
   },
