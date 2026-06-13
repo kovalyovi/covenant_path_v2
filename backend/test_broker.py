@@ -166,6 +166,69 @@ def test_enrolled_stakes_object_embed() -> None:
             setattr(admin, k, v)
 
 
+def test_enrolled_stakes_self_renewing_from_membertools() -> None:
+    """A1 (REAL BUG): the self_renewing chip showed the OPPOSITE of truth — it read the OLD LCR
+    has_refresh_token (~always false), but 45-day self-renewal now lives in the Member Tools refresh
+    token (migration 0049). self_renewing must be true when membertools_refresh_enc is set even with
+    has_refresh_token false; the payload must also carry membertools_minted_at + a derived
+    token_expires_in_days (45 − days since minted; null with no token)."""
+    from datetime import datetime, timedelta, timezone
+    saved = {k: getattr(admin, k) for k in ("_member_counts", "_reauths_30d", "_jobs_last_7d")}
+    saved_get = admin.requests.get
+    saved_cfg = (admin.SUPABASE_URL, admin.SERVICE_KEY)
+    minted = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+    try:
+        admin.SUPABASE_URL = admin.SUPABASE_URL or "https://test.supabase.co"
+        admin.SERVICE_KEY = admin.SERVICE_KEY or "test-key"
+        admin._member_counts = lambda: {}
+        admin._reauths_30d = lambda: {}
+        admin._jobs_last_7d = lambda: {}
+        # Member Tools token present, LCR refresh token absent (the prod reality the bug got backwards).
+        admin.requests.get = lambda *a, **k: _FakeResp([{
+            "id": "s1", "name": "Raleigh", "unit_number": 503991,
+            "last_synced_at": None, "sync_state": None, "onboarded_at": None,
+            "stake_credentials": {
+                "principal_name": "Ilia", "principal_email": "ilia@example.com",
+                "revoked": False, "coverage": {"complete": True}, "access_rank": 1000,
+                "updated_at": None, "last_failed_at": None, "last_error": None,
+                "last_succeeded_at": None, "has_refresh_token": False,
+                "membertools_refresh_enc": "enc-blob", "membertools_minted_at": minted}}])
+        cred = (admin._enrolled_stakes()[0] or {}).get("credential") or {}
+        check("self_renewing true from membertools token (not has_refresh_token)",
+              cred.get("self_renewing") is True)
+        check("membertools_minted_at returned", cred.get("membertools_minted_at") == minted)
+        check("token_expires_in_days ~ 45-5 = 40", cred.get("token_expires_in_days") == 40)
+
+        # No Member Tools token AND no LCR token -> not self-renewing, null countdown.
+        admin.requests.get = lambda *a, **k: _FakeResp([{
+            "id": "s2", "name": "Cary", "unit_number": 11,
+            "last_synced_at": None, "sync_state": None, "onboarded_at": None,
+            "stake_credentials": {
+                "principal_email": "x@y.z", "revoked": False, "coverage": {},
+                "has_refresh_token": False, "membertools_refresh_enc": None,
+                "membertools_minted_at": None}}])
+        cred2 = (admin._enrolled_stakes()[0] or {}).get("credential") or {}
+        check("no token -> self_renewing false", cred2.get("self_renewing") is False)
+        check("no token -> token_expires_in_days null", cred2.get("token_expires_in_days") is None)
+
+        # An expired token (minted 50 days ago) yields a NEGATIVE countdown (red in the UI).
+        old_minted = (datetime.now(timezone.utc) - timedelta(days=50)).isoformat()
+        admin.requests.get = lambda *a, **k: _FakeResp([{
+            "id": "s3", "name": "Apex", "unit_number": 12,
+            "last_synced_at": None, "sync_state": None, "onboarded_at": None,
+            "stake_credentials": {
+                "principal_email": "z@y.z", "revoked": False, "coverage": {},
+                "has_refresh_token": False, "membertools_refresh_enc": "enc",
+                "membertools_minted_at": old_minted}}])
+        cred3 = (admin._enrolled_stakes()[0] or {}).get("credential") or {}
+        check("expired token -> negative countdown", (cred3.get("token_expires_in_days") or 0) < 0)
+    finally:
+        admin.requests.get = saved_get
+        admin.SUPABASE_URL, admin.SERVICE_KEY = saved_cfg
+        for k, v in saved.items():
+            setattr(admin, k, v)
+
+
 def test_endpoint_health_trend() -> None:
     """The passive cross-run endpoint trend: aggregate sync_diagnostics across runs into per-endpoint
     calls/errors/error_pct + by-hour error rate, with route-pattern grouping and a verdict."""
@@ -1745,6 +1808,7 @@ def main() -> int:
     test_cors()
     test_credential_embed_shape()
     test_enrolled_stakes_object_embed()
+    test_enrolled_stakes_self_renewing_from_membertools()
     test_endpoint_health_trend()
     test_mint_misconfig()
     test_mint_empty_email()

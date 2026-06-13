@@ -569,13 +569,33 @@ def enrolled_stakes() -> list[dict]:
     return _cached("enrolled_stakes", 30, _enrolled_stakes)
 
 
+_TOKEN_LIFETIME_DAYS = 45  # the Member Tools refresh token's ceiling (migration 0049)
+
+
+def _token_days_left(minted_at: str | None, refresh_enc: str | None) -> int | None:
+    """Days of life left in the 45-day Member Tools sync token: 45 − (days since minted). None when
+    there's no token at all; can go negative (expired) so the ops view can flag it red."""
+    if not refresh_enc or not minted_at:
+        return None
+    from datetime import datetime, timezone
+    try:
+        minted = datetime.fromisoformat(str(minted_at).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if minted.tzinfo is None:
+        minted = minted.replace(tzinfo=timezone.utc)
+    age_days = (datetime.now(timezone.utc) - minted).total_seconds() / 86400
+    return _TOKEN_LIFETIME_DAYS - int(age_days)
+
+
 def _enrolled_stakes() -> list[dict]:
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/stakes",
         headers=_sb_headers(),
         params={"select": "id,name,unit_number,last_synced_at,sync_state,onboarded_at,"
                           "stake_credentials(principal_name,principal_email,revoked,coverage,access_rank,"
-                          "updated_at,last_failed_at,last_error,last_succeeded_at,has_refresh_token)",
+                          "updated_at,last_failed_at,last_error,last_succeeded_at,has_refresh_token,"
+                          "membertools_refresh_enc,membertools_minted_at)",
                 "order": "name.asc"},
         timeout=_TIMEOUT)
     if r.status_code != 200:
@@ -614,8 +634,17 @@ def _enrolled_stakes() -> list[dict]:
                 "last_failed_at": cred.get("last_failed_at"),
                 "last_error": cred.get("last_error"),
                 "last_succeeded_at": cred.get("last_succeeded_at"),
-                # cadence: self-renewing (refresh token captured) + re-auths in the last 30 days
-                "self_renewing": cred.get("has_refresh_token"),
+                # cadence: self-renewing means the daily sync can renew its own bearer for ~45 days
+                # with no Okta web session. That now lives in the Member Tools refresh token
+                # (migration 0049) — NOT the old LCR refresh token (has_refresh_token, ~always false),
+                # which is what the chip used to read (it showed the OPPOSITE of the truth).
+                "self_renewing": bool(cred.get("has_refresh_token"))
+                                 or bool(cred.get("membertools_refresh_enc")),
+                # When the 45-day Member Tools token was last minted + how many days of life it has
+                # left (45 − age; null when no token). Drives the per-stake expiry countdown chip.
+                "membertools_minted_at": cred.get("membertools_minted_at"),
+                "token_expires_in_days": _token_days_left(
+                    cred.get("membertools_minted_at"), cred.get("membertools_refresh_enc")),
                 "reauths_30d": reauths.get(s.get("unit_number"), 0),
             },
         })
