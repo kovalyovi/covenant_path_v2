@@ -952,6 +952,44 @@ def test_provider_wipe_data() -> None:
         admin.verify_user, admin.requests.get, admin.requests.post = saved_fns
 
 
+def test_admin_reauth_email() -> None:
+    # B3: POST /admin/stakes/{id}/reauth-email looks up the provider email + stake name and sends the
+    # re-auth nudge with the /reauth deep link. require_admin gates it; a missing credential / missing
+    # provider email -> 404; the LCR-sourced stake name is HTML-escaped in the body.
+    app.dependency_overrides[require_admin] = lambda: "admin@test"
+    sent: dict = {}
+    one_rows: dict = {
+        "stake_credentials": {"principal_email": "provider@test", "principal_name": "P", "revoked": False},
+        "stakes": {"name": "<b>Raleigh</b>", "unit_number": 503991},
+    }
+    saved = (admin._one, admin._send_email)
+    admin._one = lambda table, params: one_rows.get(table)
+    admin._send_email = lambda to, subject, html: sent.update(to=to, subject=subject, html=html)
+    try:
+        r = client.post("/admin/stakes/s1/reauth-email")
+        check("reauth-email -> 200", r.status_code == 200)
+        check("reauth-email returns the recipient", r.json().get("to") == "provider@test")
+        check("reauth-email sent to the provider", sent.get("to") == "provider@test")
+        check("reauth-email body carries the /reauth deep link", "/reauth" in sent.get("html", ""))
+        check("reauth-email escapes the stake name (BACKEND-02)",
+              "<b>Raleigh</b>" not in sent.get("html", "") and "&lt;b&gt;" in sent.get("html", ""))
+
+        # No credential on file -> 404, nothing sent.
+        sent.clear()
+        one_rows["stake_credentials"] = None
+        r = client.post("/admin/stakes/s1/reauth-email")
+        check("reauth-email no credential -> 404", r.status_code == 404)
+        check("reauth-email no credential sends nothing", "to" not in sent)
+
+        # Credential but no provider email -> 404.
+        one_rows["stake_credentials"] = {"principal_email": "", "revoked": False}
+        r = client.post("/admin/stakes/s1/reauth-email")
+        check("reauth-email no provider email -> 404", r.status_code == 404)
+    finally:
+        admin._one, admin._send_email = saved
+        app.dependency_overrides.clear()
+
+
 def test_admin_requires_auth() -> None:
     # No bearer token -> 403 before any network call (verify_admin short-circuits).
     r = client.get("/admin/summary")
@@ -1834,6 +1872,7 @@ def main() -> int:
     test_nested_idx_messages_and_mask()
     test_mfa_pending_and_select_failures_audited()
     test_provider_wipe_data()
+    test_admin_reauth_email()
     test_full_eval_enroll_reaches_scrape_and_stores()
     test_full_eval_new_stake_offers_enroll()
     test_friendly_okta_errors()

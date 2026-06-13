@@ -934,6 +934,19 @@ def admin_revoke_stake(stake_id: str, email: str = Depends(require_admin)) -> di
         raise HTTPException(status_code=503, detail=str(e))
 
 
+@app.post("/admin/stakes/{stake_id}/reauth-email")
+def admin_stake_reauth_email(stake_id: str, email: str = Depends(require_admin)) -> dict:
+    """B3: email the stake's credential provider the re-authorize nudge (+ /reauth deep link) on
+    demand — the ops worklist button for a stake whose token expired / session went stale."""
+    logger.info("admin %s sending re-auth email for stake %s", email, stake_id)
+    try:
+        return admin.send_reauth_email(stake_id)
+    except admin.NotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 @app.post("/admin/stakes/{stake_id}/sync")
 def admin_stake_sync(stake_id: str, email: str = Depends(require_admin)) -> dict:
     """Per-stake 'Sync now' — dispatches a sync for ONLY this stake (never the full matrix)."""

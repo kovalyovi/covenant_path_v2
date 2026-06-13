@@ -656,6 +656,39 @@ def admin_revoke_stake(stake_id: str) -> dict:
     return _patch_revoke(stake_id, _sb_headers())
 
 
+def send_reauth_email(stake_id: str) -> dict:
+    """B3: on demand from the ops worklist, email the stake's credential PROVIDER the re-authorize
+    nudge (the same day-40 body + /reauth deep link the daily sync sends near expiry). Looks up the
+    provider email + stake name over REST (the broker holds no DB connection). NotFound (-> 404) when
+    there's no credential / no provider email to send to."""
+    cred = _one("stake_credentials",
+                {"select": "principal_email,principal_name,revoked", "stake_id": f"eq.{stake_id}",
+                 "limit": "1"})
+    if not cred:
+        raise NotFound("no credential on file for this stake")
+    to = (cred.get("principal_email") or "").strip()
+    if not to:
+        raise NotFound("no provider email on file for this stake")
+    stake = _one("stakes", {"select": "name,unit_number", "id": f"eq.{stake_id}", "limit": "1"}) or {}
+    name = stake.get("name") or stake.get("unit_number") or "your stake"
+    from html import escape  # BACKEND-02: escape the LCR-sourced stake name before the HTML body
+    safe = escape(str(name))
+    reauth_url = os.environ.get("APP_URL", "https://app.membercovenantpath.org").rstrip("/") + "/reauth"
+    _send_email(
+        to,
+        f"Covenant Path — re-authorize the {safe} sync when convenient",
+        (f"<p>The daily Covenant Path sync for <b>{safe}</b> needs to be re-authorized — the Church "
+         f"session backing it has expired or is about to, and when it does the sync pauses until you "
+         f"sign in again.</p>"
+         f'<p style="margin:18px 0"><a href="{escape(reauth_url)}" '
+         f'style="background:#7c5cff;color:#fff;padding:11px 20px;border-radius:8px;'
+         f'text-decoration:none;font-weight:600">Re-authorize the {safe} sync</a></p>'
+         f"<p>It takes under a minute — sign in once on the Church page (one verification code) and "
+         f"the sync keeps running for another ~45 days. (You can also do it in the app → "
+         f"<b>Sync settings → Re-authorize daily sync</b>.)</p>"))
+    return {"status": "sent", "to": to, "stake": name}
+
+
 def _rpc(name: str, params: dict) -> requests.Response:
     return requests.post(f"{SUPABASE_URL}/rest/v1/rpc/{name}",
                          headers={**_sb_headers(), "Content-Type": "application/json"},
