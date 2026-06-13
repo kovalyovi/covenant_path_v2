@@ -259,7 +259,7 @@ struct ListSection<Content: View>: View {
     let count: Int
     var caption: String?
     let accent: Color
-    @ViewBuilder let content: () -> Content
+    let content: () -> Content
 
     init(title: String, symbol: String, count: Int, caption: String? = nil,
          accent: Color = DashboardTab.goldenHour.accent,

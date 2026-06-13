@@ -113,7 +113,7 @@ struct TableView: View {
 
             // FROZEN header row (row 1): the corner (# + Member) stays put; the data headers mirror the
             // body's horizontal scroll so each label sits above its column.
-            HStack(spacing: 0, alignment: .center) {
+            HStack(alignment: .center, spacing: 0) {
                 cornerHeader(memberCol: memberCol).frame(width: frozenW)
                 dataHeaderRow(cols: dataCols)
                     .offset(x: dataOffsetX)
@@ -129,7 +129,7 @@ struct TableView: View {
             // scroll so they move together. (Frozen columns have no native SwiftUI support — this is the
             // standard split + offset-mirror pattern.)
             ScrollView(.vertical, showsIndicators: true) {
-                HStack(spacing: 0, alignment: .top) {
+                HStack(alignment: .top, spacing: 0) {
                     VStack(spacing: 0) {
                         ForEach(Array(rowsF.enumerated()), id: \.element.id) { idx, m in
                             NavigationLink(value: m) { frozenRowCell(idx: idx, m: m, memberCol: memberCol) }
