@@ -164,7 +164,10 @@
   background: var(--surface);
   border: 1px solid var(--outline-variant);
   border-radius: var(--radius-card);
-  margin: 6px 0;
+  margin: 8px 0;
+  /* item 10: subtle resting elevation; transitions power the gentle hover lift on tappable cards. */
+  box-shadow: var(--shadow-card);
+  transition: box-shadow 0.16s ease, transform 0.16s ease, border-color 0.16s ease;
 }
 .card__body {
   padding: var(--lg);
@@ -191,9 +194,18 @@ button.card--tappable {
   text-align: left;
   border: 1px solid var(--outline-variant);
   background: var(--surface);
+  cursor: pointer;
 }
+/* item 10: gentle lift on hover (raised shadow + 1px rise) for interactive cards. */
 button.card--tappable:hover {
   background: var(--surface-container);
+  box-shadow: var(--shadow-card-hover);
+  transform: translateY(-1px);
+  border-color: var(--outline);
+}
+button.card--tappable:active {
+  transform: translateY(0);
+  box-shadow: var(--shadow-card);
 }
 
 /* ---- Buttons --------------------------------------------------------------------------------- */
@@ -555,12 +567,15 @@ button.card--tappable:hover {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 8px 4px;
+  padding: 8px;
   border: none;
+  border-radius: var(--radius-md);
   background: transparent;
   width: 100%;
   text-align: left;
   color: inherit;
+  cursor: pointer;
+  transition: background 0.14s ease;
 }
 .member-row:hover {
   background: var(--surface-container);

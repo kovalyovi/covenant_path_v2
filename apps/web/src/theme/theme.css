@@ -44,6 +44,10 @@
   --radius-pill: 20px;
 
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.06);
+  /* Card elevation (item 10): a soft resting shadow + a slightly deeper one on hover for the gentle
+     lift. Layered shadows read as best-practice "elevation" without being heavy. */
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
+  --shadow-card-hover: 0 4px 10px rgba(16, 24, 40, 0.08), 0 8px 24px rgba(16, 24, 40, 0.10);
 
   color-scheme: light;
 }
@@ -72,6 +76,9 @@
   --warning: #ffb74d;
   --info: #64b5f6;
   --danger: #ef9a9a;
+  /* Deeper, darker elevation on the dark surface so cards still read as raised (item 10). */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.45), 0 10px 28px rgba(0, 0, 0, 0.5);
 
   color-scheme: dark;
 }
