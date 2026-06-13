@@ -96,8 +96,12 @@ fun EnrollmentEmptyState(
     val cred = enrollStatus?.credential
     val hasNoRole = enrollStatus?.noRole == true
 
-    var title = "No members visible"
-    var body = "Access is scoped to your LCR calling. Sign in with the email your stake has on file."
+    // Default (also the enrollStatus == null and unmatched-fallback cases): signed in but no stake/role
+    // resolved for this email — it isn't linked yet. Name the TWO ways in (a leader invites them, OR one
+    // Church login binds their calling), not the dead-end "sign in with the right email" — they ARE in.
+    var title = "No stake linked to this sign-in"
+    var body = "You're signed in, but this email isn't linked to a stake yet. Ask your stake leader to " +
+        "invite you, or sign in once with your Church account to link your calling automatically."
     var actionLabel: String? = null
 
     when {
@@ -112,13 +116,20 @@ fun EnrollmentEmptyState(
                 "automatically. If this seems wrong, contact your stake leadership."
         }
         hasNoRole && cred?.isNone == true -> {
+            // No role AND no stake we can name — this email isn't linked to a stake. We can't tell a
+            // brand-new-stake LEADER from an unlinked VIEWER, so present both true paths: a leader signs
+            // in with their Church account (sets up sync / binds their calling); a viewer asks to be
+            // invited by email.
             if (brokerAvailable) {
-                title = "Set up stake sync"
-                body = "Your stake hasn't set up Covenant Path yet. Authorize with your Church account to start daily data updates — it keeps your stake synced automatically."
-                actionLabel = "Authorize stake sync"
+                title = "Link your stake access"
+                body = "You're signed in, but this email isn't linked to a stake yet. If your stake " +
+                    "already uses Covenant Path, ask a stake leader to invite you by email. If you lead " +
+                    "the stake, sign in with your Church account to set it up — that also links your calling."
+                actionLabel = "Sign in with Church account"
             } else {
-                title = "Stake not set up"
-                body = "Ask your stake leader to enable Covenant Path by signing in with their Church account. Once set up, sign in with your email code for access."
+                title = "Not linked to a stake yet"
+                body = "Ask your stake leader to invite you by email, or to set up Covenant Path with " +
+                    "their Church account. Once your email is linked, this code sign-in shows your stake."
             }
         }
         cred?.isRevoked == true -> {

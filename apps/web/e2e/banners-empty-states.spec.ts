@@ -68,7 +68,11 @@ test.describe('empty states', () => {
     await expect(page.getByRole('button', { name: 'Authorize stake sync' })).not.toBeVisible();
   });
 
-  test('no credential at all prompts to set up stake sync (and opens the ReauthDialog)', async ({ page }) => {
+  test('an unlinked sign-in (no role, no stake) offers BOTH paths in: invite or Church login', async ({ page }) => {
+    // The pure email-code viewer whose address was never bound to a role — RLS returns nothing and the
+    // broker can't name a stake. Don't show a blank dashboard or a misleading "wrong email" line: name
+    // the two true ways in (a leader invites them, OR one Church login binds their calling), and keep
+    // the Church-account action for a leader (also opens the dialog).
     await openDashboard(page, {
       supabase: { stakes: [], members: [], comments: [] },
       broker: {
@@ -81,8 +85,10 @@ test.describe('empty states', () => {
       },
     });
 
-    await expect(page.getByRole('heading', { name: 'Set up stake sync' })).toBeVisible();
-    const cta = page.getByRole('button', { name: 'Authorize stake sync' });
+    await expect(page.getByRole('heading', { name: 'Link your stake access' })).toBeVisible();
+    await expect(page.getByText(/ask a stake leader to invite you/i)).toBeVisible();
+    await expect(page.getByText(/sign in with your Church account/i)).toBeVisible();
+    const cta = page.getByRole('button', { name: 'Sign in with Church account' });
     await expect(cta).toBeVisible();
 
     await cta.click();
