@@ -23,6 +23,9 @@ struct TableView: View {
     /// Per-column EXCLUDED values (the unchecked ones). A row passes if none of its values excluded.
     @State private var excluded: [String: Set<String>] = [:]
     @State private var filterColumn: Column?
+    /// Horizontal scroll offset of the data region, mirrored onto the frozen header so its column
+    /// labels track the columns beneath them (the frozen first row + first column pattern).
+    @State private var dataOffsetX: CGFloat = 0
 
     private let columns: [Column] = [
         Column(title: "Member", value: { $0.name ?? "" }, kind: .text),
@@ -82,11 +85,18 @@ struct TableView: View {
         }
     }
     private let rowNumWidth: CGFloat = 40
+    // Fixed row/header heights so the frozen first column and the scrolling data column stay aligned.
+    private let rowH: CGFloat = 44
+    private let hdrH: CGFloat = 44
 
     var body: some View {
-        VStack(spacing: 0) {
+        let rowsF = filtered                      // filter + sort once
+        let memberCol = columns[0]                // "Member" — the frozen first column
+        let dataCols = Array(columns.dropFirst())
+        let frozenW = rowNumWidth + width(memberCol)
+        return VStack(spacing: 0) {
             HStack {
-                Text("\(filtered.count) member\(filtered.count == 1 ? "" : "s")"
+                Text("\(rowsF.count) member\(rowsF.count == 1 ? "" : "s")"
                      + (activeFilters > 0 ? " (filtered)" : ""))
                     .font(.footnote).foregroundStyle(.secondary)
                 Spacer()
@@ -101,21 +111,54 @@ struct TableView: View {
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
 
-            ScrollView([.horizontal, .vertical]) {
-                // LazyVStack so only the on-screen rows are built (was a non-lazy VStack of the whole
-                // stake); the column header is a pinned section header so it stays visible while you
-                // scroll a long table.
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    SwiftUI.Section(header: headerRow) {
-                        ForEach(Array(filtered.enumerated()), id: \.element.id) { idx, m in
-                            NavigationLink(value: m) { dataRow(idx: idx, m: m) }
+            // FROZEN header row (row 1): the corner (# + Member) stays put; the data headers mirror the
+            // body's horizontal scroll so each label sits above its column.
+            HStack(spacing: 0, alignment: .center) {
+                cornerHeader(memberCol: memberCol).frame(width: frozenW)
+                dataHeaderRow(cols: dataCols)
+                    .offset(x: dataOffsetX)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .clipped()
+            }
+            .frame(height: hdrH)
+            .cpGlass(in: Rectangle())
+            .overlay(alignment: .bottom) { Divider() }
+            .zIndex(1)
+
+            // BODY: a frozen first column beside the horizontally-scrolling data, sharing ONE vertical
+            // scroll so they move together. (Frozen columns have no native SwiftUI support — this is the
+            // standard split + offset-mirror pattern.)
+            ScrollView(.vertical, showsIndicators: true) {
+                HStack(spacing: 0, alignment: .top) {
+                    VStack(spacing: 0) {
+                        ForEach(Array(rowsF.enumerated()), id: \.element.id) { idx, m in
+                            NavigationLink(value: m) { frozenRowCell(idx: idx, m: m, memberCol: memberCol) }
                                 .buttonStyle(.plain)
                             Divider()
                         }
                     }
+                    .frame(width: frozenW)
+                    .overlay(alignment: .trailing) { Divider() }
+                    .zIndex(1)
+
+                    ScrollView(.horizontal, showsIndicators: true) {
+                        VStack(spacing: 0) {
+                            ForEach(Array(rowsF.enumerated()), id: \.element.id) { _, m in
+                                NavigationLink(value: m) { dataRowCells(m: m, cols: dataCols) }
+                                    .buttonStyle(.plain)
+                                Divider()
+                            }
+                        }
+                        .background(GeometryReader { g in
+                            Color.clear.preference(key: HOffsetKey.self,
+                                                   value: g.frame(in: .named("tableH")).minX)
+                        })
+                    }
+                    .coordinateSpace(name: "tableH")
                 }
             }
         }
+        .onPreferenceChange(HOffsetKey.self) { dataOffsetX = $0 }
         .sheet(item: $filterColumn) { col in
             ColumnFilterSheet(
                 title: col.title,
@@ -128,18 +171,22 @@ struct TableView: View {
         }
     }
 
-    private var headerRow: some View {
+    /// Frozen top-left corner: the "#" + the Member column header (sort/filter intact).
+    private func cornerHeader(memberCol: Column) -> some View {
         HStack(spacing: 0) {
             Text("#").font(.caption.bold()).foregroundStyle(.secondary)
                 .frame(width: rowNumWidth, alignment: .leading).padding(.horizontal, 6)
-            ForEach(columns) { col in
+            headerCell(memberCol).frame(width: width(memberCol), alignment: .leading).padding(.horizontal, 6)
+        }
+    }
+
+    /// The non-frozen column headers (everything after Member), at intrinsic full width.
+    private func dataHeaderRow(cols: [Column]) -> some View {
+        HStack(spacing: 0) {
+            ForEach(cols) { col in
                 headerCell(col).frame(width: width(col), alignment: .leading).padding(.horizontal, 6)
             }
         }
-        .padding(.vertical, 10)
-        // Frosted pinned header (was an opaque accent slab) — it now frosts the rows scrolling beneath
-        // it like a real iOS pinned header, instead of being the one fully-opaque element over glass.
-        .cpGlass(in: Rectangle())
     }
 
     private func headerCell(_ col: Column) -> some View {
@@ -161,22 +208,32 @@ struct TableView: View {
         }
     }
 
-    private func dataRow(idx: Int, m: Member) -> some View {
+    /// Frozen first column for a row: the row number + the Member name (with a note marker).
+    private func frozenRowCell(idx: Int, m: Member, memberCol: Column) -> some View {
         HStack(spacing: 0) {
             Text("\(idx + 1)").font(.caption).foregroundStyle(.secondary)
                 .frame(width: rowNumWidth, alignment: .leading).padding(.horizontal, 6)
-            ForEach(columns) { col in
-                // The Member cell carries a note marker when leaders have left notes on this person.
-                HStack(spacing: 4) {
-                    cell(col.value(m), col.kind)
-                    if col.title == "Member", let uuid = m.personUUID, store?.notes[uuid] != nil {
-                        Image(systemName: "note.text").font(.caption2).foregroundStyle(Color.accentColor)
-                    }
+            HStack(spacing: 4) {
+                cell(memberCol.value(m), memberCol.kind)
+                if let uuid = m.personUUID, store?.notes[uuid] != nil {
+                    Image(systemName: "note.text").font(.caption2).foregroundStyle(Color.accentColor)
                 }
-                .frame(width: width(col), alignment: .leading).padding(.horizontal, 6)
+            }
+            .frame(width: width(memberCol), alignment: .leading).padding(.horizontal, 6)
+        }
+        .frame(height: rowH)
+        .contentShape(Rectangle())
+    }
+
+    /// The non-frozen cells for a row (everything after Member).
+    private func dataRowCells(m: Member, cols: [Column]) -> some View {
+        HStack(spacing: 0) {
+            ForEach(cols) { col in
+                cell(col.value(m), col.kind)
+                    .frame(width: width(col), alignment: .leading).padding(.horizontal, 6)
             }
         }
-        .padding(.vertical, 8)
+        .frame(height: rowH)
         .contentShape(Rectangle())
     }
 
@@ -238,6 +295,13 @@ struct TableView: View {
         let v = m.membershipDuration ?? ""
         return v.replacingOccurrences(of: #"(?i)^Member for\s*"#, with: "", options: .regularExpression)
     }
+}
+
+/// Carries the data region's horizontal scroll offset up to the frozen header (so its labels track
+/// the columns beneath them). One-directional (body → header); no scroll feedback loop.
+private struct HOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 /// Google-Sheets-style value picker (port of `_openFilter`): each distinct value with a checkbox;

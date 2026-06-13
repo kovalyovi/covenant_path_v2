@@ -181,10 +181,16 @@ struct StatusSection: View {
     let value: String
     private var good: Bool { value == "Active" || value == "Yes" }
     var body: some View {
-        SectionCard(title: title, systemImage: systemImage) {
-            Text(value)
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(good ? Color(hex: 0x2E7D32) : Color.primary)
+        // Don't show a "not applicable" status card (e.g. Endowment for a not-yet-eligible friend) —
+        // an N/A card is noise on the detail page.
+        if value == "N/A" {
+            EmptyView()
+        } else {
+            SectionCard(title: title, systemImage: systemImage) {
+                Text(value)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(good ? Color(hex: 0x2E7D32) : Color.primary)
+            }
         }
     }
 }

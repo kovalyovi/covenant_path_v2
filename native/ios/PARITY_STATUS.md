@@ -74,8 +74,16 @@ parity is unaffected (this is platform-specific UI, intentionally iOS-only).
   (`totalCostLimit`); and unified the glass language on the surfaces left flat — **skeletons**,
   **person-detail header**, **Needs** category/ward chips, and the **Table** pinned header (now a frosted
   bar, not an opaque accent slab). Avoided glass-on-glass (unit-count chips stay solid inside their card).
+- **Device-feedback fixes (2026-06-13, on-device pass):** (1) **Needs tab hang** — `missingByMilestone`
+  was a computed property re-evaluated per category chip (O(categories²) sorts over the stake per layout
+  pass; iOS 26 glass passes multiplied it into a freeze) → now computed once in `body` and passed down,
+  and the member list lifted out of its glass card. (2) **Stake name** no longer hard-truncates
+  (`minimumScaleFactor`). (3) **N/A status cards** (e.g. Endowment for a non-eligible friend) are hidden.
+  (4) **Principles Taught** uses a per-lesson color palette + accent bar + taught/total count (was all
+  one green). (5) **Table** freezes the first row (header) AND first column (Member) via the
+  split-with-offset-mirror pattern.
 - **Verification:** compiles via the iOS CI build; **pending a device/AVD pass** for the glass look on
-  iOS 26 and the pinned Table header behavior.
+  iOS 26 and the frozen Table row/column (offset-mirror alignment).
 
 ## Addendum (2026-06-10): notes on list rows
 - **List-row note lines** — newest leader note (+N) under each person in Golden Hour / Needs / by-date lists (`MemberRow` + `NoteLine`), the Baptisms timeline rows, and a note marker in the Table's Member cell. Data: one bulk RLS-scoped `member_comments` fetch per stake load (`SupabaseGateway.noteRows` -> `NotesIndex.build`, mirrored unit tests in `LogicTests`); posting a note on detail refreshes the index (`DashboardStore.reloadNotes`). **Pending CI build + simulator verification.**

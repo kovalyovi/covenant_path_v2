@@ -195,7 +195,12 @@ struct TempleSection: View {
 struct PrinciplesSection: View {
     let details: MemberDetails
     private var lessons: [MemberDetails.Lesson] { details.lessons ?? [] }
-    private let green = Color(hex: 0x388E3C)
+
+    // Distinct per-lesson hues so principles read as grouped lessons, not one undifferentiated wall of
+    // green. Each lesson gets its own color (accent bar + title + dots).
+    private static let palette: [UInt32] = [
+        0x1E88E5, 0x8E24AA, 0x00897B, 0xF4511E, 0x3949AB, 0x43A047, 0xC0CA33, 0xD81B60
+    ]
 
     var body: some View {
         if lessons.isEmpty {
@@ -204,38 +209,54 @@ struct PrinciplesSection: View {
             SectionCard(title: "Principles Taught", systemImage: "book",
                         trailing: AnyView(
                             HStack(spacing: 4) {
-                                Image(systemName: "person.fill").font(.caption)
-                                Text("= Member Present").font(.caption)
-                            }.foregroundStyle(green))) {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(Array(lessons.enumerated()), id: \.offset) { _, l in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(l.name ?? "").foregroundStyle(green).fontWeight(.medium)
-                            FlowLayout(spacing: 6) {
-                                ForEach(Array((l.principles ?? []).enumerated()), id: \.offset) { _, p in
-                                    PrincipleDot(taught: p.isTaught, memberPresent: p.memberPresent == true)
-                                }
-                            }
-                        }
+                                Image(systemName: "person.fill").font(.caption2)
+                                Text("Member present").font(.caption)
+                            }.foregroundStyle(.secondary))) {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(Array(lessons.enumerated()), id: \.offset) { i, l in
+                        lessonRow(l, color: Color(hex: Self.palette[i % Self.palette.count]))
                     }
                 }
             }
         }
+    }
+
+    private func lessonRow(_ l: MemberDetails.Lesson, color: Color) -> some View {
+        let principles = l.principles ?? []
+        let taught = principles.filter { $0.isTaught }.count
+        return HStack(alignment: .top, spacing: 10) {
+            RoundedRectangle(cornerRadius: 2).fill(color)
+                .frame(width: 4).frame(maxHeight: .infinity)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text(l.name ?? "").foregroundStyle(color).fontWeight(.semibold)
+                    if !principles.isEmpty {
+                        Text("\(taught)/\(principles.count)").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                FlowLayout(spacing: 6) {
+                    ForEach(Array(principles.enumerated()), id: \.offset) { _, p in
+                        PrincipleDot(taught: p.isTaught, memberPresent: p.memberPresent == true, color: color)
+                    }
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
 struct PrincipleDot: View {
     let taught: Bool
     let memberPresent: Bool
-    private let green = Color(hex: 0x388E3C)
+    var color: Color = Color(hex: 0x388E3C)
     var body: some View {
         ZStack {
-            Circle().fill(taught ? green : .clear)
+            Circle().fill(taught ? color : .clear)
                 .frame(width: 22, height: 22)
-                .overlay(Circle().stroke(green, lineWidth: 1.4))
+                .overlay(Circle().stroke(taught ? color : color.opacity(0.4), lineWidth: 1.4))
             if memberPresent {
                 Image(systemName: "person.fill").font(.system(size: 11))
-                    .foregroundStyle(taught ? .white : green)
+                    .foregroundStyle(taught ? .white : color)
             }
         }
     }

@@ -163,7 +163,7 @@ struct DashboardView: View {
                 }
             } label: {
                 HStack(spacing: 2) {
-                    Text(store.stakeName).font(.headline).lineLimit(1)
+                    Text(store.stakeName).font(.headline).lineLimit(1).minimumScaleFactor(0.6)
                     Image(systemName: "chevron.down").font(.caption2)
                 }
             }

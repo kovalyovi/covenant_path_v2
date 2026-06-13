@@ -27,22 +27,16 @@ struct NeedsView: View {
         return orgScoped.filter { ($0.unitName ?? "") == ward }
     }
 
-    /// Per-category "still need" lists, each sorted by baptism date then unit.
-    private var missingByMilestone: [[Member]] {
-        Milestones.needsCategories.map { ms in
-            Milestones.missing(ms, in: baptized).sorted(by: compare)
-        }
-    }
-
-    private var total: Int { missingByMilestone.reduce(0) { $0 + $1.count } }
-
-    private var selectedIndex: Int {
-        if let selected { return selected }
-        return missingByMilestone.firstIndex { !$0.isEmpty } ?? 0
-    }
-
     var body: some View {
-        ScrollView {
+        // Compute the heavy per-category "still need" lists ONCE per render. (Was a computed property
+        // re-evaluated for every chip in the selector → O(categories²) sorts over the whole stake on
+        // every layout pass, which iOS 26's glass layout passes multiplied into a hard hang.)
+        let wards = self.wards
+        let baptized = self.baptized
+        let missing = Milestones.needsCategories.map { Milestones.missing($0, in: baptized).sorted(by: compare) }
+        let total = missing.reduce(0) { $0 + $1.count }
+        let selIdx = selected ?? (missing.firstIndex { !$0.isEmpty } ?? 0)
+        return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 BigHeader(title: "Needs Action",
                           subtitle: "Eligible members still missing each integration step",
@@ -61,9 +55,9 @@ struct NeedsView: View {
                               ? "Nothing outstanding — everyone eligible is on track. 🎉"
                               : "Nothing outstanding for the selected orgs. 🎉")
                 } else {
-                    categorySelector
+                    categorySelector(missing: missing, selectedIndex: selIdx)
                     sortRow
-                    categorySection
+                    categorySection(missing: missing, selectedIndex: selIdx)
                 }
             }
             .padding(16)
@@ -74,13 +68,13 @@ struct NeedsView: View {
 
     // MARK: - pieces
 
-    private var categorySelector: some View {
+    private func categorySelector(missing: [[Member]], selectedIndex: Int) -> some View {
         // Wrap the category pills to the next line (FlowLayout) instead of horizontal scrolling —
         // matches the OrgFilterBar and the web `.wrap` behaviour. Glass container blends the chips on iOS 26.
         CPGlassGroup(spacing: 8) {
             FlowLayout(spacing: 8) {
                 ForEach(Array(Milestones.needsCategories.enumerated()), id: \.element.id) { i, ms in
-                    CategoryChip(milestone: ms, count: missingByMilestone[i].count,
+                    CategoryChip(milestone: ms, count: missing[i].count,
                                  selected: i == selectedIndex) {
                         selected = i
                     }
@@ -102,16 +96,17 @@ struct NeedsView: View {
         }
     }
 
-    private var categorySection: some View {
+    private func categorySection(missing: [[Member]], selectedIndex: Int) -> some View {
         let ms = Milestones.needsCategories[selectedIndex]
-        let missing = missingByMilestone[selectedIndex]
-        let byUnit = Dictionary(grouping: missing) { $0.unitName ?? "—" }
+        let missingMembers = missing[selectedIndex]
+        let byUnit = Dictionary(grouping: missingMembers) { $0.unitName ?? "—" }
             .map { (unit: $0.key, count: $0.value.count) }
             .sorted { $0.count > $1.count }
-        return SectionCard(title: "Needs \(ms.label)", systemImage: ms.style.symbol,
-                           iconColor: Color(hex: ms.style.hex),
-                           trailing: AnyView(CountBadge(missing.count))) {
-            if missing.isEmpty {
+        // ListSection (not a glass card) so the long member list isn't backed by a tall translucent
+        // surface — same fix as Golden Hour, and it avoids the glass-card + LazyVStack hang.
+        return ListSection(title: "Needs \(ms.label)", symbol: ms.style.symbol,
+                           count: missingMembers.count, accent: Color(hex: ms.style.hex)) {
+            if missingMembers.isEmpty {
                 Text("Everyone eligible has this. 🎉").foregroundStyle(.secondary)
             } else {
                 VStack(alignment: .leading, spacing: 0) {
@@ -122,7 +117,7 @@ struct NeedsView: View {
                     }
                     Divider().padding(.vertical, 8)
                     // Needs rows show the responsible-org chip (showResponsible) and the unit metadata.
-                    MemberList(members: missing, showChips: false, showUnit: true, showResponsible: true)
+                    MemberList(members: missingMembers, showChips: false, showUnit: true, showResponsible: true)
                 }
             }
         }
