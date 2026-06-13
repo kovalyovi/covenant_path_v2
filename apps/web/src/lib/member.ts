@@ -19,6 +19,36 @@ export function str(m: Member, key: string): string {
   return v == null ? '' : String(v);
 }
 
+// --- sync sentinels (mirror covenant_path/report.py + backend/db.py _SENTINELS) -----------------
+// The backend writes these placeholder strings when a field couldn't be fetched this run (so the
+// merge-upsert preserves last-good). They are TECHY/internal — only ADMINS should ever see the raw
+// value; regular leaders get human-friendly text. (NEVER leak the raw sentinel into a leader's cell.)
+export const NEEDS_PROFILE = 'needs-profile-api';
+export const BLOCKED_PREFIX = 'blocked'; // 'blocked: insufficient calling access'
+
+/** True when a value is one of the backend's internal sentinels (not real member data). */
+export function isSentinel(v: unknown): boolean {
+  const s = String(v ?? '');
+  return s === NEEDS_PROFILE || s.startsWith(BLOCKED_PREFIX);
+}
+
+/**
+ * Map a possibly-sentinel field value to what should be DISPLAYED, audience-aware:
+ *  - admins see the raw sentinel verbatim (so they can diagnose "needs-profile-api" / "blocked: …");
+ *  - everyone else sees friendly text — "Not available yet" for a pending/blocked field, never the
+ *    raw techy string. A real value (Yes/No/Active/a date) is returned unchanged for both.
+ * `blank` is what a non-admin sees for a sentinel ('—' in dense tables, 'Not available yet' in detail).
+ */
+export function displayFieldValue(
+  v: unknown,
+  isAdmin: boolean,
+  blank: '—' | 'Not available yet' = 'Not available yet',
+): string {
+  const s = String(v ?? '');
+  if (isSentinel(s)) return isAdmin ? s : blank;
+  return s;
+}
+
 export function numOrNull(v: unknown): number | null {
   if (v == null) return null;
   const n = typeof v === 'number' ? v : Number(v);

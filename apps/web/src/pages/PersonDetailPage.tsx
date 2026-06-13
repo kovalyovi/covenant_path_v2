@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useDashboard } from '../hooks/useDashboard';
 import type { Member } from '../lib/member';
-import { detailsOf, freshness } from '../lib/member';
+import { detailsOf, freshness, displayFieldValue } from '../lib/member';
 import {
   endowmentDisplay, completionOf, callingEligible, ministeringAssignmentEligible,
   priesthoodEligible, templeRecommendEligible, patriarchalEligible, ageOf,
@@ -89,9 +89,9 @@ export function PersonDetailPage() {
           </SectionCard>
 
           {details ? (
-            <RichBody member={member} d={details} />
+            <RichBody member={member} d={details} isAdmin={d.isAdmin} />
           ) : (
-            <StatusSections member={member} />
+            <StatusSections member={member} isAdmin={d.isAdmin} />
           )}
 
           {uuid && <NotesSection member={member} autoEdit={editNote} />}
@@ -127,7 +127,7 @@ function DetailAppBar({ title, uuid, onBack }: { title: string; uuid?: string; o
 }
 
 /** Two columns on wide screens, stacked on narrow. Mirrors `_RichBody`. */
-function RichBody({ member, d }: { member: Member; d: Record<string, unknown> }) {
+function RichBody({ member, d, isAdmin }: { member: Member; d: Record<string, unknown>; isAdmin: boolean }) {
   // Eligibility-gated name sections: hide a section that doesn't APPLY to this person (no priesthood
   // for women, no calling for a child) — but never hide a section that has real recorded data.
   const priesthoodLines = strings(d['priesthoodOrdinations']);
@@ -170,7 +170,7 @@ function RichBody({ member, d }: { member: Member; d: Record<string, unknown> })
   );
   const right = (
     <>
-      <StatusSections member={member} />
+      <StatusSections member={member} isAdmin={isAdmin} />
       <TempleSection d={d} />
       <PrinciplesSection d={d} />
       <TogglesSection title="Self-Reliance Classes Completed" icon="rule" items={toggles(d['selfReliance'])} />
@@ -570,18 +570,18 @@ function CompletionRing({ pct, size = 30 }: { pct: number; size?: number }) {
  *  (like "Attended Sacrament Meeting"): Temple Recommend, Endowment, Patriarchal Blessing. Eligibility-
  *  gated (endowment shows "N/A" for the not-yet-eligible). Works from flat fields, so it renders with
  *  or without the rich `details` subtree. */
-function StatusSections({ member }: { member: Member }) {
+function StatusSections({ member, isAdmin }: { member: Member; isAdmin: boolean }) {
   return (
     <>
       {templeRecommendEligible(member) && (
         <StatusSection title="Temple Recommend" icon="premium" member={member} field="temple_recommend"
-          value={disp(member['temple_recommend'])} />
+          value={disp(member['temple_recommend'], isAdmin)} />
       )}
       <StatusSection title="Endowment" icon="premium" member={member} field="living_ordinance"
-        value={disp(endowmentDisplay(member))} />
+        value={disp(endowmentDisplay(member), isAdmin)} />
       {patriarchalEligible(member) && (
         <StatusSection title="Patriarchal Blessing" icon="menu_book" member={member} field="patriarchal_blessing"
-          value={disp(member['patriarchal_blessing'])} />
+          value={disp(member['patriarchal_blessing'], isAdmin)} />
       )}
     </>
   );
@@ -606,11 +606,13 @@ function StatusSection({ title, icon, member, field, value }: {
   );
 }
 
-/** Clean a status value for display: sentinels (needs-profile-api / blocked) → "—" (unknown). */
-function disp(v: unknown): string {
+/** Clean a status value for display: a real value passes through; a backend sentinel
+ *  (needs-profile-api / blocked) shows raw to ADMINS (for diagnosis) and "Not available yet" to
+ *  leaders — the techy placeholder must never leak to a regular leader. An empty value → "—". */
+function disp(v: unknown, isAdmin: boolean): string {
   const s = String(v ?? '');
-  if (!s || s === 'needs-profile-api' || s.startsWith('blocked')) return '—';
-  return s;
+  if (!s) return '—';
+  return displayFieldValue(s, isAdmin, 'Not available yet');
 }
 
 // ---- helpers ---------------------------------------------------------------

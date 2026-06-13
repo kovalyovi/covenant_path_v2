@@ -544,6 +544,70 @@ def scenario_sentinel_preserves_last_good():
     ]
 
 
+def scenario_membertools_ministering_rescue_and_sentinel():
+    """#data-gap ministering: the bulk /api/v5/sync payload carries the unit-wide ministering org +
+    member directory, so the adapter now fills ministering / calling / sex / birth from it (instead of
+    leaking the NEEDS_PROFILE sentinel once the LCR session dies). And `ministering_brothers_sisters`
+    is now sentinel-PRESERVED on upsert (added to _GATED_COLUMNS) so an unknown leaves last-good.
+    (covenant_path.membertools_adapter.adapt_sync + db._merge_expr.)"""
+    from covenant_path.membertools_adapter import adapt_sync
+    payload = {
+        "units": [{"unitNumber": 999, "unitType": "STAKE", "name": "Stake",
+                   "childUnits": [{"unitNumber": 100, "unitType": "WARD", "name": "Alpha"},
+                                  {"unitNumber": 200, "unitType": "WARD", "name": "Beta"}]}],
+        "covenantPathMembers": [
+            {"id": "m-cov", "memberUuid": "uuid-B", "names": {"listed": "Member, B"},
+             "unitNumber": 100, "confirmationDate": "2024-01-01"},
+            {"id": "m-unc", "memberUuid": "uuid-U", "names": {"listed": "Member, U"},
+             "unitNumber": 200, "confirmationDate": "2024-02-02"},  # ward 200 has no org -> unknown
+        ],
+        "households": [
+            {"uuid": "hh2", "unitNumber": 100, "members": [
+                {"uuid": "uuid-B", "sex": "FEMALE", "birthDate": "2014-07-23",
+                 "positions": [{"name": "Primary Teacher", "unitNumber": 100}]}]},
+            {"uuid": "hh-mb", "unitNumber": 100, "members": [
+                {"uuid": "mb-1", "names": {"listed": "Brother, Min"}, "sex": "MALE"}]},
+            {"uuid": "hh3", "unitNumber": 200, "members": [
+                {"uuid": "uuid-U", "sex": "FEMALE", "birthDate": "1992-05-05", "positions": []}]},
+        ],
+        "ministeringBrothers": [{"unitNumber": 100, "districts": [
+            {"companionships": [{"companions": ["mb-1"], "households": ["hh2"]}]}],
+            "unassignedHouseholds": []}],
+        "ministeringSisters": [{"unitNumber": 100, "districts": [
+            {"companionships": [{"companions": ["uuid-B"], "sisters": ["sis-1"]}]}],
+            "unassignedSisters": []}],
+    }
+    members = {m.person_uuid: m for m in adapt_sync(payload)}
+    b, u = members["uuid-B"], members["uuid-U"]
+
+    # Sentinel-preservation: an unknown ministering_brothers_sisters must keep last-good on upsert.
+    _patch_execute_values()
+    d = FakeDB()
+    sid = d.add_stake(999, "Stake")
+    ua = d.add_unit(sid, 200, "Beta")
+    db.upsert_members(d, sid, [{"person_uuid": "uuid-U", "name": "U", "unit_number": 200,
+                                "ministering_brothers_sisters": "Yes"}], {200: ua})  # prior good
+    db.upsert_members(d, sid, [{"person_uuid": "uuid-U", "name": "U", "unit_number": 200,
+                                "ministering_brothers_sisters": report.NEEDS_PROFILE}], {200: ua})
+    preserved = d.member("uuid-U")["ministering_brothers_sisters"]
+
+    return [
+        # uuid-B: EQ-assigned household (has ministers) + an RS minister (gives ministering) + calling
+        ("ministering_brothers_sisters Yes from payload", b.ministering_brothers_sisters, "Yes"),
+        ("ministering_assignment Yes from payload", b.ministering_assignment, "Yes"),
+        ("calling Yes from directory positions", b.calling, "Yes"),
+        ("sex from directory", b.sex, "F"),
+        ("birth_date from directory roster", b.birth_date, "2014-07-23"),
+        ("minister names surfaced in details",
+         bool((b.details or {}).get("ministeringBrothers")), True),
+        # uuid-U: ward 200 has no ministering org -> UNKNOWN -> sentinel (not a false 'No')
+        ("uncovered unit ministering -> sentinel", u.ministering_brothers_sisters, report.NEEDS_PROFILE),
+        ("uncovered unit calling=No (directory present, empty positions)", u.calling, "No"),
+        # the sentinel is now gated -> last-good preserved on upsert
+        ("ministering_brothers_sisters preserved through sentinel", preserved, "Yes"),
+    ]
+
+
 def scenario_field_freshness_tracking():
     """AXIS 4 (freshness): a FETCHED field stamps `f`; a SENTINEL field keeps its prior `f` while
     bumping `t` (staleness grows, value not blanked). field_staleness_summary then rolls up
@@ -1362,6 +1426,7 @@ SCENARIOS = [
     # AXIS 4 — data reconciliation
     scenario_upsert_merge_by_id_modified_added_removed,
     scenario_sentinel_preserves_last_good,
+    scenario_membertools_ministering_rescue_and_sentinel,
     scenario_field_freshness_tracking,
     scenario_reconcile_departed_safe_and_gated,
     scenario_prune_units_gated_orphans_members,

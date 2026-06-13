@@ -355,8 +355,8 @@ _MEMBER_COLUMNS = [
 ]
 _GATED_COLUMNS = frozenset({
     "baptism_date", "aaronic_priesthood", "melchizedek_priesthood", "calling",
-    "ministering_assignment", "temple_recommend", "patriarchal_blessing", "living_ordinance",
-    "family_name_prepared", "first_temple_visit",
+    "ministering_brothers_sisters", "ministering_assignment", "temple_recommend",
+    "patriarchal_blessing", "living_ordinance", "family_name_prepared", "first_temple_visit",
 })
 _SENTINELS = ("needs-profile-api", "blocked: insufficient calling access")
 

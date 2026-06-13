@@ -87,3 +87,83 @@ and read the `birth_date` line under "ADAPTER on real payload" and the OUR-FIELD
 Re-authorizing the stake re-establishes a live LCR session, so the very next sync runs the /mlt profile
 merge and back-fills birth dates (and the other profile fields). The age nudge email + `/reauth` deep
 link already drive this at ~day 40.
+
+---
+
+# Data-gap findings #2: ministering / calling / friends blank + the `needs-profile-api` leak
+
+**Date:** 2026-06-13  **Status:** root cause found; ministering/calling/sex RESCUED from the bulk
+payload; friends already resolved; the genuinely-profile-only fields documented.
+
+## Symptom
+
+The table showed the raw sentinel **`needs-profile-api`** in cells, and **ministering** + **friends
+names** were blank. Same family of bug as the birthday gap: a field whose ONLY source was the LCR
+per-member profile fetch goes blank (and leaks its placeholder) once the LCR session dies.
+
+## What the bulk `/api/v5/sync` payload actually contains (authoritative)
+
+Verified against the official-app clone's decoder + adapter
+(`rickybloomfield/Mission-KPIs`: `SyncCovenantPath.swift`, `SyncDirectory.swift`,
+`SyncGoldenHourIndex.swift` — the same source we reverse-engineered the endpoint from):
+
+- The **covenant-path PERSON** record (`covenantPath{Investigators,Members,ReturningMembers}[]`)
+  carries ONLY: id/memberUuid, names, sex, ageRange, unitNumber, **baptismGoalDate**,
+  **confirmationDate** (= baptism date), **firstTaught**, optedOut, **sealedToParents/Spouse**,
+  **sacramentAttendance[]**, **teachingRecords[]** (lessons), **friends[]** (uuid refs),
+  commitments/otherCommitments, phones, emails. → **No ministering, calling, priesthood, recommend,
+  patriarchal, or endowment on the person.**
+- The **WHOLE payload** additionally carries, at the TOP LEVEL: **`ministeringBrothers[]` /
+  `ministeringSisters[]`** (the unit-wide EQ/RS ministering org — districts → companionships →
+  `companions`/`households`/`sisters`), and **`households[].members[]`** with `positions[]`
+  (callings), `sex`, `birthDate`. This is the authoritative source for ministering + calling + sex.
+
+## Fixed (additive rescue, no regression) — `covenant_path/membertools_adapter.py`
+
+| Field | Now sourced from the bulk payload | Was |
+|---|---|---|
+| `ministering_brothers_sisters` | `MinisteringIndex` over the unit-wide org: EQ household-assigned OR RS individually-assigned | `needs-profile-api` (leaked) |
+| `ministering_assignment` ("ministers to others") | member uuid ∈ any companionship's `companions` | `needs-profile-api` |
+| minister NAMES (detail view) | resolved via the `households` directory | blank |
+| `calling` | `households[].members[].positions` (non-empty = Yes; names → detail) | `needs-profile-api` |
+| `sex` | the directory (covers everyone, incl. friends) | covenant person only |
+| `birth_date` | (already, finding #1) person record / household roster | — |
+
+`MinisteringIndex` ports `SyncGoldenHourIndex` 1:1, including the **unit-coverage** rule: a member is
+"No ministers" ONLY when their unit's ministering org is present in the payload; if it's absent the
+field is **unknown** → the adapter keeps the `NEEDS_PROFILE` sentinel so the merge-upsert preserves
+last-good rather than writing a false "No". `ministering_brothers_sisters` was also added to
+`backend/db._GATED_COLUMNS` (+ `backend/fake_db`) so that sentinel now preserves last-good (it was
+un-gated before, which is the other half of why a sentinel leaked there).
+
+## friends names — investigated: already recoverable, no change needed
+
+A covenant person's `friends[]` are **uuid references** ({id, memberUuid}); the names come from the
+`households` directory (`_name_index` indexes covenant persons + every household member). The adapter
+already resolves them into `friends_summary` + `details.friends[].name`
+(`tools/test_suite.py::test_membertools_adapter` pins `friends_summary == "Apple, Ann, Berry, Bob"`,
+resolved from the roster). So friends names survive a dead LCR session **as long as the friend is a
+member in the stake directory**. A friend who is NOT in the directory (out-of-stake or off-record)
+carries an inline `names` on the ref — handled too. If friends names are still blank in practice it
+means the bulk payload's `households` roster didn't include those uuids (a coverage gap), which the
+field-gap report surfaces.
+
+## Genuinely NOT in the bulk payload — only the LCR profile (a live session) can fill these
+
+`temple_recommend`, `patriarchal_blessing`, `aaronic_priesthood` / `melchizedek_priesthood`,
+`living_ordinance` (endowment). The official-app clone has **no field for any of these** either —
+they are not in `/api/v5/sync`. They stay `needs-profile-api` and are filled by the /mlt profile merge
+(`report._apply_profile`) when the LCR session is alive; in steady state (dead session) they hold
+last-good and a **re-authorization** refreshes them. See the long-term options in the field-gap report
+and the session writeup.
+
+## The field-gap report — answering "why is X blank?"
+
+`report.field_gap_report()` / `_emit_field_gap_report()` (called at the end of
+`build_membertools_report`) emit ONE structured log line + ONE `sync.field_gaps` observability event
+per stake, and stash the report on `stats['field_gaps']` (→ the per-sync diagnostics row). For every
+still-blank field it attributes a reason: `not in bulk payload + LCR profile merge skipped (session
+likely dead — re-auth to refresh)` · `calling lacks Member Profiles access` · `not returned in the
+bulk payload this run (unit org / directory gap)`. So an operator/Claude can pull the diagnostics row
+(or grep the log for `field-gap report`) and say exactly why ministering/recommend/etc. is blank for a
+stake.

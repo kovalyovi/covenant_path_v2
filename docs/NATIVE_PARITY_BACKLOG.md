@@ -49,6 +49,33 @@ assert the OLD labels and must be updated in the same edit.
 and `native/ios/Tests/CovenantPathKitTests/LogicTests.swift:104` (both assert `"Has ministers"`);
 `native/SPEC.md:85` documents the old label.
 
+## C. Admin-only techy language for sync sentinels (web commit — ministering/field-gap session, 2026-06-13)
+
+The backend writes internal sentinel strings (`needs-profile-api`, `blocked: insufficient calling
+access`) into profile-gated columns when a field couldn't be fetched this run (the merge-upsert then
+preserves last-good). These are **techy/internal** and must show **raw only to ADMINS**; regular
+leaders must see friendly text instead. The web added `displayFieldValue(value, isAdmin, blank)` +
+`isSentinel()` in `apps/web/src/lib/member.ts`, and routed the **Table** (`pages/tabs/TableTab.tsx`)
+and **Person detail** (`pages/PersonDetailPage.tsx` — `disp(value, isAdmin)`, `StatusSections`/
+`RichBody` now take `isAdmin`) through it. Admin status comes from `useDashboard().isAdmin`
+(`supabase.rpc('is_admin')`).
+
+| # | Item | iOS | Android | Notes |
+|---|---|---|---|---|
+| C1 | ⬜ Sentinel→friendly mapping helper (`isSentinel` + `displayFieldValue(value, isAdmin, blank)`) | new `CovenantPathKit/Logic/` helper (mirror `member.ts`) | new `…/logic/` helper | Raw to admins; "Not available yet" (detail) / "—" (table) to leaders. Sentinels: `needs-profile-api`, `blocked:` prefix. |
+| C2 | ⬜ Table cells route sentinel-able columns through the helper | `Views/Tabs/TableView.swift` | `ui/screens/tabs/TableScreen.kt` | Columns: baptism_date, aaronic/melchizedek_priesthood, calling, ministering_brothers_sisters, ministering_assignment, temple_recommend, patriarchal_blessing. Also gate the filter values so filtering matches what's shown. |
+| C3 | ⬜ Person-detail status rows route through the helper | `Views/Detail/DetailSections.swift` / `PersonDetailView.swift` | `ui/screens/PersonDetailScreen.kt` | Temple Recommend / Endowment / Patriarchal Blessing. (Empty value still → "—".) |
+| C4 | ⬜ Resolve admin status for the audience check | needs an `isAdmin` (e.g. broker/`is_admin` RPC) threaded to the views | same | If native has no admin concept yet, default non-admin (friendly text) — leaders are the priority. |
+
+## D. Ministering / calling / sex rescue from the bulk payload (backend — same session)
+
+The daily sync now fills `ministering_brothers_sisters`, `ministering_assignment`, `calling`, and
+`sex` from the **Member Tools `/api/v5/sync`** payload (the unit-wide EQ/RS ministering org +
+`households[].members[].positions`), so they survive a dead LCR session instead of leaking the
+`needs-profile-api` sentinel. This is **backend-only** (`covenant_path/membertools_adapter.py`) — the
+native apps read the already-resolved values from Supabase, so **no native code change is required**;
+they benefit automatically once the sync re-runs. (Listed here only so the parity log is complete.)
+
 ## Already DONE on native this session (NOT backlog — for reference)
 - **OTP-lane removal** (ADR-011): native re-auth is password-only (`ReauthSheet.swift`,
   `ReauthDialog.kt`, `BrokerService`/`BrokerClient` otp methods removed, `MfaCopy` hint removed).

@@ -44,6 +44,20 @@ _PROFILE_GATED_FIELDS = (
     "baptism_date", "temple_recommend", "patriarchal_blessing", "ministering_assignment",
 )
 
+# Field-gap provenance (#data-gap): which sentinel-able fields the RELIABLE Member Tools bulk payload
+# can supply vs which can ONLY come from the per-member LCR profile (so when one is still a sentinel
+# after a sync, we can say WHY). RESCUED = filled by membertools_adapter from /api/v5/sync (the org +
+# directory); PROFILE_ONLY = genuinely absent from the bulk payload — only the LCR profile fetch (a
+# LIVE LCR session) can fill them, so they go blank in steady state when the session is dead.
+_BULK_RESCUED_FIELDS = (
+    "baptism_date", "birth_date", "calling", "sex",
+    "ministering_brothers_sisters", "ministering_assignment",
+)
+_PROFILE_ONLY_FIELDS = (
+    "aaronic_priesthood", "melchizedek_priesthood", "temple_recommend",
+    "patriarchal_blessing", "living_ordinance",
+)
+
 
 # --- field parsing -----------------------------------------------------------
 
@@ -561,6 +575,11 @@ def build_membertools_report(
             "synced from the Member Tools token, and these deep-profile fields keep their last-good "
             "values). A re-authorization re-establishes the LCR session to refresh them; set logging to "
             "DEBUG for the per-member cause.", ok, ok + err, err)
+    # Structured field-gap report: ONE line + ONE event saying exactly which fields are still blank and
+    # WHY (rescuable-but-missing vs profile-only-and-session-dead vs access-blocked) — so a leader's
+    # "ministering is blank" is answerable precisely. Stashed on stats['field_gaps'] for diagnostics.
+    stake_unit = getattr(stats.get("unit_context"), "unit_number", None)
+    _emit_field_gap_report(members, stats, can_profiles=can_profiles, stake=stake_unit)
     return members, stats
 
 
@@ -758,6 +777,77 @@ def _field_coverage(dicts: list[dict]) -> dict[str, dict[str, int]]:
                 c["filled"] += 1
         cov[fld] = c
     return cov
+
+
+def field_gap_report(rows: list["CovenantPathMember"], *, profile_merge_ran: bool,
+                     can_profiles: bool = True) -> dict:
+    """A STRUCTURED 'why is this field blank?' summary for a stake (#data-gap). For every field that
+    CAN end up a sentinel, count how many members are still missing it and attribute a REASON, so an
+    operator/Claude can answer "ministering is blank" precisely instead of guessing. Reasons:
+
+      • "not in bulk payload (profile merge skipped)" — a PROFILE-only field (temple recommend,
+        priesthood, patriarchal, endowment) while the LCR profile fetch did NOT run this sync (the
+        steady-state dead-LCR-session case): genuinely unrecoverable until a re-auth.
+      • "calling lacks access"                       — a profile-only field while the calling can't
+        reach Member Profiles (the access-blocked, BLOCKED-sentinel case).
+      • "not returned this run"                      — a RESCUABLE field (ministering/calling/birth)
+        still a sentinel: the bulk payload didn't carry it for these members (e.g. their unit's
+        ministering org wasn't present, or they're absent from the directory).
+      • "profile not yet fetched"                    — a profile-only field still pending while the
+        merge DID run (a transient per-member miss).
+
+    Returns {"members": N, "fields": {field: {"missing": k, "reason": str}}, "worst": [field, …]} —
+    empty `fields` when nothing is missing. PII-free (counts + field names only)."""
+    n = len(rows)
+    fields: dict[str, dict] = {}
+    for fld in (*_BULK_RESCUED_FIELDS, *_PROFILE_ONLY_FIELDS):
+        missing = blocked = 0
+        for r in rows:
+            v = getattr(r, fld, None)
+            if v == BLOCKED:
+                blocked += 1
+                missing += 1
+            elif v in (NEEDS_PROFILE, None, ""):
+                missing += 1
+        if not missing:
+            continue
+        if blocked and not can_profiles:
+            reason = "calling lacks Member Profiles access"
+        elif fld in _PROFILE_ONLY_FIELDS:
+            reason = ("not in bulk payload + LCR profile merge skipped (session likely dead — re-auth "
+                      "to refresh)" if not profile_merge_ran else "profile not yet fetched (transient)")
+        else:  # a rescuable field still a sentinel
+            reason = "not returned in the bulk payload this run (unit org / directory gap)"
+        fields[fld] = {"missing": missing, "blocked": blocked, "reason": reason}
+    worst = sorted(fields, key=lambda f: fields[f]["missing"], reverse=True)
+    return {"members": n, "fields": fields, "worst": worst}
+
+
+def _emit_field_gap_report(rows: list["CovenantPathMember"], stats: dict, *,
+                           can_profiles: bool, stake: int | None = None,
+                           correlation_id: str | None = None) -> dict:
+    """Compute the field-gap report and emit it as ONE structured log line + ONE observability event
+    (NOT a per-member flood). Stashes it on `stats['field_gaps']` for the diagnostics row, so an
+    operator can later query exactly why a field is blank. Best-effort: never breaks the sync."""
+    profile_merge_ran = stats.get("profile_ok", 0) > 0 or stats.get("profile_cached", 0) > 0
+    report = field_gap_report(rows, profile_merge_ran=profile_merge_ran, can_profiles=can_profiles)
+    stats["field_gaps"] = report
+    gaps = report.get("fields") or {}
+    if gaps:
+        summary = ", ".join(f"{f}={gaps[f]['missing']}/{report['members']} ({gaps[f]['reason']})"
+                            for f in report["worst"])
+        logger.warning("field-gap report (stake %s): %s", stake if stake is not None else "?", summary)
+        try:
+            from backend import observability as obs
+            obs.event("sync.field_gaps", level="warning", stake=stake, correlation_id=correlation_id,
+                      count=len(gaps), status="degraded",
+                      message=summary[:300], fields={f: gaps[f]["missing"] for f in gaps},
+                      reasons={f: gaps[f]["reason"] for f in gaps})
+        except Exception as exc:  # noqa: BLE001 — observability must never break the sync
+            logger.debug("field-gap event skipped: %s", exc)
+    else:
+        logger.info("field-gap report (stake %s): all sentinel-able fields filled", stake)
+    return report
 
 
 def _neutralize_uniform_stale(rows: list[CovenantPathMember], with_profile: bool) -> list[str]:

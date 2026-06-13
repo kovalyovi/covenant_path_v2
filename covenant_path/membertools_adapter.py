@@ -94,6 +94,192 @@ def _birth_date(p: dict) -> str | None:
     return None
 
 
+# --- ministering / calling / demographics from the bulk payload --------------------------------
+# The covenant-path PERSON record carries NO ministering / calling / priesthood / recommend (verified
+# against the Member Tools sync schema — see SyncPerson in rickybloomfield/Mission-KPIs). But the WHOLE
+# payload DOES carry the unit-wide ministering org (`ministeringBrothers`/`ministeringSisters`) and the
+# member directory (`households[].members[].positions`) — the authoritative source the official-app
+# clone uses for these exact Golden-Hour flags. So we rescue them HERE (top-level payload) rather than
+# from the per-person record, instead of leaving them as the NEEDS_PROFILE sentinel for a /mlt merge
+# that never runs once the LCR session dies. (#data-gap ministering; the same "better not worse" win
+# as the birth_date rescue.) Algorithm ported 1:1 from SyncGoldenHourIndex.swift.
+
+
+def _household_members(payload: dict) -> list[tuple[str, dict, int | None]]:
+    """[(member_uuid, member_record, household_unit_number)] across every household — the member
+    directory. The Member Tools household member is keyed by `uuid`, which equals a covenant person's
+    `memberUuid` (verified). Tolerant of the older flat shape (memberUuid/id)."""
+    out: list[tuple[str, dict, int | None]] = []
+    for hh in (payload.get("households") or []):
+        unum = hh.get("unitNumber")
+        for m in (hh.get("members") or []):
+            if isinstance(m, dict):
+                u = m.get("uuid") or m.get("memberUuid") or m.get("id")
+                if u:
+                    out.append((u, m, unum))
+    return out
+
+
+def _calling_index(payload: dict) -> dict[str, list[str]]:
+    """uuid -> [calling name, ...] from the directory's `positions`. A non-empty list = has a calling
+    (the same signal LCR's per-member profile gives), and the names surface in the detail view. Empty
+    list for a directory member with no positions (a real 'No calling'); absent for someone not in the
+    directory (unknown -> stays NEEDS_PROFILE so the merge/last-good preserves)."""
+    idx: dict[str, list[str]] = {}
+    for uuid, m, _unum in _household_members(payload):
+        if "positions" not in m:
+            continue
+        names = [p.get("name") for p in (m.get("positions") or [])
+                 if isinstance(p, dict) and p.get("name")]
+        # setdefault-union across multi-household listings (a member can appear in two households).
+        cur = idx.setdefault(uuid, [])
+        for n in names:
+            if n not in cur:
+                cur.append(n)
+    return idx
+
+
+def _sex_from_household(m: dict) -> str | None:
+    s = (m.get("sex") or "").upper()
+    return "F" if s.startswith("F") else "M" if s.startswith("M") else None
+
+
+def _sex_index(payload: dict) -> dict[str, str]:
+    """uuid -> 'M'/'F' from the directory (authoritative for sex; the covenant person's `sex` is also
+    present but the directory covers everyone incl. friends)."""
+    idx: dict[str, str] = {}
+    for uuid, m, _unum in _household_members(payload):
+        s = _sex_from_household(m)
+        if s:
+            idx.setdefault(uuid, s)
+    return idx
+
+
+class MinisteringIndex:
+    """O(1) ministering lookups for the WHOLE stake, built once from the bulk payload's unit-wide
+    EQ/RS org. Ported from SyncGoldenHourIndex.swift (the official-app clone's authoritative source):
+
+      • EQ (`ministeringBrothers`) assigns per HOUSEHOLD — a member "has ministering brothers" when ANY
+        of their households is assigned to a brothers companionship.
+      • RS (`ministeringSisters`) assigns per INDIVIDUAL sister — a member "has ministering sisters"
+        when their own uuid is in a companionship's `sisters`.
+      • "has a ministering ASSIGNMENT" (ministers to others) = their uuid is a `companions` member on
+        either side.
+
+    Unit-coverage semantics matter: being in an assigned set is positive proof (-> Yes) regardless of
+    coverage; NOT being assigned is a real 'No' ONLY when that member's unit's org is in this payload,
+    else it's genuinely unknown (-> None, which the adapter leaves as the NEEDS_PROFILE sentinel so the
+    merge/last-good preserves rather than writing a false 'No')."""
+
+    def __init__(self, payload: dict):
+        # member_uuid -> set(household_uuid); member_uuid -> set(unit_number)
+        self.households_by_member: dict[str, set[str]] = {}
+        self.units_by_member: dict[str, set[int]] = {}
+        self.household_name: dict[str, str] = {}
+        for hh in (payload.get("households") or []):
+            hh_uuid = hh.get("uuid")
+            if hh_uuid and hh.get("name"):
+                self.household_name[hh_uuid] = hh["name"]
+            unum = hh.get("unitNumber")
+            for m in (hh.get("members") or []):
+                if not isinstance(m, dict):
+                    continue
+                u = m.get("uuid") or m.get("memberUuid") or m.get("id")
+                if not u:
+                    continue
+                if hh_uuid:
+                    self.households_by_member.setdefault(u, set()).add(hh_uuid)
+                if unum is not None:
+                    self.units_by_member.setdefault(u, set()).add(int(unum))
+
+        self.minister_uuids: set[str] = set()           # ministers to others (EQ or RS companions)
+        self.sisters_assigned: set[str] = set()         # RS: ministered-to sisters (by member uuid)
+        self.households_with_brothers: set[str] = set()  # EQ: ministered-to households (by hh uuid)
+        self.brothers_units: set[int] = set()
+        self.sisters_units: set[int] = set()
+        # detail maps (names behind the booleans)
+        self.brothers_by_household: dict[str, set[str]] = {}   # hh uuid -> brother (minister) uuids
+        self.sisters_by_member: dict[str, set[str]] = {}       # member uuid -> sister (minister) uuids
+
+        for org in (payload.get("ministeringBrothers") or []):
+            unum = org.get("unitNumber")
+            if unum is not None:
+                self.brothers_units.add(int(unum))
+            for district in (org.get("districts") or []):
+                for comp in (district.get("companionships") or []):
+                    comps = [c for c in (comp.get("companions") or []) if c]
+                    households = [h for h in (comp.get("households") or []) if h]
+                    self.minister_uuids.update(comps)
+                    for hh in households:
+                        self.households_with_brothers.add(hh)
+                        self.brothers_by_household.setdefault(hh, set()).update(comps)
+
+        for org in (payload.get("ministeringSisters") or []):
+            unum = org.get("unitNumber")
+            if unum is not None:
+                self.sisters_units.add(int(unum))
+            for district in (org.get("districts") or []):
+                for comp in (district.get("companionships") or []):
+                    comps = [c for c in (comp.get("companions") or []) if c]
+                    sisters = [s for s in (comp.get("sisters") or []) if s]
+                    self.minister_uuids.update(comps)
+                    for sis in sisters:
+                        self.sisters_assigned.add(sis)
+                        self.sisters_by_member.setdefault(sis, set()).update(comps)
+
+    @property
+    def present(self) -> bool:
+        """Whether the payload carried ANY ministering org at all (else every lookup is unknown)."""
+        return bool(self.brothers_units or self.sisters_units
+                    or self.minister_uuids or self.sisters_assigned)
+
+    @staticmethod
+    def _state(assigned: bool, unit_covered: bool) -> bool | None:
+        if assigned:
+            return True
+        return False if unit_covered else None
+
+    def has_ministers(self, uuid: str) -> bool | None:
+        """'has ministering brothers OR sisters assigned to them' (the `ministering_brothers_sisters`
+        field). None = unknown (member's unit org not in this payload)."""
+        households = self.households_by_member.get(uuid, set())
+        units = self.units_by_member.get(uuid, set())
+        has_brothers = bool(households & self.households_with_brothers)
+        has_sisters = uuid in self.sisters_assigned
+        b = self._state(has_brothers, bool(units & self.brothers_units))
+        s = self._state(has_sisters, bool(units & self.sisters_units))
+        # combine the two sides: a Yes on either is Yes; else No if either side is known; else unknown.
+        if b is True or s is True:
+            return True
+        if b is False or s is False:
+            return False
+        return None
+
+    def has_assignment(self, uuid: str) -> bool | None:
+        """'ministers to others' (the `ministering_assignment` field). None = unknown."""
+        units = self.units_by_member.get(uuid, set())
+        covered = bool(units & (self.brothers_units | self.sisters_units))
+        return self._state(uuid in self.minister_uuids, covered)
+
+    def minister_names(self, uuid: str, name_by_uuid: dict[str, str]) -> list[str]:
+        """Names of the brothers + sisters who minister TO this person (for the detail view)."""
+        out: list[str] = []
+        for hh in self.households_by_member.get(uuid, set()):
+            for b in self.brothers_by_household.get(hh, set()):
+                if b != uuid and name_by_uuid.get(b) and name_by_uuid[b] not in out:
+                    out.append(name_by_uuid[b])
+        for s in self.sisters_by_member.get(uuid, set()):
+            if s != uuid and name_by_uuid.get(s) and name_by_uuid[s] not in out:
+                out.append(name_by_uuid[s])
+        return out
+
+
+def _yn_or_sentinel(state: bool | None) -> str:
+    """Yes/No when known; the NEEDS_PROFILE sentinel when unknown — so an unknown leaves last-good
+    intact via the merge-upsert rather than writing a false 'No'."""
+    return "Yes" if state is True else "No" if state is False else NEEDS_PROFILE
+
+
 def _parse_date(s: Any) -> date | None:
     if not isinstance(s, str) or not s:
         return None
@@ -117,10 +303,14 @@ def _weeks_since_attendance(sacrament: list | None) -> int | None:
     return max(0, (date.today() - max(dates)).days // 7)
 
 
-def _details_subtree(p: dict, name_by_uuid: dict[str, str]) -> dict:
+def _details_subtree(p: dict, name_by_uuid: dict[str, str],
+                     ministering: "MinisteringIndex | None" = None,
+                     calling_names: list[str] | None = None) -> dict:
     """The rich progress-only subtree for the member view, in our canonical `details` shape — sourced
-    from Member Tools instead of the one-work details endpoint. Profile-sourced sub-keys (callings,
-    ministering, templeOrdinances) are left for the /mlt merge; here we fill the PROGRESS sub-keys.
+    from Member Tools instead of the one-work details endpoint. The PROGRESS sub-keys come from the
+    person record; the ministering minister-NAMES + calling NAMES now ALSO come from the bulk payload's
+    unit-wide org + member directory (rescued here so they survive a dead LCR session — they used to be
+    left for the /mlt merge). templeOrdinances stays profile-only (not in the bulk payload).
     Friend names are resolved from `name_by_uuid` (friends are stored as uuid refs)."""
     sacrament = [
         {"label": s.get("date"), "attended": bool(s.get("attended")), "date": s.get("date")}
@@ -142,7 +332,13 @@ def _details_subtree(p: dict, name_by_uuid: dict[str, str]) -> dict:
     ]
     commitments = [c.get("title") for c in (p.get("commitments") or []) + (p.get("otherCommitments") or [])
                    if c.get("title")]
-    return {
+    uuid = _person_uuid(p)
+    # Minister NAMES (who ministers TO this person) split brothers/sisters from the unit-wide org —
+    # the detail view shows them, and they used to be left blank until the (now-dead-in-steady-state)
+    # /mlt merge. We don't have a per-name EQ/RS split cheaply, so put resolved names under
+    # ministeringBrothers (the detail view concatenates brothers + sisters anyway).
+    minister_names = ministering.minister_names(uuid, name_by_uuid) if (ministering and uuid) else []
+    out: dict[str, Any] = {
         "baptismGoalDate": p.get("baptismGoalDate"),
         "firstLesson": p.get("firstTaught"),
         "nextScheduledEvent": p.get("nextAppointment"),
@@ -155,6 +351,11 @@ def _details_subtree(p: dict, name_by_uuid: dict[str, str]) -> dict:
         "sealedToSpouse": p.get("sealedToSpouse"),
         "source": "membertools",  # provenance, so the app/diagnostics can tell where it came from
     }
+    if minister_names:
+        out["ministeringBrothers"] = minister_names
+    if calling_names:
+        out["callings"] = calling_names
+    return out
 
 
 def unit_names(payload: dict) -> dict[int, str]:
@@ -192,26 +393,47 @@ def context_from_sync(payload: dict):
 
 
 def adapt_person(p: dict, kind: str, unit_name_by_number: dict[int, str],
-                 name_by_uuid: dict[str, str], birth_by_uuid: dict[str, str] | None = None) -> CovenantPathMember:
+                 name_by_uuid: dict[str, str], birth_by_uuid: dict[str, str] | None = None,
+                 ministering: "MinisteringIndex | None" = None,
+                 calling_by_uuid: dict[str, list[str]] | None = None,
+                 sex_by_uuid: dict[str, str] | None = None) -> CovenantPathMember:
     """One Member Tools covenant-path person → CovenantPathMember. Covenant-path PROGRESS fields are
-    filled from the bulk payload; PROFILE fields use the NEEDS_PROFILE sentinel so the /mlt merge (in
-    covenant_path.report) fills them from the reliable cluster — preserving the existing behaviour.
+    filled from the bulk payload; the still-PROFILE-only fields (temple_recommend, patriarchal_blessing,
+    priesthood, living_ordinance) use the NEEDS_PROFILE sentinel so the /mlt merge fills them from the
+    reliable cluster — preserving the existing behaviour for the fields that genuinely aren't in the
+    bulk payload.
 
-    EXCEPTION (#data-gap): birth_date is now ALSO read from the bulk payload when present (the person
-    record, else the household roster) so age-gated milestones/eligibility survive a dead LCR session.
-    It stays None when the payload lacks it → the /mlt merge fills it as before (no regression)."""
+    RESCUED from the bulk payload (else they'd persist as the leaking sentinel once the LCR session
+    dies — the "better not worse" win):
+      • birth_date  — person record, else household roster.
+      • ministering_brothers_sisters / ministering_assignment — the unit-wide EQ/RS org (`ministering`).
+      • calling — the member directory's `positions` (with the calling names in `details`).
+      • sex — the directory (more complete than the covenant person's own `sex`).
+    Each stays the sentinel (or None) when the payload lacks it → the /mlt merge fills it as before, so
+    this is purely additive (never a regression)."""
     unum = p.get("unitNumber")
     friend_uuids = _friend_uuids(p)
     friend_names = [name_by_uuid[u] for u in friend_uuids if name_by_uuid.get(u)]
     uuid = _person_uuid(p)
     birth = _birth_date(p) or ((birth_by_uuid or {}).get(uuid) if uuid else None)
+    sex = _sex(p) or ((sex_by_uuid or {}).get(uuid) if uuid else None)
+    # Calling: directory positions are the authoritative bulk-payload signal. A present-but-empty list
+    # is a real 'No'; absent (member not in directory) leaves the sentinel for the merge/last-good.
+    calling_names = (calling_by_uuid or {}).get(uuid) if uuid else None
+    if uuid and calling_by_uuid is not None and uuid in calling_by_uuid:
+        calling = "Yes" if calling_names else "No"
+    else:
+        calling = NEEDS_PROFILE
+    # Ministering: the unit-wide org is the authoritative bulk-payload signal (Yes/No/unknown).
+    has_min = ministering.has_ministers(uuid) if (ministering and uuid) else None
+    gives_min = ministering.has_assignment(uuid) if (ministering and uuid) else None
     return CovenantPathMember(
         name=_name(p),
         unit=unit_name_by_number.get(int(unum)) if unum is not None else None,
         unit_number=int(unum) if unum is not None else None,
         person_uuid=_person_uuid(p),
         kind=kind,
-        sex=_sex(p),
+        sex=sex,
         # covenant-path PROGRESS (from Member Tools — the data we're rescuing from the fragile cluster)
         baptism_date=p.get("confirmationDate") or NEEDS_PROFILE,
         baptism_goal_date=p.get("baptismGoalDate"),
@@ -219,15 +441,16 @@ def adapt_person(p: dict, kind: str, unit_name_by_number: dict[int, str],
         friends_count=len(friend_uuids),
         friends_summary=", ".join(friend_names) or None,
         weeks_since_last_attendance=_weeks_since_attendance(p.get("sacramentAttendance")),
-        details=_details_subtree(p, name_by_uuid),
-        # birth_date: rescued from the bulk payload when present (else None → /mlt merge, as before).
+        details=_details_subtree(p, name_by_uuid, ministering=ministering, calling_names=calling_names),
+        # birth_date / ministering / calling / sex: rescued from the bulk payload when present (else
+        # sentinel/None → /mlt merge, as before — purely additive).
         birth_date=birth,
-        # PROFILE-sourced fields — left for the /mlt merge (reliable cluster), exactly as before.
+        calling=calling,
+        ministering_brothers_sisters=_yn_or_sentinel(has_min),
+        ministering_assignment=_yn_or_sentinel(gives_min),
+        # Still PROFILE-only (genuinely NOT in the bulk payload) — left for the /mlt merge.
         aaronic_priesthood=NEEDS_PROFILE,
         melchizedek_priesthood=NEEDS_PROFILE,
-        calling=NEEDS_PROFILE,
-        ministering_brothers_sisters=NEEDS_PROFILE,
-        ministering_assignment=NEEDS_PROFILE,
         temple_recommend=NEEDS_PROFILE,
         patriarchal_blessing=NEEDS_PROFILE,
         living_ordinance=NEEDS_PROFILE,
@@ -244,12 +467,16 @@ _ARRAYS = {
 
 
 def adapt_sync(payload: dict, include_returning: bool = True) -> list[CovenantPathMember]:
-    """The whole /api/v5/sync payload → CovenantPathMember rows (covenant-path progress filled; the
-    profile fields await the /mlt merge). De-dupes by person_uuid (members can appear under multiple
-    arrays); a real person_uuid is required (else the DB upsert key is meaningless)."""
+    """The whole /api/v5/sync payload → CovenantPathMember rows. Covenant-path progress + ministering +
+    calling + birth/sex are filled from the bulk payload; the genuinely-profile-only fields await the
+    /mlt merge. De-dupes by person_uuid (members can appear under multiple arrays); a real person_uuid
+    is required (else the DB upsert key is meaningless)."""
     units = unit_names(payload)
     name_by_uuid = _name_index(payload)
     birth_by_uuid = _birth_index(payload)
+    ministering = MinisteringIndex(payload)
+    calling_by_uuid = _calling_index(payload)
+    sex_by_uuid = _sex_index(payload)
     out: list[CovenantPathMember] = []
     seen: set[str] = set()
     for arr, kind in _ARRAYS.items():
@@ -260,7 +487,9 @@ def adapt_sync(payload: dict, include_returning: bool = True) -> list[CovenantPa
             if not uuid or uuid in seen:
                 continue
             seen.add(uuid)
-            out.append(adapt_person(p, kind, units, name_by_uuid, birth_by_uuid))
+            out.append(adapt_person(p, kind, units, name_by_uuid, birth_by_uuid,
+                                    ministering=ministering, calling_by_uuid=calling_by_uuid,
+                                    sex_by_uuid=sex_by_uuid))
     return out
 
 

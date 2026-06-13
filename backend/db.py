@@ -40,8 +40,8 @@ _MEMBER_COLUMNS = [
 # degraded run never blanks priesthood/calling/etc). The sentinel strings mirror covenant_path.report.
 _GATED_COLUMNS = frozenset({
     "baptism_date", "aaronic_priesthood", "melchizedek_priesthood", "calling",
-    "ministering_assignment", "temple_recommend", "patriarchal_blessing", "living_ordinance",
-    "family_name_prepared", "first_temple_visit",
+    "ministering_brothers_sisters", "ministering_assignment", "temple_recommend",
+    "patriarchal_blessing", "living_ordinance", "family_name_prepared", "first_temple_visit",
 })
 _SENTINELS = ("needs-profile-api", "blocked: insufficient calling access")
 
@@ -66,7 +66,7 @@ def _merge_expr(c: str) -> str:
 # Per-field freshness (#data-correctness): the fields whose staleness we track. A SENTINEL value (or
 # None) means the endpoint didn't return it this run — keep the prior last-fetched stamp (staleness
 # grows); a real value (incl. a confirmed-empty like 'No' / 0) stamps it fresh.
-_FRESHNESS_FIELDS = tuple(_GATED_COLUMNS) + ("ministering_brothers_sisters", "friends_count")
+_FRESHNESS_FIELDS = tuple(_GATED_COLUMNS) + ("friends_count",)
 
 
 def _now_iso() -> str:

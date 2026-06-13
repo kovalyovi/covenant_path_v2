@@ -9,7 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import { usePersistentState } from '../../hooks/usePersistentState';
 import { useDashboard } from '../../hooks/useDashboard';
 import type { Member } from '../../lib/member';
-import { isInvestigator } from '../../lib/member';
+import { isInvestigator, displayFieldValue } from '../../lib/member';
 import { endowmentDisplay, templeExperienceDisplay, ageYears } from '../../logic/milestones';
 import { Icon } from '../../components/Icon';
 import { Modal } from '../../components/Modal';
@@ -46,13 +46,23 @@ const COLS: Col[] = [
   { header: 'Family name', key: 'family_name_prepared', kind: 'yesno' },
 ];
 
-/** Display value — friends shows the recorded count when present; strips redundant "Member for ". */
-function display(m: Member, key: string): string {
+// The sentinel-able covenant-path columns: a backend sentinel here ('needs-profile-api' / 'blocked:…')
+// must show as friendly text to leaders and only raw to admins (handled via displayFieldValue).
+const SENTINEL_COLS = new Set([
+  'baptism_date', 'aaronic_priesthood', 'melchizedek_priesthood', 'calling',
+  'ministering_brothers_sisters', 'ministering_assignment', 'temple_recommend',
+  'patriarchal_blessing',
+]);
+
+/** Display value — friends shows the recorded count when present; strips redundant "Member for ".
+ *  Sentinel-able columns map to friendly text for non-admins (raw for admins) so the techy
+ *  'needs-profile-api' / 'blocked: …' placeholders never leak to a regular leader's table. */
+function display(m: Member, key: string, isAdmin: boolean): string {
   // Endowment: N/A for ineligible members (not 18+ AND ~1yr) — gates the raw DB "No" client-side.
-  if (key === 'living_ordinance') return endowmentDisplay(m);
+  if (key === 'living_ordinance') return displayFieldValue(endowmentDisplay(m), isAdmin, '—');
   // Temple experiences: N/A under 12; falls back to details.templeExperiences pre-resync.
   if (key === 'first_temple_visit' || key === 'family_name_prepared') {
-    return templeExperienceDisplay(m, key);
+    return displayFieldValue(templeExperienceDisplay(m, key), isAdmin, '—');
   }
   if (key === 'age') {
     const a = ageYears(m);
@@ -63,6 +73,7 @@ function display(m: Member, key: string): string {
     if (c != null && String(c).length > 0) return String(c);
     return String(m['friends'] ?? '');
   }
+  if (SENTINEL_COLS.has(key)) return displayFieldValue(m[key], isAdmin, '—');
   const v = String(m[key] ?? '');
   return key === 'membership_duration' ? v.replace(/^Member for\s*/i, '') : v;
 }
@@ -105,10 +116,10 @@ export function TableTab() {
     );
   }
   if (d.members.length === 0) return <EmptyState enrollStatus={d.enrollStatus} />;
-  return <TableBody members={d.members} />;
+  return <TableBody members={d.members} isAdmin={d.isAdmin} />;
 }
 
-function TableBody({ members }: { members: Member[] }) {
+function TableBody({ members, isAdmin }: { members: Member[]; isAdmin: boolean }) {
   const navigate = useNavigate();
   const { notes, showNotes } = useDashboard();
   // Persisted view state (item 9): sort + per-column value filters survive a reload while the global
@@ -131,7 +142,7 @@ function TableBody({ members }: { members: Member[] }) {
 
   function passes(m: Member): boolean {
     for (const [key, set] of Object.entries(excluded)) {
-      if (set.has(display(m, key))) return false;
+      if (set.has(display(m, key, isAdmin))) return false;
     }
     return true;
   }
@@ -142,7 +153,7 @@ function TableBody({ members }: { members: Member[] }) {
     rows = [...rows].sort((a, b) => {
       const c = key === 'age'
         ? (ageYears(a) ?? -1) - (ageYears(b) ?? -1) // age sorts numerically, not as a string
-        : display(a, key).toLowerCase().localeCompare(display(b, key).toLowerCase());
+        : display(a, key, isAdmin).toLowerCase().localeCompare(display(b, key, isAdmin).toLowerCase());
       return sortAsc ? c : -c;
     });
   }
@@ -205,7 +216,7 @@ function TableBody({ members }: { members: Member[] }) {
                          left notes on this person. */
                       <td key={c.key}>
                         <span className="row" style={{ gap: 4, whiteSpace: 'nowrap' }}>
-                          {display(m, c.key)}
+                          {display(m, c.key, isAdmin)}
                           {showNotes && notes[id] && (
                             <Icon
                               name="note"
@@ -217,7 +228,7 @@ function TableBody({ members }: { members: Member[] }) {
                         </span>
                       </td>
                     ) : (
-                      <Cell key={c.key} value={display(m, c.key)} kind={c.kind} />
+                      <Cell key={c.key} value={display(m, c.key, isAdmin)} kind={c.kind} />
                     ),
                   )}
                 </tr>
@@ -232,6 +243,7 @@ function TableBody({ members }: { members: Member[] }) {
           col={filterCol}
           rows={base}
           excluded={excluded[filterCol.key] ?? new Set()}
+          isAdmin={isAdmin}
           onClose={() => setFilterCol(null)}
           onApply={(set) => {
             setExcluded((cur) => {
@@ -325,18 +337,20 @@ function FilterDialog({
   col,
   rows,
   excluded,
+  isAdmin,
   onClose,
   onApply,
 }: {
   col: Col;
   rows: Member[];
   excluded: Set<string>;
+  isAdmin: boolean;
   onClose: () => void;
   onApply: (set: Set<string>) => void;
 }) {
   const counts = new Map<string, number>();
   for (const m of rows) {
-    const v = display(m, col.key);
+    const v = display(m, col.key, isAdmin);
     counts.set(v, (counts.get(v) ?? 0) + 1);
   }
   const values = [...counts.keys()].sort();
