@@ -4,10 +4,10 @@ This file is the source of truth for **how to make changes consistently** across
 backend and all client views (**React web + native iOS + native Android**). Read it before editing.
 Companion docs: `PROGRESS.md` (status), `docs/DECISIONS.md` (ADR log — the *why*),
 `docs/DELEGATED_ACCESS.md`, `docs/CUSTOM_API_KEYS.md`, `docs/DEPLOYMENT.md` (broker +
-viewer hosting), `backend/auth_broker/README.md`, `apps/web/README.md`, `native/PARITY.md`.
+web hosting), `backend/auth_broker/README.md`, `apps/web/README.md`, `native/PARITY.md`.
 
-> **Flutter is DEPRECATED (2026-06-08).** The old one-codebase Flutter app moved to
-> `_deprecated/viewer` and is **frozen — do not update it**. The web app is now **React (`apps/web`)**
+> **Flutter is GONE (deprecated 2026-06-08, deleted 2026-06-13).** The old one-codebase Flutter app
+> (`_deprecated/viewer`) has been **removed from the repo**. The web app is now **React (`apps/web`)**
 > and the native apps are **Swift (`native/ios`) + Kotlin (`native/android`)**.
 
 ## The shape of the system
@@ -67,21 +67,21 @@ LCR (church data)
 | The 13 covenant-path fields | `covenant_path/report.py` (`CovenantPathMember`) | sheet, Supabase `members`, app |
 | Supabase schema / RLS | `backend/migrations/*.sql` | everything |
 | Role scope rule (stake vs ward) | `backend/roles.py` + RLS policies | access everywhere |
-| Golden-Hour milestones (app) | `apps/viewer/lib/golden_hour.dart` (`milestones`) | dashboard + detail |
-| Golden-Hour org buckets (app) | `apps/viewer/lib/golden_hour.dart` (`orgInfo` / `responsibleOrg` / `OrgBucket`) | Golden Hour view filter chips |
+| Golden-Hour milestones (app) | `apps/web/src/logic/milestones.ts` (`milestones`) — mirrored in `native/ios/.../Logic/Milestones.swift` + `native/android/.../logic/Milestones.kt` | dashboard + detail (all surfaces) |
+| Golden-Hour org buckets (app) | `apps/web/src/logic/milestones.ts` (`orgInfo` / `responsibleOrg` / `OrgBucket`) — mirrored in native `Logic/OrgBucket.swift` + `logic/OrgBucket.kt` | Golden Hour view filter chips |
 | Digest milestones (email) | `backend/mailer.py` (`_DIGEST_MILESTONES`) | digest emails |
 | Sheet columns | `sheets_sync/row_mapper.py` | Google Sheet |
 
 > When adding a covenant-path field: add it in `report.py`, add a `members` column
-> (migration), include it in `sheets_sync/row_mapper`, the Supabase select in
-> `apps/viewer/lib/dashboard_page.dart` (`_columns`), and — if it's an integration
-> milestone — `golden_hour.dart` + `mailer._DIGEST_MILESTONES`.
+> (migration), include it in `sheets_sync/row_mapper`, the Supabase select + table column in
+> `apps/web/src/` (and the mirrored native views), and — if it's an integration
+> milestone — `apps/web/src/logic/milestones.ts` (+ native mirrors) + `mailer._DIGEST_MILESTONES`.
 
 ## Making a change uniformly across views (THREE surfaces — keep in lockstep)
 
 There are **three maintained client codebases** that must be updated **together** for any
-user-facing feature or bug-fix (when applicable to that platform). Flutter (`_deprecated/viewer`)
-is **frozen — never update it**.
+user-facing feature or bug-fix (when applicable to that platform). (The old Flutter app was
+deleted 2026-06-13 — there is no Flutter surface anymore.)
 
 | Surface | Where | Verify before commit |
 |---|---|---|
