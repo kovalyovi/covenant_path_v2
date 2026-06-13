@@ -29,7 +29,9 @@ struct BaptismsView: View {
     private var today: Date { Calendar.current.startOfDay(for: Date()) }
 
     var body: some View {
-        ScrollView {
+        // Compute the parsed/sorted list ONCE per render (was re-derived on every `items` access).
+        let items = self.items
+        return ScrollView {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     SectionHeader(title: "Prospective Baptisms", count: items.count,

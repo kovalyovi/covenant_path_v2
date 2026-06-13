@@ -28,13 +28,10 @@ public struct PhotoAvatar: View {
 
     public var body: some View {
         if let s = photoURL, let url = URL(string: s), !s.isEmpty {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().scaledToFill()
-                default:
-                    InitialsAvatar(name: name, size: size)
-                }
+            // Cached, no-flash avatar (see CachedAvatarImage) — falls back to initials while loading /
+            // on error, so list scrolling never stalls on image work.
+            CachedAvatarImage(url: url) {
+                InitialsAvatar(name: name, size: size)
             }
             .frame(width: size, height: size)
             .clipShape(Circle())

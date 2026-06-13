@@ -89,7 +89,8 @@ public struct SectionCard<Content: View>: View {
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(accent)
                         .frame(width: 32, height: 32)
-                        .background(accent.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+                        // A solid tinted glyph chip — NOT glass — so we never nest glass inside the card.
+                        .background(accent.opacity(0.16), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 Text(title).font(.headline)
                 Spacer(minLength: 0)
@@ -97,12 +98,10 @@ public struct SectionCard<Content: View>: View {
             }
             content()
         }
-        .padding(16)
+        .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16)
-            .stroke(Color(.separator).opacity(0.5), lineWidth: 1))
+        // Liquid Glass on iOS 26, frosted material on iOS 17–25 — one surface for every panel app-wide.
+        .cpGlassCard()
     }
 }
 

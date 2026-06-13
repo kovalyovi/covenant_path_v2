@@ -35,6 +35,7 @@ struct DashboardView: View {
             }
         }
         .tint(tab.accent)
+        .cpTabBarMinimizeOnScroll()   // iOS 26: glass tab bar minimizes on scroll (no-op below)
         // The store rides the environment so deep list rows (MemberRow note lines) and the detail
         // page's notes section can read/refresh the notes index without threading it through props.
         .environment(store)
@@ -64,6 +65,9 @@ struct DashboardView: View {
                 }
                 pageBody(t)
             }
+            // Subtle tab-tinted backdrop so the glass surfaces (cards, nav/tab bars) have something to
+            // refract over and each tab keeps its color identity.
+            .cpScreenBackground(t.accent)
             .navigationDestination(for: Member.self) { member in
                 PersonDetailView(member: member)
             }
@@ -261,8 +265,7 @@ struct DashboardView: View {
             Text(toast)
                 .font(.callout)
                 .padding(.horizontal, 16).padding(.vertical, 12)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(.separator)))
+                .cpGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .padding(.horizontal, 24).padding(.bottom, 60)
                 .shadow(radius: 8, y: 2)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -292,10 +295,10 @@ struct SyncingBanner: View {
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
         .frame(maxWidth: .infinity)
-        // N4: frosted-glass banner (system material) tinted blue, instead of a flat fill — it
-        // overlays the scrolling member list, so the material actually frosts the content behind it.
-        .background(Color(hex: 0x1565C0).opacity(0.12))
-        .background(.ultraThinMaterial)
+        // Liquid-Glass banner tinted blue (frosted-material fallback) — it overlays the scrolling
+        // member list, so the glass actually refracts the content behind it.
+        .cpGlass(in: Rectangle(), tint: Color(hex: 0x1565C0))
+        .overlay(alignment: .bottom) { Divider() }
         .onReceive(timer) { now = $0 }
     }
 }
@@ -333,9 +336,9 @@ struct StaleBanner: View {
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
         .frame(maxWidth: .infinity)
-        // N4: frosted-glass banner (system material) tinted amber
-        .background(Color.orange.opacity(0.12))
-        .background(.ultraThinMaterial)
+        // Liquid-Glass banner tinted amber (frosted-material fallback)
+        .cpGlass(in: Rectangle(), tint: .orange)
+        .overlay(alignment: .bottom) { Divider() }
         .accessibilityHint(lastError ?? "")
     }
 }

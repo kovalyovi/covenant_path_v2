@@ -11,7 +11,7 @@ Swift Charts).
 2. **Config-error screen** — **Done.** `ConfigErrorView` when SUPABASE_URL/ANON_KEY missing (`AppConfig.isConfigured`).
 3. **Login — 3 modes** — **Done (passkey Partial, see below).** Segmented Church/Email when broker configured, else Email only. Church: username/password → MFA factor list → code → verify (broker `/auth/password`,`/auth/mfa/select`,`/auth/mfa/verify` → Supabase `verifyOTP`), consent note shown. Email: OTP send/verify with the broker-relay fallback toggle (`/auth/email/start`,`/verify`). Disclaimer + footer + transient status + error lines. (`LoginView.swift`, `BrokerService.swift`)
    - **Passkey — Partial.** Full native `ASAuthorization` WebAuthn flow is implemented (`PasskeyService.swift`, broker `/webauthn/*` begin+complete, base64url marshaling), but `available` is gated behind a `PASSKEY_RP_ID` build value because platform passkeys need an associated-domains entitlement that can't be provisioned in the unsigned CI build. When unset, the login/Settings button is shown **disabled with a clear "use email code on this device" note** (the documented one partial item).
-4. **Biometric app-lock** — **Done.** `BiometricGateView` + `BiometricService` (LocalAuthentication, persisted pref, on-by-default on native; Settings toggle).
+4. **Biometric app-lock** — **Done (opt-in).** `BiometricGateView` + `BiometricService` (LocalAuthentication, persisted pref, Settings toggle). **2026-06-13: OFF by default — Face ID is not required to open the app** (user directive); the gate computes its state synchronously so the default never renders a lock screen.
 5. **Dark mode** — **Done.** `ThemeController` (system/light/dark, persisted) → `.preferredColorScheme`; cycle toggle in Settings.
 
 ## B. Dashboard shell
@@ -24,10 +24,10 @@ Swift Charts).
 
 ## C. Tabs
 12. **Baptisms** — **Done.** Overdue ("date passed") then Scheduled date timeline; combined ↔ per-unit toggle; per-unit cards show the `MissionaryStrip` (name chips → tap reveals phone/email). (`BaptismsView.swift`)
-13. **Golden Hour** — **Done.** New Members/Being Taught segmented; eligible-only completion card (% per milestone, tap → who's missing); WML/EQ/RS org filter (all-on, can't deselect last, Clear filters) + responsibility note; Week/Month/Year/All + range pill; member rows with milestone chips + responsibility chip; drill sheets. (`GoldenHourView.swift`)
+13. **Golden Hour** — **Done.** New Members/Being Taught segmented; eligible-only completion (now a horizontal strip of % tiles, tap → who's missing); WML/EQ/RS glass org filter (all-on, can't deselect last, Clear filters) + responsibility note; Week/Month/Year/All; member rows with milestone chips + responsibility chip; drill sheets. **2026-06-13: `LazyVStack` rows + once-per-render filter/sort (the jank fix) + consolidated controls + glass.** (`GoldenHourView.swift`)
 14. **Needs** — **Done.** Per-milestone category chips (color + outstanding count) → eligible-missing list; per-unit colored chips; same org filter; baptism-date↕ sort. (`NeedsView.swift`)
 15. **KPIs** — **Done.** **Swift Charts** line cards (Investigators-at-Sacrament, New-Members-at-Sacrament, New-Friends-being-taught), current vs previous overlay, delta badges, big prior/latest stats; Month/Year/All + range pill + Compare toggle; Overview stat grid (Being taught now, Lessons w/ member present, New members tracked, Golden Hour %); Golden-Hour-by-unit ranked bars; tap a point/stat → drill sheet (by unit / by date). Bucketing/series math ported exactly in `Kpis.swift` from `dashboard_common.dart` + `kpis_view.dart`. (`KPIsView.swift`)
-16. **Table** — **Done.** Horizontally-scrolling grid of every covenant-path field, color-coded Yes/No/N-A/recommend/gender; 3-state per-column sort; per-column value-picker filter (`ColumnFilterSheet`); "N members (filtered)" + clear-filters; row → detail. (`TableView.swift`)
+16. **Table** — **Done.** Horizontally-scrolling grid of every covenant-path field, color-coded Yes/No/N-A/recommend/gender; 3-state per-column sort; per-column value-picker filter (`ColumnFilterSheet`); "N members (filtered)" + clear-filters; row → detail. **2026-06-13: `LazyVStack` rows + pinned column header.** (`TableView.swift`)
 
 ## D. Person detail
 17. **Header + open in LCR** — **Done.** Photo/initials, name, unit, member-since, baptism/planned line; LCR toolbar link.
@@ -54,6 +54,28 @@ Swift Charts).
 
 ## Summary
 **Done: 28 / 29.** **Partial: 1** — item 3 *Passkey* (full native ASAuthorization flow implemented but gated/disabled-with-note until a signed build provides `PASSKEY_RP_ID` + associated-domains; this is the spec's explicitly-allowed partial). No Stubs.
+
+## Addendum (2026-06-13): Liquid-Glass + performance pass (iOS-only UI)
+A focused redesign of the iOS look + scroll performance — **no shared logic changed**, so web/Android
+parity is unaffected (this is platform-specific UI, intentionally iOS-only).
+- **Liquid Glass** (`Shared/Glass.swift`): real iOS 26 `.glassEffect` / `GlassEffectContainer` /
+  scroll-minimizing glass tab bar, double-gated by `#if compiler(>=6.2)` + `if #available(iOS 26.0, *)`
+  with a frosted-material fallback — deployment target stays **17.0**, CI compiles on any Xcode. Adopted
+  by every `SectionCard`, the dashboard banners/toast, the filter chips, and a tab-tinted backdrop.
+- **Performance**: `MemberList` (Golden Hour + Needs) and the Table grid render in `LazyVStack` instead
+  of building every row up front (the Golden-Hour jank fix); avatars load through the cached
+  `CachedAvatarImage` (no re-download/re-decode/flash on recycle). Filter/sort computed once per render.
+- **Face ID**: app-lock is now opt-in / OFF by default; the launch gate no longer requires or flashes it.
+- **CI**: `build-native-ios.yml` selects the newest installed Xcode (iOS 26 SDK → real glass) with a
+  safe fallback to the default Xcode, so the build is green whether or not a 26.x toolchain is present.
+- **Review-driven follow-ups (same day, 2 independent audit agents — perf + style):** removed the
+  per-card drop shadow (scroll cost); lifted the long Golden Hour lists out of their glass card (no tall
+  translucent backing behind hundreds of rows); hoisted `BaptismsView.items`; capped the avatar cache
+  (`totalCostLimit`); and unified the glass language on the surfaces left flat — **skeletons**,
+  **person-detail header**, **Needs** category/ward chips, and the **Table** pinned header (now a frosted
+  bar, not an opaque accent slab). Avoided glass-on-glass (unit-count chips stay solid inside their card).
+- **Verification:** compiles via the iOS CI build; **pending a device/AVD pass** for the glass look on
+  iOS 26 and the pinned Table header behavior.
 
 ## Addendum (2026-06-10): notes on list rows
 - **List-row note lines** — newest leader note (+N) under each person in Golden Hour / Needs / by-date lists (`MemberRow` + `NoteLine`), the Baptisms timeline rows, and a note marker in the Table's Member cell. Data: one bulk RLS-scoped `member_comments` fetch per stake load (`SupabaseGateway.noteRows` -> `NotesIndex.build`, mirrored unit tests in `LogicTests`); posting a note on detail refreshes the index (`DashboardStore.reloadNotes`). **Pending CI build + simulator verification.**

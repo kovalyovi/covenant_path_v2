@@ -10,7 +10,9 @@ admin, and never touches the church system directly.
 
 Swift + SwiftUI, iOS 17+, the Observation framework (`@Observable`), async/await, `NavigationStack` /
 `TabView` / `.sheet` / `Form`, **Swift Charts** (KPIs), `AuthenticationServices` (passkeys),
-`LocalAuthentication` (app lock). Supabase via **supabase-swift** (SPM).
+`LocalAuthentication` (app lock). Supabase via **supabase-swift** (SPM). The UI uses Apple's
+**Liquid Glass** (iOS 26) where available — see `Shared/Glass.swift` — degrading to a frosted-material
+look on iOS 17–25, so the deployment target stays 17.0.
 
 > Authored without a Swift compiler in this environment — written to be meticulous and build under
 > the CI `xcodebuild` (see **Compile caveats**). The CI workflow `build-native-ios.yml` runs
@@ -103,7 +105,9 @@ schemes: `SUPABASE_URL = https:/$()/your-ref.supabase.co`.
 - **3-mode login** — Church account (username/password → MFA factor pick → code, via the broker) ·
   Email code (Supabase OTP, with a broker-relay fallback) · Passkey (native ASAuthorization WebAuthn
   against the broker — see the one **Partial** below). Disclaimer + cold-start status + error lines.
-- **Biometric app-lock** (LocalAuthentication), **dark mode** (persisted, Settings toggle).
+- **Liquid-Glass UI** (iOS 26) with an iOS-17 material fallback; the glass tab bar minimizes on scroll.
+- **Biometric app-lock** (LocalAuthentication) — **opt-in, OFF by default** (no Face ID required to
+  open the app); **dark mode** (persisted, Settings toggle).
 - **Dashboard shell** — stake switcher, freshness chip (→ Sync now), Refresh, overflow menu, syncing
   + stale-credential banners, skeletons, enrollment-aware empty states.
 - **5 tabs** — Baptisms (overdue/scheduled timeline + per-unit + missionary strip), Golden Hour
@@ -130,6 +134,12 @@ Authored without a compiler, so:
   API; `plotAreaFrame` is deprecated-but-present on iOS 17 (warning, not error).
 - **SF Symbols** were chosen to exist on the iOS 17 SDK; symbol names are strings so a wrong one only
   renders blank at runtime (never a build error). Uncertain ones were swapped for safe equivalents.
+- **Liquid Glass** (`Shared/Glass.swift`) is double-gated: `#if compiler(>=6.2)` keeps the iOS 26
+  `.glassEffect`/`GlassEffectContainer`/`.tabBarMinimizeBehavior` symbols out of the compile entirely
+  on older Xcodes (so CI is green on any toolchain), and `if #available(iOS 26.0, *)` selects glass vs.
+  the frosted-material fallback at runtime. CI selects the newest installed Xcode so a 26.x runner
+  produces real glass; otherwise it builds the fallback. **Pending a device/AVD pass** to confirm the
+  glass look and the pinned Table header.
 - **supabase-swift API** verified against 2.x: `signInWithOTP`, `verifyOTP(…type: .email)`,
   `setSession(accessToken:refreshToken:)`, `auth.session`, `authStateChanges`,
   `from().select().eq(_,value:).order().execute().value`, `rpc(_:)` / `rpc(_:params:)`, `insert`.

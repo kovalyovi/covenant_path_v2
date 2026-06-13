@@ -20,40 +20,43 @@ public struct OrgFilterBar: View {
     }
 
     public var body: some View {
-        FlowLayout(spacing: 6) {
-            ForEach(OrgBucket.allCases) { b in
-                let info = Org.info(b)
-                let color = Color(hex: info.hex)
-                let sel = selected.contains(b)
-                Button {
-                    OrgFilterBar.toggle(b, in: &selected)
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: info.symbol).font(.system(size: 14))
-                            .foregroundStyle(color)
-                        Text(info.label)
-                            .font(.system(size: 13, weight: sel ? .bold : .medium))
-                            .foregroundStyle(sel ? color : color.opacity(0.6))
+        // Liquid-Glass capsules (frosted-material fallback on iOS 17–25). The glass container lets the
+        // adjacent chips blend fluidly on iOS 26.
+        CPGlassGroup(spacing: 6) {
+            FlowLayout(spacing: 6) {
+                ForEach(OrgBucket.allCases) { b in
+                    let info = Org.info(b)
+                    let color = Color(hex: info.hex)
+                    let sel = selected.contains(b)
+                    Button {
+                        OrgFilterBar.toggle(b, in: &selected)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: info.symbol).font(.system(size: 14))
+                                .foregroundStyle(color)
+                            Text(info.label)
+                                .font(.system(size: 13, weight: sel ? .bold : .medium))
+                                .foregroundStyle(sel ? color : color.opacity(0.65))
+                        }
+                        .padding(.horizontal, 13).padding(.vertical, 8)
+                        .cpGlassChip(tint: color, selected: sel)
                     }
-                    .padding(.horizontal, 12).padding(.vertical, 7)
-                    .background(color.opacity(sel ? 0.22 : 0.06), in: Capsule())
-                    .overlay(Capsule().stroke(color.opacity(sel ? 0.9 : 0.35), lineWidth: 1))
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-            }
-            if !allSelected {
-                Button {
-                    selected = Set(OrgBucket.allCases)
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "line.3.horizontal.decrease.circle").font(.system(size: 14))
-                        Text("Clear filters").font(.system(size: 13))
+                if !allSelected {
+                    Button {
+                        selected = Set(OrgBucket.allCases)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "line.3.horizontal.decrease.circle").font(.system(size: 14))
+                            Text("Clear filters").font(.system(size: 13))
+                        }
+                        .padding(.horizontal, 13).padding(.vertical, 8)
+                        .cpGlassChip(tint: Color(.secondaryLabel), selected: false)
                     }
-                    .padding(.horizontal, 12).padding(.vertical, 7)
-                    .overlay(Capsule().stroke(Color(.separator), lineWidth: 1))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity)

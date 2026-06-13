@@ -1,5 +1,20 @@
 # Implementation Notes — file-by-file
 
+> **2026-06-13 — Liquid-Glass + performance pass (iOS-only UI; logic untouched).** A focused redesign:
+> (1) a new **`Shared/Glass.swift`** design system renders real iOS 26 **Liquid Glass**
+> (`.glassEffect`, `GlassEffectContainer`, scroll-minimizing tab bar) when built with the Xcode 26 SDK
+> and a **frosted-material fallback** on the iOS 17–25 floor — double-gated by `#if compiler(>=6.2)` +
+> `if #available(iOS 26.0, *)`, so the deployment target stays **17.0** and CI compiles on any Xcode.
+> Every `SectionCard` (hence every panel app-wide), the dashboard banners/toast, and the filter chips
+> adopt it. (2) **Scroll performance**: the member lists (`MemberList`, used by Golden Hour + Needs)
+> and the **Table** grid now render in `LazyVStack` instead of building every row up front — the fix
+> for the Golden-Hour jank — and avatars load through a cached **`CachedAvatarImage`** (no re-download/
+> re-decode/flash as rows recycle). Golden Hour's stacked controls were consolidated and its completion
+> summary is now a one-band horizontal strip. (3) **Face ID is no longer required to open the app** —
+> the app-lock is opt-in and **OFF by default**; the launch gate computes its state synchronously so a
+> disabled lock never flashes a lock screen. Native verification is via the iOS CI build (+ a device /
+> AVD pass for the glass look and the pinned table header).
+
 Every file in `native/ios/` and what it does. The `.dart` filenames below are the **original Flutter
 sources** these files were ported from; that Flutter app (`apps/viewer`) was **deleted 2026-06-13**,
 so the live equivalents now live in the React web app (`apps/web/src/`): logic in `src/logic/`
@@ -53,7 +68,7 @@ See `PARITY_STATUS.md` for the item-by-item parity map.
 | `BrokerService.swift` | Faithful port of `broker_client.dart` + `admin_client.dart` via `URLSession` (Foundation only → stays cross-platform). Cold-start retry; Church login (`password`/`mfa`), email relay, enrollment status, sync-now, schedule, Google Drive, contact, report(+email), feedback, all `/admin/*`, and `/log` telemetry. Authed calls carry the Supabase token via an injected provider. |
 | `AppServices.swift` | The configured service graph (Supabase wrappers + gateway + broker, token wired to the live session). `make(config:)` → nil when unconfigured. `passkeyRPID` from the bundle. Injected into views via `@Environment(\.appServices)`. |
 | `AppPrefs.swift` | UserDefaults-backed prefs (theme, biometric lock, remembered stake, passkey-upsell flag) + `ThemeController` (`@Observable` system/light/dark with `cycle`, persisted). |
-| `BiometricService.swift` | LocalAuthentication app-lock (port of `BiometricLock`): `available`/`enabled`/`setEnabled`/`authenticate`. On-by-default on native; persisted. |
+| `BiometricService.swift` | LocalAuthentication app-lock: `available`/`enabled`/`setEnabled`/`authenticate`. **Opt-in, OFF by default** (2026-06-13 — Face ID is not required to open the app); persisted. |
 | `PasskeyService.swift` | Native WebAuthn via `ASAuthorization` against the broker `/webauthn/*` (login + register), base64url marshaling. `available` gated behind `PASSKEY_RP_ID` (the documented Partial — needs an associated-domains entitlement). |
 | `ErrorReporter.swift` | Global error telemetry → broker `/log` (port of `error_reporter.dart`): `NSSetUncaughtExceptionHandler` + explicit `report(_:where:)`. No PII. |
 
@@ -71,26 +86,28 @@ See `PARITY_STATUS.md` for the item-by-item parity map.
 |---|---|
 | `RootView.swift` | Entry point: config check → `AppServices` graph + `ErrorReporter.install` → `SessionStore.phase` switch (loading / `LoginView` / biometric-gated `DashboardView`); applies the persisted theme. Injects `session`/`theme`/`services` into the environment. `ConfigErrorView` for missing config. |
 | `LoginView.swift` | The 3-mode login (port of `login_page.dart`): Church/Email segmented; Church 3-step (user/pass → factor pick → code); Email send/verify + relay fallback; passkey button (or disabled-with-note); disclaimer + footer + status/error lines. |
-| `BiometricGateView.swift` | Wraps the dashboard; Face ID gate when the lock is on + available (port of `BiometricGate`), fail-open on availability. |
-| `DashboardView.swift` | The 5-tab `TabView`; per-tab `NavigationStack` + member-detail destination; toolbar (stake switcher · freshness chip→Sync-now alert · Refresh · overflow menu); `SyncingBanner`/`StaleBanner`; skeleton + `EmptyStateView`; the sheet router (sync/report/invite/admin/settings); a one-time passkey-upsell toast. |
+| `BiometricGateView.swift` | Wraps the dashboard; only gates when the **opt-in** App Lock is on + available. Computes `unlocked` synchronously in `init` so the default (lock off) renders the dashboard immediately — no lock screen, no Face ID prompt, no flash. |
+| `DashboardView.swift` | The 5-tab `TabView` (iOS 26: Liquid-Glass bar that **minimizes on scroll**); per-tab `NavigationStack` over a subtle **tab-tinted backdrop** (so the glass refracts) + member-detail destination; toolbar (stake switcher · freshness chip→Sync-now alert · Refresh · overflow menu); **glass** `SyncingBanner`/`StaleBanner`/toast; skeleton + `EmptyStateView`; the sheet router; a one-time passkey-upsell toast. |
 | `PersonDetailView.swift` | Detail page: header card, milestone chips, rich `details` body or flat fallback, LCR link, `RecordedYesNote`, and `CommentsSection` (read/add notes via `member_comments`). |
 | `Detail/DetailSections.swift` | The detail sub-sections: Sacrament dots (+View all), Friends, ListText (priesthood/calling/ministering), Names (ministers), Temple, Principles (+member-present dots), Toggles (self-reliance), Flags. |
 | `Tabs/BaptismsView.swift` | Prospective-baptism timeline: combined ↔ per-unit toggle; overdue then Scheduled date rail; per-unit cards show `MissionaryStrip` (name chips → tap reveals phone/email). `SectionHeader`, `EmptyHint` live here. |
-| `Tabs/GoldenHourView.swift` | New Members / Being Taught segmented; org filter; recency window + range pill; `CompletionCard` (% per milestone, tap → `MilestoneDrillSheet`); member list. `MemberList`/`RangePill` shared helpers. |
+| `Tabs/GoldenHourView.swift` | New Members / Being Taught segmented; org filter; recency window; `CompletionCard` (now a **horizontal strip** of % tiles, tap → `MilestoneDrillSheet`); member list. Filtered/sorted arrays are computed **once** per render and the consolidated controls replace the old stacked header pile. **`MemberList` is now a `LazyVStack`** (the Golden-Hour jank fix; shared with Needs). `RangePill` shared helper. |
 | `Tabs/NeedsView.swift` | Category selector (`CategoryChip`) + counts, org filter, per-unit `UnitCountChip` breakdown, eligible-missing list sorted by baptism date then unit. `BigHeader` lives here. |
 | `Tabs/KPIsView.swift` | **Full KPIs** (port of `kpis_view.dart`): Swift Charts line cards (`MetricChartCard`) with current-vs-previous overlay + delta badges, Month/Year/All + range pill + Compare, Overview stat grid, Golden-Hour-by-unit ranked bars, and the drill sheets (`KpiDrillSheet`/`GoldenHourBreakdownSheet`/`LessonsDrillSheet`). |
-| `Tabs/TableView.swift` | Horizontally-scrolling grid of every covenant-path field, color-coded; 3-state per-column sort; per-column value-picker filter (`ColumnFilterSheet`); "N members (filtered)" + clear-filters; row → detail. |
+| `Tabs/TableView.swift` | Horizontally-scrolling grid of every covenant-path field, color-coded; 3-state per-column sort; per-column value-picker filter (`ColumnFilterSheet`); "N members (filtered)" + clear-filters; row → detail. Rows now render in a **`LazyVStack`** with a **pinned column header** (stays visible while scrolling a long table). |
 | `SettingsView.swift` | Grouped Settings (port of `settings_page.dart`): Appearance (theme cycle), Security (Add passkey + App-lock), Support (Contact/Feedback as nested sheets), About & privacy, Account (email + Sign out). |
 | `InviteView.swift` | Power users (port of `invite_page.dart`): list (grouped by email) + invite (rpc, optional unit scope) + revoke (rpc). |
 | `AdminView.swift` | Admin · Ops console (port of `admin_page.dart`): independent panels — health, freshness, maintenance dispatch, tools/links, diagnostics, enrolled stakes (sync/revoke), GitHub runs (+rerun) + changelog, admins (invite/revoke). |
 | `Sheets/SyncSettingsSheet.swift` | Sync settings (port of `_SyncSettingsSheet`): status + Sync-now + Revoke + `ScheduleSection` (ET hour + pause) + `GoogleDriveSection` (connect/disconnect, sheet link, reconnect). `InfoRow` label/value row. |
 | `Sheets/ReportSheet.swift` | Generate report (port of `_ReportSheet`): totals + most-needed steps + outstanding-by-member; Email-to-me. |
 | `Sheets/SupportSheets.swift` | `ContactSupportSheet` (`/contact`) + `FeedbackSheet` (`/feedback` → issue). |
-| `Shared/Theme.swift` | `Color(hex:)`, `StatusColor`, `DashboardTab` (per-tab accent + symbol), `SectionCard`, `CountBadge`, `AppColors`, `StatusTag`/`StatusPill`, and the `Freshness.Staleness` → color mapping. |
+| `Shared/Glass.swift` | **The Liquid-Glass design system** (2026-06-13). `View` helpers `cpGlassCard()` / `cpGlassChip(tint:selected:)` / `cpGlass(in:tint:)` / `cpScreenBackground(_:)` / `cpTabBarMinimizeOnScroll()` + the `CPGlassGroup { }` container. Real iOS 26 glass under `#if compiler(>=6.2)` + `if #available(iOS 26.0, *)`, frosted-material fallback otherwise. |
+| `Shared/Theme.swift` | `Color(hex:)`, `StatusColor`, `DashboardTab` (per-tab accent + symbol), `SectionCard` (**now a glass surface** via `cpGlassCard`), `CountBadge`, `AppColors`, `StatusTag`/`StatusPill`, and the `Freshness.Staleness` → color mapping. |
 | `Shared/GoldenHourChips.swift` | The milestone chip row (compact circles or labeled pills; next-step highlight). Port of `GoldenHourChips`. |
 | `Shared/OrgFilterBar.swift` | The WML/EQ/RS multi-select filter (all-on, can't deselect last, Clear filters) + `SubtleNote`. The `toggle(_:in:)` guard is unit-tested. |
 | `Shared/MemberRow.swift` | List row: avatar + name (+age), date line, responsible-org chip, optional milestone chips, unit metadata. Port of `_MemberRow`. |
-| `Shared/Avatars.swift` | `InitialsAvatar` + `PhotoAvatar` (AsyncImage with initials fallback). |
+| `Shared/Avatars.swift` | `InitialsAvatar` + `PhotoAvatar` (now backed by `CachedAvatarImage`, with the initials fallback while loading / on error). |
+| `Shared/CachedAvatarImage.swift` | **NSCache-backed, no-flash avatar loader** (2026-06-13) — serves decoded images instantly as lazy rows recycle and across tabs, instead of `AsyncImage` re-fetching + re-decoding every appearance. |
 | `Shared/FlowLayout.swift` | A wrapping `Layout` (Flutter `Wrap` equivalent) used by chip rows. |
 | `Shared/SkeletonView.swift` | `MemberListSkeleton` + `SyncSettingsSkeleton` + `CardSkeleton` + a shimmer modifier for the loading states. |
 

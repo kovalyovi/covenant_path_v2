@@ -75,17 +75,18 @@ struct PersonDetailView: View {
             PhotoAvatar(name: member.name, photoURL: member.photoURL, size: 60)
             VStack(alignment: .leading, spacing: 2) {
                 Text(member.displayName).font(.title3.bold())
-                if let u = member.unitName, !u.isEmpty { Text(u).font(.subheadline) }
-                if let ms = memberSince, !ms.isEmpty { Text(ms).font(.subheadline) }
-                if let demo = demographics { Text(demo).font(.caption) }
-                if let line = baptismLine { Text(line).font(.caption) }
+                if let u = member.unitName, !u.isEmpty { Text(u).font(.subheadline).foregroundStyle(.secondary) }
+                if let ms = memberSince, !ms.isEmpty { Text(ms).font(.subheadline).foregroundStyle(.secondary) }
+                if let demo = demographics { Text(demo).font(.caption).foregroundStyle(.secondary) }
+                if let line = baptismLine { Text(line).font(.caption).foregroundStyle(.secondary) }
             }
-            .foregroundStyle(Color(hex: 0x1A237E))   // on-primaryContainer-ish indigo
             Spacer(minLength: 0)
         }
-        .padding(16)
+        .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(hex: 0xC5CAE9).opacity(0.6), in: RoundedRectangle(cornerRadius: 16))
+        // Glass surface matching the section cards below (was a hardcoded indigo fill that didn't adapt
+        // to dark mode and clashed with the glass on this most-viewed screen).
+        .cpGlassCard()
     }
 
     // MARK: - rich body (details present)

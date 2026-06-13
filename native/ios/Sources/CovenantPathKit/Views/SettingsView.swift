@@ -128,7 +128,7 @@ struct SettingsView: View {
                     Label {
                         VStack(alignment: .leading) {
                             Text("App lock")
-                            Text("Require biometrics to open the app")
+                            Text("Off by default. Turn on to require Face ID / Touch ID each time you open the app.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     } icon: { Image(systemName: "faceid") }

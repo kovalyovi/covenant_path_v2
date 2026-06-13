@@ -102,12 +102,16 @@ struct TableView: View {
             .padding(.horizontal, 12).padding(.vertical, 8)
 
             ScrollView([.horizontal, .vertical]) {
-                VStack(alignment: .leading, spacing: 0) {
-                    headerRow
-                    ForEach(Array(filtered.enumerated()), id: \.element.id) { idx, m in
-                        NavigationLink(value: m) { dataRow(idx: idx, m: m) }
-                            .buttonStyle(.plain)
-                        Divider()
+                // LazyVStack so only the on-screen rows are built (was a non-lazy VStack of the whole
+                // stake); the column header is a pinned section header so it stays visible while you
+                // scroll a long table.
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    SwiftUI.Section(header: headerRow) {
+                        ForEach(Array(filtered.enumerated()), id: \.element.id) { idx, m in
+                            NavigationLink(value: m) { dataRow(idx: idx, m: m) }
+                                .buttonStyle(.plain)
+                            Divider()
+                        }
                     }
                 }
             }
@@ -126,31 +130,33 @@ struct TableView: View {
 
     private var headerRow: some View {
         HStack(spacing: 0) {
-            Text("#").font(.caption.bold()).foregroundStyle(.white)
+            Text("#").font(.caption.bold()).foregroundStyle(.secondary)
                 .frame(width: rowNumWidth, alignment: .leading).padding(.horizontal, 6)
             ForEach(columns) { col in
                 headerCell(col).frame(width: width(col), alignment: .leading).padding(.horizontal, 6)
             }
         }
         .padding(.vertical, 10)
-        .background(Color.accentColor)
+        // Frosted pinned header (was an opaque accent slab) — it now frosts the rows scrolling beneath
+        // it like a real iOS pinned header, instead of being the one fully-opaque element over glass.
+        .cpGlass(in: Rectangle())
     }
 
     private func headerCell(_ col: Column) -> some View {
         HStack(spacing: 3) {
-            Text(col.title).font(.caption.bold()).foregroundStyle(.white).lineLimit(1)
+            Text(col.title).font(.caption.bold()).foregroundStyle(.primary).lineLimit(1)
             if col.sortable {
                 Button { toggleSort(col) } label: {
                     Image(systemName: sortColumn == col.id
                           ? (ascending ? "arrow.up" : "arrow.down") : "arrow.up.arrow.down")
                         .font(.caption2)
-                        .foregroundStyle(.white.opacity(sortColumn == col.id ? 1 : 0.6))
+                        .foregroundStyle(sortColumn == col.id ? Color.accentColor : Color.secondary)
                 }
             }
             Button { filterColumn = col } label: {
                 Image(systemName: (excluded[col.id]?.isEmpty == false) ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
                     .font(.caption2)
-                    .foregroundStyle((excluded[col.id]?.isEmpty == false) ? Color(hex: 0xFFE082) : .white.opacity(0.7))
+                    .foregroundStyle((excluded[col.id]?.isEmpty == false) ? Color.accentColor : Color.secondary)
             }
         }
     }

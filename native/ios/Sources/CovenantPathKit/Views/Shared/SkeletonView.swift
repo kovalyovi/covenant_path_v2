@@ -33,9 +33,10 @@ struct SkeletonCard: View {
                 ForEach(0..<5, id: \.self) { _ in Circle().frame(width: 22, height: 22) }
             }
         }
-        .padding(16)
+        .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+        // Match the real SectionCard footprint (radius + material) so the load→content swap doesn't pop.
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: CP.cardRadius, style: .continuous))
         .redacted(reason: .placeholder)
         .shimmer()
     }
@@ -101,9 +102,9 @@ private struct SkelCard<Content: View>: View {
     init(@ViewBuilder content: () -> Content) { self.content = content() }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) { content }
-            .padding(16)
+            .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: CP.cardRadius, style: .continuous))
     }
 }
 

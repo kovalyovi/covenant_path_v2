@@ -76,12 +76,14 @@ struct NeedsView: View {
 
     private var categorySelector: some View {
         // Wrap the category pills to the next line (FlowLayout) instead of horizontal scrolling —
-        // matches the OrgFilterBar and the web `.wrap` behaviour.
-        FlowLayout(spacing: 8) {
-            ForEach(Array(Milestones.needsCategories.enumerated()), id: \.element.id) { i, ms in
-                CategoryChip(milestone: ms, count: missingByMilestone[i].count,
-                             selected: i == selectedIndex) {
-                    selected = i
+        // matches the OrgFilterBar and the web `.wrap` behaviour. Glass container blends the chips on iOS 26.
+        CPGlassGroup(spacing: 8) {
+            FlowLayout(spacing: 8) {
+                ForEach(Array(Milestones.needsCategories.enumerated()), id: \.element.id) { i, ms in
+                    CategoryChip(milestone: ms, count: missingByMilestone[i].count,
+                                 selected: i == selectedIndex) {
+                        selected = i
+                    }
                 }
             }
         }
@@ -155,22 +157,21 @@ struct CategoryChip: View {
     var body: some View {
         let done = count == 0
         let base = done ? StatusColor.off : Color(hex: milestone.style.hex)
-        let fg: Color = selected ? .white : base
         Button(action: action) {
             HStack(spacing: 7) {
                 Image(systemName: done ? "checkmark.circle" : milestone.style.symbol)
                     .font(.system(size: 15))
-                Text(milestone.label).font(.system(size: 13, weight: .semibold))
+                Text(milestone.label).font(.system(size: 13, weight: selected ? .bold : .semibold))
                 if !done {
                     Text("\(count)").font(.system(size: 12, weight: .bold))
                         .padding(.horizontal, 7).padding(.vertical, 1)
-                        .background(selected ? Color.white.opacity(0.25) : base.opacity(0.16), in: Capsule())
+                        .background(base.opacity(0.18), in: Capsule())
                 }
             }
-            .foregroundStyle(fg)
+            .foregroundStyle(selected ? base : base.opacity(0.7))
             .padding(.horizontal, 14).padding(.vertical, 9)
-            .background(selected ? base : base.opacity(0.10), in: Capsule())
-            .overlay(Capsule().stroke(base.opacity(selected ? 1 : 0.35), lineWidth: 1))
+            // Glass chip matching the Golden Hour org filter (selected = tinted glass + bold).
+            .cpGlassChip(tint: base, selected: selected)
         }
         .buttonStyle(.plain)
     }
@@ -190,12 +191,14 @@ struct UnitCountChip: View {
     }
 
     var body: some View {
+        // Solid tinted capsule (NOT glass): these render inside the glass "Needs <X>" card, so glass
+        // here would nest glass-in-glass.
         Text("\(unit) · \(count)")
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(color)
             .padding(.horizontal, 10).padding(.vertical, 4)
-            .background(color.opacity(0.10), in: Capsule())
-            .overlay(Capsule().stroke(color.opacity(0.35), lineWidth: 1))
+            .background(color.opacity(0.12), in: Capsule())
+            .overlay(Capsule().strokeBorder(color.opacity(0.32), lineWidth: 1))
     }
 }
 
@@ -236,10 +239,9 @@ struct WardPicker: View {
                 Image(systemName: "chevron.up.chevron.down").font(.caption2)
             }
             .font(.subheadline)
-            .padding(.horizontal, 12).padding(.vertical, 9)
+            .padding(.horizontal, 13).padding(.vertical, 10)
             .frame(maxWidth: 360, alignment: .leading)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(.separator).opacity(0.5), lineWidth: 1))
+            .cpGlass(in: RoundedRectangle(cornerRadius: CP.chipRadius, style: .continuous))
         }
         .buttonStyle(.plain)
     }

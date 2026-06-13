@@ -14,9 +14,12 @@ public enum BiometricService {
         return ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error)
     }
 
-    /// On by default on native (mirrors Flutter's `?? !kIsWeb`). Persisted.
+    /// **Opt-in, OFF by default** (user directive 2026-06-13: don't require Face ID to open the app).
+    /// The app launches straight to the dashboard; a leader who wants the extra lock turns it on in
+    /// Settings → Security. Persisted. (The at-rest Supabase session is already protected in the
+    /// Keychain — this lock is a defense-in-depth UI gate, not the security boundary.)
     public static func enabled() -> Bool {
-        AppPrefs.bool(AppPrefs.biometricLock, default: true)
+        AppPrefs.bool(AppPrefs.biometricLock, default: false)
     }
 
     /// Enable/disable the lock (returns whether the new state took effect — always true on native;

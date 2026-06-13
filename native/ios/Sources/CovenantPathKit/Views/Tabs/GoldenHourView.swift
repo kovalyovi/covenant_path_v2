@@ -3,7 +3,13 @@ import SwiftUI
 
 /// Two sub-sections via a segmented control: **New Members** (baptized — completion summary + the
 /// member list with milestone chips, org filter + recency window) and **Being Taught**
-/// (investigators by planned date). Faithful port of `_GoldenHourView`.
+/// (investigators by planned date).
+///
+/// Performance + clarity pass (2026-06-13): member rows render in a **`LazyVStack`** so only the
+/// on-screen rows are built (was a non-lazy `VStack` of the whole stake — the source of the scroll
+/// jank); filtered/sorted arrays are computed **once** per render instead of on every property read;
+/// the completion summary is a horizontal strip of compact tiles instead of a tall wrapping flow; and
+/// the stacked control/header pile is folded into fewer, glass surfaces.
 struct GoldenHourView: View {
     let rows: [Member]
 
@@ -23,7 +29,7 @@ struct GoldenHourView: View {
     private var allOrgs: Bool { orgs.count == OrgBucket.allCases.count }
 
     /// New members after the recency window + org filter (a convert with no baptism date / no org
-    /// shows only when no org filter is applied — matches Flutter).
+    /// shows only when no org filter is applied — matches the web client).
     private var filteredNewMembers: [Member] {
         newMembers.filter { window.contains($0) }
             .filter { allOrgs || (Org.responsible(for: $0).map { orgs.contains($0) } ?? false) }
@@ -31,7 +37,7 @@ struct GoldenHourView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 14) {
                 Picker("Section", selection: $section) {
                     Text("New Members (\(newMembers.count))").tag(Section.newMembers)
                     Text("Being Taught (\(beingTaught.count))").tag(Section.beingTaught)
@@ -56,14 +62,15 @@ struct GoldenHourView: View {
     // MARK: - Being Taught
 
     private var beingTaughtSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeader(title: "Being Taught", count: beingTaught.count, accent: DashboardTab.goldenHour.accent)
-            if beingTaught.isEmpty {
+        // Sort soonest planned date first (Being Taught default ascending) — computed once.
+        let sorted = beingTaught.sorted { sortByDate($0, $1, field: \.baptismGoalDate, ascending: true) }
+        return VStack(alignment: .leading, spacing: 14) {
+            if sorted.isEmpty {
                 EmptyHint("No one currently being taught.")
             } else {
-                // Sort soonest planned date first (Being Taught default ascending).
-                let sorted = beingTaught.sorted { sortByDate($0, $1, field: \.baptismGoalDate, ascending: true) }
-                SectionCard(title: "By date") {
+                // The long list renders directly (not inside a glass card) so a tall translucent
+                // surface isn't composited behind hundreds of rows — cleaner and lighter.
+                ListSection(title: "Being taught", symbol: "book.fill", count: sorted.count) {
                     MemberList(members: sorted, showChips: false, showUnit: true, dateField: .goal)
                 }
             }
@@ -73,7 +80,10 @@ struct GoldenHourView: View {
     // MARK: - New Members
 
     private var newMembersSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        // Compute the filtered + sorted list ONCE (was re-derived on every property access).
+        let shown = filteredNewMembers
+        let sorted = shown.sorted { sortByDate($0, $1, field: \.baptismDate, ascending: false) }
+        return VStack(alignment: .leading, spacing: 14) {
             OrgFilterBar(selected: $orgs)
             if !allOrgs && orgs.count == 1 {
                 SubtleNote(Org.responsibilityNote(orgs.first!))
@@ -84,30 +94,22 @@ struct GoldenHourView: View {
             }
             .pickerStyle(.segmented)
 
-            if let range = windowRangeLabel {
-                RangePill(range).frame(maxWidth: .infinity)
-            }
-
-            SectionHeader(title: "Recently Baptized", count: filteredNewMembers.count,
-                          accent: DashboardTab.goldenHour.accent)
-
-            CompletionCard(rows: filteredNewMembers) { label, missing in
+            CompletionCard(rows: shown) { label, missing in
                 drill = MilestoneDrill(label: label, members: missing)
             }
 
-            if filteredNewMembers.isEmpty {
+            if shown.isEmpty {
                 EmptyHint("No new members in this window.")
             } else {
-                // New Members default newest-baptized first.
-                let sorted = filteredNewMembers.sorted { sortByDate($0, $1, field: \.baptismDate, ascending: false) }
-                SectionCard(title: "By date") {
+                ListSection(title: "Recently baptized", symbol: "drop.fill", count: shown.count,
+                            caption: windowRangeLabel.map { "\($0) · newest first" }) {
                     MemberList(members: sorted, showChips: true, showUnit: true, dateField: .baptism)
                 }
             }
         }
     }
 
-    /// Human-readable window the data covers (mirrors `_windowRangeLabel`); nil for All.
+    /// Human-readable window the data covers; nil for All.
     private var windowRangeLabel: String? {
         guard let days = window.days else { return nil }
         let from = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
@@ -121,7 +123,7 @@ struct GoldenHourView: View {
         let da = MemberDate.parse(a[keyPath: field])
         let db = MemberDate.parse(b[keyPath: field])
         switch (da, db) {
-        case (nil, _): return false       // nils sort last (return 1 in Flutter)
+        case (nil, _): return false       // nils sort last
         case (_, nil): return true
         case let (x?, y?): return ascending ? x < y : x > y
         }
@@ -131,44 +133,65 @@ struct GoldenHourView: View {
 // MARK: - completion summary
 
 /// "Golden Hour completion": per-milestone % (eligible-only), each tappable to a "still need" list.
-/// Mirrors `_CompletionCard` + `_PctStat`.
+/// Rendered as a horizontal strip of compact tiles so it stays one band tall regardless of how many
+/// milestones apply (the old wrapping flow grew very tall and cluttered).
 struct CompletionCard: View {
     let rows: [Member]
     let onTapMilestone: (_ label: String, _ missing: [Member]) -> Void
 
+    /// Eligible-only completion per milestone — computed once and reused by the body.
+    private var stats: [Stat] {
+        Milestones.all.compactMap { ms in
+            let c = Milestones.completion(ms, in: rows)
+            return c.eligible > 0 ? Stat(ms: ms, done: c.done, eligible: c.eligible) : nil
+        }
+    }
+
+    private struct Stat: Identifiable {
+        let ms: Milestone; let done: Int; let eligible: Int
+        var id: String { ms.id }
+        var pct: Double { Double(done) / Double(eligible) }
+    }
+
     var body: some View {
-        if rows.isEmpty {
+        let s = stats
+        if rows.isEmpty || s.isEmpty {
             EmptyView()
         } else {
             SectionCard(title: "Golden Hour completion") {
-                FlowLayout(spacing: 18, lineSpacing: 12) {
-                    ForEach(Milestones.all) { ms in
-                        let c = Milestones.completion(ms, in: rows)
-                        if c.eligible > 0 {
-                            let pct = Double(c.done) / Double(c.eligible)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(s) { stat in
                             Button {
-                                onTapMilestone(ms.label, Milestones.missing(ms, in: rows))
+                                onTapMilestone(stat.ms.label, Milestones.missing(stat.ms, in: rows))
                             } label: {
-                                pctStat(label: ms.label, pct: pct, caption: "\(c.done)/\(c.eligible)")
+                                tile(stat)
                             }
                             .buttonStyle(.plain)
                         }
                     }
+                    .padding(.vertical, 2)
                 }
             }
         }
     }
 
-    private func pctStat(label: String, pct: Double, caption: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+    private func tile(_ stat: Stat) -> some View {
+        let accent = DashboardTab.goldenHour.accent
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text("\(Int((pct * 100).rounded()))%").font(.title3)
-                Text(caption).font(.caption).foregroundStyle(.secondary)
+                Text("\(Int((stat.pct * 100).rounded()))%")
+                    .font(.title3.weight(.semibold)).monospacedDigit()
+                Text("\(stat.done)/\(stat.eligible)")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
-            Text(label).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            ProgressView(value: pct).tint(DashboardTab.goldenHour.accent)
+            Text(stat.ms.label).font(.caption2.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
+            ProgressView(value: stat.pct).tint(accent)
         }
-        .frame(width: 124, alignment: .leading)
+        .frame(minWidth: 120, alignment: .leading)   // grows (not clips) at large Dynamic Type
+        .padding(12)
+        // A subtle tinted fill — NOT glass — so we don't nest glass inside the glass card.
+        .background(accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 
@@ -179,8 +202,7 @@ struct MilestoneDrill: Identifiable {
     var id: String { label }
 }
 
-/// The "Still need: X" bottom sheet listing eligible members missing a milestone (mirrors
-/// `_showCategory`).
+/// The "Still need: X" bottom sheet listing eligible members missing a milestone.
 struct MilestoneDrillSheet: View {
     let label: String
     let missing: [Member]
@@ -212,7 +234,7 @@ struct MilestoneDrillSheet: View {
     }
 }
 
-/// A small pill showing the date range the current period covers (mirrors `_RangePill`).
+/// A small pill showing the date range the current period covers.
 struct RangePill: View {
     let text: String
     init(_ text: String) { self.text = text }
@@ -223,12 +245,48 @@ struct RangePill: View {
         }
         .foregroundStyle(.secondary)
         .padding(.horizontal, 12).padding(.vertical, 5)
-        .background(Color(.tertiarySystemFill), in: Capsule())
+        .cpGlass(in: Capsule())
     }
 }
 
-/// A vertical list of `MemberRow`s with dividers, each wrapped in a NavigationLink to detail. The
-/// caller supplies the already-sorted members.
+/// A lightweight list-section header (accent glyph + title + count + optional caption) followed by its
+/// rows rendered DIRECTLY on the screen background — **no enclosing card**, so a long `LazyVStack` isn't
+/// backed by a tall translucent surface (that backing layer + its growth was the remaining cost after
+/// the rows themselves went lazy). Used for the Golden Hour member lists.
+struct ListSection<Content: View>: View {
+    let title: String
+    let symbol: String
+    let count: Int
+    var caption: String?
+    let accent: Color
+    @ViewBuilder let content: () -> Content
+
+    init(title: String, symbol: String, count: Int, caption: String? = nil,
+         accent: Color = DashboardTab.goldenHour.accent,
+         @ViewBuilder content: @escaping () -> Content) {
+        self.title = title; self.symbol = symbol; self.count = count
+        self.caption = caption; self.accent = accent; self.content = content
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Label(title, systemImage: symbol).font(.headline).foregroundStyle(accent)
+                CountBadge(count)
+                Spacer(minLength: 0)
+            }
+            if let caption {
+                Text(caption).font(.caption).foregroundStyle(.secondary)
+            }
+            content()
+        }
+    }
+}
+
+/// A **lazy** vertical list of `MemberRow`s with dividers, each wrapped in a NavigationLink to detail.
+/// `LazyVStack` is the key scroll-performance fix: rows are built only as they scroll into view (and
+/// torn down as they leave), so a stake with hundreds of converts no longer materializes every avatar
+/// + chip row up front. Shared by Golden Hour and Needs; the caller supplies the already-sorted members.
 struct MemberList: View {
     let members: [Member]
     var showChips = false
@@ -237,7 +295,7 @@ struct MemberList: View {
     var dateField: MemberRow.DateField = .baptism
 
     var body: some View {
-        VStack(spacing: 0) {
+        LazyVStack(spacing: 0) {
             ForEach(Array(members.enumerated()), id: \.element.id) { idx, m in
                 if idx > 0 { Divider() }
                 NavigationLink(value: m) {
