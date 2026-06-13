@@ -25,6 +25,21 @@ logger = get_logger()
 REPORT_JSON = Path(__file__).resolve().parent.parent / "output" / "covenant_path_stake.json"
 
 
+class CredentialScopeMismatch(Exception):
+    """A delegated credential resolved to a DIFFERENT stake than the one it is registered for —
+    specifically, its registered unit is a WARD/BRANCH beneath the stake the session can actually
+    see. Raised by sync_stake to REFUSE the write (a ward-scoped credential must never sync, let
+    alone overwrite, a whole stake). The caller revokes the credential and skips it (not a red-fail).
+    """
+
+    def __init__(self, expected_unit: int, stake_unit: int):
+        self.expected_unit = expected_unit
+        self.stake_unit = stake_unit
+        super().__init__(
+            f"credential registered for unit {expected_unit} is a sub-unit (ward/branch) of stake "
+            f"{stake_unit}; a ward-scoped credential cannot sync a stake")
+
+
 def _load_members(scrape: bool, with_profile: bool) -> list[dict]:
     if scrape:
         from dataclasses import asdict
@@ -67,7 +82,8 @@ def kpi_subtree(dash: dict) -> dict:
 
 
 def sync_stake(client: LcrClient, members: list[dict], conn,
-               failed_unit_numbers=None, only_unit=None, access=None, ctx_override=None) -> dict:
+               failed_unit_numbers=None, only_unit=None, access=None, ctx_override=None,
+               expected_stake_unit=None) -> dict:
     # The stake/ward identity. Prefer the live LCR user_context (it also carries positions/roles for
     # role provisioning); but once the delegated LCR session has aged out, fall back to the structure
     # the Member Tools /api/v5/sync payload provides (ctx_override) so the data sync still completes —
@@ -80,6 +96,21 @@ def sync_stake(client: LcrClient, members: list[dict], conn,
         logger.warning("user_context via LCR unavailable (%s) — using the Member Tools unit structure",
                        str(exc)[:120])
         ctx = ctx_override
+
+    # DATA-INTEGRITY GUARD — the Green Level Ward incident (2026-06-13). A delegated credential must
+    # only ever sync the stake it was registered for. A WARD/BRANCH-level leader's Member Tools token
+    # returns the PARENT STAKE as its org root (units[0]) while exposing covenant-path data for ONLY
+    # their unit — so the MT-derived context (ctx_override) names the parent stake even though the
+    # credential belongs to a single ward. Left unchecked, the sync upserts that ward's handful of
+    # members onto the WHOLE stake and reconciles every other ward's members away (Raleigh 93 -> 7,
+    # all "Green Level Ward"). A sub-unit credential can never sync a stake: refuse so the caller
+    # revokes it. We key on ctx_override (the authoritative MT org root) so this fires whether the
+    # live LCR session resolved to the ward or had already died.
+    if expected_stake_unit is not None and ctx_override is not None:
+        mt_root = ctx_override.unit_number
+        child_units = {c.unit_number for c in (ctx_override.child_units or []) if c.unit_number}
+        if mt_root is not None and mt_root != expected_stake_unit and expected_stake_unit in child_units:
+            raise CredentialScopeMismatch(expected_stake_unit, mt_root)
     # Stake identity is keyed by unit_number (stable), so a stake RENAME just updates stakes.name —
     # never a duplicate. Units are upserted by unit_number too: a renamed ward updates its name, a
     # ward that moved stakes updates its stake_id, and a person who changed wards gets their unit_id +

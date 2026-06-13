@@ -118,14 +118,21 @@ _TEMPLE_VISIT_NEEDLE = "baptisms for deceased"
 
 
 def parse_temple_experiences(commitments: list | None) -> tuple[str, str]:
-    """(family_name_prepared, first_temple_visit) Yes/No from newMemberOtherCommitments.
+    """(family_name_prepared, first_temple_visit) Yes/No from a commitments list.
     family_name = the 'Prepare a Family Name for the Temple' commitment is being kept;
     first_temple_visit = 'Perform Baptisms for Deceased Ancestors' (a proxy-baptism trip IS the
-    first temple visit for a new member). Absent commitment -> 'No' (LCR tracks it unchecked)."""
+    first temple visit for a new member). Absent commitment -> 'No' (LCR tracks it unchecked).
+
+    ONE parser for BOTH payload shapes (the source-of-truth rule): the one-work `details` record uses
+    {name, isKeeping}; the Member Tools bulk /api/v5/sync `otherCommitments` uses {title, interested}
+    — same milestones, different field names. (2026-06-13: the bulk path was leaving these two fields
+    as the NEEDS_PROFILE sentinel because it only knew the one-work key names — the Green Level Ward
+    restore surfaced it.)"""
     family = temple = False
     for c in commitments or []:
-        name = (c.get("name") or "").lower()
-        done = bool(c.get("isKeeping"))
+        name = (c.get("name") or c.get("title") or "").lower()
+        kept = c.get("isKeeping")
+        done = bool(kept if kept is not None else c.get("interested"))
         if _FAMILY_NAME_NEEDLE in name:
             family = family or done
         elif _TEMPLE_VISIT_NEEDLE in name:

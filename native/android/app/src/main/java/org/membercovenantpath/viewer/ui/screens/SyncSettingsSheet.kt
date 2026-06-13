@@ -155,6 +155,17 @@ fun SyncSettingsSheet(
                 }
             }
             if (isProvider && cred != null && !cred.isRevoked && !cred.isNone) {
+                // R3 revoke-risk: a complete (full-access) credential keeps the WHOLE stake synced for
+                // every leader. Warn before revoking — the data freezes until someone re-authorizes.
+                if (cred.complete) {
+                    Spacer(Modifier.size(12.dp))
+                    Text(
+                        "⚠ This is the stake’s full-access sync. Revoking it pauses daily updates for " +
+                            "the entire stake — every ward — until a leader re-authorizes.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFEF6C00),
+                    )
+                }
                 Spacer(Modifier.size(8.dp))
                 OutlinedButton(onClick = { onDismiss(); onRevoke() }, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Filled.LinkOff, contentDescription = null, modifier = Modifier.size(18.dp))

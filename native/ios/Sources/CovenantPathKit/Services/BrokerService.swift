@@ -46,14 +46,27 @@ public struct BrokerResult: Sendable {
     /// True when an enroll=true login actually stored/refreshed the sync credential (drives the
     /// re-auth success toast, mirrors web `BrokerResult.stored`).
     public let stored: Bool
+    /// This session is a WARD/BRANCH-level leader's — enrollment is refused (a ward leader sees their
+    /// unit via their role; daily sync is set up per stake). `enrollBlockReason` carries the message.
+    /// Green Level Ward incident, 2026-06-13.
+    public let wardScoped: Bool
+    public let enrollBlockReason: String?
+    /// The stake already has a credential and THIS session is strictly weaker — re-authorizing with it
+    /// would reduce coverage (R4). `existingProvider` names who currently provides the sync.
+    public let wouldDowngrade: Bool
+    public let existingProvider: String?
     public init(email: String? = nil, otp: String? = nil, loginID: String? = nil,
                 factors: [BrokerFactor] = [], name: String? = nil, authorized: Bool? = nil,
                 canImprove: Bool = false, canEnroll: Bool = false, stake: String? = nil,
-                missing: [String] = [], stored: Bool = false) {
+                missing: [String] = [], stored: Bool = false, wardScoped: Bool = false,
+                enrollBlockReason: String? = nil, wouldDowngrade: Bool = false,
+                existingProvider: String? = nil) {
         self.email = email; self.otp = otp; self.loginID = loginID
         self.factors = factors; self.name = name; self.authorized = authorized
         self.canImprove = canImprove; self.canEnroll = canEnroll; self.stake = stake; self.missing = missing
         self.stored = stored
+        self.wardScoped = wardScoped; self.enrollBlockReason = enrollBlockReason
+        self.wouldDowngrade = wouldDowngrade; self.existingProvider = existingProvider
     }
     public var mfaRequired: Bool { loginID != nil && otp == nil }
 }
@@ -230,7 +243,11 @@ public final class BrokerService: @unchecked Sendable {
                             canEnroll: (enroll?["can_enroll"] as? Bool) ?? false,
                             stake: enroll?["stake"] as? String,
                             missing: (enroll?["missing"] as? [Any])?.compactMap { $0 as? String } ?? [],
-                            stored: (enroll?["stored"] as? Bool) == true)
+                            stored: (enroll?["stored"] as? Bool) == true,
+                            wardScoped: (enroll?["ward_scoped"] as? Bool) == true,
+                            enrollBlockReason: enroll?["enroll_block_reason"] as? String,
+                            wouldDowngrade: (enroll?["would_downgrade"] as? Bool) == true,
+                            existingProvider: enroll?["existing_provider"] as? String)
     }
 
     // MARK: - Church account login (port of password/selectFactor/verifyMfa)

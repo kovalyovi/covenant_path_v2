@@ -248,6 +248,20 @@ struct ReauthSheet: View {
 
     private func finish(_ r: BrokerResult) async throws {
         if r.authorized == false { throw BrokerError(SessionStore.noAccessMessage) }
+        // WARD-LEVEL leader: daily sync is set up per stake by a stake-level leader; this leader sees
+        // their unit via their ward_leader role — nothing to set up. (Green Level Ward incident.)
+        if r.wardScoped {
+            throw BrokerError(r.enrollBlockReason
+                ?? "Daily sync is set up per stake, by a stake-level leader. Your access covers your "
+                 + "own unit, which you can already view here — there’s nothing to set up.")
+        }
+        // Strictly-weaker session than the credential already keeping the stake synced — left in place
+        // to avoid reducing coverage (R4). Say so plainly rather than implying an error.
+        if !r.stored && r.wouldDowngrade {
+            throw BrokerError("This stake’s daily sync is already provided by "
+                + "\(r.existingProvider ?? "another leader") with broader access. Your access is "
+                + "narrower, so it was left in place to avoid reducing coverage. No change is needed.")
+        }
         // Adopt the freshly-minted session (same user — keeps them signed in, never the login screen).
         if let email = r.email, let otp = r.otp, let services {
             try await services.auth.consume(email: email, otp: otp)

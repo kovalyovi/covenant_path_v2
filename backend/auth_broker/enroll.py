@@ -57,7 +57,8 @@ def _stored_credential_summary(unit_number: int) -> dict | None:
         sb = {"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}"}
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/stakes", headers=sb,
-            params={"select": "id,stake_credentials(coverage,access_rank,revoked)",
+            params={"select": "id,stake_credentials(coverage,access_rank,revoked,"
+                              "principal_name,principal_email)",
                     "unit_number": f"eq.{unit_number}", "limit": "1"}, timeout=30)
         rows = r.json() if r.status_code == 200 else []
         if not rows:
@@ -65,7 +66,11 @@ def _stored_credential_summary(unit_number: int) -> dict | None:
         cred = _first_usable_credential(rows[0].get("stake_credentials"))
         if not cred:
             return None
-        return {"coverage": cred.get("coverage") or {}, "access_rank": cred.get("access_rank")}
+        # provider_name/email power the "your stake's sync is already provided by X" message and the
+        # revoke-risk warning (R3); coverage/access_rank power the downgrade warning (R4).
+        return {"coverage": cred.get("coverage") or {}, "access_rank": cred.get("access_rank"),
+                "provider_name": cred.get("principal_name"),
+                "provider_email": cred.get("principal_email")}
     except Exception as exc:  # noqa: BLE001
         logger.warning("stored-credential lookup skipped: %s", exc)
         return None
@@ -351,23 +356,51 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
     # positions didn't resolve). This was hard-blocking real stake presidents.
     authorized = True if has_access else (False if positions else None)
 
+    # WARD-LEVEL GATE — the Green Level Ward incident (2026-06-13). Enrollment is a STAKE concept:
+    # the credential's covenant-path bulk data is whole-stake, keyed by the stake's unit number. A
+    # WARD/BRANCH-level leader's session can pull data for ONLY their unit, and LCR's user-context for
+    # them lists NO child units (a stake leader's lists the stake's wards). If such a leader enrolled,
+    # we'd store a ward-scoped credential whose Member Tools org root is the PARENT stake — the daily
+    # sync then overwrites the whole stake with that one ward and reconciles every other ward away
+    # (Raleigh 93 -> 7). So a ward leader NEVER enrolls: they already see their unit via their
+    # provisioned ward_leader RLS role. Detect a leaf unit = no child units; the can_pull_all clause is
+    # a safety valve so a full-access stake leader with a momentarily-degraded user-context is never
+    # mis-blocked. (FIX A in backend/sync.py + the enroll-RPC sub-unit guard are the deeper backstops.)
+    is_sub_unit = bool(getattr(ctx, "unit_number", None)) and not getattr(ctx, "child_units", None) \
+        and not bool(access.get("can_pull_all"))
+
     # Higher-access transfer offer: when the stake ALREADY has a credential that's insufficient
     # (incomplete or lower access) and THIS session would strictly improve it, tell the client so it
     # can offer this leader to take over the sync. (The enroll RPC enforces the same rule on write,
     # so authorizing actually replaces the weaker credential.)
     active = _stored_credential_summary(ctx.unit_number)
-    can_improve = bool(authorized and active is not None
+    can_improve = bool(authorized and active is not None and not is_sub_unit
                        and onboarding.should_take_over(active, access))
-    # can_enroll: this authorized leader could set up sync for a stake that has NO usable credential
-    # yet (none stored, or the only one is revoked → _stored_credential_summary returns None). The
-    # client uses this to OFFER enrollment AFTER login (consent moved off the login form, #8) — never
-    # shown when the stake already has a sufficient credential.
-    can_enroll = bool(authorized and active is None)
+    # can_enroll: this authorized, STAKE-level leader could set up sync for a stake that has NO usable
+    # credential yet (none stored, or the only one is revoked → _stored_credential_summary returns
+    # None). The client uses this to OFFER enrollment AFTER login (consent moved off the login form,
+    # #8) — never shown when the stake already has a sufficient credential, and never to a ward leader.
+    can_enroll = bool(authorized and active is None and not is_sub_unit)
+
+    # Warnings the client surfaces in Sync settings (R3 revoke-risk / R4 downgrade), computed once here
+    # so web + native render the same copy. existing_* describe the credential currently keeping the
+    # stake synced; would_downgrade is true when THIS session is strictly weaker than it (lower rank,
+    # or incomplete-vs-complete) — re-authorizing with it would reduce coverage, so the UI warns first.
+    existing_complete = bool((active or {}).get("coverage", {}).get("complete")) if active else False
+    existing_rank = (active or {}).get("access_rank") if active else None
+    would_downgrade = bool(active is not None and not can_improve
+                           and (rank < (existing_rank or 0)
+                                or (existing_complete and not coverage["complete"])))
 
     base = {"stake": ctx.unit_name, "unit_number": ctx.unit_number,
             "authorized": authorized, "access_rank": rank,
             "complete": coverage["complete"], "missing": coverage["missing"],
-            "can_improve": can_improve, "can_enroll": can_enroll, "stored": False}
+            "can_improve": can_improve, "can_enroll": can_enroll, "stored": False,
+            # Ward-leader signal + the existing-credential warnings (see comments above).
+            "ward_scoped": is_sub_unit,
+            "existing_provider": (active or {}).get("provider_name") if active else None,
+            "existing_complete": existing_complete,
+            "would_downgrade": would_downgrade}
 
     def _audit(outcome: str, error: str | None = None) -> None:
         _audit_login(identity.get("email"), identity.get("name"), ctx, access, authorized, rank,
@@ -384,6 +417,21 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
         logger.info("authorized login for %s (%s) without sync consent — not storing credential",
                     ctx.unit_name, ctx.unit_number)
         _audit("allowed")
+        return base
+
+    # WARD-LEVEL REFUSAL (defense in depth behind can_enroll=False above): never store a ward/branch
+    # leader's session as a stake credential, even if a client asked to. Doing so created the phantom
+    # "Green Level Ward" stake and let one ward overwrite the whole stake's roster. The ward's leader
+    # already sees their unit via their provisioned ward_leader RLS role — no credential needed.
+    if is_sub_unit:
+        logger.warning("REFUSING to store a ward/branch-level credential for %s (%s): enrollment is a "
+                       "stake concept; this leader sees their unit via their ward_leader role",
+                       ctx.unit_name, ctx.unit_number)
+        base["enroll_blocked"] = "ward_scoped"
+        base["enroll_block_reason"] = (
+            "Daily sync is set up per stake, by a stake-level leader. Your access covers your own "
+            "unit, which you can already view here — there's nothing to set up.")
+        _audit("blocked", error="ward-scoped session cannot enroll a stake")
         return base
 
     # Explicit consent → store the credential. The RPC keeps "most-elevated-wins-if-incomplete".

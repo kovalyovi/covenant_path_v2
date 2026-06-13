@@ -112,6 +112,15 @@ struct SyncSettingsSheet: View {
         }
 
         if isProvider, !cred.isRevoked, !cred.isNone {
+            // R3 revoke-risk: a complete (full-access) credential keeps the WHOLE stake synced for
+            // every leader. Warn before revoking — the data freezes until someone re-authorizes.
+            if cred.complete {
+                Label("This is the stake’s full-access sync. Revoking it pauses daily updates for the "
+                      + "entire stake — every ward — until a leader re-authorizes.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote).foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 12)
+            }
             Button(role: .destructive) {
                 Task { await revoke(stakeID: s.stakeID) }
             } label: {

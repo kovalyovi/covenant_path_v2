@@ -28,6 +28,7 @@ from covenant_path.report import (
     NA,
     NEEDS_PROFILE,
     CovenantPathMember,
+    parse_temple_experiences,
     priesthood_from_office,
 )
 
@@ -586,6 +587,24 @@ def adapt_person(p: dict, kind: str, unit_name_by_number: dict[int, str],
         office_by_uuid=office_by_uuid, endowed_by_uuid=endowed_by_uuid,
         recommend_by_uuid=recommend_by_uuid, directory_uuids=directory_uuids,
         recommend_present=recommend_present)
+    # Temple experiences (family_name_prepared / first_temple_visit) ARE in the bulk payload — under
+    # the person's `otherCommitments` ({title, interested}), NOT the one-work `newMemberOtherCommitments`
+    # ({name, isKeeping}). adapt_person used to leave both as the NEEDS_PROFILE sentinel, so once the LCR
+    # session died (the steady state) they NEVER filled — and the Green Level Ward restore blanked them
+    # for every re-added member. Extract them here with the shared parser, applying the SAME age gate as
+    # report._apply_profile (an ineligible "No" — not yet turning 12 — shows as N/A). Absent list ->
+    # sentinel, so the /mlt merge / last-good still wins when the bulk genuinely lacks it.
+    other_commitments = p.get("otherCommitments")
+    if other_commitments:
+        family_name_prepared, first_temple_visit = parse_temple_experiences(other_commitments)
+        em_t = {"sex": sex, "birth_date": birth, "baptism_date": baptism_for_gate}
+        if not turns_at_least(em_t, 12):
+            if first_temple_visit == "No":
+                first_temple_visit = NA
+            if family_name_prepared == "No":
+                family_name_prepared = NA
+    else:
+        family_name_prepared = first_temple_visit = NEEDS_PROFILE
     return CovenantPathMember(
         name=_name(p),
         unit=unit_name_by_number.get(int(unum)) if unum is not None else None,
@@ -613,6 +632,10 @@ def adapt_person(p: dict, kind: str, unit_name_by_number: dict[int, str],
         melchizedek_priesthood=melch,
         temple_recommend=recommend,
         living_ordinance=living,
+        # Temple experiences — rescued from the bulk `otherCommitments` (see above) instead of leaking
+        # the sentinel; the /mlt merge still fills them when the bulk lacks the list.
+        family_name_prepared=family_name_prepared,
+        first_temple_visit=first_temple_visit,
         # Still PROFILE-only: patriarchal_blessing is GENUINELY absent from the whole bulk payload
         # (no hasPatriarchalBlessing flag, no PATRIARCHAL ordinance) — left for the /mlt merge.
         patriarchal_blessing=NEEDS_PROFILE,

@@ -34,6 +34,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root on path
 
 from lcr_client.logging_setup import get_logger
+from backend.sync import CredentialScopeMismatch  # data-integrity guard (ward-as-stake refusal)
 
 logger = get_logger()
 TEST_SPREADSHEET_ID = "1JD9EC_SafClaY8cOcRzi5ZI4fUnjOxa-xXJA0lxgJaA"
@@ -267,7 +268,11 @@ def _sync_one(args) -> dict:
             result["supabase"] = bsync.sync_stake(
                 client, dicts, conn, failed_unit_numbers=failed_unit_numbers,
                 only_unit=getattr(args, "unit", None), access=access,
-                ctx_override=getattr(args, "_mt_unit_context", None))
+                ctx_override=getattr(args, "_mt_unit_context", None),
+                # The unit number this credential is REGISTERED for (the delegated stake's record, or
+                # the operator's own). sync_stake refuses to write if this turns out to be a ward/branch
+                # beneath the stake the session can see — see CredentialScopeMismatch.
+                expected_stake_unit=getattr(args, "_stake_unit", None))
             if args.photos:
                 from backend import photos as photopipe
                 s = result["supabase"]
@@ -582,6 +587,34 @@ def _revoke_if_ineligible(st: dict) -> None:
     raise RuntimeError("authorizing leader no longer has covenant-path access; credential revoked")
 
 
+def _revoke_scope_mismatch(unit, exc) -> None:
+    """A credential registered for a WARD/BRANCH that is actually a sub-unit of a real stake: revoke it
+    so the daily sync stops trying to use it (a ward-scoped credential must never sync a stake), record
+    a diagnostics breadcrumb, and emit an event. The ward's leader still sees their unit via their
+    provisioned ward_leader RLS role — no credential needed. Best-effort: never changes the run's exit
+    status. (Auto-heals any legacy ward-as-stake credential; new ones are blocked at enroll.)"""
+    if not unit:
+        return
+    try:
+        from backend import credentials, db, observability as obs
+        conn = db.connect()
+        try:
+            sid = credentials.stake_id_for_unit(conn, unit)
+            if sid:
+                credentials.revoke(conn, sid, reason=f"scope mismatch — {exc}")
+                db.insert_diagnostics(conn, sid, "scope_mismatch",
+                                      {"unit": unit, "stake_unit": getattr(exc, "stake_unit", None),
+                                       "reason": str(exc)[:300]})
+        finally:
+            conn.close()
+        obs.event("sync.stake.scope_mismatch", level="warning", stake=int(unit),
+                  status="revoked", message=str(exc)[:200])
+        obs.flush()
+        logger.warning("stake %s revoked — ward-scoped credential cannot sync a stake (%s)", unit, exc)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("scope-mismatch revoke skipped (non-fatal): %s", e)
+
+
 def _stake_schedules(conn) -> dict[str, dict]:
     """stake_id -> {hour, paused} from stake_settings (in-app schedule, migration 0030). Best-effort:
     a missing row / missing table / any error means "default" (7:00 ET, not paused) so the sync never
@@ -700,6 +733,15 @@ def run_one_stake(args, unit: int) -> int:
         try:
             with obs.span("sync.stake", correlation_id=args._correlation_id, stake=unit):
                 _mint_and_sync(args, st)
+            return 0
+        except CredentialScopeMismatch as exc:
+            # A WARD/BRANCH-level credential that resolves to its PARENT stake (the Green Level Ward
+            # incident). It must never sync — revoke it so it stops trying, and clear it from the ops
+            # surface. The ward's leader still sees their unit via their provisioned ward_leader role.
+            logger.error("stake %s: credential scope mismatch — %s", unit, exc)
+            _revoke_scope_mismatch(unit, exc)
+            print(f"[i] stake {unit}: ward-scoped credential revoked (cannot sync a stake) — its "
+                  f"leader keeps their ward view via RLS")
             return 0
         except Exception as exc:  # noqa: BLE001
             logger.error("stake %s delegated sync failed: %s", unit, exc)
@@ -982,6 +1024,12 @@ def run_delegated(args, skip_unit: int | None = None) -> int:
             continue
         try:
             _mint_and_sync(args, st)
+        except CredentialScopeMismatch as exc:
+            # Ward-scoped credential masquerading as a stake — revoke + skip (not a failure).
+            logger.error("stake %s (%s): credential scope mismatch — %s",
+                         st.get("name"), st.get("unit_number"), exc)
+            _revoke_scope_mismatch(st.get("unit_number"), exc)
+            print(f"[i] {st.get('name')}: ward-scoped credential revoked (cannot sync a stake)")
         except Exception as exc:  # noqa: BLE001
             failures += 1
             logger.error("stake %s (%s) sync failed: %s", st.get("name"), st.get("unit_number"), exc)

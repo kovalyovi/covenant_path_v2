@@ -293,6 +293,63 @@ def test_sync_stake_falls_back_to_payload_context_when_lcr_dead(monkeypatch):
     assert captured.get("stake") == (999001, "Test Stake")  # identity came from the override
 
 
+# --- E9: credential-scope guard — a ward credential can NEVER sync a stake (Green Level Ward, -----
+#     2026-06-13). A WARD/BRANCH leader's Member Tools token returns the PARENT stake as its org root
+#     while exposing covenant-path data for only their ward, so ctx_override names the stake. Without
+#     the guard, sync_stake upserts that one ward's handful of members onto the WHOLE stake and
+#     reconciles every other ward's members away (Raleigh 93 -> 7, all "Green Level Ward"). The guard
+#     fires when the credential's REGISTERED unit is a CHILD of the Member Tools root — BEFORE any write.
+
+
+def _raleigh_override():
+    from lcr_client.models import UnitRef, UserContext
+    return UserContext(individual_id=None, active_position=None,
+                       unit_name="Raleigh North Carolina West Stake", unit_number=503991,
+                       positions=[], roles=[],
+                       child_units=[UnitRef("Green Level Ward", 1102966, "WARD"),
+                                    UnitRef("Cary 1st Ward", 127833, "WARD")], raw={})
+
+
+class _DeadLCRClient:
+    def user_context(self):
+        raise RuntimeError("LCR returned 401. Session expired")
+
+
+def test_ward_credential_refuses_to_sync_a_stake(monkeypatch):
+    # Jesse (WML): credential registered for ward 1102966; the MT org root is the parent stake 503991.
+    # Must raise CredentialScopeMismatch and NEVER reach a DB write.
+    import backend.db as dbmod
+    from backend import sync as bsync
+    monkeypatch.setattr(dbmod, "upsert_stake",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not write")))
+    with pytest.raises(bsync.CredentialScopeMismatch) as ei:
+        bsync.sync_stake(_DeadLCRClient(), [{"person_uuid": "p1"}], object(),
+                         ctx_override=_raleigh_override(), expected_stake_unit=1102966)
+    assert ei.value.expected_unit == 1102966 and ei.value.stake_unit == 503991
+
+
+def test_stake_credential_passes_the_scope_guard(monkeypatch):
+    # ILYA: credential unit == the MT root 503991 -> the guard must NOT fire; it proceeds to the
+    # first DB write (which we intercept to prove the guard let it through).
+    import backend.db as dbmod
+    from backend import sync as bsync
+    monkeypatch.setattr(dbmod, "upsert_stake", lambda *a, **k: (_ for _ in ()).throw(_StopProbe()))
+    with pytest.raises(_StopProbe):
+        bsync.sync_stake(_DeadLCRClient(), [], object(),
+                         ctx_override=_raleigh_override(), expected_stake_unit=503991)
+
+
+def test_scope_guard_inert_without_expected_unit(monkeypatch):
+    # The operator's own self-sync passes no expected unit -> the guard never fires (it can't, and the
+    # operator's MT root IS their stake anyway).
+    import backend.db as dbmod
+    from backend import sync as bsync
+    monkeypatch.setattr(dbmod, "upsert_stake", lambda *a, **k: (_ for _ in ()).throw(_StopProbe()))
+    with pytest.raises(_StopProbe):
+        bsync.sync_stake(_DeadLCRClient(), [], object(),
+                         ctx_override=_raleigh_override(), expected_stake_unit=None)
+
+
 # --- E8: needs-reauth classification (2026-06-12 "Ken" fix) --------------------------------------
 # A stake that can't sync headlessly because it has NO Member Tools 45-day token AND its LCR session
 # either is dead OR is an OTP/passwordless (IDX) session that can't silently mint one (login_required)

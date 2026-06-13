@@ -38,6 +38,15 @@ data class BrokerResult(
     // True when an enroll=true login actually stored/refreshed the sync credential (drives the
     // re-auth success toast, mirrors web BrokerResult.stored).
     val stored: Boolean = false,
+    // This session is a WARD/BRANCH-level leader's — enrollment is refused (a ward leader sees their
+    // unit via their role; daily sync is set up per stake). enrollBlockReason carries the message.
+    // Green Level Ward incident, 2026-06-13.
+    val wardScoped: Boolean = false,
+    val enrollBlockReason: String? = null,
+    // The stake already has a credential and THIS session is strictly weaker — re-authorizing with it
+    // would reduce coverage (R4). existingProvider names who currently provides the sync.
+    val wouldDowngrade: Boolean = false,
+    val existingProvider: String? = null,
 ) {
     val mfaRequired: Boolean get() = loginId != null && otp == null
 }
@@ -172,6 +181,10 @@ class BrokerClient(private val auth: AuthRepository = AuthRepository()) {
             canEnroll = data.obj("enroll")?.boolOrNull("can_enroll") == true,
             stake = data.obj("enroll")?.str("stake"),
             stored = data.obj("enroll")?.boolOrNull("stored") == true,
+            wardScoped = data.obj("enroll")?.boolOrNull("ward_scoped") == true,
+            enrollBlockReason = data.obj("enroll")?.str("enroll_block_reason"),
+            wouldDowngrade = data.obj("enroll")?.boolOrNull("would_downgrade") == true,
+            existingProvider = data.obj("enroll")?.str("existing_provider"),
         )
     }
 
