@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   baptismsByMonth, metricData, attendedDates, lessonsWithMember, membersWithMemberLessons,
+  sacramentWindow,
 } from '../logic/kpis';
 import { avgCompletion } from '../logic/milestones';
 import type { Member } from '../lib/member';
@@ -118,5 +119,54 @@ describe('lessons + completion helpers', () => {
     // sex-gated). Only Friends is done → 1/6.
     const m: Member = { sex: 'F', birth_date: '1 Jan 1990', friends: 'Yes', ministering_brothers_sisters: 'No' };
     expect(avgCompletion([m])).toBeCloseTo(1 / 6, 5);
+  });
+});
+
+describe('sacramentWindow (last-8-weeks attendance, not whole-history "missed")', () => {
+  function weeksAgo(n: number): string {
+    const d = new Date();
+    d.setDate(d.getDate() - n * 7);
+    return iso(d);
+  }
+
+  it('returns null when there is no attendance list', () => {
+    expect(sacramentWindow(undefined)).toBeNull();
+    expect(sacramentWindow([])).toBeNull();
+  });
+
+  it('caps the window at 8 weeks even with a long history (no "52 of 54")', () => {
+    // 54 weekly records, attended exactly 2 of the most recent 8.
+    const list = Array.from({ length: 54 }, (_, i) => ({
+      date: weeksAgo(i),
+      attended: i === 1 || i === 4, // two of the recent 8 attended
+    }));
+    expect(sacramentWindow(list)).toEqual({ attended: 2, total: 8 });
+  });
+
+  it('uses fewer weeks when there is less data (started 2 weeks ago → out of 2)', () => {
+    const list = [
+      { date: weeksAgo(0), attended: true },
+      { date: weeksAgo(1), attended: false },
+    ];
+    expect(sacramentWindow(list)).toEqual({ attended: 1, total: 2 });
+  });
+
+  it('sorts newest-first by date regardless of stored order', () => {
+    const list = [
+      { date: weeksAgo(10), attended: false }, // outside the window
+      { date: weeksAgo(0), attended: true },
+      { date: weeksAgo(1), attended: true },
+    ];
+    // window = the 2 most recent (both attended); the 10-weeks-ago miss is excluded.
+    expect(sacramentWindow(list, 2)).toEqual({ attended: 2, total: 2 });
+  });
+
+  it('falls back to stored order when entries have no dates', () => {
+    const list = [
+      { attended: true },
+      { attended: false },
+      { attended: true },
+    ];
+    expect(sacramentWindow(list)).toEqual({ attended: 2, total: 3 });
   });
 });

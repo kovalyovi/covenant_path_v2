@@ -12,7 +12,8 @@ import {
   endowmentDisplay, completionOf, callingEligible, ministeringAssignmentEligible,
   priesthoodEligible, templeRecommendEligible, patriarchalEligible, ageOf,
 } from '../logic/milestones';
-import { agoOrNever } from '../logic/dates';
+import { agoOrNever, parseMemberDate } from '../logic/dates';
+import { sacramentWindow, SACRAMENT_WINDOW_WEEKS } from '../logic/kpis';
 import { Avatar, IconButton, SectionCard } from '../components/ui';
 import { Icon, type IconName } from '../components/Icon';
 import { GoldenHourChips } from '../components/GoldenHourChips';
@@ -183,18 +184,25 @@ function RichBody({ member, d }: { member: Member; d: Record<string, unknown> })
 
 function SacramentSection({ d }: { d: Record<string, unknown> }) {
   const all = (d['sacrament'] as Array<Record<string, unknown>>) ?? [];
-  if (all.length === 0) return null;
-  const recent = 6;
-  // newest-first stored; show most recent N rendered oldest→newest so the timeline reads L→R.
-  const shown = all.slice(0, recent).reverse();
-  const missed = missedCount(d, all);
+  // Attendance over the LAST 8 weeks of data (not the whole history — we no longer say "52 missed
+  // of 54"). The window is the most recent up-to-8 weekly records; fewer when there's less data.
+  const win = sacramentWindow(all);
+  if (win == null) return null;
   const GREEN = '#2e7d32';
+  // newest-first; render the windowed dots oldest→newest so the timeline reads L→R.
+  const withDates = all.map((s) => ({ s, dt: parseMemberDate(s['date']) }));
+  const anyDates = withDates.some((x) => x.dt != null);
+  const ordered = anyDates
+    ? [...withDates].sort((a, b) => (b.dt?.getTime() ?? -Infinity) - (a.dt?.getTime() ?? -Infinity))
+    : withDates;
+  const shown = ordered.slice(0, SACRAMENT_WINDOW_WEEKS).map((x) => x.s).reverse();
+  const allPresent = win.attended === win.total;
   return (
     <SectionCard
-      title="Attended Sacrament Meeting"
+      title="Sacrament Attendance"
       icon="event_available"
       trailing={
-        all.length > recent ? <span className="tiny muted">{all.length} recorded</span> : undefined
+        <span className="tiny muted">last {win.total} week{win.total === 1 ? '' : 's'}</span>
       }
     >
       <div className="wrap" style={{ gap: 14 }}>
@@ -220,19 +228,12 @@ function SacramentSection({ d }: { d: Record<string, unknown> }) {
           </div>
         ))}
       </div>
-      {missed > 0 && (
-        <p style={{ marginTop: 10, color: 'var(--danger)' }}>
-          {missed} sacrament meeting{missed === 1 ? '' : 's'} missed
-        </p>
-      )}
+      <p style={{ marginTop: 10, color: allPresent ? GREEN : 'var(--on-surface-variant)' }}>
+        Attended <b>{win.attended}</b> of <b>{win.total}</b> over the last{' '}
+        {win.total === 1 ? 'week' : `${win.total} weeks`}
+      </p>
     </SectionCard>
   );
-}
-
-function missedCount(d: Record<string, unknown>, list: Array<Record<string, unknown>>): number {
-  const m = Number(d['sacramentMissed']);
-  if (Number.isFinite(m)) return m;
-  return list.filter((s) => s['attended'] !== true).length;
 }
 
 function FriendsSection({ d, recordedYes, count }: { d: Record<string, unknown>; recordedYes: boolean; count: number | null }) {

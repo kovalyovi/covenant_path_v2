@@ -257,6 +257,33 @@ export function metricData(
   return { series, events };
 }
 
+/** Recent sacrament attendance over the last 8 weeks of available data. We never show "52 missed of
+ *  54" (the whole history): a leader cares about the RECENT trend. The window is the most recent up-to-8
+ *  weekly records — fewer when there's less data (a member who started 2 weeks ago shows out of 2).
+ *  `attended` is how many of those `total` weeks they were present.
+ *
+ *  Robust to either array order (LCR/Member Tools store oldest- or newest-first): each entry is one
+ *  weekly sacrament meeting, so we sort by date desc when dates are present, else trust the stored
+ *  order, then take the first `weeks` (default 8). Entries without an `attended:true` flag count as
+ *  missed (the same rule the dots use). Returns null when there's no attendance list at all. */
+export const SACRAMENT_WINDOW_WEEKS = 8;
+
+export function sacramentWindow(
+  list: Array<Record<string, unknown>> | undefined | null,
+  weeks: number = SACRAMENT_WINDOW_WEEKS,
+): { attended: number; total: number } | null {
+  if (!Array.isArray(list) || list.length === 0) return null;
+  const withDates = list.map((s) => ({ s, dt: parseMemberDate(s?.['date']) }));
+  const anyDates = withDates.some((x) => x.dt != null);
+  const ordered = anyDates
+    // newest first; undated rows sink to the end so dated recents win the window
+    ? [...withDates].sort((a, b) => (b.dt?.getTime() ?? -Infinity) - (a.dt?.getTime() ?? -Infinity))
+    : withDates;
+  const win = ordered.slice(0, Math.max(1, weeks));
+  const attended = win.filter((x) => x.s?.['attended'] === true).length;
+  return { attended, total: win.length };
+}
+
 /** Sundays this person was marked present at sacrament. Mirrors `_attendedDates`. */
 export function attendedDates(m: Member): Date[] {
   const d = detailsOf(m);

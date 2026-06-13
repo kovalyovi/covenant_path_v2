@@ -31,7 +31,10 @@ test.describe('person views', () => {
     await expect(page.getByText('Friends', { exact: true })).toBeVisible();
     await expect(page.getByText('Aaronic Priesthood', { exact: true })).toBeVisible();
     // Rich-details sections render.
-    await expect(page.getByText('Attended Sacrament Meeting')).toBeVisible();
+    await expect(page.getByText('Sacrament Attendance')).toBeVisible();
+    // Attendance is the last-8-weeks window (3 fixture records, 2 attended) — never a whole-history
+    // "missed of N" count.
+    await expect(page.getByText(/Attended\s*2\s*of\s*3/)).toBeVisible();
     await expect(page.getByText('Casey Sample')).toBeVisible(); // friend name from details
   });
 
