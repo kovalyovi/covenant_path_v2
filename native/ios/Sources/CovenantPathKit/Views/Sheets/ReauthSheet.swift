@@ -116,7 +116,7 @@ struct ReauthSheet: View {
             Text("Choose how to receive your verification code:").font(.callout)
             ForEach(factors) { f in
                 Button(f.label) { run { try await pickFactor(f) } }
-                    .buttonStyle(.bordered).frame(maxWidth: .infinity)
+                    .cpGlassButton().frame(maxWidth: .infinity)
                     .disabled(busy)
             }
         } else {
@@ -147,7 +147,7 @@ struct ReauthSheet: View {
                 Label("Authorize on the Church website instead", systemImage: "globe")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .cpGlassButton()
             .disabled(busy)
             Text("Opens churchofjesuschrist.org — your password is entered there, never in this app.")
                 .font(.caption2).foregroundStyle(.secondary)
@@ -175,7 +175,7 @@ struct ReauthSheet: View {
                 Text(title).frame(maxWidth: .infinity)
             }
         }
-        .buttonStyle(.borderedProminent)
+        .cpGlassButton(prominent: true)
         .disabled(busy || disabled)
     }
 

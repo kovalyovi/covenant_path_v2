@@ -263,7 +263,7 @@ struct CommentsSection: View {
                             } label: {
                                 Image(systemName: "paperplane.fill")
                             }
-                            .buttonStyle(.borderedProminent)
+                            .cpGlassButton(prominent: true)
                             .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
                         }
                     }

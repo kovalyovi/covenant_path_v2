@@ -61,7 +61,7 @@ struct LoginView: View {
                         Label("Sign in with a passkey", systemImage: "person.badge.key")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.bordered)
+                    .cpGlassButton()
                     .disabled(session.isBusy)
                 } else if session.brokerAvailable && !inMfa {
                     // Documented partial: native passkeys need an associated-domains entitlement +
@@ -71,7 +71,7 @@ struct LoginView: View {
                             Label("Sign in with a passkey", systemImage: "person.badge.key")
                                 .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.bordered)
+                        .cpGlassButton()
                         .disabled(true)
                         Text("Passkeys aren't set up on this build — use an email code on this device.")
                             .font(.caption2).foregroundStyle(.secondary)
@@ -178,7 +178,7 @@ struct LoginView: View {
             Text("Choose how to receive your verification code:").font(.callout)
             ForEach(session.factors) { f in
                 Button(f.label) { Task { await session.selectFactor(f) } }
-                    .buttonStyle(.bordered).frame(maxWidth: .infinity)
+                    .cpGlassButton().frame(maxWidth: .infinity)
                     .disabled(session.isBusy)
             }
             Button("Start over") { session.backToChurchStart() }.disabled(session.isBusy)
@@ -207,7 +207,7 @@ struct LoginView: View {
                 Label("Sign in on the Church website instead", systemImage: "globe")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .cpGlassButton()
             .disabled(session.isBusy)
             Text("Opens churchofjesuschrist.org — your password is entered there, never in this app.")
                 .font(.caption2).foregroundStyle(.secondary)
@@ -288,7 +288,7 @@ struct LoginView: View {
                 Text(title).frame(maxWidth: .infinity)
             }
         }
-        .buttonStyle(.borderedProminent)
+        .cpGlassButton(prominent: true)
         .disabled(session.isBusy || disabledWhen)
     }
 }

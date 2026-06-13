@@ -123,6 +123,24 @@ extension View {
         #endif
     }
 
+    // MARK: Buttons
+
+    /// A Liquid-Glass action button on iOS 26 (`.glass` / `.glassProminent`), falling back to
+    /// `.bordered` / `.borderedProminent` below. Use on prominent action buttons so they match the
+    /// glass system instead of looking like flat Material buttons.
+    @ViewBuilder
+    func cpGlassButton(prominent: Bool = false) -> some View {
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *) {
+            if prominent { self.buttonStyle(.glassProminent) } else { self.buttonStyle(.glass) }
+        } else {
+            if prominent { self.buttonStyle(.borderedProminent) } else { self.buttonStyle(.bordered) }
+        }
+        #else
+        if prominent { self.buttonStyle(.borderedProminent) } else { self.buttonStyle(.bordered) }
+        #endif
+    }
+
     // MARK: Screen backdrop
 
     /// A subtle, tab-tinted backdrop so the glass surfaces have something to refract over (Liquid Glass

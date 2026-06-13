@@ -71,7 +71,7 @@ struct SyncSettingsSheet: View {
             } label: {
                 Label("Set up daily sync", systemImage: "key.fill").frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent).padding(.top, 12)
+            .cpGlassButton(prominent: true).padding(.top, 12)
         } else {
             InfoRow(label: "Status",
                     value: cred.isRevoked ? "Revoked"
@@ -95,7 +95,7 @@ struct SyncSettingsSheet: View {
             } label: {
                 Label("Re-authorize daily sync", systemImage: "key.fill").frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent).padding(.top, 16)
+            .cpGlassButton(prominent: true).padding(.top, 16)
         }
 
         if isProvider, cred.state == "active" {
@@ -108,7 +108,7 @@ struct SyncSettingsSheet: View {
             } label: {
                 Label("Sync my stake now", systemImage: "arrow.triangle.2.circlepath").frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent).padding(.top, 16)
+            .cpGlassButton(prominent: true).padding(.top, 16)
         }
 
         if isProvider, !cred.isRevoked, !cred.isNone {
@@ -117,7 +117,7 @@ struct SyncSettingsSheet: View {
             } label: {
                 Label("Revoke my sync access", systemImage: "link.badge.plus").frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered).padding(.top, 8)
+            .cpGlassButton().padding(.top, 8)
         }
 
         if isProvider {
@@ -324,7 +324,7 @@ struct GoogleDriveSection: View {
                         Button { Task { await connect() } } label: {
                             Label("Connect Google Drive", systemImage: "externaldrive.badge.plus").font(.callout)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .cpGlassButton(prominent: true)
                     }
                     Button("Refresh") { Task { await load() } }.font(.callout)
                 }

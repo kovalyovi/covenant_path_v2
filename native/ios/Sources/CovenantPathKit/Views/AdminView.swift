@@ -173,7 +173,7 @@ struct AdminView: View {
             Task { await store?.dispatch(label: label, inputs: inputs) }
         } label: { Text(label).font(.callout) }
         .disabled(!enabled)
-        if prominent { btn.buttonStyle(.borderedProminent) } else { btn.buttonStyle(.bordered) }
+        btn.cpGlassButton(prominent: prominent)
     }
 
     private func linksCard(_ s: AdminStore) -> some View {

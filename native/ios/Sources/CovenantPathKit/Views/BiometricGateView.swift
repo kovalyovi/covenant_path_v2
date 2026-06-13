@@ -48,7 +48,7 @@ struct BiometricGateView<Content: View>: View {
             } label: {
                 Label("Unlock", systemImage: "faceid")
             }
-            .buttonStyle(.borderedProminent)
+            .cpGlassButton(prominent: true)
         }
         .padding(32)
     }

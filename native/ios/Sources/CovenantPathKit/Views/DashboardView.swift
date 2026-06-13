@@ -27,15 +27,39 @@ struct DashboardView: View {
     }
 
     var body: some View {
-        TabView(selection: $tab) {
-            ForEach(DashboardTab.allCases) { t in
-                tabContent(t)
-                    .tabItem { Label(t.title, systemImage: t.symbol) }
-                    .tag(t)
+        // ONE NavigationStack around the TabView (was a NavigationStack per tab). This gives a single
+        // shared toolbar + title, so (a) the stake name is a real top-left navigation title instead of a
+        // cramped toolbar button, and (b) the freshness/refresh/menu buttons no longer rebuild — "blink" —
+        // when you switch tabs. Pushing a member detail covers the tab bar (standard iOS).
+        NavigationStack {
+            TabView(selection: $tab) {
+                ForEach(DashboardTab.allCases) { t in
+                    tabPage(t)
+                        .tabItem { Label(t.title, systemImage: t.symbol) }
+                        .tag(t)
+                }
+            }
+            .tint(tab.accent)
+            .cpTabBarMinimizeOnScroll()   // iOS 26: glass tab bar minimizes on scroll (no-op below)
+            .navigationTitle(store.stakeName)
+            .navigationBarTitleDisplayMode(.large)
+            .toolbarTitleMenu { stakeSwitcherItems }   // tap the title to switch stakes (when >1)
+            .navigationDestination(for: Member.self) { member in
+                PersonDetailView(member: member)
+            }
+            .toolbar { toolbarTrailing }
+            .alert("Data freshness", isPresented: $freshnessShown) {
+                if store.brokerAvailable && !store.syncing {
+                    Button("Sync now") { triggerSyncNow() }
+                }
+                Button("Close", role: .cancel) {}
+            } message: {
+                if let iso = store.lastSyncedAt {
+                    Text("Last scraped from LCR:\n\n\(Freshness.exact(iso))"
+                         + (store.syncing ? "\n\nSync in progress — fresh data in a few minutes." : ""))
+                }
             }
         }
-        .tint(tab.accent)
-        .cpTabBarMinimizeOnScroll()   // iOS 26: glass tab bar minimizes on scroll (no-op below)
         // The store rides the environment so deep list rows (MemberRow note lines) and the detail
         // page's notes section can read/refresh the notes index without threading it through props.
         .environment(store)
@@ -49,42 +73,24 @@ struct DashboardView: View {
         .overlay(alignment: .bottom) { toastView }
     }
 
-    // MARK: - one tab
+    // MARK: - one tab page (banners + content; toolbar/title/nav are shared in `body`)
 
     @ViewBuilder
-    private func tabContent(_ t: DashboardTab) -> some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                if store.syncing { SyncingBanner(startedAt: store.syncStartedAt) }
-                if store.staleCredential {
-                    StaleBanner(state: store.enrollStatus?.credential.state ?? "revoked",
-                                isProvider: store.enrollStatus?.credential.isProvider == true,
-                                lastError: store.enrollStatus?.credential.lastError) {
-                        openReauth()
-                    }
-                }
-                pageBody(t)
-            }
-            // Subtle tab-tinted backdrop so the glass surfaces (cards, nav/tab bars) have something to
-            // refract over and each tab keeps its color identity.
-            .cpScreenBackground(t.accent)
-            .navigationDestination(for: Member.self) { member in
-                PersonDetailView(member: member)
-            }
-            .toolbar { toolbarContent }
-            .tint(t.accent)
-            .alert("Data freshness", isPresented: $freshnessShown) {
-                if store.brokerAvailable && !store.syncing {
-                    Button("Sync now") { triggerSyncNow() }
-                }
-                Button("Close", role: .cancel) {}
-            } message: {
-                if let iso = store.lastSyncedAt {
-                    Text("Last scraped from LCR:\n\n\(Freshness.exact(iso))"
-                         + (store.syncing ? "\n\nSync in progress — fresh data in a few minutes." : ""))
+    private func tabPage(_ t: DashboardTab) -> some View {
+        VStack(spacing: 0) {
+            if store.syncing { SyncingBanner(startedAt: store.syncStartedAt) }
+            if store.staleCredential {
+                StaleBanner(state: store.enrollStatus?.credential.state ?? "revoked",
+                            isProvider: store.enrollStatus?.credential.isProvider == true,
+                            lastError: store.enrollStatus?.credential.lastError) {
+                    openReauth()
                 }
             }
+            pageBody(t)
         }
+        // Subtle tab-tinted backdrop so the glass surfaces (cards, nav/tab bars) have something to
+        // refract over and each tab keeps its color identity.
+        .cpScreenBackground(t.accent)
     }
 
     @ViewBuilder
@@ -128,11 +134,10 @@ struct DashboardView: View {
         }
     }
 
-    // MARK: - toolbar (stake switcher · freshness · refresh · overflow)
+    // MARK: - toolbar (freshness · refresh · overflow) + the stake-switcher title menu
 
     @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) { stakeTitle }
+    private var toolbarTrailing: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
             if let iso = store.lastSyncedAt {
                 freshnessChip(iso)
@@ -146,29 +151,22 @@ struct DashboardView: View {
         }
     }
 
+    /// Items for the navigation-title menu — tapping the stake-name title switches stakes (only when
+    /// the user can see more than one; otherwise the title is a plain, non-interactive label).
     @ViewBuilder
-    private var stakeTitle: some View {
+    private var stakeSwitcherItems: some View {
         if store.stakes.count > 1 {
-            Menu {
-                ForEach(store.stakes) { s in
-                    Button {
-                        Task { await store.selectStake(s.id) }
-                    } label: {
-                        if s.id == store.currentStakeID {
-                            Label(s.name ?? "—", systemImage: "checkmark")
-                        } else {
-                            Text(s.name ?? "—")
-                        }
+            ForEach(store.stakes) { s in
+                Button {
+                    Task { await store.selectStake(s.id) }
+                } label: {
+                    if s.id == store.currentStakeID {
+                        Label(s.name ?? "—", systemImage: "checkmark")
+                    } else {
+                        Text(s.name ?? "—")
                     }
                 }
-            } label: {
-                HStack(spacing: 2) {
-                    Text(store.stakeName).font(.headline).lineLimit(1).minimumScaleFactor(0.6)
-                    Image(systemName: "chevron.down").font(.caption2)
-                }
             }
-        } else {
-            Text(store.stakeName).font(.headline).lineLimit(1)
         }
     }
 
@@ -358,7 +356,7 @@ struct EmptyStateView: View {
             Text(copy.body)
         } actions: {
             if copy.showAction {
-                Button(copy.actionLabel, action: onAuthorize).buttonStyle(.borderedProminent)
+                Button(copy.actionLabel, action: onAuthorize).cpGlassButton(prominent: true)
             }
         }
     }

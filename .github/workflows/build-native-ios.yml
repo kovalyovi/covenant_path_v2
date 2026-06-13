@@ -12,7 +12,7 @@ on:
       - '.github/workflows/build-native-ios.yml'
 
 permissions:
-  contents: read
+  contents: write   # publish the .ipa as a rolling Release asset (direct download, no artifact zip)
 
 jobs:
   build:
@@ -78,6 +78,22 @@ jobs:
           name: covenant-path-ios-unsigned-ipa
           path: native/ios/CovenantPath.ipa
           if-no-files-found: error
+      - name: Publish .ipa to a rolling Release (DIRECT .ipa download — no artifact double-zip)
+        # The GitHub *artifact* download wraps CovenantPath.ipa in a .zip; handing that .zip to
+        # AltStore/Sideloadly fails with "data couldn't be read… not in the right format". A Release
+        # ASSET downloads as the raw .ipa, so it installs directly. Rolling tag `ios-latest`, asset
+        # re-uploaded (--clobber) every main build. See docs/IOS_SIDELOAD.md.
+        if: github.ref == 'refs/heads/main'
+        working-directory: native/ios
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view ios-latest >/dev/null 2>&1 || gh release create ios-latest \
+            --title "iOS app — latest main build (unsigned)" \
+            --notes "Unsigned .ipa for AltStore / SideStore / Sideloadly. **Download \`CovenantPath.ipa\` directly below** (do NOT use the Actions artifact zip). Rebuilt on every push to main." \
+            --prerelease
+          gh release upload ios-latest CovenantPath.ipa --clobber
       - name: Unit tests (pure logic, macOS)
         working-directory: native/ios
         continue-on-error: true   # logic tests are macOS-buildable; UI target is iOS-only
