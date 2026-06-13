@@ -102,6 +102,8 @@ export interface SupabaseFixtures {
   members?: Row[];
   /** Rows for `member_comments` (default: one note on Avery). POSTs append here. */
   comments?: Row[];
+  /** Rows for `member_notes` (the single-note model, item 8; default: none). Upserts append/replace. */
+  notes?: Row[];
   /** rpc/is_admin result (default false). */
   isAdmin?: boolean;
 }
@@ -122,6 +124,7 @@ export async function mockSupabase(page: Page, fixtures: SupabaseFixtures = {}):
   const stakes = fixtures.stakes ?? [stakeRow()];
   const members = fixtures.members ?? defaultMembers();
   const comments = [...(fixtures.comments ?? defaultComments())]; // mutable: POSTs append
+  const notes = [...(fixtures.notes ?? [])]; // mutable: upserts append/replace (single-note model)
   const isAdmin = fixtures.isAdmin === true;
   const recorder = makeRecorder();
 
@@ -168,6 +171,26 @@ export async function mockSupabase(page: Page, fixtures: SupabaseFixtures = {}):
         return fulfillJson(route, 201); // PostgREST return=minimal: empty body
       }
       return fulfillJson(route, 200, applyEqFilters(comments, url));
+    }
+    if (path === '/rest/v1/member_notes') {
+      // The single editable note (item 8). POST = upsert (on conflict stake_id,member_person_uuid).
+      if (method === 'POST') {
+        const body = parseBody(request);
+        const rows = Array.isArray(body) ? (body as Row[]) : body ? [body] : [];
+        for (const r of rows) {
+          const i = notes.findIndex((n) => n['member_person_uuid'] === r['member_person_uuid']);
+          if (i >= 0) notes[i] = { ...notes[i], ...r };
+          else notes.push({ updated_at: new Date().toISOString(), ...r });
+        }
+        return fulfillJson(route, 201);
+      }
+      const matched = applyEqFilters(notes, url);
+      // `.maybeSingle()` asks for a single object via the Accept header → return one row or null.
+      const accept = request.headers()['accept'] ?? '';
+      if (accept.includes('pgrst.object')) {
+        return fulfillJson(route, 200, matched[0] ?? null);
+      }
+      return fulfillJson(route, 200, matched);
     }
 
     return fulfillJson(route, 404, { message: `e2e: no Supabase mock for ${method} ${path}` });

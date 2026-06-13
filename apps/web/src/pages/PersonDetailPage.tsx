@@ -5,7 +5,7 @@
 // plus leader notes (RLS-scoped). The member is read from the loaded dashboard data by person_uuid.
 
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useDashboard } from '../hooks/useDashboard';
 import type { Member } from '../lib/member';
 import { detailsOf, freshness } from '../lib/member';
@@ -18,10 +18,12 @@ import { sacramentWindow, SACRAMENT_WINDOW_WEEKS } from '../logic/kpis';
 import { Avatar, IconButton, SectionCard } from '../components/ui';
 import { Icon, type IconName } from '../components/Icon';
 import { GoldenHourChips } from '../components/GoldenHourChips';
-import { CommentsSection } from '../components/CommentsSection';
+import { NotesSection } from '../components/NotesSection';
 
 export function PersonDetailPage() {
   const { id } = useParams();
+  const [searchParams] = useSearchParams();
+  const editNote = searchParams.get('editNote') === '1'; // long-press on a main-screen row opens edit
   const d = useDashboard();
   const navigate = useNavigate();
   const member = d.members.find((m) => String(m['person_uuid'] ?? '') === id);
@@ -92,7 +94,7 @@ export function PersonDetailPage() {
             <StatusSections member={member} />
           )}
 
-          {uuid && <CommentsSection member={member} />}
+          {uuid && <NotesSection member={member} autoEdit={editNote} />}
         </div>
       </main>
     </div>

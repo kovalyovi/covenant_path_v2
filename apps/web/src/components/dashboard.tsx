@@ -2,7 +2,7 @@
 // `_BigHeader`, `_SyncingBanner`, the freshness chip, `_MemberRow`, `_UnitGrid`, `_DateList`,
 // `_OrgFilterBar`, and the small notes/pills. The tab views compose these so the layouts match.
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Member } from '../lib/member';
 import {
@@ -319,6 +319,37 @@ interface MemberRowProps {
   dateField?: string;
 }
 
+/** Long-press detector for a clickable surface: fires `onLongPress` after ~500ms held, and marks the
+ *  next click as consumed so it doesn't ALSO trigger the normal click action. Pointer-events based so
+ *  it works for both touch (mobile) and mouse (desktop). */
+function useLongPress(onLongPress: () => void, ms = 500) {
+  const timer = useRef<number | null>(null);
+  const fired = useRef(false);
+  const clear = () => {
+    if (timer.current != null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+  };
+  return {
+    onPointerDown: () => {
+      fired.current = false;
+      clear();
+      timer.current = window.setTimeout(() => {
+        fired.current = true;
+        onLongPress();
+      }, ms);
+    },
+    onPointerUp: clear,
+    /** Returns true (and resets) when the just-finished press was a long-press → suppress the click. */
+    consumeClick: () => {
+      const was = fired.current;
+      fired.current = false;
+      return was;
+    },
+  };
+}
+
 /** One member row (avatar + name + date/responsibility + optional GH chips). Mirrors `_MemberRow`. */
 export function MemberRow({ m, chips = false, showUnit = false, showResp = false, dateField = 'baptism_date' }: MemberRowProps) {
   const navigate = useNavigate();
@@ -330,9 +361,20 @@ export function MemberRow({ m, chips = false, showUnit = false, showResp = false
   const isBaptism = dateField === 'baptism_date';
   const resp = chips || showResp ? responsibleParty(m) : null;
   const id = m['person_uuid'] != null ? String(m['person_uuid']) : '';
+  // Long-press a row → open the member detail straight into NOTE EDIT (no separate Edit button); a
+  // normal tap/click opens the detail. The press timer fires the edit path and suppresses the click.
+  const press = useLongPress(() => id && navigate(`/person/${encodeURIComponent(id)}?editNote=1`));
 
   return (
-    <button type="button" className="member-row" onClick={() => id && navigate(`/person/${encodeURIComponent(id)}`)}>
+    <button
+      type="button"
+      className="member-row"
+      onClick={() => { if (!press.consumeClick() && id) navigate(`/person/${encodeURIComponent(id)}`); }}
+      onPointerDown={press.onPointerDown}
+      onPointerUp={press.onPointerUp}
+      onPointerLeave={press.onPointerUp}
+      onContextMenu={(e) => e.preventDefault()}
+    >
       <Avatar name={name} photoUrl={m['photo_url'] as string | undefined} size={44} />
       <span className="member-row__main">
         {/* #12: on a phone the name takes the whole first row and age drops below it (not a cramped
@@ -376,19 +418,18 @@ export function MemberRow({ m, chips = false, showUnit = false, showResp = false
   );
 }
 
-/** The newest leader note under a list row (+N when there are more) — shared by every member list
- *  so notes travel with people in Golden Hour, Needs, by-date lists, and the baptisms timeline. */
+/** The single leader note under a list row, shown IN FULL — shared by every member list so notes
+ *  travel with people in Golden Hour, Needs, by-date lists, and the baptisms timeline. Hidden when the
+ *  "show notes" preference is off (item 9). */
 export function NoteLine({ uuid }: { uuid: string }) {
-  const { notes } = useDashboard();
+  const { notes, showNotes } = useDashboard();
   const n = uuid ? notes[uuid] : undefined;
-  if (!n) return null;
+  if (!n || !showNotes) return null;
   return (
-    <span className="row tiny" style={{ gap: 4, marginTop: 4, color: 'var(--on-surface-variant)', minWidth: 0 }}>
+    <span className="row tiny" style={{ gap: 4, marginTop: 4, color: 'var(--on-surface-variant)', minWidth: 0, alignItems: 'flex-start' }}>
       <Icon name="note" size={13} color="var(--primary)" />
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' }}>
-        {n.latest}
-      </span>
-      {n.count > 1 && <span style={{ flexShrink: 0 }}>+{n.count - 1}</span>}
+      {/* full note (multi-line preserved), never truncated */}
+      <span style={{ whiteSpace: 'pre-wrap', fontStyle: 'italic', minWidth: 0 }}>{n.text}</span>
     </span>
   );
 }

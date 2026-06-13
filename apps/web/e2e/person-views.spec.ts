@@ -78,30 +78,42 @@ test.describe('person views', () => {
     await expect(page.getByText('Attended Sacrament Meeting')).not.toBeVisible();
   });
 
-  test('notes render mocked comments and posting calls rest/v1/member_comments', async ({ page }) => {
+  test('single note: legacy thread folds in, editing saves to member_notes', async ({ page }) => {
     const { supabase } = await openDashboard(page, { path: `/person/${AVERY_UUID}` });
 
-    // The seeded note (from the member_comments fixture) renders with its author.
-    await expect(page.getByText('Welcomed at sacrament meeting.')).toBeVisible();
-    await expect(page.getByText(/Jamie Clerksample/).first()).toBeVisible();
+    // The legacy member_comments thread is FOLDED into the single note (so nothing is lost).
+    await expect(page.getByText(/Welcomed at sacrament meeting\./)).toBeVisible();
 
-    // Post a new note.
-    const noteBox = page.getByPlaceholder('Add a note…');
-    await noteBox.fill('Follow up next week.');
-    await page.getByRole('button', { name: 'Post note' }).click();
+    // No separate "Edit" button — tap the note surface to edit, replace the text, save.
+    await page.getByRole('button', { name: /Edit note/ }).click();
+    const noteBox = page.getByPlaceholder('Write a note about this member…');
+    await noteBox.fill('One consolidated note.');
+    await page.getByRole('button', { name: 'Save' }).click();
 
-    // A successful post clears the input (the deterministic "request finished" signal — getByText
-    // alone would match the textarea's own value while the POST is still in flight).
-    await expect(noteBox).toHaveValue('');
-    // Read-after-write: the mock appended the row, the reload renders it as a comment paragraph.
-    await expect(page.locator('p', { hasText: 'Follow up next week.' })).toBeVisible();
+    // Read-after-write: the saved single note renders in full.
+    await expect(page.getByText('One consolidated note.')).toBeVisible();
 
-    const posts = supabase.callsTo('/rest/v1/member_comments').filter((c) => c.method === 'POST');
-    expect(posts).toHaveLength(1);
+    // It was upserted to member_notes (the single-field table), NOT appended to the thread.
+    await expect.poll(() =>
+      supabase.callsTo('/rest/v1/member_notes').filter((c) => c.method === 'POST').length,
+    ).toBe(1);
+    const posts = supabase.callsTo('/rest/v1/member_notes').filter((c) => c.method === 'POST');
     expect(posts[0].body).toMatchObject({
       member_person_uuid: AVERY_UUID,
-      body: 'Follow up next week.',
-      author_email: 'leader@example.test',
+      note: 'One consolidated note.',
     });
+  });
+
+  test('long-press a member row opens the note straight into edit', async ({ page }) => {
+    await openDashboard(page, { path: '/golden-hour' });
+
+    // A long-press (pointer held ~600ms) on a member row fires the edit path on the press timer and
+    // navigates to the detail with the note open — the row unmounts, so no pointerup is needed.
+    const row = page.locator('.member-row', { hasText: 'Avery Example' }).first();
+    await expect(row).toBeVisible();
+    await row.dispatchEvent('pointerdown');
+
+    await expect(page).toHaveURL(/editNote=1/);
+    await expect(page.getByPlaceholder('Write a note about this member…')).toBeVisible();
   });
 });

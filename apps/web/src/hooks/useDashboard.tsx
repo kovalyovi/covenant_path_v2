@@ -9,8 +9,9 @@ import {
 } from 'react';
 import { supabase } from '../lib/supabase';
 import { MEMBER_COLUMNS, type Member } from '../lib/member';
-import { buildNotesIndex, type NoteRow, type NoteSummary } from '../logic/notes';
+import { buildNotesIndex, type NoteRow, type MemberNoteRow, type NoteSummary } from '../logic/notes';
 import { broker, type EnrollmentStatus } from '../lib/broker';
+import { getShowNotes, setShowNotes as persistShowNotes } from '../lib/prefs';
 
 const STAKE_KEY = 'current_stake_id';
 const SYNC_GUARD_MIN = 30; // ignore a 'running' state older than this (crashed run that never marked 'done')
@@ -30,10 +31,13 @@ interface DashboardState {
   loading: boolean;
   error: string | null;
   members: Member[];
-  /** person_uuid -> newest leader note + count, for the list-row note lines. */
+  /** person_uuid -> the single editable leader note, for the list-row note lines. */
   notes: Record<string, NoteSummary>;
-  /** Re-pull the notes index (after posting/deleting a note on the detail page). */
+  /** Re-pull the notes index (after editing a note on the detail page or via long-press). */
   reloadNotes: () => Promise<void>;
+  /** Whether the main screen shows member notes (default true; persisted per the global pref). */
+  showNotes: boolean;
+  setShowNotes: (on: boolean) => void;
   stakes: StakeRow[];
   currentStakeId: string | null;
   stakeName: string | null;
@@ -98,6 +102,12 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const [missionaries, setMissionaries] = useState<Missionaries>({});
   const [isAdmin, setIsAdmin] = useState(false);
   const [enrollStatus, setEnrollStatus] = useState<EnrollmentStatus | null>(null);
+  const [showNotes, setShowNotesState] = useState<boolean>(() => getShowNotes());
+
+  const setShowNotes = useCallback((on: boolean) => {
+    setShowNotesState(on);
+    persistShowNotes(on);
+  }, []);
 
   const pollRef = useRef<number | null>(null);
   const stakesRef = useRef<StakeRow[]>([]);
@@ -118,13 +128,20 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const loadNotes = useCallback(async (stakeId: string | null): Promise<Record<string, NoteSummary>> => {
-    // One bulk query per stake (RLS-scoped like members). Best-effort: a notes hiccup must never
-    // fail the member load — rows just render without their note line.
+    // The SINGLE note per member (member_notes) WINS; legacy member_comments threads are folded in
+    // for members not yet migrated, so nothing is lost. Both bulk-queried per stake (RLS-scoped like
+    // members). Best-effort: a notes hiccup must never fail the member load.
     try {
-      const base = supabase.from('member_comments').select('member_person_uuid, body, created_at');
-      const scoped = stakeId != null ? base.eq('stake_id', stakeId) : base;
-      const { data } = await scoped;
-      return buildNotesIndex((data ?? []) as NoteRow[]);
+      const noteBase = supabase.from('member_notes').select('member_person_uuid, note, updated_at');
+      const cmtBase = supabase.from('member_comments').select('member_person_uuid, body, author_name, author_email, created_at');
+      const [notesRes, cmtRes] = await Promise.all([
+        stakeId != null ? noteBase.eq('stake_id', stakeId) : noteBase,
+        stakeId != null ? cmtBase.eq('stake_id', stakeId) : cmtBase,
+      ]);
+      return buildNotesIndex(
+        (notesRes.data ?? []) as MemberNoteRow[],
+        (cmtRes.data ?? []) as NoteRow[],
+      );
     } catch {
       return {};
     }
@@ -297,13 +314,15 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<DashboardState>(
     () => ({
-      loading, error, members, notes, reloadNotes, stakes, currentStakeId, stakeName, lastSynced,
+      loading, error, members, notes, reloadNotes, showNotes, setShowNotes,
+      stakes, currentStakeId, stakeName, lastSynced,
       syncing, syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,
       reloadStakes, reloadEnrollStatus, setEnrollStatus,
       reauthOpen, openReauth, closeReauth,
     }),
     [
-      loading, error, members, notes, reloadNotes, stakes, currentStakeId, stakeName, lastSynced,
+      loading, error, members, notes, reloadNotes, showNotes, setShowNotes,
+      stakes, currentStakeId, stakeName, lastSynced,
       syncing, syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,
       reloadStakes, reloadEnrollStatus, reauthOpen, openReauth, closeReauth,
     ],

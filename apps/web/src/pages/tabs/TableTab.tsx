@@ -109,7 +109,7 @@ export function TableTab() {
 
 function TableBody({ members }: { members: Member[] }) {
   const navigate = useNavigate();
-  const { notes } = useDashboard();
+  const { notes, showNotes } = useDashboard();
   const [sortCol, setSortCol] = useState<number | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
   // per column: the set of values the user UNCHECKED (hidden). Empty/absent = show everything.
@@ -195,12 +195,12 @@ function TableBody({ members }: { members: Member[] }) {
                       <td key={c.key}>
                         <span className="row" style={{ gap: 4, whiteSpace: 'nowrap' }}>
                           {display(m, c.key)}
-                          {notes[id] && (
+                          {showNotes && notes[id] && (
                             <Icon
                               name="note"
                               size={13}
                               color="var(--primary)"
-                              title={notes[id].latest}
+                              title={notes[id].text}
                             />
                           )}
                         </span>

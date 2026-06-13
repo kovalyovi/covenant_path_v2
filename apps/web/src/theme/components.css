@@ -470,6 +470,31 @@ button.card--tappable:hover {
   display: inline-flex;
 }
 
+/* ---- Single editable member note (item 8) --------------------------------------------------- */
+.note-edit-surface {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px dashed transparent;
+  border-radius: 10px;
+  padding: 8px;
+  margin: -8px;
+  cursor: text;
+  color: inherit;
+  font: inherit;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.note-edit-surface:hover {
+  border-color: var(--outline);
+  background: var(--surface-variant, rgba(0, 0, 0, 0.03));
+}
+.note-body {
+  margin: 0;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
 /* ---- Avatar ---------------------------------------------------------------------------------- */
 .avatar {
   display: inline-flex;
