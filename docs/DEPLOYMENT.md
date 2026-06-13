@@ -4,8 +4,8 @@ How the two deployable pieces go live and stay healthy:
 
 - **Auth broker** (`backend/auth_broker`) — small FastAPI server for "Sign in with your
   Church account" on the web. Hosted on **Render** (free).
-- **Viewer** (`apps/viewer`) — the Flutter web app. Hosted on **Cloudflare Pages** (free)
-  at `app.membercovenantpath.org`.
+- **Web app** (`apps/web`) — the **React (Vite)** app. Hosted on **Cloudflare Pages** (free)
+  at `app.membercovenantpath.org`. (The native iOS/Android apps build in CI — see §2b.)
 
 The daily data sync is separate and runs in **GitHub Actions** (`.github/workflows/daily-sync.yml`).
 
@@ -55,45 +55,44 @@ is only ever held server-side on the broker — never shipped to the app.
 
 ---
 
-## 2. Viewer → Cloudflare Pages
+## 2. Web app → Cloudflare Pages
 
-Config is baked at build time via `--dart-define` (the anon key is safe on clients; RLS
-gates data).
+The React app is **Vite**; config is baked in at build time via `VITE_*` env vars (the anon
+key is safe on clients; RLS gates data).
 
 ### Auto-deploy (default — GitHub Actions)
 
-`.github/workflows/deploy-web.yml` builds the Flutter web app and deploys it to Cloudflare
-Pages on **every push to `main` that touches `apps/viewer/**`** (and on manual
-`workflow_dispatch`). Backend-only commits skip the build via the `paths` filter.
+`.github/workflows/deploy-web.yml` builds `apps/web` (`npm ci && npm run build`) and deploys
+the `dist/` output to Cloudflare Pages with **wrangler** on **every push to `main` that
+touches `apps/web/**`** (and on manual `workflow_dispatch`). Backend-only commits skip the
+build via the `paths` filter. After deploy it runs `npm run smoke` against the live site to
+confirm the shell + every lazy chunk serve (catches the "failed to fetch dynamically imported
+module" class of breakage).
 
-Why GitHub Actions and not Cloudflare's native git integration: Cloudflare's build image
-has no Flutter SDK, so the native integration would need a brittle per-build SDK-download
-script. The Actions runner uses `subosito/flutter-action` (SDK cached) — the standard,
-reliable path. The Pages project stays in **direct-upload** mode; do **not** also connect
-git in the Cloudflare dashboard or you'll get competing deploys.
+The Pages project stays in **direct-upload** mode (wrangler) — do **not** also connect git in
+the Cloudflare dashboard or you'll get competing deploys.
 
 Required GitHub secrets (Settings → Secrets and variables → Actions):
 `CLOUDFLARE_API_TOKEN` (Edit Cloudflare Pages template), `CLOUDFLARE_ACCOUNT_ID`,
-`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `BROKER_URL`. The `projectName` in the workflow must
-match the Pages project (`covenant-path-app`).
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `BROKER_URL`, *optional* `SENTRY_DSN` (web error
+reporting) and `APP_URL` (the smoke-test target; defaults to production). The
+`--project-name` in the workflow must match the Pages project (`covenant-path-app`).
 
 Force a deploy: GitHub → Actions → "Deploy web app to Cloudflare Pages" → Run workflow.
 
 ### Manual deploy (fallback)
 
 ```powershell
-cd D:/dev/covenant_path_v2/apps/viewer
-D:/dev/flutter/bin/flutter build web --release `
-  --dart-define=SUPABASE_URL=https://ntbrzjihhyvzvvzvwowq.supabase.co `
-  --dart-define=SUPABASE_ANON_KEY=sb_publishable_hiAGDv7bMCm5C5O_RbGP5A_8tskAiBF `
-  --dart-define=BROKER_URL=https://covenant-path-broker.onrender.com
+cd D:/dev/covenant_path_v2/apps/web
+$env:VITE_SUPABASE_URL = "https://ntbrzjihhyvzvvzvwowq.supabase.co"
+$env:VITE_SUPABASE_ANON_KEY = "sb_publishable_hiAGDv7bMCm5C5O_RbGP5A_8tskAiBF"
+$env:VITE_BROKER_URL = "https://covenant-path-broker.onrender.com"
+npm ci
+npm run build
+npx wrangler@4 pages deploy dist --project-name=covenant-path-app --branch=main
 ```
-Output: `apps/viewer/build/web`. Then either:
-- **Dashboard:** Cloudflare → Workers & Pages → `covenant-path-app` → *Upload assets* →
-  drag the `build/web` folder → Deploy.
-- **CLI:** `npx wrangler pages deploy build/web --project-name covenant-path-app --branch main`
-  (create the project once in the dashboard first — wrangler's auto-create can fail with
-  Cloudflare API `code: 8000000`).
+(`--branch=main` marks it a production deployment. Create the Pages project once in the
+dashboard first — wrangler's auto-create can fail with Cloudflare API `code: 8000000`.)
 
 Custom domain: Pages project → **Custom domains** → add `app.membercovenantpath.org`.
 DNS is already at Cloudflare, so the record + HTTPS are provisioned automatically.
@@ -103,34 +102,19 @@ DNS is already at Cloudflare, so the record + HTTPS are provisioned automaticall
 
 ---
 
-## 2b. Android app (APK)
+## 2b. Native apps (iOS + Android)
 
-Same codebase, same `--dart-define` config (pointed at the prod broker):
+The native apps are **Swift (`native/ios`)** and **Kotlin (`native/android`)** — they build
+in CI, not locally:
 
-```powershell
-cd D:/dev/covenant_path_v2/apps/viewer
-D:/dev/flutter/bin/flutter build apk --release `
-  --dart-define=SUPABASE_URL=https://ntbrzjihhyvzvvzvwowq.supabase.co `
-  --dart-define=SUPABASE_ANON_KEY=sb_publishable_hiAGDv7bMCm5C5O_RbGP5A_8tskAiBF `
-  --dart-define=BROKER_URL=https://covenant-path-broker.onrender.com
-```
-Output: `apps/viewer/build/app/outputs/flutter-apk/app-release.apk`. Copy it to an Android
-device and install (enable "install from unknown sources"). For a smaller per-device download
-use `--split-per-abi`; for the Play Store build an `.aab` (`flutter build appbundle`).
+- **iOS** — `.github/workflows/build-native-ios.yml` produces an unsigned `.ipa` artifact.
+  Install on a device without a Mac/Apple-developer account via AltStore/Sideloadly on
+  Windows — step-by-step in **`docs/IOS_SIDELOAD.md`** (free Apple ID, 7-day refresh).
+- **Android** — `.github/workflows/build-native-android.yml` runs the unit tests and produces
+  a debug APK artifact; download it from the run and install (enable "install from unknown
+  sources").
 
-**Toolchain note:** the generated `android/` is gitignored. If you re-run `flutter create`, it
-may scaffold a bleeding-edge AGP (9.x) that breaks plugins with a `DefaultAndroidSourceSet` cast
-error. Pin a stable combo: AGP **8.9.1** + Kotlin **2.1.0** in `android/settings.gradle.kts`, and
-Gradle **8.11.1** in `android/gradle/wrapper/gradle-wrapper.properties`. (AGP 8.7.3 is too OLD for
-`app_links 7.1.0` — a transitive dep of `supabase_flutter` — and throws the SAME cast error; 8.9.1
-is the sweet spot: new enough for the plugins, short of the 9.x break.)
-
-**Two manifest edits the release build needs** (`android/app/src/main/AndroidManifest.xml`, also
-regenerated by `flutter create` so re-apply after a regen):
-- Add **`<uses-permission android:name="android.permission.INTERNET"/>`** above `<application>`.
-  Flutter only auto-adds INTERNET to the *debug* manifest; without it the **release** APK has no
-  network and the app can't reach Supabase or the broker (blank/"no config" screen).
-- Set `android:label="Covenant Path"` (default scaffold uses `covenant_path_viewer`).
+Both read the same backend (Supabase + the broker); there's no separate per-app deploy step.
 
 ---
 
@@ -139,22 +123,23 @@ regenerated by `flutter create` so re-apply after a regen):
 Render free sleeps after ~15 min idle; the first request after a sleep hits a holding page
 with **no CORS header**, so the browser reports `Failed to fetch`. Two mitigations, both on:
 
-- **In-app:** `broker_client.dart` retries network failures across ~60s and shows
-  "Waking up the sign-in service…", so a cold start resolves itself instead of erroring.
+- **In-app:** the web broker client (`apps/web/src/lib/broker.ts`) retries network failures
+  across ~60s and shows "Waking up the sign-in service…", so a cold start resolves itself
+  instead of erroring; it also warms `/health` on app load.
 - **Keep-warm pings:**
   - *Primary (live since 2026-06-09): **Supabase pg_cron*** — migration `0042_login_fast_lane.sql`
     schedules cron job **`keep-broker-warm`** to `net.http_get` the broker `/health` every
     **4 minutes** from Postgres. Unlike GitHub cron it fires on time. Inspect with
-    `select * from cron.job;` and recent firings in `cron.job_run_details`.
-  - *Free backstop:* `.github/workflows/keep-broker-warm.yml` pings `/health` every 5 min on
-    paper — measured firing every **2–4 hours** (GitHub cron is best-effort). Backstop only.
+    `select * from cron.job;` and recent firings in `cron.job_run_details`. This is the sole
+    keep-warm now — the old `keep-broker-warm.yml` GitHub-cron backstop was removed
+    2026-06-13 (it fired only every 2–4h, too slow to prevent a 15-min Render sleep).
   - *Optional extra: **UptimeRobot*** — free, pings every 5 min and also emails you if the
     broker is ever down: uptimerobot.com → **+ New monitor** → HTTP(s),
     `https://covenant-path-broker.onrender.com/health`, interval 5 min.
 
-If the broker URL ever changes, set repo variable `BROKER_URL` (Settings → Secrets and
-variables → Actions → Variables) and update the UptimeRobot monitor + the viewer's
-`--dart-define=BROKER_URL`.
+If the broker URL ever changes, set the `BROKER_URL` GitHub secret (Settings → Secrets and
+variables → Actions) and update the UptimeRobot monitor; the web build picks it up as
+`VITE_BROKER_URL` on the next deploy.
 
 ---
 
@@ -164,7 +149,7 @@ variables → Actions → Variables) and update the UptimeRobot monitor + the vi
 |---|---|
 | Render (broker) | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `CP_TOKEN_KEY` (enrollment encryption), `ALLOWED_ORIGINS`; *optional:* `GITHUB_TOKEN` + `GITHUB_REPO` (admin console), `WEBAUTHN_RP_ID` (passkeys), `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REDIRECT` (per-stake Drive), `RESEND_API_KEY` (reports/contact) |
 | GitHub Actions (daily sync) | `LCR_LOGIN`, `LCR_PASSWORD`, `CP_TOKEN_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_DB_URL` (IPv4 pooler), `GOOGLE_SERVICE_ACCOUNT_JSON`, `SPREADSHEET_ID`; *optional (per-stake OAuth Drive):* `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REDIRECT` |
-| GitHub Actions (deploy-web) | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `BROKER_URL` |
-| Viewer build | `--dart-define`: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `BROKER_URL` |
+| GitHub Actions (deploy-web) | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `BROKER_URL`; *optional:* `SENTRY_DSN`, `APP_URL` |
+| Web build (Vite) | `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_BROKER_URL`; *optional:* `VITE_SENTRY_DSN` |
 
 Never commit any of these — `.env` mirrors them locally and is gitignored.

@@ -1,9 +1,8 @@
 name: Deploy web app to Cloudflare Pages
 
-# WEB = React (apps/web) as of the #4 cutover. The Flutter app (apps/viewer) still powers
-# iOS / macOS / Android (built by the build-native-* workflows); only the WEB build moved to React.
-# ROLLBACK to Flutter web: restore this file from the commit before the cutover (it built
-# apps/viewer with flutter-action and deployed apps/viewer/build/web).
+# WEB = React (apps/web). The native apps are Swift (native/ios) + Kotlin (native/android),
+# built by the build-native-* workflows. The old Flutter app (apps/viewer) was deleted
+# 2026-06-13; this workflow builds apps/web with Vite and deploys dist/ via wrangler.
 
 on:
   push:

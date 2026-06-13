@@ -205,6 +205,12 @@ with access can extend it to any email; mitigated by audit + revoke + scope-clon
 
 ## ADR-005 — Client apps: one Flutter codebase reading the backend (2026-05-27)
 
+> **SUPERSEDED (web cutover 2026-06-08; Flutter app deleted 2026-06-13).** The single Flutter
+> codebase was replaced by **React (`apps/web`)** for web + **native Swift (`native/ios`) and
+> Kotlin (`native/android`)** apps. The "separate backend, clients read RLS-scoped data" core of
+> this ADR still holds; only the "one Flutter codebase" implementation choice was reversed. The
+> `_deprecated/viewer` Flutter app has been removed from the repo.
+
 **Context.** Goal: backend separated from clients; iOS/macOS/Android/Web apps (one Flutter
 codebase) read data scoped by stake/login/permissions. Question raised: "why not Flutter for
 web and everything?"
