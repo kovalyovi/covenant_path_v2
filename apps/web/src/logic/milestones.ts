@@ -19,9 +19,41 @@ export interface Milestone {
   complete: (m: Member) => boolean;
   /** Who this milestone can apply to. */
   eligible: (m: Member) => boolean;
+  /** The member field this milestone reads — so an N/A value can be detected and EXCLUDED from the
+   *  "missing/incomplete" lists (N/A ≠ not-done). Optional: a milestone derived from logic rather than
+   *  a single column (none today) can omit it. */
+  field?: string;
 }
 
 const everyone = (_m: Member) => true;
+
+/** A milestone value that means "doesn't apply to this person" (priesthood for a woman, patriarchal
+ *  blessing for a young child, …). N/A is NOT the same as not-done: an N/A field must never make a
+ *  member show up as ineligible/missing. The backend writes the literal "N/A"; some display helpers
+ *  also derive it client-side (endowmentDisplay / templeExperienceDisplay). */
+export function isNA(v: unknown): boolean {
+  return String(v ?? '').trim().toUpperCase() === 'N/A';
+}
+
+/** Whether a member is EXPECTED to complete this milestone: eligible AND the underlying field isn't
+ *  N/A. This is the gate the "needs / missing / incomplete" surfaces use so an N/A field is excluded
+ *  entirely (N/A ≠ not-done). Falls back to plain eligibility when a milestone has no single field. */
+export function expected(ms: Milestone, m: Member): boolean {
+  if (!ms.eligible(m)) return false;
+  if (ms.field != null && isNA(m[ms.field])) return false;
+  // family-name / first-temple-visit derive N/A client-side for ineligible-by-age people; honor it.
+  if (ms.field === 'family_name_prepared' || ms.field === 'first_temple_visit') {
+    return !isNA(templeExperienceDisplay(m, ms.field));
+  }
+  if (ms.field === 'living_ordinance') return !isNA(endowmentDisplay(m));
+  return true;
+}
+
+/** A member is "missing" a milestone when they're EXPECTED to have it but haven't completed it. The
+ *  single helper every needs/incomplete/completion surface shares (so N/A is excluded uniformly). */
+export function isMissing(ms: Milestone, m: Member): boolean {
+  return expected(ms, m) && !ms.complete(m);
+}
 
 function dateOf(v: unknown): Date | null {
   return parseMemberDate(v);
@@ -102,28 +134,31 @@ export function templeExperienceValue(m: Member, key: string): string {
 // to (age / sex / tenure). Baptism is intentionally NOT a milestone.
 export const milestones: Milestone[] = [
   {
-    label: 'Friends', abbr: 'F', icon: 'handshake', color: '#D81B60',
+    label: 'Friends', abbr: 'F', icon: 'handshake', color: '#D81B60', field: 'friends',
     complete: (m) => m['friends'] === 'Yes', eligible: everyone,
   },
   {
-    label: 'Calling', abbr: 'C', icon: 'badge', color: '#6A1B9A',
+    label: 'Calling', abbr: 'C', icon: 'badge', color: '#6A1B9A', field: 'calling',
     complete: (m) => m['calling'] === 'Yes', eligible: (m) => turnsAtLeast(m, 12),
   },
   {
     label: 'Has ministers', abbr: 'M', icon: 'support', color: '#00838F',
+    field: 'ministering_brothers_sisters',
     complete: (m) => m['ministering_brothers_sisters'] === 'Yes', eligible: everyone,
   },
   {
     label: 'Ministering assignment', abbr: 'MA', icon: 'volunteer', color: '#EF6C00',
+    field: 'ministering_assignment',
     complete: (m) => m['ministering_assignment'] === 'Yes', eligible: (m) => turnsAtLeast(m, 14),
   },
   {
-    label: 'Aaronic Priesthood', abbr: 'AP', icon: 'medal', color: '#1565C0',
+    label: 'Aaronic Priesthood', abbr: 'AP', icon: 'medal', color: '#1565C0', field: 'aaronic_priesthood',
     complete: (m) => m['aaronic_priesthood'] === 'Yes',
     eligible: (m) => male(m) && turnsAtLeast(m, 12),
   },
   {
     label: 'Melchizedek Priesthood', abbr: 'MP', icon: 'premium', color: '#2E7D32',
+    field: 'melchizedek_priesthood',
     complete: (m) => m['melchizedek_priesthood'] === 'Yes',
     eligible: (m) => male(m) && ageNowAtLeast(m, 18) && memberOneYearPlus(m),
   },
@@ -131,24 +166,29 @@ export const milestones: Milestone[] = [
   // the year someone turns 12 (limited-use recommend age — same by-year rule as calling/Aaronic).
   {
     label: 'Family name prepared', abbr: 'FN', icon: 'menu_book', color: '#6D4C41',
+    field: 'family_name_prepared',
     complete: (m) => templeExperienceValue(m, 'family_name_prepared') === 'Yes',
     eligible: (m) => turnsAtLeast(m, 12),
   },
   {
     label: 'First temple visit', abbr: 'FT', icon: 'account_balance', color: '#00897B',
+    field: 'first_temple_visit',
     complete: (m) => templeExperienceValue(m, 'first_temple_visit') === 'Yes',
     eligible: (m) => turnsAtLeast(m, 12),
   },
 ];
 
-/** The milestones that apply to a given member (eligibility-filtered). Mirrors `milestonesFor`. */
+/** The milestones that apply to a given member (eligibility- AND not-N/A-filtered, via `expected`).
+ *  An N/A field (priesthood for a woman, patriarchal blessing for a young child) is EXCLUDED — it's
+ *  not-applicable, not not-done — so it never inflates the denominator or shows as missing. A real
+ *  "Yes" is always still counted (it's not N/A). Mirrors `milestonesFor`. */
 export function milestonesFor(m: Member): Milestone[] {
-  return milestones.filter((x) => x.eligible(m));
+  return milestones.filter((x) => expected(x, m) || x.complete(m));
 }
 
-/** Fraction 0..1 of this member's APPLICABLE Golden Hour milestones that are complete (eligible-only).
- *  Drives the completion ring on the detail page — full + green at 1.0. (Friends + Has-ministers apply
- *  to everyone, so there's always ≥1 applicable.) */
+/** Fraction 0..1 of this member's APPLICABLE Golden Hour milestones that are complete (eligible-only,
+ *  N/A excluded). Drives the completion ring on the detail page — full + green at 1.0. (Friends +
+ *  Has-ministers apply to everyone, so there's always ≥1 applicable.) */
 export function completionOf(m: Member): number {
   const applicable = milestonesFor(m);
   if (applicable.length === 0) return 0;
@@ -184,17 +224,20 @@ export const templeExperienceEligible = (m: Member): boolean => turnsAtLeast(m, 
 export const needsCategories: Milestone[] = [
   ...milestones,
   {
-    label: 'Temple Recommend', abbr: 'TR', icon: 'premium', color: '#5E35B1',
+    label: 'Temple Recommend', abbr: 'TR', icon: 'premium', color: '#5E35B1', field: 'temple_recommend',
     complete: (m) => m['temple_recommend'] === 'Active',
     eligible: templeRecommendEligible,
   },
   {
-    label: 'Endowment', abbr: 'EN', icon: 'premium', color: '#00695C',
+    label: 'Endowment', abbr: 'EN', icon: 'premium', color: '#00695C', field: 'living_ordinance',
     complete: (m) => m['living_ordinance'] === 'Yes',
     eligible: endowmentEligible,
   },
+  // Patriarchal blessing uses the SAME age gate as temple recommend (members turning ≥12 this
+  // calendar year — the limited-use recommend age). N/A (a young child) is excluded via `expected`.
   {
     label: 'Patriarchal Blessing', abbr: 'PB', icon: 'menu_book', color: '#AD1457',
+    field: 'patriarchal_blessing',
     complete: (m) => m['patriarchal_blessing'] === 'Yes',
     eligible: patriarchalEligible,
   },

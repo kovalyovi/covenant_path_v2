@@ -9,7 +9,7 @@ import type { Member } from '../../lib/member';
 import { isInvestigator } from '../../lib/member';
 import { parseMemberDate, fmtMonShort } from '../../logic/dates';
 import {
-  milestones, responsibleOrg, ORG_BUCKETS, type OrgBucket,
+  milestones, responsibleOrg, expected, isMissing, ORG_BUCKETS, type OrgBucket,
 } from '../../logic/milestones';
 import {
   PageScaffold, SectionTitle, OrgFilterBar, SubtleNote, UnitGrid, DateList, orgNoteFor,
@@ -188,10 +188,12 @@ function CompletionCard({ rows, onDrill }: { rows: Member[]; onDrill: (d: Drill)
     <SectionCard title="Golden Hour completion">
       <div className="wrap" style={{ gap: 18 }}>
         {milestones.map((ms) => {
-          const eligible = rows.filter(ms.eligible);
+          // Expected-only: eligible AND not N/A (N/A ≠ not-done), so the % + drill exclude
+          // not-applicable members entirely.
+          const eligible = rows.filter((m) => expected(ms, m));
           if (eligible.length === 0) return null;
           const done = eligible.filter(ms.complete);
-          const missing = eligible.filter((m) => !ms.complete(m));
+          const missing = eligible.filter((m) => isMissing(ms, m));
           const pct = done.length / eligible.length;
           return (
             <button

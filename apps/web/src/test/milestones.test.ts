@@ -3,8 +3,9 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  milestones, milestonesFor, responsibleOrg, completionOf, priesthoodEligible, callingEligible,
-  aaronicEligible, endowmentEligible, templeExperienceValue, templeExperienceDisplay,
+  milestones, milestonesFor, needsCategories, responsibleOrg, completionOf, priesthoodEligible,
+  callingEligible, aaronicEligible, endowmentEligible, templeExperienceValue, templeExperienceDisplay,
+  isNA, expected, isMissing, patriarchalEligible, templeRecommendEligible,
   type OrgBucket,
 } from '../logic/milestones';
 import type { Member } from '../lib/member';
@@ -86,7 +87,9 @@ describe('temple experiences (family name + first temple visit)', () => {
 describe('milestonesFor (eligibility filtering)', () => {
   it('priesthood chips only apply to males', () => {
     const aF = abbrs(member({ sex: 'F' }));
-    const aM = abbrs(member({ sex: 'M', baptism_date: '1 Jan 2000' }));
+    // an eligible male's priesthood reads "No" (not yet ordained), not the N/A fixture default — N/A
+    // would be EXCLUDED (item 4b), so eligibility tests use the realistic not-done value.
+    const aM = abbrs(member({ sex: 'M', baptism_date: '1 Jan 2000', aaronic_priesthood: 'No', melchizedek_priesthood: 'No' }));
     expect(aF.has('AP')).toBe(false);
     expect(aF.has('MP')).toBe(false);
     expect(aM.has('AP')).toBe(true);
@@ -99,7 +102,7 @@ describe('milestonesFor (eligibility filtering)', () => {
   });
 
   it('a 12-year-old is eligible for calling + Aaronic, but NOT ministering (needs 14)', () => {
-    const turning12 = member({ sex: 'M', birth_date: `1 Jan ${thisYear - 12}` });
+    const turning12 = member({ sex: 'M', birth_date: `1 Jan ${thisYear - 12}`, aaronic_priesthood: 'No' });
     const a = abbrs(turning12);
     expect(a.has('C')).toBe(true);
     expect(a.has('AP')).toBe(true);
@@ -129,6 +132,61 @@ it('a fully-integrated member completes all applicable milestones', () => {
   });
   const applicable = milestonesFor(m);
   expect(applicable.filter((x) => x.complete(m)).length).toBe(applicable.length);
+});
+
+describe('N/A exclusion + patriarchal/temple-name gate (item 4)', () => {
+  const calling = needsCategories.find((m) => m.abbr === 'C')!;
+  const aaronic = needsCategories.find((m) => m.abbr === 'AP')!;
+  const patriarchal = needsCategories.find((m) => m.abbr === 'PB')!;
+  const recommend = needsCategories.find((m) => m.abbr === 'TR')!;
+
+  it('isNA recognizes the N/A sentinel (case/space tolerant)', () => {
+    expect(isNA('N/A')).toBe(true);
+    expect(isNA(' n/a ')).toBe(true);
+    expect(isNA('No')).toBe(false);
+    expect(isNA('Yes')).toBe(false);
+    expect(isNA(null)).toBe(false);
+  });
+
+  it('an N/A field is NOT missing (N/A ≠ not-done) even for an eligible member', () => {
+    // An adult man whose calling field is somehow N/A: not expected, not missing.
+    const m = member({ sex: 'M', birth_date: `1 Jan ${thisYear - 30}`, calling: 'N/A' });
+    expect(expected(calling, m)).toBe(false);
+    expect(isMissing(calling, m)).toBe(false);
+    // A real not-done IS missing.
+    const notDone = member({ sex: 'M', birth_date: `1 Jan ${thisYear - 30}`, calling: 'No' });
+    expect(isMissing(calling, notDone)).toBe(true);
+  });
+
+  it("priesthood N/A for a woman is excluded (she's not even eligible)", () => {
+    const woman = member({ sex: 'F', birth_date: `1 Jan ${thisYear - 30}`, aaronic_priesthood: 'N/A' });
+    expect(expected(aaronic, woman)).toBe(false);
+    expect(isMissing(aaronic, woman)).toBe(false);
+  });
+
+  it('patriarchal blessing uses the SAME age gate as temple recommend (turning ≥12 this year)', () => {
+    const child = member({ birth_date: `1 Jan ${thisYear - 8}` });
+    const teen = member({ birth_date: `1 Jan ${thisYear - 12}` });
+    expect(patriarchalEligible(child)).toBe(templeRecommendEligible(child)); // both false
+    expect(patriarchalEligible(teen)).toBe(templeRecommendEligible(teen));   // both true
+    expect(patriarchalEligible(teen)).toBe(true);
+    expect(patriarchalEligible(child)).toBe(false);
+    // a child is therefore never "missing" a patriarchal blessing / temple recommend
+    expect(isMissing(patriarchal, member({ birth_date: `1 Jan ${thisYear - 8}`, patriarchal_blessing: 'N/A' }))).toBe(false);
+    expect(isMissing(recommend, member({ birth_date: `1 Jan ${thisYear - 8}`, temple_recommend: 'N/A' }))).toBe(false);
+  });
+
+  it('completion ring + milestonesFor exclude an N/A milestone from the denominator', () => {
+    // adult woman, 1yr member: applicable = Friends, Calling, Has-ministers, Ministering-assignment,
+    // Family name, First temple visit = 6. If calling is N/A, applicable drops to 5.
+    const base = member({ sex: 'F', baptism_date: '1 Jan 2000' });
+    expect(milestonesFor(base).length).toBe(6);
+    const naCalling = member({ sex: 'F', baptism_date: '1 Jan 2000', calling: 'N/A' });
+    expect(milestonesFor(naCalling).length).toBe(5);
+    // a completed milestone still counts even if oddly N/A-shaped is irrelevant here; verify ring math
+    const oneDone = member({ sex: 'F', baptism_date: '1 Jan 2000', calling: 'N/A', friends: 'Yes' });
+    expect(completionOf(oneDone)).toBeCloseTo(1 / 5, 5);
+  });
 });
 
 describe('responsibleOrg (convert-care ownership by tenure)', () => {

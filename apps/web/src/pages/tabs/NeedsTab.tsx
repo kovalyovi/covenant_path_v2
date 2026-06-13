@@ -9,7 +9,7 @@ import type { Member } from '../../lib/member';
 import { isInvestigator } from '../../lib/member';
 import { parseMemberDate } from '../../logic/dates';
 import {
-  needsCategories, responsibleOrg, ORG_BUCKETS, type OrgBucket, type Milestone,
+  needsCategories, responsibleOrg, isMissing, ORG_BUCKETS, type OrgBucket, type Milestone,
 } from '../../logic/milestones';
 import { assignUnitColors } from '../../logic/kpis';
 import { hexA } from '../../theme/tokens';
@@ -66,8 +66,11 @@ function NeedsBody() {
   const orgScoped = allOrgs ? all : all.filter((m) => orgs.has(responsibleOrg(m) as OrgBucket));
   // Ward dropdown (default Stake = all wards) filters on top of the org filter.
   const baptized = ward == null ? orgScoped : orgScoped.filter((m) => String(m['unit_name'] ?? '') === ward);
+  // "Missing" = expected-but-incomplete: eligible AND the field isn't N/A (N/A ≠ not-done, so a
+  // not-applicable field — priesthood for a woman, a patriarchal blessing for a young child — never
+  // shows the member as missing). `isMissing` is the shared rule across all completion surfaces.
   const missingByMs = needsCategories.map((ms) =>
-    baptized.filter((m) => ms.eligible(m) && !ms.complete(m)).sort(cmp),
+    baptized.filter((m) => isMissing(ms, m)).sort(cmp),
   );
   const total = missingByMs.reduce((acc, l) => acc + l.length, 0);
   const note = orgNoteFor(orgs);

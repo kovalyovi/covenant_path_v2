@@ -79,28 +79,40 @@ def member_one_year(m: dict) -> bool:
     return mm is not None and mm >= 12
 
 
-# (label, is-complete, is-eligible) — the single source of milestone eligibility. Confirmed rules
-# (2026-05-30): turning-N-this-year = currentYear-birthYear>=N; "now" = actual current age.
+def _is_na(v) -> bool:
+    """A field value that means "doesn't apply to this person" (priesthood for a woman, a patriarchal
+    blessing for a young child). N/A is NOT not-done — an N/A field must never make a member show up as
+    missing a step. Mirrors `isNA` in apps/web/src/logic/milestones.ts."""
+    return str(v or "").strip().upper() == "N/A"
+
+
+# (label, field, is-complete, is-eligible) — the single source of milestone eligibility. `field` is the
+# member key the step reads, so an N/A value can be EXCLUDED from "missing" (N/A ≠ not-done). Confirmed
+# rules (2026-05-30): turning-N-this-year = currentYear-birthYear>=N; "now" = actual current age.
 #   Aaronic = male & turning-12;  calling = turning-12;  gives-ministering = turning-14 (both sexes);
 #   has-ministers = everyone;  Melchizedek = male & age>=18 NOW & member>=1yr;
 #   family-name + first-temple-visit = turning-12 (limited-use recommend age, both sexes).
 # Mirrored in apps/web/src/logic/milestones.ts (+ the native Milestones ports) — keep in sync.
 MILESTONES = [
-    ("a friend in the ward", lambda m: m.get("friends") == "Yes", lambda m: True),
-    ("a calling", lambda m: m.get("calling") == "Yes", lambda m: turns_at_least(m, 12)),
-    ("ministers assigned to them", lambda m: m.get("ministering_brothers_sisters") == "Yes", lambda m: True),
-    ("a ministering assignment", lambda m: m.get("ministering_assignment") == "Yes", lambda m: turns_at_least(m, 14)),
-    ("the Aaronic Priesthood", lambda m: m.get("aaronic_priesthood") == "Yes",
+    ("a friend in the ward", "friends", lambda m: m.get("friends") == "Yes", lambda m: True),
+    ("a calling", "calling", lambda m: m.get("calling") == "Yes", lambda m: turns_at_least(m, 12)),
+    ("ministers assigned to them", "ministering_brothers_sisters",
+     lambda m: m.get("ministering_brothers_sisters") == "Yes", lambda m: True),
+    ("a ministering assignment", "ministering_assignment",
+     lambda m: m.get("ministering_assignment") == "Yes", lambda m: turns_at_least(m, 14)),
+    ("the Aaronic Priesthood", "aaronic_priesthood", lambda m: m.get("aaronic_priesthood") == "Yes",
      lambda m: m.get("sex") == "M" and turns_at_least(m, 12)),
-    ("the Melchizedek Priesthood", lambda m: m.get("melchizedek_priesthood") == "Yes",
+    ("the Melchizedek Priesthood", "melchizedek_priesthood", lambda m: m.get("melchizedek_priesthood") == "Yes",
      lambda m: m.get("sex") == "M" and is_at_least_now(m, 18) and member_one_year(m)),
-    ("a family name prepared for the temple", lambda m: m.get("family_name_prepared") == "Yes",
-     lambda m: turns_at_least(m, 12)),
-    ("a first temple visit (baptisms for ancestors)", lambda m: m.get("first_temple_visit") == "Yes",
-     lambda m: turns_at_least(m, 12)),
+    ("a family name prepared for the temple", "family_name_prepared",
+     lambda m: m.get("family_name_prepared") == "Yes", lambda m: turns_at_least(m, 12)),
+    ("a first temple visit (baptisms for ancestors)", "first_temple_visit",
+     lambda m: m.get("first_temple_visit") == "Yes", lambda m: turns_at_least(m, 12)),
 ]
 
 
 def member_missing(m: dict) -> list[str]:
-    """The eligible-but-incomplete integration steps for one member dict."""
-    return [label for label, complete, elig in MILESTONES if elig(m) and not complete(m)]
+    """The eligible-but-incomplete integration steps for one member dict. An N/A field is EXCLUDED
+    (it doesn't apply to this person — N/A ≠ not-done)."""
+    return [label for label, field, complete, elig in MILESTONES
+            if elig(m) and not _is_na(m.get(field)) and not complete(m)]

@@ -7,7 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import type { Member } from '../lib/member';
 import { memberId } from '../lib/member';
 import { fmtLong } from '../logic/dates';
-import { milestones, type Milestone } from '../logic/milestones';
+import { milestones, expected, isMissing, type Milestone } from '../logic/milestones';
 import type { Ev, MemberLessonCount } from '../logic/kpis';
 import { Modal } from './Modal';
 import { Avatar, CountBadge, Segmented, Progress } from './ui';
@@ -132,10 +132,11 @@ function GhDrillBody({ drill, onClose }: { drill: GhDrill; onClose: () => void }
         who actually still needs it.
       </p>
       {milestones.map((ms: Milestone) => {
-        const eligible = drill.rows.filter(ms.eligible);
+        // Expected-only: eligible AND not N/A (N/A ≠ not-done), so the % reflects who actually needs it.
+        const eligible = drill.rows.filter((m) => expected(ms, m));
         if (eligible.length === 0) return null;
         const missing = eligible
-          .filter((m) => !ms.complete(m))
+          .filter((m) => isMissing(ms, m))
           .sort((a, b) => String(a['name'] ?? '').localeCompare(String(b['name'] ?? '')));
         const done = eligible.length - missing.length;
         const pct = done / eligible.length;

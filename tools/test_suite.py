@@ -335,6 +335,32 @@ def test_stale_first_unit_ordering():
     return "stale-first ordering: never-synced first, then oldest-data; empty=no-op"
 
 
+def test_milestone_na_exclusion():
+    """member_missing EXCLUDES N/A fields (N/A ≠ not-done): a woman's priesthood, a young child's
+    age-gated steps. Mirrors the web `isMissing`/`expected` rule."""
+    from backend.milestones import member_missing
+    this_year = __import__("datetime").datetime.now().year
+    # An adult man, member 2+ years, with priesthood explicitly N/A (shouldn't happen for a man, but
+    # proves the exclusion): the priesthood steps must NOT appear as missing.
+    man = {"sex": "M", "birth_date": f"1 Jan {this_year - 30}", "baptism_date": f"1 Jan {this_year - 2}",
+           "friends": "No", "calling": "No", "ministering_brothers_sisters": "No",
+           "ministering_assignment": "No", "aaronic_priesthood": "N/A", "melchizedek_priesthood": "N/A",
+           "family_name_prepared": "No", "first_temple_visit": "No"}
+    miss = member_missing(man)
+    assert "the Aaronic Priesthood" not in miss, miss      # N/A excluded
+    assert "the Melchizedek Priesthood" not in miss, miss  # N/A excluded
+    assert "a calling" in miss and "a friend in the ward" in miss, miss  # real not-done still listed
+    # A young child (turns 8 this year): age-gated steps aren't eligible AND their flat values are N/A —
+    # the child shows NO missing steps except the everyone-steps (friends, has-ministers).
+    child = {"sex": "F", "birth_date": f"1 Jan {this_year - 8}", "baptism_date": f"1 Jan {this_year}",
+             "friends": "No", "calling": "N/A", "ministering_brothers_sisters": "No",
+             "ministering_assignment": "N/A", "family_name_prepared": "N/A", "first_temple_visit": "N/A"}
+    cmiss = member_missing(child)
+    assert "a calling" not in cmiss and "a family name prepared for the temple" not in cmiss, cmiss
+    assert "a friend in the ward" in cmiss, cmiss  # everyone step still applies
+    return "milestone N/A exclusion: N/A fields never show as missing; real not-done still does"
+
+
 def test_calling_union_and_neutralize():
     """Calling: the per-member profile (individualCallings) UNIONs with the org-aggregate — a profile
     'Yes' upgrades, a profile 'No' never downgrades a real org 'Yes' (the Terry Stoner sub-org-calling
@@ -784,6 +810,7 @@ def main() -> int:
     print("== OFFLINE tests ==")
     offline = [test_token_store_roundtrip, test_token_store_key_mismatch,
                test_report_degradation_helpers, test_stale_first_unit_ordering,
+               test_milestone_na_exclusion,
                test_membertools_auth, test_membertools_adapter, test_membertools_build_report,
                test_membertools_token_store, test_calling_union_and_neutralize,
                test_http_util_transient_classification, test_http_util_retry_and_breaker,
