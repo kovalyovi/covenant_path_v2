@@ -52,11 +52,15 @@ def _retry_post(url: str, *, retryable_on_5xx: bool = True, attempts: int = 4,
             time.sleep(min(base_delay * (2 ** i), max_delay))
     raise MemberToolsError(f"POST {url} failed after {attempts} attempts: {last}")
 
+from lcr_client.hosts import IDENTITY_BASE
 from lcr_client.logging_setup import get_logger
 
 logger = get_logger()
 
-OKTA = "https://id.churchofjesuschrist.org/oauth2/default/v1"
+# Derived from IDENTITY_BASE so the e2e mock (CP_TEST_MODE) redirects the silent mint to the local
+# Okta stand-in instead of reaching production Okta from a test. In prod IDENTITY_BASE is the pinned
+# id.churchofjesuschrist.org, so this is byte-identical to the old hard-coded URL.
+OKTA = f"{IDENTITY_BASE}/oauth2/default/v1"
 API_BASE = "https://membertools-api.churchofjesuschrist.org"
 SYNC_URL = f"{API_BASE}/api/v5/sync"
 SYNC_FILES_URL = f"{API_BASE}/api/v5/sync/files"

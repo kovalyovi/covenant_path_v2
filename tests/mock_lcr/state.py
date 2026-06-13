@@ -39,6 +39,7 @@ class MockChurchState:
         self.auth_codes: dict[str, str] = {}         # authorize ?code= -> username
         self.refresh_tokens: dict[str, str] = {}     # refresh_token -> username
         self.id_tokens: dict[str, str] = {}          # id_token -> username
+        self.session_tokens: dict[str, str] = {}     # /api/v1/authn sessionToken -> username (web lane)
 
     # -- lifecycle -------------------------------------------------------------------
     def reset(self) -> None:
@@ -54,6 +55,7 @@ class MockChurchState:
             self.auth_codes.clear()
             self.refresh_tokens.clear()
             self.id_tokens.clear()
+            self.session_tokens.clear()
 
     def set_scenario(self, scenario: str, sleep_seconds: float | None = None) -> None:
         if scenario not in SCENARIOS:
@@ -127,6 +129,14 @@ class MockChurchState:
         token = "lcrsess-" + secrets.token_urlsafe(12)
         with self.lock:
             self.lcr_sessions[token] = username
+        return token
+
+    def issue_session_token(self, username: str) -> str:
+        """The classic /api/v1/authn sessionToken — redeemed at the OAuth /authorize?sessionToken=
+        leg the web_session (credential-capture / one-MFA) flow uses."""
+        token = "st-" + secrets.token_urlsafe(12)
+        with self.lock:
+            self.session_tokens[token] = username
         return token
 
     def issue_tokens(self, username: str) -> dict:

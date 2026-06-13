@@ -106,7 +106,7 @@ incomplete.**
 | # | Scenario | Status |
 |---|---|---|
 | B1 | Consented enroll stores credential (eval → scrape → RPC) — **the 2026-06-10 NameError regression** | ✅ offline `test_broker::test_full_eval_enroll_reaches_scrape_and_stores` + e2e-mock |
-| B2 | Re-enroll after REVOKE → row un-revoked, failure state cleared | ✅ e2e-mock (seeded revoked row) + offline RPC-semantics stub + **fullstack browser loop** (`apps/web/e2e/fullstack`) |
+| B2 | Re-enroll after REVOKE → row un-revoked, failure state cleared | ✅ e2e-mock (seeded revoked row) + offline RPC-semantics stub + **fullstack browser loop** (`apps/web/e2e/fullstack`). The 2026-06-12 enroll rewrite routed the post-login offer + re-auth through the credential-capture `/auth/web/*` lane (`web_session`: `/api/v1/authn` → `/authorize?sessionToken=` → appSession + silent Member Tools mint); the fullstack mock now implements that lane (`tests/mock_lcr` authn + sessionToken authorize + appSession cookie; `membertools.OKTA` derives from `IDENTITY_BASE` so the mint stays on the mock and cleanly no-ops). Pre-fix the browser loop stranded the leader on `/login` (the offer's `webStart` had no mock to talk to). |
 | B3 | can_enroll offer for a credential-less stake (post-login offer, consent moved off login form) | ✅ offline + e2e-mock + Playwright `login-enroll-offer` |
 | B4 | can_improve takeover offer (higher access replaces incomplete credential; lower never clobbers healthy higher) | ✅ offline (`onboarding.should_take_over`) · 🔶 e2e-mock persona pair |
 | B5 | Consented enroll that stored NOTHING says so (dialog stays open with server error; no fake success toast) | ✅ Playwright `reauth-dialog` (web logic shipped eb7107f) |

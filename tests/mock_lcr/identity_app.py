@@ -285,6 +285,21 @@ def create_identity_app(state: MockChurchState) -> FastAPI:
                                 status_code=401)
         return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
 
+    # ---- classic /api/v1/authn (the credential-capture / web_session lane) ------------
+    @app.post("/api/v1/authn")
+    async def authn(request: Request):
+        """username+password -> sessionToken. The Church org returns SUCCESS here WITHOUT MFA (MFA is
+        applied later, at the OAuth /authorize step); a bad password / locked account is a clean 401.
+        Drives backend.auth_broker.web_session.web_start -> _authn -> _open_lcr_authorize."""
+        body = await request.json()
+        username = (body.get("username") or "").strip()
+        password = body.get("password") or ""
+        persona = PERSONAS.get(username)
+        if username == LOCKED_USERNAME or persona is None or password != persona.password:
+            return JSONResponse({"errorCode": "E0000004", "errorSummary": "Authentication failed"},
+                                status_code=401)
+        return {"status": "SUCCESS", "sessionToken": state.issue_session_token(username)}
+
     # ---- IDX --------------------------------------------------------------------------
     @app.post("/idp/idx/introspect")
     async def introspect(request: Request):
@@ -437,7 +452,17 @@ def create_identity_app(state: MockChurchState) -> FastAPI:
         if state.scenario == "sso_reject":
             return RedirectResponse(f"{state.identity_base}/signin?error=login_required",
                                     status_code=302)
-        username = state.okta_sessions.get(request.cookies.get("idx", ""))
+        # The credential-capture (web_session) lane redeems a /api/v1/authn sessionToken HERE. For a
+        # no-MFA persona (president.* etc.) the Church org issues the auth code straight away AND
+        # establishes the global Okta session (the `idx` cookie the later silent Member Tools mint
+        # would SSO from), exactly like a real authn->authorize. MFA-via-the-web-widget is not modeled
+        # (no fullstack persona uses webStart with MFA).
+        set_okta_cookie = False
+        username = state.session_tokens.get(q.get("sessionToken", ""))
+        if username is not None:
+            set_okta_cookie = True
+        else:
+            username = state.okta_sessions.get(request.cookies.get("idx", ""))
         if username is None and q.get("id_token_hint"):
             username = state.id_tokens.get(q.get("id_token_hint", ""))
         if username is None or not redirect_uri.startswith(state.lcr_base):
@@ -447,8 +472,11 @@ def create_identity_app(state: MockChurchState) -> FastAPI:
             return RedirectResponse(f"{state.identity_base}/signin", status_code=302)
         code = state.issue_auth_code(username)
         sep = "&" if "?" in redirect_uri else "?"
-        return RedirectResponse(f"{redirect_uri}{sep}code={code}&state={state_param}",
+        resp = RedirectResponse(f"{redirect_uri}{sep}code={code}&state={state_param}",
                                 status_code=302)
+        if set_okta_cookie:
+            resp.set_cookie("idx", state.issue_okta_session(username), path="/", httponly=True)
+        return resp
 
     @app.get("/signin")
     async def signin():

@@ -78,6 +78,11 @@ def create_lcr_app(state: MockChurchState) -> FastAPI:
         resp = RedirectResponse(f"{state.lcr_base}/", status_code=302)
         resp.set_cookie("lcr_session", state.issue_lcr_session(username), path="/",
                         httponly=True)
+        # Production LCR names its session cookie `appSession`; the credential-capture flow
+        # (web_session._open_lcr_authorize / _follow_success) gates on a cookie whose name starts
+        # with "appSession". Set it alongside lcr_session (which the mock keys its own auth on) so the
+        # web lane recognizes the established session. Both ride the captured/replayed cookie jar.
+        resp.set_cookie("appSession", state.issue_lcr_session(username), path="/", httponly=True)
         return resp
 
     @app.get("/")
