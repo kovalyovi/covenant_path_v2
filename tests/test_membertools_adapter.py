@@ -19,11 +19,14 @@ from __future__ import annotations
 from covenant_path.membertools_adapter import (
     MinisteringIndex,
     _calling_index,
+    _endowed_index,
     _name_index,
+    _priesthood_office_index,
+    _recommend_index,
     _sex_index,
     adapt_sync,
 )
-from covenant_path.report import NEEDS_PROFILE
+from covenant_path.report import NA, NEEDS_PROFILE
 
 
 # The reference fixture: stake 999, wards 100 (full EQ/RS org) + 200 (no org). Each member sits in
@@ -220,14 +223,22 @@ def test_field_gap_report_attributes_reasons():
         base.update(over)
         return CovenantPathMember(**base)
 
-    # LCR session DEAD (profile merge did not run): the profile-only fields are blank for everyone.
+    # LCR session DEAD (profile merge did not run): patriarchal_blessing is the ONLY genuinely
+    # profile-only field, so it (and only it) gets the "re-auth" reason. Priesthood / temple-recommend /
+    # endowment are now RESCUED from the bulk payload (2026-06-13), so a sentinel on those reads as a
+    # bulk-payload gap, NOT "re-auth needed".
     rows = [mk() for _ in range(3)]
     rep = field_gap_report(rows, profile_merge_ran=False)
     assert rep["members"] == 3
+    assert "patriarchal_blessing" in rep["fields"]
+    assert rep["fields"]["patriarchal_blessing"]["missing"] == 3
+    assert "re-auth" in rep["fields"]["patriarchal_blessing"]["reason"]
+    # temple_recommend / priesthood / endowment are now rescuable → a sentinel = "bulk payload gap".
     assert "temple_recommend" in rep["fields"]
-    assert rep["fields"]["temple_recommend"]["missing"] == 3
-    assert "re-auth" in rep["fields"]["temple_recommend"]["reason"]
-    # the rescued fields are filled → NOT in the gap report
+    assert "bulk payload" in rep["fields"]["temple_recommend"]["reason"]
+    assert "bulk payload" in rep["fields"]["aaronic_priesthood"]["reason"]
+    assert "bulk payload" in rep["fields"]["living_ordinance"]["reason"]
+    # the already-filled rescued fields are NOT in the gap report
     assert "ministering_brothers_sisters" not in rep["fields"]
     assert "calling" not in rep["fields"]
 
@@ -240,3 +251,170 @@ def test_field_gap_report_attributes_reasons():
     full = [mk(aaronic_priesthood="Yes", melchizedek_priesthood="Yes", temple_recommend="Active",
                patriarchal_blessing="Yes", living_ordinance="Yes")]
     assert field_gap_report(full, profile_merge_ran=True)["fields"] == {}
+
+
+# --- priesthood office / endowment / temple recommend RESCUE (#data-gap 2026-06-13) --------------
+# Verified live (stake 503991) that the bulk payload carries these three of the four "profile-only"
+# fields after all: the member directory's `priesthood` OFFICE enum + `ordinances[]` (ENDOWMENT), and
+# the unit-wide `templeRecommendStatus[].recommends[]` roster. Only patriarchal_blessing is genuinely
+# absent. These tests pin the index builders + the eligibility-gated end-to-end rescue.
+
+from datetime import datetime  # noqa: E402
+
+_THIS_YEAR = datetime.now().year
+
+
+def _adult_birth():
+    return f"{_THIS_YEAR - 40}-01-01"          # 40yo -> 18+ now, turns 12+
+
+
+def _youth_birth():
+    return f"{_THIS_YEAR - 13}-01-01"          # 13yo -> turns 12+ this year, but NOT 18 now
+
+
+def _long_member_conf():
+    return f"{_THIS_YEAR - 5}-01-01"           # baptized 5y ago -> member >1yr
+
+
+# A live-shaped payload: covenant members ALSO present in the directory with priesthood + ordinances,
+# plus a unit-wide temple-recommend roster. Wards 100 (covered) + 200 (no recommend roster entry).
+_RESCUE_PAYLOAD = {
+    "units": [{"unitNumber": 999, "unitType": "STAKE", "name": "Stake",
+               "childUnits": [{"unitNumber": 100, "unitType": "WARD", "name": "W100"},
+                              {"unitNumber": 200, "unitType": "WARD", "name": "W200"}]}],
+    "households": [
+        # Endowed elder, active regular recommend.
+        {"uuid": "h-elder", "unitNumber": 100, "members": [
+            {"uuid": "u-elder", "displayName": "E, E", "sex": "MALE", "birthDate": _adult_birth(),
+             "priesthood": "ELDER",
+             "ordinances": [{"type": "BAPTISM"}, {"type": "CONFIRMATION"},
+                            {"type": "ORDAIN_ELDER"}, {"type": "ENDOWMENT"}]}]},
+        # Young deacon, NOT endowed (has ordinances but no ENDOWMENT), no recommend entry -> 'No'.
+        {"uuid": "h-deacon", "unitNumber": 100, "members": [
+            {"uuid": "u-deacon", "displayName": "D, D", "sex": "MALE", "birthDate": _youth_birth(),
+             "priesthood": "DEACON",
+             "ordinances": [{"type": "BAPTISM"}, {"type": "CONFIRMATION"}, {"type": "ORDAIN_DEACON"}]}]},
+        # Adult woman, no priesthood office, endowed, active recommend.
+        {"uuid": "h-sister", "unitNumber": 100, "members": [
+            {"uuid": "u-sister", "displayName": "S, S", "sex": "FEMALE", "birthDate": _adult_birth(),
+             "ordinances": [{"type": "BAPTISM"}, {"type": "CONFIRMATION"}, {"type": "ENDOWMENT"}]}]},
+        # Member in ward 200 — in the directory but absent from the recommend roster (a real 'No').
+        {"uuid": "h-w200", "unitNumber": 200, "members": [
+            {"uuid": "u-w200", "displayName": "W, W", "sex": "MALE", "birthDate": _adult_birth(),
+             "priesthood": "HIGH_PRIEST",
+             "ordinances": [{"type": "BAPTISM"}, {"type": "ENDOWMENT"}]}]},
+    ],
+    "templeRecommendStatus": [
+        {"unitNumber": 100, "recommends": [
+            {"memberUuid": "u-elder", "type": "REGULAR", "status": "ACTIVE"},
+            {"memberUuid": "u-sister", "type": "REGULAR", "status": "EXPIRED"},
+            {"memberUuid": "u-sister", "type": "REGULAR", "status": "ACTIVE"},   # strongest wins
+        ]},
+    ],
+    "covenantPathMembers": [
+        {"id": "c-elder", "memberUuid": "u-elder", "names": {"listed": "E, E"},
+         "unitNumber": 100, "confirmationDate": _long_member_conf()},
+        {"id": "c-deacon", "memberUuid": "u-deacon", "names": {"listed": "D, D"},
+         "unitNumber": 100, "confirmationDate": _long_member_conf()},
+        {"id": "c-sister", "memberUuid": "u-sister", "names": {"listed": "S, S"},
+         "unitNumber": 100, "confirmationDate": _long_member_conf()},
+        {"id": "c-w200", "memberUuid": "u-w200", "names": {"listed": "W, W"},
+         "unitNumber": 200, "confirmationDate": _long_member_conf()},
+    ],
+}
+
+
+def test_priesthood_office_index():
+    idx = _priesthood_office_index(_RESCUE_PAYLOAD)
+    assert idx.get("u-elder") == "ELDER"
+    assert idx.get("u-deacon") == "DEACON"
+    assert "u-sister" in idx and idx["u-sister"] == ""   # in directory, no office -> real "no office"
+    assert "not-in-dir" not in idx
+
+
+def test_endowed_index():
+    idx = _endowed_index(_RESCUE_PAYLOAD)
+    assert idx.get("u-elder") is True
+    assert idx.get("u-deacon") is False        # has ordinances list, but no ENDOWMENT
+    assert idx.get("u-sister") is True
+
+
+def test_recommend_index_strongest_label_wins():
+    idx = _recommend_index(_RESCUE_PAYLOAD)
+    assert idx.get("u-elder") == "Active"
+    assert idx.get("u-sister") == "Active"     # ACTIVE beats the EXPIRED record
+    assert "u-w200" not in idx                 # not in any roster entry
+
+
+def test_adapt_sync_rescues_priesthood_endowment_recommend():
+    members = {m.person_uuid: m for m in adapt_sync(_RESCUE_PAYLOAD)}
+
+    # Endowed elder, member >1yr, adult male: full priesthood + endowed + active recommend.
+    elder = members["u-elder"]
+    assert elder.aaronic_priesthood == "Yes"
+    assert elder.melchizedek_priesthood == "Yes"
+    assert elder.living_ordinance == "Yes"
+    assert elder.temple_recommend == "Active"
+    assert elder.patriarchal_blessing == NEEDS_PROFILE   # genuinely not in the payload
+
+    # Young deacon: Aaronic Yes (office), Melchizedek N/A (under 18), endowment N/A (ineligible 'No'),
+    # no recommend roster entry but IS a directory member -> a real 'No'.
+    deacon = members["u-deacon"]
+    assert deacon.aaronic_priesthood == "Yes"
+    assert deacon.melchizedek_priesthood == NA
+    assert deacon.living_ordinance == NA
+    assert deacon.temple_recommend == "No"
+
+    # Adult woman: priesthood N/A (female), endowed Yes, active recommend (strongest label).
+    sister = members["u-sister"]
+    assert sister.aaronic_priesthood == NA
+    assert sister.melchizedek_priesthood == NA
+    assert sister.living_ordinance == "Yes"
+    assert sister.temple_recommend == "Active"
+
+    # Ward-200 member: directory member absent from the recommend roster -> a real 'No'.
+    w200 = members["u-w200"]
+    assert w200.temple_recommend == "No"
+    assert w200.melchizedek_priesthood == "Yes"   # HIGH_PRIEST office, adult male, member >1yr
+
+
+def test_adapt_sync_no_directory_keeps_priesthood_recommend_sentinels():
+    # A covenant person NOT in any household + no recommend roster: priesthood/endowment/recommend stay
+    # the sentinel so the /mlt merge (or last-good) preserves — never a false 'No' for an unknown.
+    payload = {
+        "units": [{"unitNumber": 999, "name": "S", "unitType": "STAKE",
+                   "childUnits": [{"unitNumber": 100, "name": "W", "unitType": "WARD"}]}],
+        "covenantPathMembers": [
+            {"id": "x", "memberUuid": "u-x", "names": {"listed": "X, Y"}, "unitNumber": 100,
+             "confirmationDate": _long_member_conf()},
+        ],
+    }
+    m = adapt_sync(payload)[0]
+    assert m.aaronic_priesthood == NEEDS_PROFILE
+    assert m.melchizedek_priesthood == NEEDS_PROFILE
+    assert m.living_ordinance == NEEDS_PROFILE
+    assert m.temple_recommend == NEEDS_PROFILE
+    assert m.patriarchal_blessing == NEEDS_PROFILE
+
+
+def test_recommend_roster_absent_keeps_directory_member_sentinel():
+    # A directory member with NO templeRecommendStatus container in the payload (a degraded/minimal
+    # sync): temple_recommend must stay the sentinel for everyone — NOT a false stake-wide 'No' — so the
+    # merge preserves last-good. Priesthood/endowment (per-member directory data) still resolve.
+    payload = {
+        "units": [{"unitNumber": 999, "name": "S", "unitType": "STAKE",
+                   "childUnits": [{"unitNumber": 100, "name": "W", "unitType": "WARD"}]}],
+        "households": [
+            {"uuid": "h", "unitNumber": 100, "members": [
+                {"uuid": "u-m", "sex": "MALE", "birthDate": f"{_THIS_YEAR - 40}-01-01",
+                 "priesthood": "ELDER", "ordinances": [{"type": "ENDOWMENT"}]}]},
+        ],
+        "covenantPathMembers": [
+            {"id": "c-m", "memberUuid": "u-m", "names": {"listed": "M, M"}, "unitNumber": 100,
+             "confirmationDate": _long_member_conf()},
+        ],
+    }
+    m = {x.person_uuid: x for x in adapt_sync(payload)}["u-m"]
+    assert m.temple_recommend == NEEDS_PROFILE        # roster absent -> unknown, not a false 'No'
+    assert m.melchizedek_priesthood == "Yes"          # per-member directory office still resolves
+    assert m.living_ordinance == "Yes"                # per-member ordinances still resolve

@@ -4,10 +4,14 @@ Adapt the Member Tools `/api/v5/sync` bulk payload → our CovenantPathMember mo
 This replaces the FRAGILE one-work source (progress-record + per-person details) with the reliable
 Member Tools bulk call (lcr_client.membertools). It fills the covenant-path PROGRESS fields (the data
 that used to come from the flaky cluster) + the rich `details` subtree the app's member view shows.
-The PROFILE-sourced fields (patriarchal_blessing, temple_recommend, ministering, calling, priesthood,
-birth_date, …) are left as the NEEDS_PROFILE sentinel — covenant_path.report's existing /mlt profile
-merge fills those from the reliable /mlt cluster, exactly as before. So this is a SURGICAL swap of
-only the broken part.
+
+Most of the once-"profile-only" fields turned out to BE in the bulk payload (verified live vs stake
+503991, 2026-06-13) and are rescued here so they survive a dead LCR session (the steady-state): the
+member DIRECTORY (`households[].members[]`) carries the priesthood OFFICE enum + the per-member
+`ordinances[]` (ENDOWMENT), and the unit-wide `templeRecommendStatus[].recommends[]` roster carries
+temple-recommend status. Only `patriarchal_blessing` is GENUINELY absent from the whole payload (no
+hasPatriarchalBlessing flag, no PATRIARCHAL ordinance type anywhere), so it alone stays the
+NEEDS_PROFILE sentinel for covenant_path.report's /mlt profile merge.
 
 person_uuid mapping is load-bearing (wrong choice → duplicated members): VERIFIED live that members
 match our DB on `memberUuid` (76/76) and investigators (no memberUuid) on `id` (17/17) — so
@@ -19,7 +23,13 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-from covenant_path.report import CovenantPathMember, NEEDS_PROFILE
+from backend.milestones import is_at_least_now, member_one_year, turns_at_least
+from covenant_path.report import (
+    NA,
+    NEEDS_PROFILE,
+    CovenantPathMember,
+    priesthood_from_office,
+)
 
 
 def _person_uuid(p: dict) -> str | None:
@@ -153,6 +163,92 @@ def _sex_index(payload: dict) -> dict[str, str]:
         if s:
             idx.setdefault(uuid, s)
     return idx
+
+
+# --- priesthood office / endowment / temple recommend from the bulk payload ----------------------
+# (#data-gap, 2026-06-13.) Verified LIVE against stake 503991's /api/v5/sync that these three of the
+# four still-"profile-only" fields ARE in the bulk payload after all (they were left for the /mlt merge
+# only because the FIRST pass read the covenant PERSON record, which omits them — exactly how birthday
+# was missed). They live in the member DIRECTORY + the unit-wide temple-recommend roster, both of which
+# renew with the 45-day Member Tools token, so we rescue them HERE instead of leaking the NEEDS_PROFILE
+# sentinel once the LCR session dies (the steady-state). Patriarchal blessing is the ONLY one genuinely
+# absent from the whole payload — it stays the sentinel for the /mlt merge.
+#
+#   • priesthood office: `households[].members[].priesthood` is a direct enum
+#     (DEACON/TEACHER/PRIEST/ELDER/HIGH_PRIEST/BISHOP/SEVENTY/PATRIARCH/APOSTLE, or absent), the same
+#     vocabulary report.priesthood_from_office already maps. Absent = no current office (a real "No").
+#   • endowment (living_ordinance): `households[].members[].ordinances[]` carries `type == "ENDOWMENT"`
+#     when endowed. A directory member with an ordinances list but no ENDOWMENT = a real "No".
+#   • temple recommend: `templeRecommendStatus[].recommends[]` is a unit-wide roster keyed by
+#     `memberUuid` with {status: ACTIVE/EXPIRED/ISSUED/CANCELED, type: REGULAR/LIMITED_USE, expiration}.
+#     Mapped to the same Active/Expired/No labels member_profile._recommend_label emits.
+
+
+def _priesthood_office_index(payload: dict) -> dict[str, str]:
+    """uuid -> current priesthood OFFICE (upper-case enum) from the directory. EVERY directory member is
+    indexed: the live payload OMITS the `priesthood` key entirely for members with no office (women,
+    un-ordained males), so directory membership — not key presence — is the "we know this member"
+    signal. A missing/empty office maps to "" (a real "no office", which priesthood_from_office turns
+    into N/A via the eligibility gate). A member ABSENT from the directory is simply not in the index
+    (-> the adapter keeps the sentinel for the /mlt merge / last-good)."""
+    idx: dict[str, str] = {}
+    for uuid, m, _unum in _household_members(payload):
+        office = m.get("priesthood")
+        office = office if isinstance(office, str) else ""
+        # An office anywhere wins over "" across multi-household listings.
+        if uuid not in idx or (office and not idx[uuid]):
+            idx[uuid] = office
+    return idx
+
+
+def _endowed_index(payload: dict) -> dict[str, bool]:
+    """uuid -> endowed? from the directory's `ordinances` list (type == ENDOWMENT). Only members whose
+    directory record carries an `ordinances` list are indexed (a present list is authoritative: no
+    ENDOWMENT entry = not endowed). Absent from the index -> the adapter keeps the sentinel."""
+    idx: dict[str, bool] = {}
+    for uuid, m, _unum in _household_members(payload):
+        ords = m.get("ordinances")
+        if not isinstance(ords, list):
+            continue
+        endowed = any(isinstance(o, dict) and o.get("type") == "ENDOWMENT" for o in ords)
+        # OR across multi-household listings: a True anywhere wins.
+        idx[uuid] = idx.get(uuid, False) or endowed
+    return idx
+
+
+# A temple-recommend roster status that means "has a usable/known recommend record" for the label.
+_RECOMMEND_STATUS_LABEL = {"ACTIVE": "Active", "EXPIRED": "Expired"}
+
+
+def _recommend_index(payload: dict) -> dict[str, str]:
+    """uuid -> temple-recommend label ('Active'/'Expired'/'No') from the unit-wide
+    `templeRecommendStatus[].recommends[]` roster. Keyed by `memberUuid`. A member with an ACTIVE
+    recommend anywhere is 'Active'; else EXPIRED is 'Expired'; any other status (ISSUED/CANCELED) is
+    'No'. Members NOT in any roster entry are absent from the index — when the roster IS present in the
+    payload, a DIRECTORY member missing from it genuinely has no recommend ('No', resolved in
+    adapt_person via directory_uuids + recommend_present); when the whole roster container is absent
+    (degraded sync) recommend stays unknown for everyone. Mirrors member_profile._recommend_label so
+    the values match the /mlt-sourced ones."""
+    idx: dict[str, str] = {}
+    for unit in (payload.get("templeRecommendStatus") or []):
+        for r in (unit.get("recommends") or []):
+            if not isinstance(r, dict):
+                continue
+            uuid = r.get("memberUuid")
+            if not uuid:
+                continue
+            label = _RECOMMEND_STATUS_LABEL.get(r.get("status"), "No")
+            cur = idx.get(uuid)
+            # Prefer the strongest label across multiple records (Active > Expired > No).
+            if label == "Active" or (label == "Expired" and cur != "Active") or cur is None:
+                idx[uuid] = label
+    return idx
+
+
+def _directory_uuids(payload: dict) -> set[str]:
+    """Every uuid present in the member directory — used to distinguish a real 'No recommend' (a
+    directory member absent from the recommend roster) from 'unknown' (someone not in the directory)."""
+    return {uuid for uuid, _m, _u in _household_members(payload)}
 
 
 class MinisteringIndex:
@@ -392,16 +488,67 @@ def context_from_sync(payload: dict):
         positions=[], roles=[], child_units=children, raw=root)
 
 
+def _priesthood_endowment_recommend(
+        uuid: str | None, *, sex: str | None, birth_date: str | None, baptism_date: str | None,
+        office_by_uuid: dict[str, str] | None, endowed_by_uuid: dict[str, bool] | None,
+        recommend_by_uuid: dict[str, str] | None, directory_uuids: set[str] | None,
+        recommend_present: bool = False,
+) -> tuple[str, str, str, str]:
+    """Compute (aaronic, melchizedek, living_ordinance, temple_recommend) from the bulk-payload
+    indexes, applying the SAME eligibility gating report._apply_profile applies — so the values match
+    the /mlt-sourced ones whether the merge runs (live LCR) or not (steady-state dead session). Each
+    field stays NEEDS_PROFILE when the payload can't determine it, so the merge/last-good preserves it
+    (purely additive). Mirrors report._apply_profile's priesthood/endowment/recommend blocks 1:1."""
+    aaronic = melch = living = recommend = NEEDS_PROFILE
+    if not uuid:
+        return aaronic, melch, living, recommend
+    em = {"sex": sex, "birth_date": birth_date, "baptism_date": baptism_date}
+    male = sex == "M"
+
+    # Priesthood from the directory's current office (authoritative). Same eligibility gates as
+    # _apply_profile: Aaronic = male & turning-12; Melchizedek = male & 18+ now & member 1yr; else N/A.
+    if office_by_uuid is not None and uuid in office_by_uuid:
+        a, mel = priesthood_from_office(office_by_uuid[uuid] or None)
+        aaronic = a if (male and turns_at_least(em, 12)) else NA
+        melch = mel if (male and is_at_least_now(em, 18) and member_one_year(em)) else NA
+
+    # Endowment (living_ordinance). A directory member with an ordinances list = authoritative; ENDOWMENT
+    # present = "Yes", else "No". Gate an ineligible "No" (under 18 / member <1yr) to N/A — matching
+    # _apply_profile (a "No" misleads when they can't yet be endowed). A genuine "Yes" is always kept.
+    if endowed_by_uuid is not None and uuid in endowed_by_uuid:
+        if endowed_by_uuid[uuid]:
+            living = "Yes"
+        elif is_at_least_now(em, 18) and member_one_year(em):
+            living = "No"
+        else:
+            living = NA
+
+    # Temple recommend. The roster is unit-wide: an explicit roster label wins; a DIRECTORY member with
+    # no roster entry genuinely has no recommend ("No") — BUT only when the roster is actually PRESENT in
+    # this payload. If the whole `templeRecommendStatus` container is absent (a degraded/minimal sync),
+    # recommend is genuinely UNKNOWN for everyone → stay the sentinel so last-good is preserved, never a
+    # false stake-wide "No". Someone not in the directory at all also stays the sentinel.
+    if recommend_by_uuid is not None and uuid in recommend_by_uuid:
+        recommend = recommend_by_uuid[uuid]
+    elif recommend_present and directory_uuids is not None and uuid in directory_uuids:
+        recommend = "No"
+    return aaronic, melch, living, recommend
+
+
 def adapt_person(p: dict, kind: str, unit_name_by_number: dict[int, str],
                  name_by_uuid: dict[str, str], birth_by_uuid: dict[str, str] | None = None,
                  ministering: "MinisteringIndex | None" = None,
                  calling_by_uuid: dict[str, list[str]] | None = None,
-                 sex_by_uuid: dict[str, str] | None = None) -> CovenantPathMember:
+                 sex_by_uuid: dict[str, str] | None = None,
+                 office_by_uuid: dict[str, str] | None = None,
+                 endowed_by_uuid: dict[str, bool] | None = None,
+                 recommend_by_uuid: dict[str, str] | None = None,
+                 directory_uuids: set[str] | None = None,
+                 recommend_present: bool = False) -> CovenantPathMember:
     """One Member Tools covenant-path person → CovenantPathMember. Covenant-path PROGRESS fields are
-    filled from the bulk payload; the still-PROFILE-only fields (temple_recommend, patriarchal_blessing,
-    priesthood, living_ordinance) use the NEEDS_PROFILE sentinel so the /mlt merge fills them from the
-    reliable cluster — preserving the existing behaviour for the fields that genuinely aren't in the
-    bulk payload.
+    filled from the bulk payload; only patriarchal_blessing stays the NEEDS_PROFILE sentinel (it is
+    GENUINELY absent from the whole /api/v5/sync payload — verified live) so the /mlt merge fills it
+    from the reliable cluster.
 
     RESCUED from the bulk payload (else they'd persist as the leaking sentinel once the LCR session
     dies — the "better not worse" win):
@@ -409,8 +556,12 @@ def adapt_person(p: dict, kind: str, unit_name_by_number: dict[int, str],
       • ministering_brothers_sisters / ministering_assignment — the unit-wide EQ/RS org (`ministering`).
       • calling — the member directory's `positions` (with the calling names in `details`).
       • sex — the directory (more complete than the covenant person's own `sex`).
+      • aaronic/melchizedek priesthood — the directory's `priesthood` OFFICE enum (#data-gap 2026-06-13).
+      • living_ordinance (endowment) — the directory's `ordinances[]` (type ENDOWMENT).
+      • temple_recommend — the unit-wide `templeRecommendStatus[].recommends[]` roster.
     Each stays the sentinel (or None) when the payload lacks it → the /mlt merge fills it as before, so
-    this is purely additive (never a regression)."""
+    this is purely additive (never a regression). The priesthood/endowment/recommend values apply the
+    SAME eligibility gating as report._apply_profile so they match the /mlt-sourced ones."""
     unum = p.get("unitNumber")
     friend_uuids = _friend_uuids(p)
     friend_names = [name_by_uuid[u] for u in friend_uuids if name_by_uuid.get(u)]
@@ -427,6 +578,14 @@ def adapt_person(p: dict, kind: str, unit_name_by_number: dict[int, str],
     # Ministering: the unit-wide org is the authoritative bulk-payload signal (Yes/No/unknown).
     has_min = ministering.has_ministers(uuid) if (ministering and uuid) else None
     gives_min = ministering.has_assignment(uuid) if (ministering and uuid) else None
+    # Priesthood / endowment / temple recommend — rescued from the directory + recommend roster, gated
+    # exactly like report._apply_profile (else the sentinel leaks once the LCR session dies).
+    baptism_for_gate = p.get("confirmationDate")
+    aaronic, melch, living, recommend = _priesthood_endowment_recommend(
+        uuid, sex=sex, birth_date=birth, baptism_date=baptism_for_gate,
+        office_by_uuid=office_by_uuid, endowed_by_uuid=endowed_by_uuid,
+        recommend_by_uuid=recommend_by_uuid, directory_uuids=directory_uuids,
+        recommend_present=recommend_present)
     return CovenantPathMember(
         name=_name(p),
         unit=unit_name_by_number.get(int(unum)) if unum is not None else None,
@@ -448,12 +607,15 @@ def adapt_person(p: dict, kind: str, unit_name_by_number: dict[int, str],
         calling=calling,
         ministering_brothers_sisters=_yn_or_sentinel(has_min),
         ministering_assignment=_yn_or_sentinel(gives_min),
-        # Still PROFILE-only (genuinely NOT in the bulk payload) — left for the /mlt merge.
-        aaronic_priesthood=NEEDS_PROFILE,
-        melchizedek_priesthood=NEEDS_PROFILE,
-        temple_recommend=NEEDS_PROFILE,
+        # Rescued from the directory + recommend roster (else they'd leak the sentinel once the LCR
+        # session dies). Each is NEEDS_PROFILE when the payload couldn't determine it → /mlt merge.
+        aaronic_priesthood=aaronic,
+        melchizedek_priesthood=melch,
+        temple_recommend=recommend,
+        living_ordinance=living,
+        # Still PROFILE-only: patriarchal_blessing is GENUINELY absent from the whole bulk payload
+        # (no hasPatriarchalBlessing flag, no PATRIARCHAL ordinance) — left for the /mlt merge.
         patriarchal_blessing=NEEDS_PROFILE,
-        living_ordinance=NEEDS_PROFILE,
         membership_duration=None,
     )
 
@@ -468,15 +630,24 @@ _ARRAYS = {
 
 def adapt_sync(payload: dict, include_returning: bool = True) -> list[CovenantPathMember]:
     """The whole /api/v5/sync payload → CovenantPathMember rows. Covenant-path progress + ministering +
-    calling + birth/sex are filled from the bulk payload; the genuinely-profile-only fields await the
-    /mlt merge. De-dupes by person_uuid (members can appear under multiple arrays); a real person_uuid
-    is required (else the DB upsert key is meaningless)."""
+    calling + birth/sex + priesthood/endowment/temple-recommend are filled from the bulk payload; only
+    patriarchal_blessing (genuinely absent from the payload) awaits the /mlt merge. De-dupes by
+    person_uuid (members can appear under multiple arrays); a real person_uuid is required (else the DB
+    upsert key is meaningless)."""
     units = unit_names(payload)
     name_by_uuid = _name_index(payload)
     birth_by_uuid = _birth_index(payload)
     ministering = MinisteringIndex(payload)
     calling_by_uuid = _calling_index(payload)
     sex_by_uuid = _sex_index(payload)
+    office_by_uuid = _priesthood_office_index(payload)
+    endowed_by_uuid = _endowed_index(payload)
+    recommend_by_uuid = _recommend_index(payload)
+    directory_uuids = _directory_uuids(payload)
+    # Whether the unit-wide temple-recommend roster is present AT ALL — gates the "directory member with
+    # no roster entry = a real 'No'" fallback. If the whole container is missing (degraded sync), every
+    # member's recommend is genuinely unknown -> sentinel (preserve last-good), not a false stake 'No'.
+    recommend_present = bool(payload.get("templeRecommendStatus"))
     out: list[CovenantPathMember] = []
     seen: set[str] = set()
     for arr, kind in _ARRAYS.items():
@@ -489,7 +660,11 @@ def adapt_sync(payload: dict, include_returning: bool = True) -> list[CovenantPa
             seen.add(uuid)
             out.append(adapt_person(p, kind, units, name_by_uuid, birth_by_uuid,
                                     ministering=ministering, calling_by_uuid=calling_by_uuid,
-                                    sex_by_uuid=sex_by_uuid))
+                                    sex_by_uuid=sex_by_uuid, office_by_uuid=office_by_uuid,
+                                    endowed_by_uuid=endowed_by_uuid,
+                                    recommend_by_uuid=recommend_by_uuid,
+                                    directory_uuids=directory_uuids,
+                                    recommend_present=recommend_present))
     return out
 
 

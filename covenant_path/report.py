@@ -47,15 +47,18 @@ _PROFILE_GATED_FIELDS = (
 # Field-gap provenance (#data-gap): which sentinel-able fields the RELIABLE Member Tools bulk payload
 # can supply vs which can ONLY come from the per-member LCR profile (so when one is still a sentinel
 # after a sync, we can say WHY). RESCUED = filled by membertools_adapter from /api/v5/sync (the org +
-# directory); PROFILE_ONLY = genuinely absent from the bulk payload — only the LCR profile fetch (a
-# LIVE LCR session) can fill them, so they go blank in steady state when the session is dead.
+# directory + recommend roster); PROFILE_ONLY = genuinely absent from the bulk payload — only the LCR
+# profile fetch (a LIVE LCR session) can fill them, so they go blank in steady state when the session
+# is dead. As of 2026-06-13, priesthood/endowment/temple-recommend ALSO rescue from the bulk payload
+# (the directory carries the priesthood office + ordinances; the unit-wide roster carries recommends),
+# leaving patriarchal_blessing as the ONLY genuinely-profile-only field.
 _BULK_RESCUED_FIELDS = (
     "baptism_date", "birth_date", "calling", "sex",
     "ministering_brothers_sisters", "ministering_assignment",
+    "aaronic_priesthood", "melchizedek_priesthood", "temple_recommend", "living_ordinance",
 )
 _PROFILE_ONLY_FIELDS = (
-    "aaronic_priesthood", "melchizedek_priesthood", "temple_recommend",
-    "patriarchal_blessing", "living_ordinance",
+    "patriarchal_blessing",
 )
 
 

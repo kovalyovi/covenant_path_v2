@@ -608,6 +608,72 @@ def scenario_membertools_ministering_rescue_and_sentinel():
     ]
 
 
+def scenario_membertools_priesthood_recommend_endowment_rescue():
+    """#data-gap priesthood/recommend/endowment (2026-06-13): verified LIVE that the bulk /api/v5/sync
+    payload carries these three of the four once-"profile-only" fields after all — the member directory
+    has the `priesthood` OFFICE enum + per-member `ordinances[]` (ENDOWMENT), and the unit-wide
+    `templeRecommendStatus[].recommends[]` roster has temple-recommend status. The adapter now fills
+    them (eligibility-gated, like report._apply_profile) instead of leaking the sentinel once the LCR
+    session dies. Only patriarchal_blessing stays profile-only. The rescued columns were already in
+    db._GATED_COLUMNS, so a still-sentinel value (e.g. an investigator not in the directory) preserves
+    last-good on upsert. (covenant_path.membertools_adapter.adapt_sync + db._merge_expr.)"""
+    from datetime import datetime
+    from covenant_path.membertools_adapter import adapt_sync
+    yr = datetime.now().year
+    adult = f"{yr - 40}-01-01"          # 18+ now, turns 12+
+    conf = f"{yr - 5}-01-01"           # baptized 5y ago -> member >1yr
+    payload = {
+        "units": [{"unitNumber": 999, "unitType": "STAKE", "name": "Stake",
+                   "childUnits": [{"unitNumber": 100, "unitType": "WARD", "name": "Alpha"}]}],
+        "households": [
+            {"uuid": "h-e", "unitNumber": 100, "members": [
+                {"uuid": "u-elder", "sex": "MALE", "birthDate": adult, "priesthood": "ELDER",
+                 "ordinances": [{"type": "BAPTISM"}, {"type": "ENDOWMENT"}]}]},
+        ],
+        "templeRecommendStatus": [{"unitNumber": 100, "recommends": [
+            {"memberUuid": "u-elder", "type": "REGULAR", "status": "ACTIVE"}]}],
+        "covenantPathMembers": [
+            {"id": "c-e", "memberUuid": "u-elder", "names": {"listed": "E, E"},
+             "unitNumber": 100, "confirmationDate": conf},
+            # An investigator: NOT in the directory + no recommend roster -> all stay the sentinel.
+        ],
+        "covenantPathInvestigators": [
+            {"id": "c-i", "memberUuid": "u-inv", "names": {"listed": "I, I"},
+             "unitNumber": 100, "sex": "MALE"},
+        ],
+    }
+    members = {m.person_uuid: m for m in adapt_sync(payload)}
+    e, i = members["u-elder"], members["u-inv"]
+
+    # Sentinel-preservation: a still-sentinel temple_recommend must keep last-good on upsert (the
+    # column is already gated — this proves the rescue is safe for not-in-directory members).
+    _patch_execute_values()
+    d = FakeDB()
+    sid = d.add_stake(999, "Stake")
+    ua = d.add_unit(sid, 100, "Alpha")
+    db.upsert_members(d, sid, [{"person_uuid": "u-inv", "name": "I", "unit_number": 100,
+                                "temple_recommend": "Active"}], {100: ua})  # prior good
+    db.upsert_members(d, sid, [{"person_uuid": "u-inv", "name": "I", "unit_number": 100,
+                                "temple_recommend": report.NEEDS_PROFILE}], {100: ua})
+    preserved = d.member("u-inv")["temple_recommend"]
+
+    return [
+        # endowed elder, adult male, member >1yr: full priesthood + endowed + active recommend
+        ("aaronic from directory office", e.aaronic_priesthood, "Yes"),
+        ("melchizedek from directory office (eligible)", e.melchizedek_priesthood, "Yes"),
+        ("living_ordinance Yes from ordinances ENDOWMENT", e.living_ordinance, "Yes"),
+        ("temple_recommend Active from roster", e.temple_recommend, "Active"),
+        ("patriarchal_blessing stays profile-only sentinel", e.patriarchal_blessing,
+         report.NEEDS_PROFILE),
+        # investigator not in directory/roster -> every rescued field stays the sentinel (no false 'No')
+        ("not-in-directory priesthood -> sentinel", i.aaronic_priesthood, report.NEEDS_PROFILE),
+        ("not-in-directory recommend -> sentinel", i.temple_recommend, report.NEEDS_PROFILE),
+        ("not-in-directory endowment -> sentinel", i.living_ordinance, report.NEEDS_PROFILE),
+        # the sentinel is gated -> last-good preserved on upsert
+        ("temple_recommend preserved through sentinel", preserved, "Active"),
+    ]
+
+
 def scenario_field_freshness_tracking():
     """AXIS 4 (freshness): a FETCHED field stamps `f`; a SENTINEL field keeps its prior `f` while
     bumping `t` (staleness grows, value not blanked). field_staleness_summary then rolls up
@@ -1427,6 +1493,7 @@ SCENARIOS = [
     scenario_upsert_merge_by_id_modified_added_removed,
     scenario_sentinel_preserves_last_good,
     scenario_membertools_ministering_rescue_and_sentinel,
+    scenario_membertools_priesthood_recommend_endowment_rescue,
     scenario_field_freshness_tracking,
     scenario_reconcile_departed_safe_and_gated,
     scenario_prune_units_gated_orphans_members,
