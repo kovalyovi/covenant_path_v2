@@ -17,12 +17,17 @@ export interface ManualMember {
   merged_into_uuid?: string | null;
 }
 
-/** Normalize a person name for matching: lowercased, punctuation/extra-space stripped, and a
- *  "Surname, Given" form folded to the same token set as "Given Surname" (order-insensitive). So
- *  "Smith, John" matches "John Smith". */
+/** Normalize a person name for matching: lowercased, diacritics folded, punctuation/extra-space
+ *  stripped, and a "Surname, Given" form folded to the same token set as "Given Surname"
+ *  (order-insensitive). So "Smith, John" matches "John Smith" and "José García" matches "Jose Garcia". */
 export function normalizeName(name: string): string {
   const tokens = String(name ?? '')
     .toLowerCase()
+    // Fold diacritics so an accented name matches its ASCII form — LCR often stores "Jose Garcia"
+    // while a leader types "José García" (and vice-versa). Decompose then drop the combining marks
+    // (é→e, í→i, ñ→n) BEFORE the ASCII filter, which would otherwise delete the letter outright.
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
     .replace(/[.,]/g, ' ')
     .replace(/['’-]/g, '')           // drop apostrophes/hyphens: "O'Brien"/"Mary-Jane" match plain forms
     .replace(/[^a-z0-9\s]/g, '')

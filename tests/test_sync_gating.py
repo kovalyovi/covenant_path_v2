@@ -318,6 +318,11 @@ def test_is_needs_reauth_true_for_reauth_signals(msg):
     "LCR returned 500 on one-work",
     "connection reset by peer",
     "KeyError: 'covenantPathMembers'",
+    # A 5xx at the Member Tools /authorize is a TRANSIENT OUTAGE, not a dead session — membertools.py
+    # now phrases it without "Okta session not live" so it does NOT match the re-auth signals (it must
+    # red-fail + alert the operator, never silently ask the leader to re-authorize).
+    "Member Tools /authorize returned HTTP 500 — transient outage; retry",
+    "Member Tools /authorize returned HTTP 503 — transient outage; retry",
 ])
 def test_is_needs_reauth_false_for_real_failures(msg):
     # An infrastructure outage or a bug is NOT a re-auth case — it must still red-fail the workflow.

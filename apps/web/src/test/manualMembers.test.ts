@@ -24,6 +24,14 @@ describe('normalizeName', () => {
   it('strips punctuation and is order-insensitive', () => {
     expect(normalizeName('Mary-Jane O\'Brien')).toBe(normalizeName('OBrien Mary-Jane'));
   });
+
+  it('folds diacritics so accented names match their ASCII form (LCR often stores ASCII)', () => {
+    // Regression: the ASCII filter used to DELETE accented letters ("José"→"jos"), so an accented
+    // name never matched its ASCII record. Now é→e, í→i, ñ→n before the filter.
+    expect(normalizeName('José García')).toBe(normalizeName('Jose Garcia'));
+    expect(normalizeName('Muñoz, Ángel')).toBe(normalizeName('Angel Munoz'));
+    expect(normalizeName('José García')).toBe('garcia jose');
+  });
 });
 
 describe('findMatch (by name within the same unit)', () => {

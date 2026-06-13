@@ -131,6 +131,15 @@ def mint_from_okta_session(session: requests.Session) -> dict:
     loc = r.headers.get("Location", "")
     if not (300 <= r.status_code < 400) or "code=" not in loc:
         q = parse_qs(urlparse(loc).query) if loc else {}
+        # Distinguish two very different failures so callers classify correctly:
+        #  • a 5xx (or other server error) at /authorize is a TRANSIENT Member Tools/Okta OUTAGE — it
+        #    must NOT read as "session not live" (the daily sync's needs-reauth classifier keys on that
+        #    phrase; a transient outage should red-fail + alert, not silently ask the leader to re-auth).
+        #  • a 200/3xx-without-code (typically error=login_required) means the Okta session really is
+        #    not live → a genuine re-authorization is needed.
+        if r.status_code >= 500:
+            raise MemberToolsError(
+                f"Member Tools /authorize returned HTTP {r.status_code} — transient outage; retry")
         raise MemberToolsError(
             f"silent authorize did not return a code (HTTP {r.status_code}, "
             f"error={q.get('error', ['none'])[0]}) — Okta session not live")
