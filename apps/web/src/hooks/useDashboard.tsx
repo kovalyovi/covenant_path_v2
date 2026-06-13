@@ -206,6 +206,13 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       const email = (await supabase.auth.getUser()).data.user?.email ?? '';
       // member object (for stake_id/unit_id needed by the member_notes RLS bind)
       const real = members.find((m) => String(m['person_uuid'] ?? '') === plan.personUuid);
+      // If there's a note to carry over but the matched member isn't in the loaded set (stale/filtered
+      // list), DON'T proceed — marking the manual row merged without writing the note would silently
+      // lose it. Fail loudly so the leader can refresh and retry. (planMerge builds from this same
+      // members array, so this is a guard against a race, not the normal path.)
+      if (plan.preservedNote && !real) {
+        throw new Error('Could not merge — the matched member isn’t loaded yet. Refresh and try again.');
+      }
       if (plan.preservedNote && real) {
         const { data: existing } = await supabase
           .from('member_notes')

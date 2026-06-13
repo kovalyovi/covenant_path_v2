@@ -124,6 +124,10 @@ function AddManualDialog({
     if (!name.trim()) return;
     setSaving(true);
     try {
+      // KNOWN EDGE (low): with no units loaded yet (brand-new stake, nothing synced) this falls back to
+      // a null unit_id — fine for a STAKE leader (their role unit_id is null → RLS passes), but a WARD
+      // leader would hit an RLS denial (shown via the catch toast) until their first sync populates
+      // `units`. Proper fix = thread the leader's own role-unit here; tracked, not yet done.
       const u = units[unitIdx] ?? units[0] ?? { id: null, name: '' };
       await d.addManualMember({ unitId: u.id, unitName: u.name || null, name, notes });
       toast.show({ message: `Added ${name.trim()}.` });
