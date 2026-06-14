@@ -3,7 +3,7 @@
 // (Sync settings / Generate report / Invite / Admin / Settings). Responsive nav: a side rail on
 // tablet/desktop, a frosted bottom nav on mobile. Hosts the syncing/stale banners and the sheets.
 
-import { useState } from 'react';
+import { lazy, Suspense, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useDashboard } from '../hooks/useDashboard';
 import { useTier } from '../hooks/useTier';
@@ -11,6 +11,7 @@ import { signOut } from '../hooks/useAuth';
 import { broker } from '../lib/broker';
 import { admin } from '../lib/admin';
 import { currentAccessToken } from '../lib/supabase';
+import { lazyWithReload } from '../lib/lazyReload';
 import { passkey } from '../lib/passkey';
 import { TABS } from '../theme/tokens';
 import { Icon, type IconName } from '../components/Icon';
@@ -26,6 +27,13 @@ import { ReportSheet } from '../components/ReportSheet';
 import { useToast } from '../components/Toast';
 import { Modal } from '../components/Modal';
 import { Button } from '../components/ui';
+import { SettingsPage } from './SettingsPage';
+
+// Settings + Admin render as side sheets OVER the dashboard (see router). The console is heavy
+// (dense tables) + rarely opened, so its content is code-split out of the dashboard bundle and lazy-
+// loaded inside the sheet — the same chunks the standalone routes used.
+const AdminPage = lazy(lazyWithReload(() => import('./AdminPage').then((m) => ({ default: m.AdminPage }))));
+const AdminListPage = lazy(lazyWithReload(() => import('./AdminListPage').then((m) => ({ default: m.AdminListPage }))));
 
 export function DashboardShell() {
   const d = useDashboard();
@@ -40,6 +48,21 @@ export function DashboardShell() {
   const [reportLoading, setReportLoading] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
+
+  // Settings + Admin are URL-driven side sheets overlaying the dashboard. They're "open" purely as a
+  // function of the path, so a deep link / refresh on /settings or /admin lands on the dashboard with
+  // the sheet open (the route renders the default tab underneath). Closing navigates back to the tab
+  // the user was on (remembered below), so the URL updates and Back/forward work.
+  const path = location.pathname;
+  const settingsOpen = path === '/settings';
+  const adminOpen = path === '/admin' || path.startsWith('/admin/');
+  const adminSection = path.startsWith('/admin/') ? path.slice('/admin/'.length) : '';
+
+  // Remember the last real tab so closing a sheet returns there (falls back to /baptisms when the
+  // user deep-linked straight onto /settings or /admin with no prior tab).
+  const lastTabRef = useRef<string>('/baptisms');
+  if (!settingsOpen && !adminOpen && path !== '/') lastTabRef.current = path;
+  const closeOverlay = () => navigate(lastTabRef.current || '/baptisms');
 
   const credState = d.enrollStatus?.credential.state;
   // Show the banner for a REVOKED credential or a STALE one (its delegated session died → sync failing).
@@ -78,15 +101,24 @@ export function DashboardShell() {
       toast.show({ message: 'Reports need Church-account login configured.' });
       return;
     }
+    // Open the report sheet IMMEDIATELY and load INSIDE it (spinner over the sheet body) — no
+    // full-screen scrim blocking the whole app while the broker builds the report.
+    setReport(null);
     setReportLoading(true);
     try {
       const rep = await broker.report();
       setReport(rep);
     } catch (e) {
-      toast.show({ message: `Couldn't build report: ${e instanceof Error ? e.message : e}` });
-    } finally {
       setReportLoading(false);
+      toast.show({ message: `Couldn't build report: ${e instanceof Error ? e.message : e}` });
+      return;
     }
+    setReportLoading(false);
+  }
+
+  function closeReport() {
+    setReport(null);
+    setReportLoading(false);
   }
 
   async function emailReport() {
@@ -144,6 +176,7 @@ export function DashboardShell() {
       case 'sync': return openSyncSettings();
       case 'report': return void generateReport();
       case 'invite': return setInviteOpen(true);
+      // Navigate so the URL updates → Settings/Admin open as URL-landable side sheets (Back/refresh work).
       case 'admin': return navigate('/admin');
       case 'settings': return navigate('/settings');
     }
@@ -268,11 +301,35 @@ export function DashboardShell() {
       />
       <ReauthDialog open={d.reauthOpen} onClose={d.closeReauth} />
       <PowerUserSheet open={inviteOpen} onClose={() => setInviteOpen(false)} />
-      {report && <ReportSheet open onClose={() => setReport(null)} report={report} onEmail={emailReport} />}
-      {reportLoading && (
-        <div className="scrim">
-          <span className="spinner spinner--lg" role="status" aria-label="Building report" />
-        </div>
+      {/* Report flow loads INSIDE a side sheet (spinner over the body) — never a full-screen block.
+          While the broker builds it we show a loading side sheet; once it arrives, the real
+          ReportSheet replaces it. */}
+      {reportLoading && !report && (
+        <Modal open side title="Generating report" loading onClose={closeReport}>
+          <span />
+        </Modal>
+      )}
+      {report && <ReportSheet open onClose={closeReport} report={report} onEmail={emailReport} />}
+
+      {/* Settings + Admin overlay the dashboard as URL-landable side sheets (open is path-driven). */}
+      <Modal open={settingsOpen} side title="Settings" onClose={closeOverlay}>
+        {settingsOpen && <SettingsPage />}
+      </Modal>
+      {adminOpen && adminSection ? (
+        // Admin sub-list (full history): its own app-bar acts as the header → render bare + wide.
+        <Modal open side wide bare title="Admin" onClose={closeOverlay}>
+          <Suspense fallback={<AdminSheetFallback />}>
+            <AdminListPage />
+          </Suspense>
+        </Modal>
+      ) : (
+        <Modal open={adminOpen} side wide title="Admin · Ops console" onClose={closeOverlay}>
+          {adminOpen && (
+            <Suspense fallback={<AdminSheetFallback />}>
+              <AdminPage embedded />
+            </Suspense>
+          )}
+        </Modal>
       )}
 
       <Modal
@@ -296,6 +353,15 @@ export function DashboardShell() {
       <ContactDialog open={contactOpen} onClose={() => setContactOpen(false)} />
       {/* expose the support dialogs to Settings via context-free location state would be heavier;
           Settings opens its own copies. These remain for parity if invoked from the shell. */}
+    </div>
+  );
+}
+
+/** Centered spinner while the lazy Admin chunk loads inside its side sheet (no full-screen block). */
+function AdminSheetFallback() {
+  return (
+    <div className="center-col" style={{ minHeight: 240 }}>
+      <Spinner large />
     </div>
   );
 }

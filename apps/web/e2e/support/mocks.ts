@@ -106,6 +106,9 @@ export interface SupabaseFixtures {
   notes?: Row[];
   /** Rows for `manual_members` (leader-added people being taught, item 11; default: none). */
   manualMembers?: Row[];
+  /** Rows for `user_roles` (the signed-in user's role(s) → Settings "access" block; default: none —
+   *  the power-user path). Each row may carry nested `units`/`stakes` join objects ({ name }). */
+  userRoles?: Row[];
   /** rpc/is_admin result (default false). */
   isAdmin?: boolean;
 }
@@ -132,6 +135,7 @@ export async function mockSupabase(page: Page, fixtures: SupabaseFixtures = {}):
   const comments = [...(fixtures.comments ?? defaultComments())]; // mutable: POSTs append
   const notes = [...(fixtures.notes ?? [])]; // mutable: upserts append/replace (single-note model)
   const manualMembers = [...(fixtures.manualMembers ?? [])]; // mutable: insert/merge/delete (item 11)
+  const userRoles = fixtures.userRoles ?? [];
   const isAdmin = fixtures.isAdmin === true;
   const recorder = makeRecorder();
 
@@ -169,6 +173,10 @@ export async function mockSupabase(page: Page, fixtures: SupabaseFixtures = {}):
     }
     if (path === '/rest/v1/members' && method === 'GET') {
       return fulfillJson(route, 200, applyEqFilters(members, url));
+    }
+    if (path === '/rest/v1/user_roles' && method === 'GET') {
+      // The signed-in user's role(s) for the Settings "access" block (RLS-scoped to them in prod).
+      return fulfillJson(route, 200, applyEqFilters(userRoles, url));
     }
     if (path === '/rest/v1/member_comments') {
       if (method === 'POST') {

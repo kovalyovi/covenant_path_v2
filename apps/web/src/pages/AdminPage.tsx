@@ -25,7 +25,10 @@ function openUrl(url?: string) {
   if (url) window.open(url, '_blank', 'noopener');
 }
 
-export function AdminPage() {
+/** When `embedded`, the console renders inside the dashboard's wide side sheet — the sheet supplies
+ *  the title + close, so we drop our own app-shell/appbar chrome (just a Refresh control in a header
+ *  row). Standalone (deep-link without the shell, kept for safety) still renders the full page. */
+export function AdminPage({ embedded = false }: { embedded?: boolean } = {}) {
   const navigate = useNavigate();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
@@ -166,15 +169,8 @@ export function AdminPage() {
     });
   }
 
-  return (
-    <div className="app-shell">
-      <header className="appbar">
-        <IconButton icon="chevron_left" label="Back" onClick={() => navigate(-1)} />
-        <h1 className="appbar__title">Admin · Ops console</h1>
-        <span className="appbar__spacer" />
-        <IconButton icon="refresh" label="Refresh" onClick={refresh} disabled={busy} />
-      </header>
-      <main className="page" style={{ position: 'relative' }}>
+  const panels = (
+    <>
         <div className="maxw" style={{ maxWidth: 900, padding: 12 }}>
           <Panel key={`sys-${nonce}`} title="System" load={() => admin.summary()}>
             {(s) => (
@@ -294,11 +290,15 @@ export function AdminPage() {
           </Panel>
         </div>
         {busy && (
-          <div className="scrim" style={{ background: 'rgba(0,0,0,0.2)' }}>
+          /* A busy-action overlay scoped to the console (absolute within its relative container) — not
+             a screen-wide block. The Modal already keeps it visually inside the side sheet. */
+          <div
+            className="scrim"
+            style={{ position: 'absolute', background: 'rgba(0,0,0,0.2)' }}
+          >
             <span className="spinner spinner--lg" role="status" aria-label="Working" />
           </div>
         )}
-      </main>
 
       {confirm && (
         <Modal
@@ -325,6 +325,33 @@ export function AdminPage() {
           <p>{confirm.body}</p>
         </Modal>
       )}
+    </>
+  );
+
+  // Embedded: the wide side sheet supplies the title + close; we add a compact Refresh header row.
+  if (embedded) {
+    return (
+      <div style={{ position: 'relative' }}>
+        <div className="row" style={{ justifyContent: 'flex-end', padding: '8px 12px 0' }}>
+          <IconButton icon="refresh" label="Refresh" onClick={refresh} disabled={busy} />
+        </div>
+        {panels}
+      </div>
+    );
+  }
+
+  // Standalone (deep-link safety): the original full-page chrome.
+  return (
+    <div className="app-shell">
+      <header className="appbar">
+        <IconButton icon="chevron_left" label="Back" onClick={() => navigate(-1)} />
+        <h1 className="appbar__title">Admin · Ops console</h1>
+        <span className="appbar__spacer" />
+        <IconButton icon="refresh" label="Refresh" onClick={refresh} disabled={busy} />
+      </header>
+      <main className="page" style={{ position: 'relative' }}>
+        {panels}
+      </main>
     </div>
   );
 }
