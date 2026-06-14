@@ -284,6 +284,54 @@ def test_enrollment_status_patriarchal_signal() -> None:
     print("  ok enrollment_status exposes patriarchal_pending + can_refresh_patriarchal")
 
 
+def test_patriarchal_refresh_worker_fills_via_live_session() -> None:
+    """The re-auth background worker fills patriarchal for members still MISSING it (NULL) using the
+    just-captured live session's /mlt fetch, PATCHing the Yes/No back; an unreadable member (None from
+    a 307/no-record) is skipped, never clobbered. Best-effort — proves the item-2a refresh path."""
+    import types as _types
+    from backend.auth_broker import enroll
+    from lcr_client import member_profile
+
+    patched: list = []
+
+    class _Resp:
+        def __init__(self, payload, status=200):
+            self._p, self.status_code, self.headers = payload, status, {}
+
+        def json(self):
+            return self._p
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if url.endswith("/stakes"):
+            return _Resp([{"id": "stake-1"}])
+        if url.endswith("/members"):
+            return _Resp([{"person_uuid": "U1"}, {"person_uuid": "U2"}, {"person_uuid": "U3"}])
+        return _Resp([])
+
+    def fake_patch(url, headers=None, params=None, json=None, timeout=None):
+        uuid = (params or {}).get("person_uuid", "").replace("eq.", "")
+        patched.append((uuid, (json or {}).get("patriarchal_blessing")))
+        return _Resp(None, status=204)
+
+    saved = (enroll.requests.get, enroll.requests.patch, enroll._client_from_cookies,
+             member_profile.fetch_patriarchal, enroll.SUPABASE_URL, enroll.SERVICE_KEY)
+    try:
+        enroll.SUPABASE_URL = enroll.SUPABASE_URL or "https://test.supabase.co"
+        enroll.SERVICE_KEY = enroll.SERVICE_KEY or "test-key"
+        enroll.requests.get = fake_get
+        enroll.requests.patch = fake_patch
+        enroll._client_from_cookies = lambda cookies: _types.SimpleNamespace(session=object())
+        vals = {"U1": "Yes", "U2": "No", "U3": None}  # U3 = 307/no-record → must be skipped
+        member_profile.fetch_patriarchal = lambda session, uuid: vals[uuid]
+        enroll._refresh_patriarchal_worker([{"name": "x"}], 503991)
+    finally:
+        (enroll.requests.get, enroll.requests.patch, enroll._client_from_cookies,
+         member_profile.fetch_patriarchal, enroll.SUPABASE_URL, enroll.SERVICE_KEY) = saved
+    assert ("U1", "Yes") in patched and ("U2", "No") in patched, patched
+    assert all(u != "U3" for u, _ in patched), f"unreadable member must NOT be patched: {patched}"
+    print("  ok patriarchal refresh worker fills via live session (skips unreadable)")
+
+
 def test_endpoint_health_trend() -> None:
     """The passive cross-run endpoint trend: aggregate sync_diagnostics across runs into per-endpoint
     calls/errors/error_pct + by-hour error rate, with route-pattern grouping and a verdict."""
@@ -1904,6 +1952,7 @@ def main() -> int:
     test_enrolled_stakes_self_renewing_from_membertools()
     test_endpoint_health_trend()
     test_enrollment_status_patriarchal_signal()
+    test_patriarchal_refresh_worker_fills_via_live_session()
     test_mint_misconfig()
     test_mint_empty_email()
     test_mfa_expiry()

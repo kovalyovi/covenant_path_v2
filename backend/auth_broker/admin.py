@@ -419,9 +419,13 @@ def enrollment_status(email: str, auth_id: str) -> dict:
     # baptism date → in the directory, profile-fetchable) still on the NEEDS_PROFILE sentinel, so the app
     # can offer a leader with profile access a "re-authorize to refresh" banner. Investigators (no profile
     # record, hence no baptism) are excluded so the count can actually reach zero.
+    # A genuinely-unknown gated field is now NULL (db._scrub_sentinel maps the raw sentinel → NULL at
+    # the write boundary), so "missing patriarchal" = NULL, not the old literal string. Real members
+    # have a real baptism_date (investigators don't), so that excludes investigators → the count can
+    # reach zero once patriarchal is refreshed at re-auth.
     patriarchal_pending = _count_where("members", {
-        "stake_id": f"eq.{stake_id}", "patriarchal_blessing": "eq.needs-profile-api",
-        "and": "(baptism_date.not.is.null,baptism_date.neq.needs-profile-api)"}) or 0
+        "stake_id": f"eq.{stake_id}", "patriarchal_blessing": "is.null",
+        "baptism_date": "not.is.null"}) or 0
 
     # 4. Get credential state
     cred_r = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=headers,
