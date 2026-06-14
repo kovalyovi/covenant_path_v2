@@ -49,6 +49,16 @@ export interface BrokerResult {
   /** When the server-side login eval failed (e.g. LCR outage), its error — so a consented enroll
    *  can say WHY nothing was stored instead of pretending it succeeded. */
   enrollError?: string;
+  /** This session is a WARD/BRANCH-level leader's — enrollment is refused (a ward leader sees their
+   *  unit via their role; daily sync is set up per stake). Carries a friendly reason. (Green Level
+   *  Ward incident, 2026-06-13.) */
+  wardScoped?: boolean;
+  enrollBlockReason?: string;
+  /** The stake already has a credential and THIS session is strictly weaker — re-authorizing with it
+   *  would reduce coverage, so the UI warns first (R4). existingProvider names who currently provides it. */
+  wouldDowngrade?: boolean;
+  existingProvider?: string | null;
+  existingComplete?: boolean;
 }
 
 export function mfaRequired(r: BrokerResult): boolean {
@@ -303,6 +313,14 @@ export class BrokerClient {
       stake: (enroll?.['stake'] as string) ?? null,
       missing: ((enroll?.['missing'] as unknown[]) ?? []).map((m) => String(m)),
       enrollError: typeof enroll?.['error'] === 'string' ? (enroll['error'] as string) : undefined,
+      wardScoped: enroll?.['ward_scoped'] === true,
+      enrollBlockReason:
+        typeof enroll?.['enroll_block_reason'] === 'string'
+          ? (enroll['enroll_block_reason'] as string)
+          : undefined,
+      wouldDowngrade: enroll?.['would_downgrade'] === true,
+      existingProvider: (enroll?.['existing_provider'] as string) ?? null,
+      existingComplete: enroll?.['existing_complete'] === true,
     };
   }
 

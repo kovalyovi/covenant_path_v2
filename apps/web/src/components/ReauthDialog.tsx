@@ -78,10 +78,31 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
     if (r.email && r.otp) {
       await supabase.auth.verifyOtp({ email: r.email, token: r.otp, type: 'email' });
     }
+    // WARD-LEVEL leader: daily sync is set up per stake by a stake-level leader. This leader already
+    // sees their unit via their ward_leader role — nothing to set up. (Green Level Ward incident.)
+    if (r.wardScoped) {
+      setError(
+        r.enrollBlockReason ??
+          'Daily sync is set up per stake, by a stake-level leader. Your access covers your own unit, ' +
+            'which you can already view here — there’s nothing to set up.',
+      );
+      return;
+    }
     // The whole point of this dialog is storing the credential (enroll=true). If the broker's eval
     // failed (e.g. LCR outage — the 2026-06-10 "couldn't do sync for his stake" report), nothing was
     // stored: say so and keep the dialog open instead of toasting a success that didn't happen.
     if (!r.stored) {
+      // A NON-failure reason nothing was stored: this session is strictly WEAKER than the credential
+      // already keeping the stake synced — re-authorizing with it would reduce coverage (R4). Say so
+      // plainly rather than implying an error.
+      if (r.wouldDowngrade) {
+        setError(
+          `This stake's daily sync is already provided by ${r.existingProvider || 'another leader'} ` +
+            'with broader access. Your access is narrower, so it was left in place to avoid reducing ' +
+            'coverage. No change is needed.',
+        );
+        return;
+      }
       setError(
         'Your sign-in worked, but the daily sync could not be set up' +
           (r.enrollError ? ` — ${r.enrollError}` : '.') +

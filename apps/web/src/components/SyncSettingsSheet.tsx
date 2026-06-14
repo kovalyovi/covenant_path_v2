@@ -165,17 +165,30 @@ export function SyncSettingsSheet({ open, onClose, initial, onLoaded, onRevoke, 
             </Button>
           )}
           {isProvider && credState !== 'revoked' && credState !== 'none' && (
-            <Button
-              variant="outlined"
-              icon="link_off"
-              onClick={() => {
-                onClose();
-                onRevoke();
-              }}
-              style={{ marginTop: 8 }}
-            >
-              Revoke my sync access
-            </Button>
+            <>
+              {/* R3 revoke-risk: a complete (full-access) credential keeps the WHOLE stake synced for
+                  every leader. Warn before revoking — the data freezes until someone re-authorizes. */}
+              {cred?.complete && (
+                <div className="row" style={{ alignItems: 'flex-start', gap: 6, marginTop: 12 }}>
+                  <Icon name="warning" size={15} color="var(--warning)" />
+                  <span className="small" style={{ color: 'var(--warning)' }}>
+                    This is the stake's full-access sync. Revoking it pauses daily updates for the
+                    entire stake — every ward — until a leader re-authorizes.
+                  </span>
+                </div>
+              )}
+              <Button
+                variant="outlined"
+                icon="link_off"
+                onClick={() => {
+                  onClose();
+                  onRevoke();
+                }}
+                style={{ marginTop: 8 }}
+              >
+                Revoke my sync access
+              </Button>
+            </>
           )}
           {isProvider && (
             <Button
