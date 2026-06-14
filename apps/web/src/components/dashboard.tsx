@@ -23,9 +23,21 @@ import { useDashboard } from '../hooks/useDashboard';
 
 // ---- Page scaffold ----------------------------------------------------------------------------
 
-export function PageScaffold({ tier, header, children }: { tier: Tier; header: ReactNode; children: ReactNode }) {
+export function PageScaffold({
+  tier, header, children, maxWidth,
+}: {
+  tier: Tier;
+  header: ReactNode;
+  children: ReactNode;
+  /** Constrain the column to a content-appropriate width (overrides the default 1280px cap) so a
+   *  single-column view doesn't stretch edge-to-edge on wide screens (#24/#25). */
+  maxWidth?: number;
+}) {
   return (
-    <div className={tier === 'mobile' ? 'page__inner page__inner--mobile' : 'page__inner'}>
+    <div
+      className={tier === 'mobile' ? 'page__inner page__inner--mobile' : 'page__inner'}
+      style={maxWidth ? { maxWidth } : undefined}
+    >
       {header}
       <div style={{ height: 8 }} />
       {children}
@@ -459,9 +471,17 @@ export function MemberRow({ m, chips = false, showUnit = false, showResp = false
             <GoldenHourChips member={m} size={22} highlightNext />
           </span>
         )}
+        {/* #24: on a narrow screen the unit drops UNDER the name (inline) instead of eating a fixed
+            right-hand column. CSS toggles which copy shows by breakpoint. */}
+        {showUnit && (
+          <span className="member-row__unit-inline row tiny" style={{ gap: 4, marginTop: 2 }}>
+            <Icon name="groups" size={12} color="var(--on-surface-variant)" />
+            <span className="muted">{String(m['unit_name'] ?? '')}</span>
+          </span>
+        )}
       </span>
       {showUnit ? (
-        <span className="muted tiny" style={{ width: 130, textAlign: 'right' }}>
+        <span className="member-row__unit-right muted tiny" style={{ width: 130, textAlign: 'right' }}>
           {String(m['unit_name'] ?? '')}
         </span>
       ) : (

@@ -635,6 +635,19 @@ button.card--tappable:active {
 .member-row__name {
   font-weight: 600;
 }
+/* #24: the member's unit shows in a right-hand column on tablet/desktop, but INLINE under the name on
+   phones (so it doesn't steal a fixed 130px of a narrow row). */
+.member-row__unit-inline {
+  display: none;
+}
+@media (max-width: 600px) {
+  .member-row__unit-inline {
+    display: inline-flex;
+  }
+  .member-row__unit-right {
+    display: none;
+  }
+}
 
 /* ---- Custom dropdown (filter rows: Category / Units, with icons + colors) --------------------- */
 .dd {

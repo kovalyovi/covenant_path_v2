@@ -181,6 +181,7 @@ function NeedsBody() {
   return (
     <PageScaffold
       tier={tier}
+      maxWidth={880}
       header={
         <div className="stack" style={{ gap: 0 }}>
           <BigHeader text="Action Needed" subtitle="Eligible members still working toward each step" />
