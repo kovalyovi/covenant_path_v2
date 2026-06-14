@@ -3,7 +3,7 @@
 // (Sync settings / Generate report / Invite / Admin / Settings). Responsive nav: a side rail on
 // tablet/desktop, a frosted bottom nav on mobile. Hosts the syncing/stale banners and the sheets.
 
-import { lazy, Suspense, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useDashboard } from '../hooks/useDashboard';
 import { useTier } from '../hooks/useTier';
@@ -69,6 +69,16 @@ export function DashboardShell() {
     try { sessionStorage.setItem('cp:lastTab', path); } catch { /* private mode */ }
   }
   const closeOverlay = () => navigate(lastTabRef.current || '/baptisms');
+
+  // #34: filter/view state lives in the URL query string so Back restores previous states. On a FRESH
+  // page load we start clean — strip any params present at load (so a refresh resets to defaults rather
+  // than resurrecting the last session's filters). Runs once; in-session changes still push params.
+  const strippedRef = useRef(false);
+  useEffect(() => {
+    if (strippedRef.current) return;
+    strippedRef.current = true;
+    if (window.location.search) navigate(`${window.location.pathname}${window.location.hash}`, { replace: true });
+  }, [navigate]);
 
   const credState = d.enrollStatus?.credential.state;
   // Show the banner for a REVOKED credential or a STALE one (its delegated session died → sync failing).

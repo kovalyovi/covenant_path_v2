@@ -11,7 +11,6 @@ import { supabase } from '../lib/supabase';
 import { signOut } from '../hooks/useAuth';
 import { useTheme } from '../hooks/useTheme';
 import { useDashboard } from '../hooks/useDashboard';
-import { getRemember, setRemember } from '../lib/prefs';
 import { passkey } from '../lib/passkey';
 import { Icon, type IconName } from '../components/Icon';
 import { AboutDialog, RulesDialog } from '../components/Disclaimer';
@@ -60,9 +59,6 @@ export function SettingsPage() {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [resolvedEmail, setResolvedEmail] = useState<string>('');
   const [roles, setRoles] = useState<AccountRole[] | null>(null);
-  // The GLOBAL "remember my filters & view preferences" switch (item 9). Turning it off forgets
-  // everything persisted (lib/prefs.setRemember clears it) and stops persisting going forward.
-  const [remember, setRememberState] = useState<boolean>(() => getRemember());
 
   // Resolve the signed-in email once.
   useEffect(() => {
@@ -115,16 +111,8 @@ export function SettingsPage() {
       <hr className="divider" style={{ margin: 0 }} />
 
       <SectionHead>Preferences</SectionHead>
-      <ToggleTile
-        icon="sort"
-        title="Remember my filters & view preferences"
-        subtitle="Keep your filters, sorts, and view choices between sessions on this device"
-        checked={remember}
-        onChange={(on) => {
-          setRemember(on); // persists / clears, then governs notes persistence too
-          setRememberState(on);
-        }}
-      />
+      {/* Filters/sorts/view choices now live in the URL (Back restores them; a refresh starts clean),
+          so there's no longer a "remember preferences" switch. */}
       <ToggleTile
         icon="note"
         title="Show notes on member lists"

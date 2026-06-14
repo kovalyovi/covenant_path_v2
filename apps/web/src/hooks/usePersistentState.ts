@@ -1,12 +1,13 @@
-// Persisted view state (item 9): a drop-in useState that remembers its value in localStorage under a
-// namespaced key — but ONLY while the global "remember my filters & view preferences" switch is on
-// (lib/prefs). When the switch is off, it behaves like a plain useState (resets each session) and
-// nothing is written. Used for every table/view filter, sort, and view selection.
+// View state (filters / sorts / view selections) lives in the URL QUERY STRING — a drop-in useState
+// whose value is stored under a query param. Changing a filter PUSHES a history entry, so the browser
+// Back button steps through previous filter states. A fresh page load starts clean (DashboardShell
+// strips any params at load), so a refresh resets to defaults rather than resurrecting old filters.
 //
-// Optional `serialize`/`deserialize` handle non-JSON values (e.g. a Set ↔ array).
+// Same signature as the old localStorage-backed hook, so every tab adopts query-param state with no
+// per-call change. Optional `serialize`/`deserialize` handle non-JSON values (e.g. a Set ↔ array); the
+// serialized value is JSON-encoded into the param.
 
-import { useEffect, useRef, useState } from 'react';
-import { getRemember, loadViewPref, saveViewPref } from '../lib/prefs';
+import { useSearchParams } from 'react-router-dom';
 
 interface Codec<T> {
   serialize: (v: T) => unknown;
@@ -24,34 +25,35 @@ export const setCodec: Codec<Set<string>> = {
   deserialize: (raw) => new Set(Array.isArray(raw) ? (raw as string[]) : []),
 };
 
+function decode<T>(raw: string | null, initial: T, c: Codec<T>): T {
+  if (raw == null) return initial;
+  try {
+    return c.deserialize(JSON.parse(raw));
+  } catch {
+    return initial;
+  }
+}
+
 export function usePersistentState<T>(
   key: string,
   initial: T,
   codec?: Codec<T>,
 ): [T, (v: T | ((prev: T) => T)) => void] {
-  const c = (codec ?? (identityCodec as Codec<T>));
-  const [state, setState] = useState<T>(() => {
-    if (!getRemember()) return initial;
-    const raw = loadViewPref<unknown>(key, undefined);
-    if (raw === undefined) return initial;
-    try {
-      return c.deserialize(raw);
-    } catch {
-      return initial;
-    }
-  });
+  const c = codec ?? (identityCodec as Codec<T>);
+  const [params, setParams] = useSearchParams();
+  const value = decode(params.get(key), initial, c);
 
-  // Persist on change (no-op when remember is off, enforced inside saveViewPref). Skip the very first
-  // run so we don't immediately re-write the value we just read.
-  const first = useRef(true);
-  useEffect(() => {
-    if (first.current) {
-      first.current = false;
-      return;
-    }
-    saveViewPref(key, c.serialize(state));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, state]);
+  const setValue = (v: T | ((prev: T) => T)) => {
+    // Push (not replace) so Back returns to the previous filter state. Read the CURRENT value from
+    // `prev` inside the updater so functional updates compose correctly even across rapid changes.
+    setParams((prev) => {
+      const cur = decode(prev.get(key), initial, c);
+      const resolved = typeof v === 'function' ? (v as (p: T) => T)(cur) : v;
+      const next = new URLSearchParams(prev);
+      next.set(key, JSON.stringify(c.serialize(resolved)));
+      return next;
+    });
+  };
 
-  return [state, setState];
+  return [value, setValue];
 }
