@@ -180,3 +180,27 @@ def fetch_sync(access_token: str, *, timeout: float = 180.0) -> dict:
         raise MemberToolsError("/api/v5/sync 401 — access token expired/invalid")
     r.raise_for_status()
     return r.json()
+
+
+# The sync body + a photo-feature selection. `/api/v5/sync/files` returns a ZIP of WebP photos keyed by
+# UUID under MEMBERS_PHOTOS/<uuid>.webp, MISSIONARIES_ASSIGNED_PHOTOS/<uuid>.webp,
+# MISSIONARIES_SERVING_PHOTOS/<unit>/<uuid>.webp (+ a root sync.json). `exclusions` drops feature sets;
+# we keep MEMBERS + MISSIONARIES (drop households/temples) so one fetch covers member AND missionary
+# avatars. Accept MUST be zip — application/json 406s. Recipe verified vs rickybloomfield/Mission-KPIs.
+SYNC_FILES_BODY = {**SYNC_BODY, "exclusions": [{"features": ["HOUSEHOLDS_PHOTOS", "TEMPLES_PHOTOS"]}]}
+
+
+def fetch_sync_files(access_token: str, *, timeout: float = 240.0) -> bytes:
+    """The photo BUNDLE — a ZIP (~50MB for a stake) of WebP member + missionary avatars keyed by UUID,
+    from POST /api/v5/sync/files. Returns the raw ZIP bytes (caller unzips). Session-independent (the
+    Member Tools token), so member photos no longer need a live LCR session / cmisId. Raises
+    MemberToolsError on 401 (expired token) and raise_for_status on other 4xx/5xx after retries."""
+    r = _retry_post(SYNC_FILES_URL, data=json.dumps(SYNC_FILES_BODY), timeout=timeout,
+                    headers={"Authorization": f"Bearer {access_token}",
+                             "Accept": "application/zip, application/octet-stream, */*",
+                             "Content-Type": "application/json", "Accept-Language": "en-US,en;q=0.9",
+                             "User-Agent": USER_AGENT})
+    if r.status_code == 401:
+        raise MemberToolsError("/api/v5/sync/files 401 — access token expired/invalid")
+    r.raise_for_status()
+    return r.content

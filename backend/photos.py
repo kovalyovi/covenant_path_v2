@@ -162,6 +162,80 @@ def sync_photos_for_stake(client, conn, stake_id: str, stake_unit: int) -> dict:
     return stats
 
 
+def _downsize(data: bytes) -> bytes | None:
+    """Decode any image (WebP from the bundle) → a small square-ish JPEG thumbnail."""
+    from PIL import Image
+    try:
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+        img.thumbnail((SIZE, SIZE))
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=82, optimize=True)
+        return out.getvalue()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("photo downsize failed: %s", exc)
+        return None
+
+
+def sync_photos_from_bundle(conn, stake_id: str, stake_unit: int, access_token: str) -> dict:
+    """Member + missionary avatars from the Member Tools /api/v5/sync/files ZIP — NO LCR session, no
+    cmisId (supersedes sync_photos_for_stake). Member photos land on members.photo_url; missionary
+    photos are uploaded keyed by uuid and the {uuid: signed_url} map is RETURNED so the caller can
+    thread it onto the stake's missionary roster. The bundle is ~50MB → run this periodically (the
+    daily --photos pass), not every sync."""
+    import zipfile
+    from lcr_client import membertools
+    url, key = _sb()
+    ensure_bucket()
+    z = zipfile.ZipFile(io.BytesIO(membertools.fetch_sync_files(access_token)))
+    members_photos: dict[str, str] = {}
+    missionary_photos: dict[str, str] = {}
+    for name in z.namelist():
+        if not name.lower().endswith(".webp"):
+            continue
+        uuid = name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        if name.startswith("MEMBERS_PHOTOS/"):
+            members_photos[uuid] = name
+        elif name.startswith("MISSIONARIES_"):
+            missionary_photos[uuid] = name
+    # member photos: only THIS stake's covenant-path members that actually have a photo in the bundle.
+    with conn.cursor() as cur:
+        cur.execute("select person_uuid from members where stake_id = %s", (stake_id,))
+        member_uuids = [r[0] for r in cur.fetchall() if r[0]]
+    stats = {"member_photos": 0, "missionary_photos": 0, "skipped": 0}
+    for uuid in member_uuids:
+        entry = members_photos.get(uuid)
+        if not entry:
+            continue
+        thumb = _downsize(z.read(entry))
+        if not thumb:
+            stats["skipped"] += 1
+            continue
+        path = f"{stake_unit}/{uuid}.jpg"
+        if not _upload(url, key, path, thumb):
+            stats["skipped"] += 1
+            continue
+        signed = _signed_url(url, key, path)
+        with conn.cursor() as cur:
+            cur.execute("update members set photo_url=%s, photo_path=%s where stake_id=%s and person_uuid=%s",
+                        (signed, path, stake_id, uuid))
+        conn.commit()
+        stats["member_photos"] += 1
+    # missionary photos → bucket keyed by uuid; return the signed-url map for the missionary roster.
+    missionary_urls: dict[str, str] = {}
+    for uuid, entry in missionary_photos.items():
+        thumb = _downsize(z.read(entry))
+        if not thumb:
+            continue
+        path = f"missionaries/{uuid}.jpg"
+        if _upload(url, key, path, thumb):
+            su = _signed_url(url, key, path)
+            if su:
+                missionary_urls[uuid] = su
+                stats["missionary_photos"] += 1
+    logger.info("photo bundle for stake %s: %s", stake_id, stats)
+    return {"stats": stats, "missionary_urls": missionary_urls}
+
+
 def main() -> int:
     from lcr_client import LcrClient, okta_login
     okta_login.login()

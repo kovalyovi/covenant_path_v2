@@ -250,6 +250,7 @@ def _sync_one(args) -> dict:
         # LCR-derived unit only when the caller didn't supply one (the operator's own self-sync).
         stake_unit = getattr(args, "_stake_unit", None) or _stake_unit_for_token(client)
         access_token = _membertools_access_token(client, stake_unit)
+        args._mt_access_token = access_token  # for the /api/v5/sync/files bundle photo pass (#11)
         rows, mt_stats = build_membertools_report(
             client, access_token=access_token, with_profile=args.with_profile,
             access=access, cache=cache, verbose=args.verbose)
@@ -303,8 +304,15 @@ def _sync_one(args) -> dict:
             if args.photos:
                 from backend import photos as photopipe
                 s = result["supabase"]
-                result["photos"] = photopipe.sync_photos_for_stake(
-                    client, conn, s["stake_id"], s["stake_unit"])
+                at = getattr(args, "_mt_access_token", None)
+                if at:
+                    # Member + missionary avatars from the /api/v5/sync/files bundle — no LCR session,
+                    # no cmisId (#11). The missionary photo URLs ride back for the roster (best-effort).
+                    pres = photopipe.sync_photos_from_bundle(conn, s["stake_id"], s["stake_unit"], at)
+                    result["photos"] = pres["stats"]
+                    args._missionary_photo_urls = pres["missionary_urls"]
+                else:
+                    result["photos"] = photopipe.sync_photos_for_stake(client, conn, s["stake_id"], s["stake_unit"])
                 logger.info("photos: %s", result["photos"])
             # persist a diagnostics row: run stats + field parity + request metrics
             try:
