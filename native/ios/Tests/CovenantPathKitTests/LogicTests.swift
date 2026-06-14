@@ -57,8 +57,8 @@ final class LogicTests: XCTestCase {
             let c = Calendar.current.dateComponents([.year, .month, .day], from: d)
             return String(format: "%04d-%02d-%02d", c.year!, c.month!, c.day!)
         }
-        return Member(name: "Test Person", baptismDate: baptismISO, birthDate: birth, sex: sex,
-                      membershipDuration: membership)
+        return Member(name: "Test Person", baptismDate: baptismISO, birthDate: birth,
+                      membershipDuration: membership, sex: sex)
     }
 
     func testTurnsAtLeastByYear() {
@@ -85,13 +85,13 @@ final class LogicTests: XCTestCase {
         let year = Calendar.current.component(.year, from: Date())
         let mp = Milestones.all.first { $0.label == "Melchizedek Priesthood" }!
         // Male, 25 now (born year-25), member 2 years → eligible.
-        let ok = Member(birthDate: "\(year - 25)-01-01", sex: "M", membershipDuration: "Member for 2 years")
+        let ok = Member(birthDate: "\(year - 25)-01-01", membershipDuration: "Member for 2 years", sex: "M")
         XCTAssertTrue(mp.eligible(ok))
         // Female → not eligible.
-        let female = Member(birthDate: "\(year - 25)-01-01", sex: "F", membershipDuration: "Member for 2 years")
+        let female = Member(birthDate: "\(year - 25)-01-01", membershipDuration: "Member for 2 years", sex: "F")
         XCTAssertFalse(mp.eligible(female))
         // Male but only 17 → not eligible.
-        let young = Member(birthDate: "\(year - 17)-01-01", sex: "M", membershipDuration: "Member for 2 years")
+        let young = Member(birthDate: "\(year - 17)-01-01", membershipDuration: "Member for 2 years", sex: "M")
         XCTAssertFalse(mp.eligible(young))
     }
 
@@ -112,9 +112,9 @@ final class LogicTests: XCTestCase {
         let year = Calendar.current.component(.year, from: Date())
         let calling = Milestones.all.first { $0.label == "Calling" }!
         let rows = [
-            Member(calling: "Yes", birthDate: "\(year - 30)-01-01", sex: "M"),  // eligible, done
-            Member(calling: "No", birthDate: "\(year - 30)-01-01", sex: "M"),   // eligible, not done
-            Member(calling: "No", birthDate: "\(year - 8)-01-01", sex: "F"),    // ineligible (too young)
+            Member(birthDate: "\(year - 30)-01-01", sex: "M", calling: "Yes"),  // eligible, done
+            Member(birthDate: "\(year - 30)-01-01", sex: "M", calling: "No"),   // eligible, not done
+            Member(birthDate: "\(year - 8)-01-01", sex: "F", calling: "No"),    // ineligible (too young)
         ]
         let c = Milestones.completion(calling, in: rows)
         XCTAssertEqual(c.eligible, 2)   // the child is excluded
@@ -191,13 +191,13 @@ final class LogicTests: XCTestCase {
     // MARK: - org bucket
 
     func testResponsibleOrgFirstYearIsWML() {
-        let m = member(baptismDaysAgo: 30, sex: "M")
+        let m = member(sex: "M", baptismDaysAgo: 30)
         XCTAssertEqual(Org.responsible(for: m), .wml)
     }
 
     func testResponsibleOrgAfterYearBySex() {
-        XCTAssertEqual(Org.responsible(for: member(baptismDaysAgo: 800, sex: "M")), .eq)
-        XCTAssertEqual(Org.responsible(for: member(baptismDaysAgo: 800, sex: "F")), .rs)
+        XCTAssertEqual(Org.responsible(for: member(sex: "M", baptismDaysAgo: 800)), .eq)
+        XCTAssertEqual(Org.responsible(for: member(sex: "F", baptismDaysAgo: 800)), .rs)
     }
 
     func testResponsibleOrgNilWithoutBaptismDate() {
@@ -206,8 +206,8 @@ final class LogicTests: XCTestCase {
 
     func testOrgBoundaryAt12Months() {
         // 11 months → WML; 13 months → EQ (men). 30.44 days/month, floored.
-        XCTAssertEqual(Org.responsible(for: member(baptismDaysAgo: Int(30.44 * 11), sex: "M")), .wml)
-        XCTAssertEqual(Org.responsible(for: member(baptismDaysAgo: Int(30.44 * 13), sex: "M")), .eq)
+        XCTAssertEqual(Org.responsible(for: member(sex: "M", baptismDaysAgo: Int(30.44 * 11))), .wml)
+        XCTAssertEqual(Org.responsible(for: member(sex: "M", baptismDaysAgo: Int(30.44 * 13))), .eq)
     }
 
     // MARK: - org filter toggle guard
