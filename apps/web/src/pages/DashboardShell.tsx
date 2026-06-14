@@ -284,6 +284,22 @@ export function DashboardShell() {
       </div>
       {tier === 'mobile' && (
         <nav className="bottomnav" aria-label="Primary">
+          {/* #31: a sliding indicator that glides to the active tab (hidden when a sheet route has no
+              active tab). Width = one slot; it translates by activeIndex slots. */}
+          {(() => {
+            const activeIndex = TABS.findIndex((t) => location.pathname === `/${t.path}`);
+            return (
+              <span
+                className="bottomnav__indicator"
+                aria-hidden="true"
+                style={{
+                  width: `${100 / TABS.length}%`,
+                  transform: `translateX(${Math.max(0, activeIndex) * 100}%)`,
+                  opacity: activeIndex < 0 ? 0 : 1,
+                }}
+              />
+            );
+          })()}
           {TABS.map((t) => {
             const active = location.pathname === `/${t.path}`;
             return (

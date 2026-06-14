@@ -139,6 +139,18 @@
 .bottomnav__item.active .icon {
   opacity: 1;
 }
+/* #31: a slim indicator that glides along the top edge to the active tab. The nav is position:sticky
+   (a containing block), so this absolute element positions within it. */
+.bottomnav__indicator {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 3px;
+  background: var(--primary);
+  border-radius: 0 0 3px 3px;
+  transition: transform 0.28s var(--ease-sheet), opacity 0.2s ease;
+  pointer-events: none;
+}
 
 .page {
   flex: 1;
@@ -149,6 +161,12 @@
   max-width: 1280px;
   margin: 0 auto;
   padding: var(--lg) 14px 32px;
+  /* Gentle entrance on each tab switch (the tab remounts on route change) — fade + small rise. Reduced
+     motion zeroes this via the global rule. Transform-only → no layout shift, doesn't block input. */
+  animation: page-enter 0.22s var(--ease-sheet) both;
+}
+@keyframes page-enter {
+  from { opacity: 0; transform: translateY(8px); }
 }
 .page__inner--mobile {
   /* The bottom nav now sits OUTSIDE the scroll area (a fixed shell row), so the old 96px clearance is
