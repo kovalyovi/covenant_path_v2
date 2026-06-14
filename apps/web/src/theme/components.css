@@ -771,6 +771,49 @@ button.card--tappable:active {
 .data-table tbody tr:hover {
   background: var(--surface-container);
 }
+
+/* Table tab (.page__inner--wide): freeze the header ROW (vertical scroll) + the #/Member COLUMNS
+   (horizontal scroll on small screens). The wrap must be height-bounded so sticky has a scroll
+   container to engage within — a horizontal-only scroller leaves the PAGE scrolling vertically, so
+   `top: 0` never sticks (this is why the existing sticky header didn't visibly freeze). */
+.page__inner--wide .table-wrap {
+  overflow: auto;
+  max-height: calc(100dvh - 150px);
+}
+/* sticky first column group: # is a fixed width so Member's left offset is predictable */
+.page__inner--wide .data-table th:first-child,
+.page__inner--wide .data-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  width: 44px;
+  min-width: 44px;
+  max-width: 44px;
+}
+.page__inner--wide .data-table th:nth-child(2),
+.page__inner--wide .data-table td:nth-child(2) {
+  position: sticky;
+  left: 44px;
+  z-index: 1;
+}
+/* sticky BODY cells need an opaque background so columns scrolling under them don't bleed through */
+.page__inner--wide .data-table td:first-child,
+.page__inner--wide .data-table td:nth-child(2) {
+  background: var(--surface);
+}
+.page__inner--wide .data-table tbody tr:hover td:first-child,
+.page__inner--wide .data-table tbody tr:hover td:nth-child(2) {
+  background: var(--surface-container);
+}
+/* z-order: header above sticky body cells; the two header corner cells above BOTH sticky axes */
+.page__inner--wide .data-table thead th {
+  z-index: 2;
+}
+.page__inner--wide .data-table thead th:first-child,
+.page__inner--wide .data-table thead th:nth-child(2) {
+  z-index: 3;
+}
+
 .cell-pill {
   display: inline-block;
   padding: 4px 8px;
