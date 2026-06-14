@@ -20,7 +20,6 @@ import { Icon } from '../../components/Icon';
 import { Avatar, CountBadge, SectionCard } from '../../components/ui';
 import { PageScaffold, SectionTitle, Columns } from '../../components/dashboard';
 import { MissionaryStrip, MissionariesSection, useUnitMissionaries } from '../../components/Missionaries';
-import { GoldenHourChips } from '../../components/GoldenHourChips';
 import { TabGate } from '../../components/TabGate';
 
 interface Dated {
@@ -73,7 +72,7 @@ function BaptismsBody() {
       ) : byUnit ? (
         <PerUnit items={items} today={today} tier={tier} />
       ) : (
-        <PersonCardSections items={items} today={today} tier={tier} />
+        <PersonCardSections items={items} today={today} />
       )}
 
       {/* SECOND section (item 4): assigned/full-time missionaries — a full per-unit breakdown. */}
@@ -86,7 +85,7 @@ function BaptismsBody() {
 
 /** All people's cards, split into "needs attention — date passed" then "scheduled", laid out in
  *  responsive columns. Card-per-person (item 1). */
-function PersonCardSections({ items, today, tier }: { items: Dated[]; today: Date; tier: ReturnType<typeof useTier> }) {
+function PersonCardSections({ items, today }: { items: Dated[]; today: Date }) {
   const overdue = items.filter((i) => i.date.getTime() < today.getTime());
   const upcoming = items.filter((i) => i.date.getTime() >= today.getTime());
   return (
@@ -98,7 +97,6 @@ function PersonCardSections({ items, today, tier }: { items: Dated[]; today: Dat
           color="var(--warning)"
           items={overdue}
           today={today}
-          tier={tier}
           overdue
         />
       )}
@@ -109,7 +107,6 @@ function PersonCardSections({ items, today, tier }: { items: Dated[]; today: Dat
           color="var(--primary)"
           items={upcoming}
           today={today}
-          tier={tier}
           overdue={false}
         />
       )}
@@ -118,10 +115,10 @@ function PersonCardSections({ items, today, tier }: { items: Dated[]; today: Dat
 }
 
 function PersonCardGroup({
-  title, icon, color, items, today, tier, overdue,
+  title, icon, color, items, today, overdue,
 }: {
   title: string; icon: 'warning' | 'event_available'; color: string;
-  items: Dated[]; today: Date; tier: ReturnType<typeof useTier>; overdue: boolean;
+  items: Dated[]; today: Date; overdue: boolean;
 }) {
   return (
     <div>
@@ -132,11 +129,12 @@ function PersonCardGroup({
         </strong>
         <CountBadge n={items.length} />
       </div>
-      <Columns cols={colsFor(tier)}>
+      {/* #3c: a SINGLE column of [date pill | person card] rows for easier tracking + conversations. */}
+      <div className="stack" style={{ gap: 12 }}>
         {items.map((it) => (
           <BaptismPersonCard key={String(it.m['person_uuid'] ?? it.m['name'])} item={it} today={today} overdue={overdue} />
         ))}
-      </Columns>
+      </div>
     </div>
   );
 }
@@ -166,10 +164,17 @@ function BaptismPersonCard({ item, today, overdue }: { item: Dated; today: Date;
         : `in ${days} days`;
 
   return (
-    <div className="card baptism-card">
-      <div className="card__body">
-        {/* Header: avatar + name + (tappable to detail), date badge on the right. */}
-        <div className="row" style={{ alignItems: 'flex-start', gap: 12, justifyContent: 'space-between' }}>
+    // #3e: a narrow DATE pill on the LEFT, OUTSIDE the card; the person card sits to its right.
+    <div className="row" style={{ gap: 12, alignItems: 'flex-start' }}>
+      <div style={{ width: 58, flexShrink: 0, textAlign: 'center', paddingTop: 8 }}>
+        <div className="tiny" style={{ color: accent, fontWeight: 700 }}>{fmtMonShort(item.date).toUpperCase()}</div>
+        <div style={{ fontSize: 26, lineHeight: 1, color: accent, fontWeight: 800 }}>{item.date.getDate()}</div>
+        <div className="tiny muted">{fmtWeekdayShort(item.date)}</div>
+        <div className="tiny" style={{ color: accent, fontWeight: 600, marginTop: 4 }}>{rel}</div>
+      </div>
+
+      <div className="card baptism-card" style={{ flex: 1, minWidth: 0, borderLeft: `3px solid ${hexA(accentHex, 0.9)}` }}>
+        <div className="card__body">
           <button
             type="button"
             className="baptism-card__head"
@@ -181,70 +186,47 @@ function BaptismPersonCard({ item, today, overdue }: { item: Dated; today: Date;
               {unitName && <span className="tiny muted" style={{ display: 'block' }}>{unitName}</span>}
             </span>
           </button>
-          <div
-            style={{
-              width: 56,
-              padding: '6px 0',
-              textAlign: 'center',
-              borderRadius: 10,
-              background: hexA(accentHex, 0.1),
-              flexShrink: 0,
-            }}
-          >
-            <div className="tiny" style={{ color: accent, fontWeight: 700 }}>
-              {fmtMonShort(item.date).toUpperCase()}
+
+          {/* #3b: lead with the leader's NOTES / concerns (what matters for the conversation). */}
+          {note?.text ? (
+            <div className="baptism-card__notes" style={{ marginTop: 10 }}>
+              <div className="row tiny" style={{ gap: 4, alignItems: 'flex-start', color: 'var(--on-surface-variant)' }}>
+                <Icon name="note" size={13} color="var(--primary)" />
+                <span style={{ whiteSpace: 'pre-wrap', fontStyle: 'italic', minWidth: 0 }}>{note.text}</span>
+              </div>
             </div>
-            <div style={{ fontSize: 22, lineHeight: 1, color: accent, fontWeight: 700 }}>{item.date.getDate()}</div>
-            <div className="tiny muted">{fmtWeekdayShort(item.date)}</div>
+          ) : (
+            <p className="tiny muted" style={{ marginTop: 10 }}>No notes yet — tap to add a concern or detail.</p>
+          )}
+
+          {/* #3b: the PATH toward baptism — the remaining steps (no covenant-path milestone pills). */}
+          {steps.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <div className="tiny muted" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6 }}>
+                Path to baptism
+              </div>
+              <div className="wrap" style={{ gap: 6, marginTop: 4 }}>
+                {steps.map((ms) => (
+                  <span key={ms.abbr} className="chip" style={{ background: 'var(--surface-container-highest)', border: 'none', fontSize: 12 }}>
+                    <Icon name="circle_outline" size={13} color={ms.color} />
+                    {ms.label}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Missionary info: who teaches them (their unit's assigned missionaries). */}
+          <hr className="divider" style={{ margin: '12px 0 10px' }} />
+          <div className="tiny muted" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 }}>
+            Missionaries
           </div>
+          {missionaries.length > 0 ? (
+            <MissionaryStrip missionaries={missionaries} />
+          ) : (
+            <p className="tiny muted" style={{ margin: 0 }}>No assigned missionaries on record for this ward.</p>
+          )}
         </div>
-
-        <div className="tiny" style={{ color: accent, fontWeight: 600, marginTop: 6 }}>
-          Planned baptism · {rel}
-        </div>
-
-        {/* Golden Hour chips — quick covenant-path glance + suggested next step. */}
-        <div style={{ marginTop: 10 }}>
-          <GoldenHourChips member={m} size={22} highlightNext />
-        </div>
-
-        {/* Next steps (the not-yet-done Golden Hour milestones for this person). */}
-        {steps.length > 0 && (
-          <div style={{ marginTop: 10 }}>
-            <div className="tiny muted" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6 }}>
-              Next steps
-            </div>
-            <div className="wrap" style={{ gap: 6, marginTop: 4 }}>
-              {steps.map((ms) => (
-                <span key={ms.abbr} className="chip" style={{ background: 'var(--surface-container-highest)', border: 'none', fontSize: 12 }}>
-                  <Icon name="circle_outline" size={13} color={ms.color} />
-                  {ms.label}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Full leader notes / comments for this person. */}
-        {note?.text && (
-          <div className="baptism-card__notes" style={{ marginTop: 10 }}>
-            <div className="row tiny" style={{ gap: 4, alignItems: 'flex-start', color: 'var(--on-surface-variant)' }}>
-              <Icon name="note" size={13} color="var(--primary)" />
-              <span style={{ whiteSpace: 'pre-wrap', fontStyle: 'italic', minWidth: 0 }}>{note.text}</span>
-            </div>
-          </div>
-        )}
-
-        {/* Missionary info: who teaches them (their unit's assigned missionaries). */}
-        <hr className="divider" style={{ margin: '12px 0 10px' }} />
-        <div className="tiny muted" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 }}>
-          Missionaries
-        </div>
-        {missionaries.length > 0 ? (
-          <MissionaryStrip missionaries={missionaries} />
-        ) : (
-          <p className="tiny muted" style={{ margin: 0 }}>No assigned missionaries on record for this ward.</p>
-        )}
       </div>
     </div>
   );
