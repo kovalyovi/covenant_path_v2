@@ -39,6 +39,25 @@ function LazyRoute({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<FullScreenLoader />}>{children}</Suspense>;
 }
 
+// The Settings/Admin side sheets overlay the dashboard but must show WHATEVER tab the user was on
+// underneath (not always Baptisms). DashboardShell records the last real tab path in sessionStorage;
+// these routes render that tab as the backdrop so opening a sheet doesn't reset the view.
+export const LAST_TAB_KEY = 'cp:lastTab';
+const BG_TABS: Record<string, React.ReactNode> = {
+  '/baptisms': <BaptismsTab />,
+  '/golden-hour': <GoldenHourTab />,
+  '/needs': <NeedsTab />,
+  '/kpis': <LazyRoute><KpisTab /></LazyRoute>,
+  '/table': <TableTab />,
+  '/leadership': <LazyRoute><LeadershipTab /></LazyRoute>,
+};
+
+function BackgroundTab() {
+  let last = '/baptisms';
+  try { last = sessionStorage.getItem(LAST_TAB_KEY) || '/baptisms'; } catch { /* private mode */ }
+  return <>{BG_TABS[last] ?? <BaptismsTab />}</>;
+}
+
 function FullScreenLoader() {
   return (
     <div className="center-col" style={{ minHeight: '100vh' }}>
@@ -92,10 +111,10 @@ export const router = createBrowserRouter([
           // the default Baptisms tab underneath while the shell overlays the matching sheet (keyed off
           // the pathname). A refresh / deep link lands here → dashboard + open sheet; closing the sheet
           // navigates back to the underlying tab. Admin's content is lazy-loaded inside the sheet.
-          { path: 'settings', element: <BaptismsTab /> },
-          { path: 'admin', element: <BaptismsTab /> },
+          { path: 'settings', element: <BackgroundTab /> },
+          { path: 'admin', element: <BackgroundTab /> },
           // Full-history ops views (#7): /admin/runs · /admin/changelog · /admin/logins · /admin/endpoints (paginated).
-          { path: 'admin/:section', element: <BaptismsTab /> },
+          { path: 'admin/:section', element: <BackgroundTab /> },
         ],
       },
       { path: 'person/:id', element: <PersonDetailPage /> },

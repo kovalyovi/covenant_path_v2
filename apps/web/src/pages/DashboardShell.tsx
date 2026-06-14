@@ -58,10 +58,14 @@ export function DashboardShell() {
   const adminOpen = path === '/admin' || path.startsWith('/admin/');
   const adminSection = path.startsWith('/admin/') ? path.slice('/admin/'.length) : '';
 
-  // Remember the last real tab so closing a sheet returns there (falls back to /baptisms when the
-  // user deep-linked straight onto /settings or /admin with no prior tab).
+  // Remember the last real tab so closing a sheet returns there AND the sheet renders that tab as its
+  // backdrop (BackgroundTab in router.tsx reads this) — opening Settings/Admin no longer resets the
+  // view to Baptisms. Persisted to sessionStorage so a URL-landed sheet still shows the right backdrop.
   const lastTabRef = useRef<string>('/baptisms');
-  if (!settingsOpen && !adminOpen && path !== '/') lastTabRef.current = path;
+  if (!settingsOpen && !adminOpen && path !== '/') {
+    lastTabRef.current = path;
+    try { sessionStorage.setItem('cp:lastTab', path); } catch { /* private mode */ }
+  }
   const closeOverlay = () => navigate(lastTabRef.current || '/baptisms');
 
   const credState = d.enrollStatus?.credential.state;

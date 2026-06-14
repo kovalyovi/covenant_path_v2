@@ -2,10 +2,15 @@
    the Flutter widgets (SectionCard, GoldenHourChips, the data table, banners, the nav scaffold). */
 
 /* ---- Layout ---------------------------------------------------------------------------------- */
+/* Pin the shell to the viewport so ONLY the main content (.page) scrolls — the top app bar and the
+   left rail stay fixed on desktop (and the bottom nav stays fixed on mobile). Previously the whole
+   window scrolled (min-height:100vh, uncapped), dragging the rail/navbar away with the content. */
 .app-shell {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
 }
 
 .appbar {
@@ -73,6 +78,9 @@
   border-right: 1px solid var(--outline-variant);
   min-width: 176px;
   background: var(--surface);
+  /* The rail stays put while .page scrolls; let it scroll internally only if the viewport is too
+     short to fit every nav item. */
+  overflow-y: auto;
 }
 .rail__item {
   display: flex;
@@ -143,7 +151,9 @@
   padding: var(--lg) 14px 32px;
 }
 .page__inner--mobile {
-  padding-bottom: 96px; /* clear the glass bottom nav */
+  /* The bottom nav now sits OUTSIDE the scroll area (a fixed shell row), so the old 96px clearance is
+     no longer needed — just a little breathing room at the end of the list. */
+  padding-bottom: 24px;
 }
 /* Table tab: use the FULL window width on desktop — no 1280px cap (the wide data table needs room). */
 .page__inner--wide {
@@ -1076,7 +1086,8 @@ button.card--tappable:active {
   max-height: 100dvh;
   border-radius: 0;
   box-shadow: -8px 0 30px rgba(0, 0, 0, 0.3);
-  animation: side-in 0.26s var(--ease-sheet) both;
+  will-change: transform;
+  animation: side-in 0.32s var(--ease-sheet) both;
 }
 /* Wider side-sheet for dense content (the Admin ops console). */
 .dialog--side.dialog--wide {
@@ -1086,7 +1097,7 @@ button.card--tappable:active {
   animation: side-out 0.24s var(--ease-sheet) both;
 }
 @keyframes side-in {
-  from { transform: translateX(100%); opacity: 0.6; }
+  from { transform: translateX(100%); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
 }
 @keyframes side-out {
