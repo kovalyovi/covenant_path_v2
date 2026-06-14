@@ -28,37 +28,62 @@ export function useUnitMissionaries(unitName: string | null | undefined): Compan
   return normalize(missionaries[unitName] ?? []);
 }
 
-function Contact({ phone, email }: { phone?: string; email?: string }) {
-  if (!phone && !email) return null;
+/** Pull a clean phone out of a raw directory value that may carry trailing label text (e.g.
+ *  "(919) 555-1234 Morrisville"). `href` is digits-only (a valid `tel:`), `text` is the human number
+ *  without the label. Null when no number is present. */
+function phoneParts(raw?: string): { href: string; text: string } | null {
+  if (!raw) return null;
+  const m = /\+?\d[\d().\-\s]{5,}\d/.exec(raw); // first phone-shaped run
+  const text = (m ? m[0] : raw).trim();
+  const digits = text.replace(/[^\d+]/g, ''); // tel: wants only digits + a leading +
+  return digits.replace(/\D/g, '').length >= 7 ? { href: `tel:${digits}`, text } : null;
+}
+
+/** Pull a clean email out of a raw value (strip surrounding label text / trailing punctuation). */
+function emailParts(raw?: string): { href: string; text: string } | null {
+  if (!raw) return null;
+  const m = /[^\s,;<>]+@[^\s,;<>]+\.[^\s,;<>]+/.exec(raw);
+  if (!m) return null;
+  const text = m[0].replace(/[.,;]+$/, '');
+  return { href: `mailto:${text}`, text };
+}
+
+/** Phone + email as REAL anchors, each on its own row, sanitized so the link is just the number/address
+ *  (no trailing label) and copies cleanly. `size` scales the type (default = small). */
+function Contact({ phone, email, size = 'small' }: { phone?: string; email?: string; size?: 'tiny' | 'small' }) {
+  const ph = phoneParts(phone);
+  const em = emailParts(email);
+  if (!ph && !em) return null;
   return (
-    <span className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
-      {phone && (
-        <a className="row tiny" href={`tel:${phone}`} style={{ gap: 3, color: 'var(--primary)' }}>
-          <Icon name="account" size={12} /> {phone}
+    <div className="stack" style={{ gap: 3 }}>
+      {ph && (
+        <a className={`row ${size}`} href={ph.href} style={{ gap: 5, color: 'var(--primary)', alignItems: 'center' }}>
+          <Icon name="account" size={14} /> {ph.text}
         </a>
       )}
-      {email && (
-        <a className="row tiny" href={`mailto:${email}`} style={{ gap: 3, color: 'var(--primary)', wordBreak: 'break-all' }}>
-          <Icon name="mail" size={12} /> {email}
+      {em && (
+        <a className={`row ${size}`} href={em.href} style={{ gap: 5, color: 'var(--primary)', alignItems: 'center', wordBreak: 'break-all' }}>
+          <Icon name="mail" size={14} /> {em.text}
         </a>
       )}
-    </span>
+    </div>
   );
 }
 
-/** Compact companionship rows (used inside a person card / unit card / Leadership tab). */
+/** Compact companionship rows (used inside a person card / unit card / Leadership tab). Larger, nicer
+ *  type for the leader-facing list, with contact info on its own two rows. */
 export function MissionaryStrip({ missionaries }: { missionaries: MissionaryRec[] | Companionship[] }) {
   const comps = normalize(missionaries as MissionaryRec[]);
   if (comps.length === 0) return null;
   return (
-    <div className="stack" style={{ gap: 10 }}>
+    <div className="stack" style={{ gap: 14 }}>
       {comps.map((c, i) => (
-        <div key={i} className="stack" style={{ gap: 4 }}>
-          <div className="row" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div key={i} className="stack" style={{ gap: 6 }}>
+          <div className="row" style={{ gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
             {c.missionaries.map((m, j) => (
-              <span key={j} className="row" style={{ gap: 6, alignItems: 'center' }}>
-                <Avatar name={m.name ?? '?'} photoUrl={m.photo_url} size={28} />
-                <span className="small">{m.name}</span>
+              <span key={j} className="row" style={{ gap: 8, alignItems: 'center' }}>
+                <Avatar name={m.name ?? '?'} photoUrl={m.photo_url} size={36} />
+                <span style={{ fontWeight: 600, fontSize: '0.95rem' }}>{m.name}</span>
               </span>
             ))}
           </div>

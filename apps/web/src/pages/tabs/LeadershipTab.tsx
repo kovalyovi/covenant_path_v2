@@ -72,6 +72,11 @@ function LeadershipBody() {
   );
 }
 
+// The LCR ward-leadership/callings page (where a leader fills the gaps). The URL isn't per-unit-
+// parameterized by LCR, but a leader lands on their org's leadership list after the unit picker.
+const LCR_LEADERSHIP_URL =
+  'https://lcr.churchofjesuschrist.org/mlt/orgs?unitTypeId=7,8&list=true&leadership=true&lang=eng';
+
 function UnitLeadershipCard({ unit, missionaries }: { unit: UnitRow; missionaries: Array<Record<string, unknown>> }) {
   const roster = unit.staffing ?? [];
   const gaps = staffingGaps(roster);
@@ -89,18 +94,25 @@ function UnitLeadershipCard({ unit, missionaries }: { unit: UnitRow; missionarie
 
   return (
     <SectionCard title={unit.name} icon="badge" trailing={badge}>
-      {/* Required-role checklist (the gaps the user cares about). */}
+      {/* Required-role checklist: the calling label on the LEFT; the RIGHT slot shows a green check +
+          who's serving when the calling EXISTS, or "Not filled" (warning) when it's a gap (#callings). */}
       <div className="stack" style={{ gap: 6 }}>
         {gaps.map((g) => (
           <div key={g.key} className="row" style={{ justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
-            <span className="row" style={{ gap: 6, alignItems: 'center', minWidth: 0 }}>
-              <Icon name={g.ok ? 'check_circle' : 'warning'} size={15} color={g.ok ? status.success : status.danger} />
+            <span className="row" style={{ gap: 4, alignItems: 'center', minWidth: 0 }}>
               <span style={{ fontWeight: 600 }}>{g.label}</span>
               {g.min > 1 && <span className="tiny muted">({g.have}/{g.min})</span>}
             </span>
-            <span className="small muted" style={{ textAlign: 'right', minWidth: 0 }}>
-              {g.holders.length > 0 ? g.holders.join(', ') : (g.ok ? '' : 'Not filled')}
-            </span>
+            {g.ok ? (
+              <span className="row small" style={{ gap: 5, alignItems: 'center', textAlign: 'right', minWidth: 0, color: status.success }}>
+                <Icon name="check_circle" size={15} color={status.success} />
+                <span className="muted" style={{ minWidth: 0 }}>{g.holders.join(', ')}</span>
+              </span>
+            ) : (
+              <span className="row small" style={{ gap: 5, alignItems: 'center', color: status.danger, fontWeight: 600 }}>
+                <Icon name="warning" size={15} color={status.danger} /> Not filled
+              </span>
+            )}
           </div>
         ))}
       </div>
@@ -131,6 +143,18 @@ function UnitLeadershipCard({ unit, missionaries }: { unit: UnitRow; missionarie
           <MissionaryStrip missionaries={missionaries} />
         </>
       )}
+
+      {/* Per-unit deeplink to LCR's ward-leadership page (to view/fill callings). */}
+      <hr className="divider" />
+      <a
+        className="row small"
+        href={LCR_LEADERSHIP_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ gap: 5, alignItems: 'center', color: 'var(--primary)', fontWeight: 600 }}
+      >
+        <Icon name="open_in_new" size={15} /> Ward leadership in LCR
+      </a>
     </SectionCard>
   );
 }
