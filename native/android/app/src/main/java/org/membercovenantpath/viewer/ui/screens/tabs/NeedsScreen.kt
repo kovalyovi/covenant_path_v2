@@ -106,8 +106,11 @@ fun NeedsScreen(
         if (ascending) c else -c
     }
 
+    // "Missing" = EXPECTED to have it (eligible AND not an N/A field) but not complete — the shared
+    // gate so an N/A field (a child's temple recommend, a woman's priesthood) is excluded uniformly,
+    // matching web `isMissing`. (A sentinel/empty value still counts as missing — it's outstanding.)
     val missingByMs: List<List<Member>> = Milestones.needsCategories.map { ms ->
-        baptized.filter { ms.eligible(it, today) && !ms.complete(it) }.sortedWith(cmp)
+        baptized.filter { Milestones.isMissing(ms, it, today) }.sortedWith(cmp)
     }
     val total = missingByMs.sumOf { it.size }
 

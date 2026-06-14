@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.VolunteerActivism
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material.icons.filled.WorkspacePremium
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.PeopleOutline
@@ -79,7 +80,13 @@ private val AmberInfo = Color(0xFFFF8F00) // amber.shade800
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PersonDetailScreen(member: Member, onBack: () -> Unit, onNotesChanged: () -> Unit = {}) {
+fun PersonDetailScreen(
+    member: Member,
+    onBack: () -> Unit,
+    onNotesChanged: () -> Unit = {},
+    isAdmin: Boolean = false,
+    missionariesByUnit: Map<String, List<org.membercovenantpath.viewer.model.Missionary>> = emptyMap(),
+) {
     val name = member.name ?: "—"
     val d = member.parsedDetails()
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -128,11 +135,20 @@ fun PersonDetailScreen(member: Member, onBack: () -> Unit, onNotesChanged: () ->
                     leadingContent = { CompletionRing(Milestones.completionOf(member)) },
                 ) {
                     GoldenHourChips(member = member, highlightNext = true, labeled = true)
+                    // The user-chosen completion layout: one row per item — ✓ done / ○ not done /
+                    // ⚠ data issue. N/A items are omitted (not eligible). Complements the chips above.
+                    Spacer(Modifier.size(12.dp))
+                    org.membercovenantpath.viewer.ui.components.GoldenHourRows(member = member)
                 }
+            }
+            // Investigator (being-taught) extras: unit, the full-time missionaries who teach them, and
+            // their next steps — the not-yet-done Golden Hour milestones.
+            if (member.isInvestigator) {
+                item { InvestigatorSection(member, missionariesByUnit) }
             }
             // Each tracked status that lacks its own rich section, as its own card (eligibility-gated).
             // Renders with or without details.
-            item { StatusSections(member) }
+            item { StatusSections(member, isAdmin) }
             if (d != null) {
                 richSections(d, member)
             }
@@ -577,38 +593,97 @@ private fun CompletionRing(pct: Double, diameter: androidx.compose.ui.unit.Dp = 
     }
 }
 
+/**
+ * For a friend / investigator (being taught): their unit, the full-time missionaries who teach them
+ * (their unit's assigned missionaries — the best link the synced data gives), and the next steps they
+ * need to take (their not-yet-done Golden Hour milestones, from the shared logic). Mirrors web
+ * `PersonDetailPage.InvestigatorSection`.
+ */
+@Composable
+private fun InvestigatorSection(
+    member: Member,
+    missionariesByUnit: Map<String, List<org.membercovenantpath.viewer.model.Missionary>>,
+) {
+    val unitName = (member.unitName ?: "").trim()
+    val missionaries = missionariesByUnit[unitName].orEmpty()
+    val steps = Milestones.nextSteps(member)
+    Column {
+        SectionCard(title = "Unit", leadingIcon = Icons.Filled.Diversity3) {
+            if (unitName.isNotEmpty()) Text(unitName)
+            else MutedLine("No unit on record.")
+        }
+        org.membercovenantpath.viewer.ui.components.MissionariesSection(
+            unitName = unitName, missionaries = missionaries, title = "Missionaries Teaching",
+        )
+        SectionCard(title = "Next Steps", leadingIcon = Icons.Filled.Check) {
+            if (steps.isEmpty()) {
+                MutedLine("All Golden Hour steps are complete — ready for baptism.")
+            } else {
+                Column {
+                    steps.forEach { ms ->
+                        Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Filled.RadioButtonUnchecked,
+                                contentDescription = null, tint = ms.color, modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text(ms.label)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** Each tracked status that lacks its own rich section, shown as its OWN section card (like "Attended
  *  Sacrament Meeting"): Temple Recommend, Endowment, Patriarchal Blessing. Eligibility-gated (endowment
- *  shows "N/A" for the not-yet-eligible). Works from flat fields, so it renders with or without the
- *  rich details subtree. */
+ *  shows "N/A" for the not-yet-eligible). Each value runs through the shared display contract
+ *  (`FieldDisplay`): a real value verbatim, "N/A" quietly, and a DATA ISSUE as a warning (never the raw
+ *  sentinel — an admin may see it). Works from flat fields, so it renders with or without details. */
 @Composable
-private fun StatusSections(member: Member) {
+private fun StatusSections(member: Member, isAdmin: Boolean) {
     Column {
         if (Milestones.templeRecommendEligible(member)) {
-            StatusSection("Temple Recommend", Icons.Filled.WorkspacePremium, recordDisp(member.templeRecommend))
+            StatusSection("Temple Recommend", Icons.Filled.WorkspacePremium, member.templeRecommend, isAdmin)
         }
-        StatusSection("Endowment", Icons.Filled.AccountBalance, recordDisp(Milestones.endowmentDisplay(member)))
+        // endowmentDisplay already gates the not-yet-eligible to "N/A" client-side.
+        StatusSection("Endowment", Icons.Filled.AccountBalance, Milestones.endowmentDisplay(member), isAdmin)
         if (Milestones.patriarchalEligible(member)) {
-            StatusSection("Patriarchal Blessing", Icons.AutoMirrored.Filled.MenuBook, recordDisp(member.patriarchalBlessing))
+            StatusSection("Patriarchal Blessing", Icons.AutoMirrored.Filled.MenuBook, member.patriarchalBlessing, isAdmin)
         }
     }
 }
 
 @Composable
-private fun StatusSection(title: String, icon: ImageVector, value: String) {
-    val good = value == "Active" || value == "Yes"
+private fun StatusSection(title: String, icon: ImageVector, raw: String?, isAdmin: Boolean) {
+    val r = org.membercovenantpath.viewer.logic.FieldDisplay.classify(raw, isAdmin)
     SectionCard(title = title, leadingIcon = icon) {
-        Text(
-            value,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = if (good) Green else MaterialTheme.colorScheme.onSurface,
-        )
+        when (r.status) {
+            org.membercovenantpath.viewer.logic.FieldDisplay.Status.ISSUE ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Filled.WarningAmber,
+                        contentDescription = "Data issue — value unavailable",
+                        tint = StatusColors.NextAmber,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("Not available yet", color = StatusColors.NextAmber, fontSize = 14.sp)
+                    if (isAdmin && r.text.isNotEmpty()) { // raw sentinel, for diagnosis
+                        Spacer(Modifier.width(6.dp))
+                        Text("(${r.text})", color = StatusColors.GreyText, fontSize = 12.sp)
+                    }
+                }
+            else -> {
+                val good = r.text == "Active" || r.text == "Yes"
+                Text(
+                    r.text,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (good) Green else MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
     }
-}
-
-/** Clean a status value for display: sentinels (needs-profile-api / blocked) → "—" (unknown). */
-private fun recordDisp(v: String?): String {
-    val s = v ?: ""
-    return if (s.isEmpty() || s == "needs-profile-api" || s.startsWith("blocked")) "—" else s
 }

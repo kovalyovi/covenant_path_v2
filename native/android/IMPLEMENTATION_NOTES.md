@@ -88,12 +88,15 @@ live in the React web app (`apps/web/src/`: logic in `src/logic/`, clients in `s
 | `components/FreshnessChip.kt`,`Banners.kt`,`Shimmer.kt` | Freshness chip + dialog, syncing/stale banners, skeletons. |
 | `components/LineChart.kt` | Hand-drawn Canvas trend line (gradient fill, dots, value labels, prev overlay, tap→bucket). |
 | `components/MissionaryChip.kt` | Missionary name chip → call/email. |
+| `components/MissionariesSection.kt` | `MissionaryStrip` (chip row) + `MissionariesSection` (contact-line list) — shared by Baptisms cards + the per-person "Missionaries by Unit" section + the investigator detail. |
+| `components/GoldenHourRows.kt` | Per-member Golden-Hour completion rows (one row per item: ✓ done / ○ not done / ⚠ data issue; N/A omitted). Mirrors web `GoldenHourRows.tsx`. |
 | `components/Dialogs.kt` | Contact/Feedback/About/Confirm dialogs + disclaimer copy. |
 | `util/Dates.kt` | Display date formatters. |
 
 ## test/ — JVM unit tests
 | File | Purpose |
 |---|---|
-| `logic/DateParseTest.kt`,`MilestonesTest.kt`,`OrgsTest.kt` | Date/milestone/org logic (existing). |
+| `logic/DateParseTest.kt`,`MilestonesTest.kt`,`OrgsTest.kt` | Date/milestone/org logic (existing). `MilestonesTest` also covers `goldenHourRows`/`nextSteps`/`isMissing` (done/not-done/⚠ classification + N/A omission). |
+| `logic/FieldDisplayTest.kt` | The sentinel/N-A/⚠ display contract (`FieldDisplay.classify`): real value verbatim, N/A quiet, sentinel-or-empty = data issue (admin sees raw, leader doesn't). Mirrors web `fieldDisplay.ts`. |
 | `logic/KpisTest.kt` | KPI windows (5 weekly / 12 monthly buckets), unique-per-bucket, event→bucket mapping, ALL year/month granularity, lessons-with-member, range labels. |
 | `logic/FreshnessTest.kt` | `ago` buckets + staleness color thresholds. |

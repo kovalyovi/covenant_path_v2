@@ -117,6 +117,8 @@ private fun SignedInNav(
                     member = member,
                     onBack = { nav.popBackStack() },
                     onNotesChanged = dashVm::reloadNotes,
+                    isAdmin = state.isAdmin,
+                    missionariesByUnit = state.missionariesByUnit,
                 )
             } else {
                 nav.popBackStack()

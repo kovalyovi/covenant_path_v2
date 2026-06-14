@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.UnfoldMore
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
@@ -56,9 +57,14 @@ import org.membercovenantpath.viewer.ui.theme.StatusColors
  * Every covenant-path field in a sortable, color-coded grid (Yes=green / No=red / N/A=grey,
  * recommend Active/Expired/No, sex M/F). 3-state sort on text columns + a per-column value filter on
  * every column (tap the header funnel). Ported from table_view.dart `_SpreadsheetView`.
+ *
+ * Covenant-path status cells honor the shared display contract (`FieldDisplay`): a real value shows
+ * verbatim, "N/A" shows quietly (not eligible), and a DATA ISSUE — the needs-profile-api / blocked
+ * sentinel OR an empty value — shows a warning indicator (never the raw sentinel string; an admin may
+ * see it). This is the surface the user was complaining leaked the raw "needs-profile-api" string.
  */
 @Composable
-fun TableScreen(members: List<Member>, onOpen: (Member) -> Unit) {
+fun TableScreen(members: List<Member>, onOpen: (Member) -> Unit, isAdmin: Boolean = false) {
     var sortCol by remember { mutableStateOf<Int?>(null) }
     var sortAsc by remember { mutableStateOf(true) }
     // Per-column value filters: column index -> the set of allowed cell values (absent = unfiltered).
@@ -158,7 +164,7 @@ fun TableScreen(members: List<Member>, onOpen: (Member) -> Unit) {
                                 )
                             }
                         } else {
-                            ValueCell(c.value(m), c.kind, c.width)
+                            ValueCell(c.value(m), c.kind, c.width, isAdmin)
                         }
                     }
                 }
@@ -172,9 +178,24 @@ fun TableScreen(members: List<Member>, onOpen: (Member) -> Unit) {
         val options = remember(col, members) {
             base.map { c.value(it) }.distinct().sortedWith(String.CASE_INSENSITIVE_ORDER)
         }
+        // For covenant-path status columns, the filter menu shows a friendly label for the data-issue
+        // group (sentinel/empty) instead of the raw "needs-profile-api" string — leaders never see it.
+        val labelOf: (String) -> String = label@{ raw ->
+            if (c.kind == Kind.YESNO || c.kind == Kind.RECOMMEND) {
+                val r = org.membercovenantpath.viewer.logic.FieldDisplay.classify(raw, isAdmin)
+                return@label when (r.status) {
+                    org.membercovenantpath.viewer.logic.FieldDisplay.Status.ISSUE ->
+                        if (r.text.isNotEmpty()) "Needs data ($raw)" else "Needs data"
+                    org.membercovenantpath.viewer.logic.FieldDisplay.Status.NA -> "N/A"
+                    org.membercovenantpath.viewer.logic.FieldDisplay.Status.VALUE -> r.text
+                }
+            }
+            if (raw.isBlank()) "(blank)" else raw
+        }
         FilterDialog(
             title = c.header,
             options = options,
+            labelOf = labelOf,
             initial = filters[col] ?: options.toSet(),
             onApply = { sel ->
                 // All or none selected = no filter; otherwise keep just the chosen values.
@@ -247,7 +268,49 @@ private fun Cell(text: String, width: Dp, header: Boolean = false, color: Color 
 }
 
 @Composable
-private fun ValueCell(value: String, kind: Kind, width: Dp) {
+private fun ValueCell(value: String, kind: Kind, width: Dp, isAdmin: Boolean) {
+    // Covenant-path status columns route through the shared display contract so the raw
+    // "needs-profile-api" / "blocked: …" sentinel (or an empty value) never leaks — a DATA ISSUE shows
+    // a warning indicator (a leader sees no text; an admin sees the raw string to diagnose). N/A shows
+    // quietly. A real value keeps the existing color fill. Other column kinds are unchanged.
+    if (kind == Kind.YESNO || kind == Kind.RECOMMEND) {
+        val r = org.membercovenantpath.viewer.logic.FieldDisplay.classify(value, isAdmin)
+        Box(Modifier.width(width).padding(horizontal = 7.dp)) {
+            when (r.status) {
+                org.membercovenantpath.viewer.logic.FieldDisplay.Status.ISSUE ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            androidx.compose.material.icons.Icons.Filled.WarningAmber,
+                            contentDescription = "Data issue — value unavailable",
+                            tint = StatusColors.NextAmber,
+                            modifier = Modifier.size(15.dp),
+                        )
+                        if (r.text.isNotEmpty()) { // admin-only raw sentinel, for diagnosis
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                r.text, fontSize = 11.sp, color = StatusColors.GreyText,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                org.membercovenantpath.viewer.logic.FieldDisplay.Status.NA ->
+                    Box(
+                        Modifier.clip(RoundedCornerShape(6.dp)).background(StatusColors.CellGrey)
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    ) { Text("N/A", fontSize = 13.sp, color = StatusColors.GreyText, maxLines = 1) }
+                org.membercovenantpath.viewer.logic.FieldDisplay.Status.VALUE -> {
+                    val fill = cellColor(r.text, kind)
+                    if (fill == null) Text(r.text, fontSize = 13.sp, maxLines = 1)
+                    else Box(
+                        Modifier.clip(RoundedCornerShape(6.dp)).background(fill)
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    ) { Text(r.text, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1) }
+                }
+            }
+        }
+        return
+    }
+
     val fill = cellColor(value, kind)
     Box(Modifier.width(width).padding(horizontal = 7.dp)) {
         if (fill == null) {
@@ -295,11 +358,14 @@ private fun cellColor(v: String, kind: Kind): Color? = when (kind) {
     Kind.TEXT -> null
 }
 
-/** A multi-select value picker for one column: check the values to keep, then Apply. */
+/** A multi-select value picker for one column: check the values to keep, then Apply. [labelOf] maps a
+ *  raw cell value to the label shown (so a data-issue sentinel reads "Needs data", not the raw string);
+ *  the filter still keys on the raw value. */
 @Composable
 private fun FilterDialog(
     title: String,
     options: List<String>,
+    labelOf: (String) -> String = { if (it.isBlank()) "(blank)" else it },
     initial: Set<String>,
     onApply: (Set<String>) -> Unit,
     onDismiss: () -> Unit,
@@ -325,7 +391,7 @@ private fun FilterDialog(
                             checked = opt in checked,
                             onCheckedChange = { if (it) checked.add(opt) else checked.remove(opt) },
                         )
-                        Text(if (opt.isBlank()) "(blank)" else opt)
+                        Text(labelOf(opt))
                     }
                 }
             }

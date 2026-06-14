@@ -153,4 +153,45 @@ class MilestonesTest {
         assertTrue(en.eligible(adult, today) && !en.complete(adult))
         assertFalse(en.eligible(Member(birthDate = "2018"), today)) // a child is not eligible
     }
+
+    // --- Golden Hour completion ROWS (done / not-done / data-issue), mirrors web goldenHourRows ---
+
+    @Test fun goldenHourRowsClassifyDoneNotDoneAndIssue() {
+        // Adult female, member 1yr+ → applicable: Friends, Calling, Has-ministers, Ministering-
+        // assignment, Family name, First temple visit. Friends done; Calling a sentinel (data issue);
+        // the rest a real "No" / empty.
+        val m = Member(
+            sex = "F", birthDate = "1990-01-01", baptismDate = "2023-01-01",
+            friends = "Yes", calling = "needs-profile-api", ministeringBrothersSisters = "No",
+        )
+        val rows = Milestones.goldenHourRows(m, Milestones.all, today)
+        val byLabel = rows.associate { it.milestone.label to it.status }
+        assertEquals(Milestones.GhRowStatus.DONE, byLabel["Friends"])
+        // A sentinel value on an EXPECTED, incomplete milestone → a data issue, NOT a not-done.
+        assertEquals(Milestones.GhRowStatus.ISSUE, byLabel["Calling"])
+        // A genuine "No" is an honest not-done, never an issue.
+        assertEquals(Milestones.GhRowStatus.NOT_DONE, byLabel["Has ministers"])
+        // An empty/missing value on an expected milestone is ALSO a data issue (treated like a sentinel).
+        assertEquals(Milestones.GhRowStatus.ISSUE, byLabel["Ministering assignment"])
+    }
+
+    @Test fun goldenHourRowsOmitNAIneligibleRows() {
+        // A 10-year-old girl: only Friends + Has-ministers apply; priesthood/calling/temple are N/A and
+        // must be OMITTED (never rendered as a row).
+        val child = Member(sex = "F", birthDate = "2016", friends = "Yes")
+        val rows = Milestones.goldenHourRows(child, Milestones.all, today)
+        val labels = rows.map { it.milestone.label }.toSet()
+        assertEquals(setOf("Friends", "Has ministers"), labels)
+    }
+
+    @Test fun nextStepsAreTheNotDoneApplicableMilestones() {
+        // Adult male, member 1yr+, only Friends done → next steps = the rest of his eligible set.
+        val m = Member(
+            sex = "M", birthDate = "1990-01-01", baptismDate = "2023-01-01", friends = "Yes",
+        )
+        val steps = Milestones.nextSteps(m, Milestones.all, today).map { it.label }
+        assertFalse("Friends" in steps) // already done → not a next step
+        assertTrue("Calling" in steps)
+        assertTrue("Melchizedek Priesthood" in steps)
+    }
 }

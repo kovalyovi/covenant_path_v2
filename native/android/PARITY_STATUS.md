@@ -63,3 +63,37 @@ Everything else in A–F is **Done**.
 
 ## Addendum (2026-06-10): notes on list rows
 - **List-row note lines** — newest leader note (+N) under each person in Golden Hour / Needs / by-date lists (`MemberRow` + `NoteLine` via `LocalMemberNotes`), the Baptisms timeline rows, and a note marker in the Table's Member cell. Data: one bulk RLS-scoped `member_comments` fetch per stake load (`CommentsRepository.stakeNotes` -> `NotesIndex.build`, unit-tested in `NotesIndexTest`); posting a note on detail refreshes the index (`DashboardViewModel.reloadNotes`). **Pending CI assembleDebug + AVD verification.**
+
+## Addendum (2026-06-13): web-parity pass — sentinel display contract, patriarchal banner, baptisms cards
+All three changes mirror the React web source; **pending CI `assembleDebug` + `:app:testDebugUnitTest` + AVD/device verification.**
+
+- **(TOP) Sentinel / N-A / ⚠ display contract** (ports web `logic/fieldDisplay.ts` + `lib/member.ts`).
+  New `logic/FieldDisplay.kt` (`classify` → VALUE / NA / ISSUE; `isSentinel`/`isAdminSentinel`/`isNA`/
+  `isDataIssue`) with unit test `FieldDisplayTest.kt`. The contract: a real value shows verbatim; "N/A"
+  shows quietly (never a warning); the `needs-profile-api` / `blocked: …` sentinel **OR null/empty** is a
+  DATA ISSUE → a ⚠ warning indicator, **never the raw sentinel string** (an admin may see it for
+  diagnosis). Applied where covenant-path fields render: **`TableScreen`** (YESNO/RECOMMEND cells +
+  the filter-dialog labels — this was the surface leaking the raw `needs-profile-api` the user
+  reported) and **`PersonDetailScreen` `StatusSection`** (Temple Recommend / Endowment / Patriarchal
+  Blessing). `isAdmin` is threaded from `DashboardUiState.isAdmin` into both. The Golden-Hour completion
+  rows also distinguish the ⚠ data-issue case (see Baptisms below).
+- **Patriarchal refresh banner** (ports web `PatriarchalBanner` + `DashboardShell` gating). `BrokerClient`
+  `CredentialInfo` gains `canRefreshPatriarchal` (`can_refresh_patriarchal`) and `EnrollmentStatus`
+  gains `patriarchalPending` (`patriarchal_pending`). New `components/Banners.kt PatriarchalBanner`
+  shown via `DashboardUiState.showPatriarchalBanner` — provider + `canRefreshPatriarchal` +
+  `patriarchalPending > 0`, suppressed while syncing or the stale/revoked banner shows, and within a
+  **14-day grace** since the last re-auth (`credential.enrolledAt`). Its action opens the existing
+  in-app `ReauthDialog`. Copy matches web (`patriarchal_banner.test.tsx`).
+- **Baptisms card-per-person + Missionaries-by-Unit + investigator detail** (ports web `BaptismsTab.tsx`,
+  `GoldenHourRows.tsx`, `Missionaries.tsx`, `logic/milestones.ts goldenHourRows`/`nextSteps`).
+  `BaptismsScreen` reworked from the date-timeline to **one card per person** (overdue group → scheduled
+  group): date badge + countdown, unit, Golden-Hour chips, **next steps**, full leader note, and the
+  unit's missionary strip; plus a **"Missionaries by Unit"** section (every unit in `stakes.missionaries`,
+  via new `components/MissionariesSection.kt` — `MissionaryStrip` + a contact-line `MissionariesSection`).
+  The Unit/Date toggle groups cards per unit. `PersonDetailScreen` gains the **Golden-Hour completion
+  rows** (one row per item, ✓ done / ○ not done / ⚠ data issue, **N/A omitted** — `components/
+  GoldenHourRows.kt`) under the Covenant Path card, and for **investigators** an InvestigatorSection
+  (unit + "Missionaries Teaching" + next steps). Milestone logic added to `logic/Milestones.kt`:
+  `field` per milestone, `expected`/`isMissing`/`goldenHourRows`/`nextSteps`/`GhRow`/`GhRowStatus`
+  (1:1 with web), tested in `MilestonesTest`. `NeedsScreen` now uses `Milestones.isMissing` so N/A
+  fields are excluded uniformly. `App.kt` passes `isAdmin` + `missionariesByUnit` into the detail.

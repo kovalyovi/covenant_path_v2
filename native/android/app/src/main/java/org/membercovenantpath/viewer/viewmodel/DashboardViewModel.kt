@@ -50,6 +50,27 @@ data class DashboardUiState(
      *  daily sync failing until a leader re-authorizes; matches the web `showStaleBanner`). */
     val staleCredential: Boolean
         get() = enrollStatus?.credential?.isRevoked == true || enrollStatus?.credential?.isStale == true
+
+    /**
+     * For a HEALTHY credential, nudge the PROVIDER (whose calling can read profiles) to re-authorize
+     * and refresh patriarchal blessing — the one field the daily sync can't pull. Mirrors the web
+     * `DashboardShell` gating: suppressed while the stale/revoked banner already prompts re-auth or a
+     * sync runs; requires the provider + can_refresh_patriarchal + pending>0; and a 14-day GRACE
+     * WINDOW since the last re-auth (credential.enrolledAt = its updated_at) so it doesn't nag right
+     * after a refresh.
+     */
+    val showPatriarchalBanner: Boolean
+        get() {
+            if (staleCredential || syncing) return false
+            val cred = enrollStatus?.credential ?: return false
+            if (!cred.isProvider || !cred.canRefreshPatriarchal) return false
+            if ((enrollStatus?.patriarchalPending ?: 0) <= 0) return false
+            val graceMs = 14L * 24 * 60 * 60 * 1000
+            val lastReauthMs = cred.enrolledAt
+                ?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() } ?: 0L
+            // No known re-auth time, or older than the grace window → show it.
+            return lastReauthMs == 0L || (System.currentTimeMillis() - lastReauthMs) > graceMs
+        }
 }
 
 /**

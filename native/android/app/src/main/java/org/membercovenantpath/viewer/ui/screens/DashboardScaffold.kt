@@ -58,6 +58,7 @@ import org.membercovenantpath.viewer.ui.components.FreshnessChip
 import org.membercovenantpath.viewer.ui.components.GoldenHourSkeleton
 import org.membercovenantpath.viewer.ui.components.KpiSkeleton
 import org.membercovenantpath.viewer.ui.components.MemberListSkeleton
+import org.membercovenantpath.viewer.ui.components.PatriarchalBanner
 import org.membercovenantpath.viewer.ui.components.ReauthDialog
 import org.membercovenantpath.viewer.ui.components.StaleCredentialBanner
 import org.membercovenantpath.viewer.ui.components.SyncingBanner
@@ -211,6 +212,14 @@ fun DashboardScaffold(
                     onReenroll = { openReauth() },
                 )
             }
+            // Healthy-credential nudge to refresh patriarchal blessing (the one field daily sync can't
+            // pull). Its action opens the same in-app re-auth dialog. Gated in DashboardUiState.
+            if (state.showPatriarchalBanner) {
+                PatriarchalBanner(
+                    pending = state.enrollStatus?.patriarchalPending ?: 0,
+                    onRefresh = { openReauth() },
+                )
+            }
 
             // N6: breathing room so the last card/row isn't flush against the bottom nav bar
             // (the Scaffold already insets by the nav height under edge-to-edge; this just adds a gap).
@@ -238,7 +247,7 @@ fun DashboardScaffold(
                                     DashboardTab.GoldenHour -> GoldenHourScreen(members, onOpenMember)
                                     DashboardTab.Needs -> NeedsScreen(members, onOpenMember)
                                     DashboardTab.Kpis -> KpisScreen(members, onOpenMember)
-                                    DashboardTab.Table -> TableScreen(members, onOpenMember)
+                                    DashboardTab.Table -> TableScreen(members, onOpenMember, isAdmin = state.isAdmin)
                                 }
                             }
                         }

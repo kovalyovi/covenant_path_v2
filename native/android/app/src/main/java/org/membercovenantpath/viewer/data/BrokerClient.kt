@@ -60,6 +60,10 @@ data class CredentialInfo(
     val enrolledAt: String? = null,
     /** When state == "stale", the last sync error (e.g. "SSO did not complete…"). */
     val lastError: String? = null,
+    /** True when THIS credential's calling can read per-member profiles — so a re-auth can refresh
+     *  patriarchal blessing, the one field the daily Member Tools sync can't pull. Drives the
+     *  PatriarchalBanner together with the top-level [EnrollmentStatus.patriarchalPending]. */
+    val canRefreshPatriarchal: Boolean = false,
 ) {
     val isActive get() = state == "active"
     /** Stale = the delegated Church session died → daily sync is failing until re-authorized. */
@@ -75,6 +79,7 @@ data class CredentialInfo(
             isProvider = j?.bool("is_provider") ?: false,
             enrolledAt = j?.str("enrolled_at"),
             lastError = j?.str("last_error"),
+            canRefreshPatriarchal = j?.bool("can_refresh_patriarchal") ?: false,
         )
     }
 }
@@ -90,6 +95,10 @@ data class EnrollmentStatus(
     val hasData: Boolean = false,
     val noRole: Boolean = false,
     val credential: CredentialInfo = CredentialInfo(),
+    /** Count of real members still MISSING a patriarchal blessing — gates the PatriarchalBanner
+     *  (hidden at 0). Patriarchal blessing isn't part of the daily sync; it only refreshes on a
+     *  re-authorization with a live session. */
+    val patriarchalPending: Int = 0,
 ) {
     companion object {
         fun from(j: JsonObject) = EnrollmentStatus(
@@ -101,6 +110,7 @@ data class EnrollmentStatus(
             hasData = j.bool("has_data"),
             noRole = j.str("status") == "no_role",
             credential = CredentialInfo.from(j.obj("credential")),
+            patriarchalPending = j.int("patriarchal_pending"),
         )
     }
 }

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.SyncProblem
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -106,6 +107,40 @@ fun StaleCredentialBanner(
                 style = MaterialTheme.typography.bodyMedium,
             )
             TextButton(onClick = onReenroll) { Text(actionLabel) }
+        }
+    }
+}
+
+/**
+ * Patriarchal-blessing refresh nudge (mirrors web `PatriarchalBanner` + its `DashboardShell` gating).
+ * Patriarchal blessing is the ONE covenant-path field absent from the daily Member Tools sync — it
+ * only fills from the per-member LCR profile read during a sync with a LIVE session (i.e. right after
+ * a re-authorization). Shown to the credential PROVIDER (whose calling can read it) when there are
+ * members still missing it and the credential hasn't been re-authed recently. Its action opens the
+ * existing in-app re-auth dialog. [pending] is the count of real members still missing it.
+ */
+@Composable
+fun PatriarchalBanner(pending: Int, onRefresh: () -> Unit) {
+    val who = if (pending == 1) "member is" else "members are"
+    Surface(color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.AutoMirrored.Filled.MenuBook,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "Patriarchal blessing status isn’t part of the daily Church sync, so $pending $who " +
+                    "missing it. Re-authorize to refresh it for your stake.",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+            TextButton(onClick = onRefresh) { Text("Refresh") }
         }
     }
 }

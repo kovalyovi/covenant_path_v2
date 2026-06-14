@@ -15,13 +15,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.EventAvailable
 import androidx.compose.material.icons.filled.Groups
-import androidx.compose.material.icons.filled.VolunteerActivism
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -41,13 +40,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.membercovenantpath.viewer.logic.DateParse
+import org.membercovenantpath.viewer.logic.Milestones
 import org.membercovenantpath.viewer.model.Member
 import org.membercovenantpath.viewer.model.Missionary
 import org.membercovenantpath.viewer.ui.components.CountBadge
-import org.membercovenantpath.viewer.ui.components.MissionaryChip
+import org.membercovenantpath.viewer.ui.components.GoldenHourChips
+import org.membercovenantpath.viewer.ui.components.LocalMemberNotes
+import org.membercovenantpath.viewer.ui.components.MissionariesSection
+import org.membercovenantpath.viewer.ui.components.MissionaryStrip
+import org.membercovenantpath.viewer.ui.components.NoteLine
 import org.membercovenantpath.viewer.ui.components.PhotoAvatar
 import org.membercovenantpath.viewer.ui.components.SectionCard
 import org.membercovenantpath.viewer.ui.screens.EmptyPanel
@@ -60,10 +65,11 @@ private val OverdueOrange = Color(0xFFEF6C00) // orange.shade800
 private data class Dated(val m: Member, val date: LocalDate)
 
 /**
- * Prospective baptisms: investigators with a planned `baptism_goal_date`, as a date timeline. A
- * **Combined / Per unit** toggle (#12): combined is one timeline; per-unit splits into cards that
- * also show the assigned full-time **missionaries** strip. Each timeline surfaces an overdue
- * ("date passed") block first, then "Scheduled", grouped by date. Ported from baptisms_view.dart.
+ * Baptisms tab — a CARD PER PERSON (mirrors web `pages/tabs/BaptismsTab.tsx`). Each investigator with a
+ * planned `baptism_goal_date` gets their OWN card: the planned date + countdown, unit, full leader
+ * notes, Golden Hour chips + next steps, and the assigned full-time missionaries for their unit.
+ * Overdue ("date passed") cards surface first, then "Scheduled". A SECOND section below lists every
+ * unit's missionaries ("Missionaries by Unit"). A Unit/Date toggle groups the cards per unit.
  */
 @Composable
 fun BaptismsScreen(
@@ -79,6 +85,12 @@ fun BaptismsScreen(
         .mapNotNull { m -> DateParse.parseMemberDate(m.baptismGoalDate)?.let { Dated(m, it) } }
         .sortedBy { it.date }
 
+    // Every stake unit that has missionaries synced — the full per-unit breakdown for the section
+    // below (independent of who's in the baptism list, so it's a complete missionary roster).
+    val unitsWithMissionaries = missionariesByUnit
+        .filter { (u, list) -> u.isNotBlank() && list.isNotEmpty() }
+        .keys.sorted()
+
     LazyColumn(modifier = Modifier.fillMaxWidth(), contentPadding = PaddingValues(14.dp)) {
         item {
             Row(
@@ -87,7 +99,7 @@ fun BaptismsScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    AccentTitle("Prospective Baptisms")
+                    AccentTitle("Upcoming Baptisms")
                     Spacer(Modifier.width(8.dp))
                     CountBadge(items.size)
                 }
@@ -97,25 +109,86 @@ fun BaptismsScreen(
         }
 
         if (items.isEmpty()) {
-            item { EmptyPanel("No prospective baptisms with a planned date.") }
-            return@LazyColumn
+            item { EmptyPanel("No baptisms scheduled yet.") }
+        } else if (!byUnit) {
+            personCardSections(items, today, missionariesByUnit, onOpen)
+        } else {
+            perUnit(items, today, missionariesByUnit, onOpen)
         }
 
-        if (!byUnit) {
-            timeline(items, today, onOpen, embedded = false)
-        } else {
-            val grouped = items.groupBy { it.m.unitName ?: "—" }.toSortedMap()
-            grouped.forEach { (unit, list) ->
-                item {
-                    SectionCard(title = unit, leadingIcon = Icons.Filled.Groups, trailing = { CountBadge(list.size) }) {
-                        Column {
-                            val miss = missionariesByUnit[unit].orEmpty()
-                            if (miss.isNotEmpty()) {
-                                MissionaryStrip(miss)
-                                HorizontalDivider(Modifier.padding(vertical = 9.dp))
-                            }
-                            EmbeddedTimeline(list, today, onOpen)
-                        }
+        // SECOND section: assigned/full-time missionaries — a full per-unit breakdown.
+        if (unitsWithMissionaries.isNotEmpty()) {
+            item {
+                Spacer(Modifier.size(20.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    AccentTitle("Missionaries by Unit")
+                    Spacer(Modifier.width(8.dp))
+                    CountBadge(unitsWithMissionaries.size)
+                }
+                Spacer(Modifier.size(4.dp))
+            }
+            unitsWithMissionaries.forEach { unit ->
+                item(key = "miss-$unit") {
+                    MissionariesSection(unitName = unit, missionaries = missionariesByUnit[unit].orEmpty(), title = unit)
+                }
+            }
+        }
+    }
+}
+
+/** People-cards split into "needs attention — date passed" then "scheduled". */
+private fun LazyListScope.personCardSections(
+    items: List<Dated>,
+    today: LocalDate,
+    missionariesByUnit: Map<String, List<Missionary>>,
+    onOpen: (Member) -> Unit,
+) {
+    val overdue = items.filter { it.date.isBefore(today) }
+    val upcoming = items.filterNot { it.date.isBefore(today) }
+    if (overdue.isNotEmpty()) {
+        item { GroupHeader("Needs attention — date has passed", Icons.Filled.WarningAmber, OverdueOrange, overdue.size) }
+        personCards(overdue, "overdue", today, missionariesByUnit, onOpen, overdue = true)
+    }
+    if (upcoming.isNotEmpty()) {
+        item { GroupHeader("Scheduled", Icons.Filled.EventAvailable, null, upcoming.size) }
+        personCards(upcoming, "scheduled", today, missionariesByUnit, onOpen, overdue = false)
+    }
+}
+
+private fun LazyListScope.personCards(
+    list: List<Dated>,
+    keyPrefix: String,
+    today: LocalDate,
+    missionariesByUnit: Map<String, List<Missionary>>,
+    onOpen: (Member) -> Unit,
+    overdue: Boolean,
+) {
+    list.forEach { it ->
+        item(key = "$keyPrefix-${it.m.personUuid ?: it.m.name}") {
+            BaptismPersonCard(it, today, overdue, missionariesByUnit, onOpen)
+        }
+    }
+}
+
+/** The by-unit toggle: one card per unit holding that unit's missionary strip + people-cards. */
+private fun LazyListScope.perUnit(
+    items: List<Dated>,
+    today: LocalDate,
+    missionariesByUnit: Map<String, List<Missionary>>,
+    onOpen: (Member) -> Unit,
+) {
+    val grouped = items.groupBy { it.m.unitName ?: "—" }.toSortedMap()
+    grouped.forEach { (unit, list) ->
+        item(key = "unit-$unit") {
+            SectionCard(title = unit, leadingIcon = Icons.Filled.Groups, trailing = { CountBadge(list.size) }) {
+                Column {
+                    val miss = missionariesByUnit[unit].orEmpty()
+                    if (miss.isNotEmpty()) {
+                        MissionaryStrip(miss)
+                        HorizontalDivider(Modifier.padding(vertical = 9.dp))
+                    }
+                    list.forEach { d ->
+                        BaptismPersonCard(d, today, d.date.isBefore(today), missionariesByUnit, onOpen, embedded = true)
                     }
                 }
             }
@@ -123,38 +196,152 @@ fun BaptismsScreen(
     }
 }
 
-/** Combined timeline: overdue card then scheduled card (each its own list item). */
-private fun androidx.compose.foundation.lazy.LazyListScope.timeline(
-    items: List<Dated>,
+/** ONE card for ONE person being taught: date badge + countdown, unit, full notes, Golden Hour next
+ *  steps, and the assigned missionaries who teach them (their unit's full-time missionaries). */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun BaptismPersonCard(
+    item: Dated,
     today: LocalDate,
+    overdue: Boolean,
+    missionariesByUnit: Map<String, List<Missionary>>,
     onOpen: (Member) -> Unit,
-    embedded: Boolean,
+    embedded: Boolean = false,
 ) {
-    val overdue = items.filter { it.date.isBefore(today) }
-    val upcoming = items.filterNot { it.date.isBefore(today) }
-    if (overdue.isNotEmpty()) {
-        item {
-            DateSectionCard("Needs attention — date passed", Icons.Filled.WarningAmber, OverdueOrange, overdue, true, today, onOpen)
+    val m = item.m
+    val name = m.name ?: "—"
+    val unitName = (m.unitName ?: "").trim()
+    val missionaries = missionariesByUnit[unitName].orEmpty()
+    val note = LocalMemberNotes.current[m.personUuid]
+    val steps = Milestones.nextSteps(m, today = today)
+    val accent = if (overdue) OverdueOrange else MaterialTheme.colorScheme.primary
+
+    val days = ChronoUnit.DAYS.between(today, item.date).toInt()
+    val rel = when {
+        overdue -> "${-days} day${if (days == -1) "" else "s"} ago"
+        days == 0 -> "Today"
+        days == 1 -> "Tomorrow"
+        else -> "in $days days"
+    }
+
+    val body: @Composable () -> Unit = {
+        Column {
+            // Header: avatar + name (tappable) + date badge on the right.
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                Row(
+                    Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).clickable { onOpen(m) },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PhotoAvatar(name = name, photoUrl = m.photoUrl, size = 44.dp)
+                    Spacer(Modifier.width(10.dp))
+                    Column {
+                        Text(name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (unitName.isNotEmpty()) {
+                            Text(unitName, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(
+                    modifier = Modifier.width(56.dp).clip(RoundedCornerShape(10.dp))
+                        .background(accent.copy(alpha = 0.10f)).padding(vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(Dates.monthAbbrUpper(item.date), fontSize = 11.sp, color = accent, fontWeight = FontWeight.Bold)
+                    Text("${item.date.dayOfMonth}", fontSize = 22.sp, color = accent, fontWeight = FontWeight.Bold)
+                    Text(Dates.weekdayAbbr(item.date), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            Text(
+                "Planned baptism · $rel",
+                fontSize = 11.sp, color = accent, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+
+            // Golden Hour chips — quick covenant-path glance + suggested next step.
+            Spacer(Modifier.size(10.dp))
+            GoldenHourChips(member = m, size = 22.dp, highlightNext = true, today = today)
+
+            // Next steps (the not-yet-done Golden Hour milestones for this person).
+            if (steps.isNotEmpty()) {
+                Spacer(Modifier.size(10.dp))
+                Text(
+                    "NEXT STEPS", fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, letterSpacing = 0.6.sp,
+                )
+                Spacer(Modifier.size(4.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    steps.forEach { ms -> NextStepChip(ms.label, ms.color) }
+                }
+            }
+
+            // Full leader note / comment for this person.
+            note?.let {
+                Spacer(Modifier.size(10.dp))
+                NoteLine(it)
+            }
+
+            // Missionary info: who teaches them (their unit's assigned missionaries).
+            HorizontalDivider(Modifier.padding(top = 12.dp, bottom = 10.dp))
+            Text(
+                "MISSIONARIES", fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, letterSpacing = 0.6.sp,
+            )
+            Spacer(Modifier.size(6.dp))
+            if (missionaries.isNotEmpty()) {
+                MissionaryStrip(missionaries)
+            } else {
+                Text(
+                    "No assigned missionaries on record for this ward.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
-    if (upcoming.isNotEmpty()) {
-        item {
-            DateSectionCard("Scheduled", Icons.Filled.EventAvailable, null, upcoming, false, today, onOpen)
+
+    if (embedded) {
+        Box(Modifier.fillMaxWidth().padding(vertical = 8.dp)) { body() }
+    } else {
+        androidx.compose.material3.Card(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+            shape = RoundedCornerShape(16.dp),
+            elevation = androidx.compose.material3.CardDefaults.cardElevation(0.dp),
+            colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Box(Modifier.padding(16.dp)) { body() }
         }
     }
 }
 
 @Composable
-private fun EmbeddedTimeline(items: List<Dated>, today: LocalDate, onOpen: (Member) -> Unit) {
-    val overdue = items.filter { it.date.isBefore(today) }
-    val upcoming = items.filterNot { it.date.isBefore(today) }
-    Column {
-        if (overdue.isNotEmpty()) {
-            EmbeddedSection("Needs attention — date passed", Icons.Filled.WarningAmber, OverdueOrange, overdue, true, today, onOpen)
+private fun NextStepChip(label: String, color: Color) {
+    Box(
+        Modifier.clip(RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(8.dp).clip(RoundedCornerShape(50)).background(color))
+            Spacer(Modifier.width(6.dp))
+            Text(label, fontSize = 12.sp)
         }
-        if (upcoming.isNotEmpty()) {
-            EmbeddedSection("Scheduled", Icons.Filled.EventAvailable, MaterialTheme.colorScheme.primary, upcoming, false, today, onOpen)
-        }
+    }
+}
+
+@Composable
+private fun GroupHeader(title: String, icon: ImageVector, color: Color?, count: Int) {
+    val accent = color ?: MaterialTheme.colorScheme.primary
+    Row(
+        Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(title, color = accent, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        Spacer(Modifier.width(8.dp))
+        CountBadge(count)
     }
 }
 
@@ -182,115 +369,5 @@ private fun LayoutToggle(byUnit: Boolean, onChange: (Boolean) -> Unit) {
             shape = SegmentedButtonDefaults.itemShape(1, 2),
             icon = { Icon(Icons.Filled.Groups, contentDescription = null, modifier = Modifier.size(16.dp)) },
         ) { Text("Unit") }
-    }
-}
-
-@Composable
-private fun DateSectionCard(
-    title: String,
-    icon: ImageVector,
-    color: Color?,
-    items: List<Dated>,
-    overdue: Boolean,
-    today: LocalDate,
-    onOpen: (Member) -> Unit,
-) {
-    val accent = color ?: MaterialTheme.colorScheme.primary
-    val byDate = items.groupBy { it.date }.toSortedMap()
-    SectionCard(title = title, leadingIcon = icon, iconColor = accent) {
-        Column {
-            byDate.entries.forEachIndexed { i, (date, people) ->
-                if (i > 0) HorizontalDivider(Modifier.padding(vertical = 9.dp), color = MaterialTheme.colorScheme.outlineVariant)
-                DateRow(date, people, overdue, today, onOpen)
-            }
-        }
-    }
-}
-
-@Composable
-private fun EmbeddedSection(
-    title: String,
-    icon: ImageVector,
-    color: Color,
-    items: List<Dated>,
-    overdue: Boolean,
-    today: LocalDate,
-    onOpen: (Member) -> Unit,
-) {
-    val byDate = items.groupBy { it.date }.toSortedMap()
-    Column(Modifier.padding(top = 4.dp, bottom = 6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(6.dp))
-            Text(title, color = color, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-        }
-        Spacer(Modifier.size(8.dp))
-        byDate.entries.forEachIndexed { i, (date, people) ->
-            if (i > 0) HorizontalDivider(Modifier.padding(vertical = 9.dp), color = MaterialTheme.colorScheme.outlineVariant)
-            DateRow(date, people, overdue, today, onOpen)
-        }
-    }
-}
-
-@Composable
-private fun DateRow(date: LocalDate, people: List<Dated>, overdue: Boolean, today: LocalDate, onOpen: (Member) -> Unit) {
-    val accent = if (overdue) OverdueOrange else MaterialTheme.colorScheme.primary
-    val days = ChronoUnit.DAYS.between(today, date).toInt()
-    val rel = when {
-        overdue -> "${-days} day${if (days == -1) "" else "s"} ago"
-        days == 0 -> "Today"
-        days == 1 -> "Tomorrow"
-        else -> "in $days days"
-    }
-    Row(verticalAlignment = Alignment.Top) {
-        Column(
-            modifier = Modifier.width(54.dp).clip(RoundedCornerShape(10.dp))
-                .background(accent.copy(alpha = 0.10f)).padding(vertical = 6.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(Dates.monthAbbrUpper(date), fontSize = 11.sp, color = accent, fontWeight = FontWeight.Bold)
-            Text("${date.dayOfMonth}", fontSize = 22.sp, color = accent, fontWeight = FontWeight.Bold)
-            Text(Dates.weekdayAbbr(date), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                rel, fontSize = 11.sp,
-                color = if (overdue) accent else MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 3.dp, bottom = 1.dp),
-            )
-            people.forEach { p ->
-                Row(
-                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                        .clickable { onOpen(p.m) }.padding(vertical = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    PhotoAvatar(name = p.m.name ?: "?", photoUrl = p.m.photoUrl, size = 36.dp)
-                    Spacer(Modifier.width(10.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(p.m.name ?: "—", fontWeight = FontWeight.SemiBold)
-                        Text(p.m.unitName ?: "", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        org.membercovenantpath.viewer.ui.components.LocalMemberNotes
-                            .current[p.m.personUuid]?.let { note ->
-                                org.membercovenantpath.viewer.ui.components.NoteLine(note)
-                            }
-                    }
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(18.dp))
-                }
-            }
-        }
-    }
-}
-
-/** The full-time missionaries assigned to a unit (#12): name chips → tap shows phone/email. */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun MissionaryStrip(missionaries: List<Missionary>) {
-    Row(verticalAlignment = Alignment.Top) {
-        Icon(Icons.Filled.VolunteerActivism, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(6.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            missionaries.forEach { MissionaryChip(it) }
-        }
     }
 }
