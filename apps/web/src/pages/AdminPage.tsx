@@ -328,16 +328,10 @@ export function AdminPage({ embedded = false }: { embedded?: boolean } = {}) {
     </>
   );
 
-  // Embedded: the wide side sheet supplies the title + close; we add a compact Refresh header row.
+  // Embedded: the wide side sheet supplies the title + close + an inline Refresh (in the title row),
+  // so we render just the panels — no separate refresh row (#28).
   if (embedded) {
-    return (
-      <div style={{ position: 'relative' }}>
-        <div className="row" style={{ justifyContent: 'flex-end', padding: '8px 12px 0' }}>
-          <IconButton icon="refresh" label="Refresh" onClick={refresh} disabled={busy} />
-        </div>
-        {panels}
-      </div>
-    );
+    return <div style={{ position: 'relative' }}>{panels}</div>;
   }
 
   // Standalone (deep-link safety): the original full-page chrome.
@@ -387,9 +381,12 @@ function Panel<T extends Json>({
   }, []);
 
   if (state.loading) {
+    // #29: reserve a min-height close to the typical loaded panel so content doesn't jump on arrival.
     return (
       <Card title={`${title}…`}>
-        <CardSkeleton lines={3} />
+        <div style={{ minHeight: 96 }}>
+          <CardSkeleton lines={4} />
+        </div>
       </Card>
     );
   }

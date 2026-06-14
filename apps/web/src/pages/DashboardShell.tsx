@@ -27,6 +27,7 @@ import { ReportSheet } from '../components/ReportSheet';
 import { useToast } from '../components/Toast';
 import { Modal } from '../components/Modal';
 import { Button } from '../components/ui';
+import { AdminSkeleton } from '../components/Skeletons';
 import { SettingsPage } from './SettingsPage';
 
 // Settings + Admin render as side sheets OVER the dashboard (see router). The console is heavy
@@ -48,6 +49,7 @@ export function DashboardShell() {
   const [reportLoading, setReportLoading] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
+  const [adminNonce, setAdminNonce] = useState(0); // #28: header Refresh remounts the console → reloads all panels
 
   // Settings + Admin are URL-driven side sheets overlaying the dashboard. They're "open" purely as a
   // function of the path, so a deep link / refresh on /settings or /admin lands on the dashboard with
@@ -322,15 +324,24 @@ export function DashboardShell() {
       {adminOpen && adminSection ? (
         // Admin sub-list (full history): its own app-bar acts as the header → render bare + wide.
         <Modal open side wide bare title="Admin" onClose={closeOverlay}>
-          <Suspense fallback={<AdminSheetFallback />}>
+          <Suspense fallback={<AdminSkeleton />}>
             <AdminListPage />
           </Suspense>
         </Modal>
       ) : (
-        <Modal open={adminOpen} side wide title="Admin · Ops console" onClose={closeOverlay}>
+        // Refresh lives INLINE in the title row (next to ×), not on its own row — it remounts the
+        // console (key) so every panel reloads. The lazy chunk loads behind section-shaped skeletons.
+        <Modal
+          open={adminOpen}
+          side
+          wide
+          title="Admin · Ops console"
+          onClose={closeOverlay}
+          headerExtra={<IconButton icon="refresh" label="Refresh" onClick={() => setAdminNonce((n) => n + 1)} size={20} />}
+        >
           {adminOpen && (
-            <Suspense fallback={<AdminSheetFallback />}>
-              <AdminPage embedded />
+            <Suspense fallback={<AdminSkeleton />}>
+              <AdminPage key={adminNonce} embedded />
             </Suspense>
           )}
         </Modal>
@@ -357,15 +368,6 @@ export function DashboardShell() {
       <ContactDialog open={contactOpen} onClose={() => setContactOpen(false)} />
       {/* expose the support dialogs to Settings via context-free location state would be heavier;
           Settings opens its own copies. These remain for parity if invoked from the shell. */}
-    </div>
-  );
-}
-
-/** Centered spinner while the lazy Admin chunk loads inside its side sheet (no full-screen block). */
-function AdminSheetFallback() {
-  return (
-    <div className="center-col" style={{ minHeight: 240 }}>
-      <Spinner large />
     </div>
   );
 }

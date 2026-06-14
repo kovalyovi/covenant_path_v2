@@ -72,3 +72,23 @@ export function CardSkeleton({ lines = 3 }: { lines?: number }) {
     </div>
   );
 }
+
+/** Admin/Ops console skeleton — section-shaped cards shown IMMEDIATELY while the lazy console chunk
+ *  downloads (instead of a bare spinner), each with a min-height close to the real panel so content
+ *  doesn't jump when it resolves (#28/#29). */
+export function AdminSkeleton() {
+  const panels = [220, 160, 200, 150, 180];
+  return (
+    <div className="stack" style={{ gap: 12, padding: 12 }} aria-hidden="true">
+      {panels.map((h, i) => (
+        <div key={i} className="card">
+          <div className="card__body" style={{ minHeight: h }}>
+            <SkeletonBox width={i % 2 ? 150 : 200} height={18} />
+            <div style={{ height: 14 }} />
+            <CardSkeleton lines={4} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}

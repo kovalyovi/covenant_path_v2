@@ -37,6 +37,9 @@ interface ModalProps {
   /** Show a centered spinner over the body instead of the children — for in-sheet async loads, so a
    *  flow never has to block the whole screen with a full-screen scrim. */
   loading?: boolean;
+  /** Extra control(s) rendered in the title row, immediately before the close (×) — e.g. a Refresh
+   *  button, so it sits inline with the close instead of on its own row inside the body. */
+  headerExtra?: ReactNode;
 }
 
 // Exit animation duration (kept in sync with the CSS *-out keyframes). A fallback timeout unmounts
@@ -44,7 +47,7 @@ interface ModalProps {
 const EXIT_MS = 260;
 
 export function Modal({
-  open, onClose, title, children, actions, sheet, side, wide, hideClose, bare, bodyClassName, loading,
+  open, onClose, title, children, actions, sheet, side, wide, hideClose, bare, bodyClassName, loading, headerExtra,
 }: ModalProps) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useRef(`modal-${Math.random().toString(36).slice(2)}`).current;
@@ -166,6 +169,7 @@ export function Modal({
             <span id={titleId} style={{ flex: 1 }}>
               {title}
             </span>
+            {headerExtra}
             {!hideClose && <IconButton icon="close" label="Close" onClick={onClose} size={20} />}
           </div>
         )}
