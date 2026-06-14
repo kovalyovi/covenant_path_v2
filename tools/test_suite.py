@@ -262,6 +262,13 @@ def test_db_sentinel_scrub_on_insert():
     assert db._scrub_sentinel("name", NEEDS_PROFILE) == NEEDS_PROFILE  # name is NOT gated
     assert db._scrub_sentinel("baptism_date", None) is None
 
+    # 1b) the ON CONFLICT merge SELF-HEALS a STORED sentinel: a row that already holds the literal
+    #     sentinel (leaked before the scrub) must collapse to NULL on the next sync, not be preserved
+    #     forever — so the stored value is sentinel-stripped too, not just the incoming one.
+    me = db._merge_expr("patriarchal_blessing")
+    assert "nullif(members.patriarchal_blessing" in me, me  # stored sentinel stripped
+    assert "nullif(excluded.patriarchal_blessing" in me and "coalesce(" in me, me
+
     # 2) end-to-end through upsert_members: a fresh INSERT of a sentinel-bearing member must put NULL
     #    (not the literal sentinel) into the gated columns of the captured row. A fake connection
     #    captures the rows that would be sent to execute_values — no DB, faithful to the real path.

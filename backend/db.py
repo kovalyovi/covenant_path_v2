@@ -73,10 +73,15 @@ def _merge_expr(c: str) -> str:
         # (incoming NULL) but accept a genuine 0 (empty friends array).
         return "friends_count = coalesce(excluded.friends_count, members.friends_count)"
     if c in _GATED_COLUMNS:
-        e = f"excluded.{c}"
-        for s in _SENTINELS:
-            e = f"nullif({e}, '{s}')"
-        return f"{c} = coalesce({e}, members.{c})"
+        def _strip(expr: str) -> str:
+            for s in _SENTINELS:
+                expr = f"nullif({expr}, '{s}')"
+            return expr
+        # Incoming sentinel → keep the stored last-good. BUT strip the STORED value too, so a row that
+        # already holds a sentinel (one that leaked before the write-boundary scrub, or never had data)
+        # self-HEALS to NULL on the next sync instead of being preserved forever. A real stored value is
+        # untouched (it isn't a sentinel). Closes the "existing needs-profile-api never goes away" gap.
+        return f"{c} = coalesce({_strip(f'excluded.{c}')}, {_strip(f'members.{c}')})"
     return f"{c} = excluded.{c}"
 
 
