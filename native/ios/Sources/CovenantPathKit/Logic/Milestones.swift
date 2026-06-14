@@ -87,14 +87,14 @@ public enum Milestones {
     /// 11-year-old turning 12 this year counts). Unknown birth → not eligible for age-gated ones.
     public static func turnsAtLeast(_ m: Member, _ age: Int) -> Bool {
         guard let by = MemberDate.yearOf(m.birthDate) else { return false }
-        let year = Calendar.current.component(.year, from: Date())
+        let year = MemberDate.cal.component(.year, from: Date())
         return (year - by) >= age
     }
 
     /// Member ≥ 1 year: baptized ≥ 365 days ago, OR `membership_duration` mentions "N year(s)" with N≥1.
     public static func memberOneYearPlus(_ m: Member) -> Bool {
         if let b = MemberDate.parse(m.baptismDate) {
-            let days = Calendar.current.dateComponents([.day], from: b, to: Date()).day ?? 0
+            let days = MemberDate.cal.dateComponents([.day], from: b, to: Date()).day ?? 0
             return days >= 365
         }
         // `(\d+)\s*year` on the lowercased membership_duration (regex compiled once, not per call).
@@ -111,11 +111,11 @@ public enum Milestones {
     /// `nil` when birth is unknown. Mirrors `_ageNow`.
     public static func ageNow(_ m: Member) -> Int? {
         if let d = MemberDate.parse(m.birthDate) {
-            let comps = Calendar.current.dateComponents([.year], from: d, to: Date())
+            let comps = MemberDate.cal.dateComponents([.year], from: d, to: Date())
             return comps.year
         }
         guard let by = MemberDate.yearOf(m.birthDate) else { return nil }
-        return Calendar.current.component(.year, from: Date()) - by
+        return MemberDate.cal.component(.year, from: Date()) - by
     }
 
     public static func ageNowAtLeast(_ m: Member, _ age: Int) -> Bool {

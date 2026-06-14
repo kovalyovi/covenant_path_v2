@@ -11,6 +11,7 @@ struct NeedsView: View {
     @State private var ascending = true     // baptism-date order: oldest (most overdue) first
     @State private var orgs: Set<OrgBucket> = Set(OrgBucket.allCases)
     @State private var ward: String?        // nil = Stake (all wards)
+    @State private var missingResult: [[Member]]?   // the 11 "still need" lists; nil while computing off-main
 
     private var allOrgs: Bool { orgs.count == OrgBucket.allCases.count }
 
@@ -19,31 +20,23 @@ struct NeedsView: View {
         Array(Set(rows.filter { !$0.isInvestigator }.compactMap { $0.unitName }.filter { !$0.isEmpty })).sorted()
     }
 
-    /// Baptized members after the org filter + ward picker (Needs is about converts the org watches).
-    private var baptized: [Member] {
-        let base = rows.filter { !$0.isInvestigator }
-        let orgScoped = allOrgs ? base : base.filter { Org.responsible(for: $0).map { orgs.contains($0) } ?? false }
-        guard let ward else { return orgScoped }
-        return orgScoped.filter { ($0.unitName ?? "") == ward }
+    /// Recompute trigger — the inputs that change the lists (filters / sort / underlying data). Switching
+    /// the selected *category* isn't here: that just indexes the cached result (instant, no recompute).
+    private var needsKey: String {
+        let orgMask = OrgBucket.allCases.map { orgs.contains($0) ? "1" : "0" }.joined()
+        return "\(orgMask)|\(ward ?? "*")|\(ascending)|\(rows.count)|\(rows.first?.id ?? "")|\(rows.last?.id ?? "")"
     }
 
     var body: some View {
-        // Compute the heavy per-category "still need" lists ONCE per render. (Was a computed property
-        // re-evaluated for every chip in the selector → O(categories²) sorts over the whole stake on
-        // every layout pass, which iOS 26's glass layout passes multiplied into a hard hang.)
         let wards = self.wards
-        let baptized = self.baptized
-        let missing = Perf.measure("compute.needs") {
-            Milestones.needsCategories.map { Milestones.missing($0, in: baptized).sorted(by: compare) }
-        }
-        let total = missing.reduce(0) { $0 + $1.count }
-        let selIdx = selected ?? (missing.firstIndex { !$0.isEmpty } ?? 0)
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 BigHeader(title: "Needs Action",
                           subtitle: "Eligible members still missing each integration step",
                           accent: DashboardTab.needs.accent)
 
+                // Filters paint immediately (cheap) — only the heavy per-category lists wait on the
+                // background pass, so switching to Needs is instant.
                 OrgFilterBar(selected: $orgs)
                 if !allOrgs && orgs.count == 1 {
                     SubtleNote(Org.responsibilityNote(orgs.first!))
@@ -52,20 +45,63 @@ struct NeedsView: View {
                     WardPicker(wards: wards, selection: $ward)
                 }
 
-                if total == 0 {
-                    EmptyHint(allOrgs
-                              ? "Nothing outstanding — everyone eligible is on track. 🎉"
-                              : "Nothing outstanding for the selected orgs. 🎉")
+                if let missing = missingResult {
+                    let total = missing.reduce(0) { $0 + $1.count }
+                    let selIdx = selected ?? (missing.firstIndex { !$0.isEmpty } ?? 0)
+                    if total == 0 {
+                        EmptyHint(allOrgs
+                                  ? "Nothing outstanding — everyone eligible is on track. 🎉"
+                                  : "Nothing outstanding for the selected orgs. 🎉")
+                    } else {
+                        categorySelector(missing: missing, selectedIndex: selIdx)
+                        sortRow
+                        categorySection(missing: missing, selectedIndex: selIdx)
+                    }
                 } else {
-                    categorySelector(missing: missing, selectedIndex: selIdx)
-                    sortRow
-                    categorySection(missing: missing, selectedIndex: selIdx)
+                    needsSkeleton
                 }
             }
             .padding(16)
             .frame(maxWidth: 760)
             .frame(maxWidth: .infinity)
         }
+        // Compute the 11 "still need" lists OFF the main thread; `.task(id:)` re-runs only when the
+        // inputs change and cancels a stale pass. The previous result stays on screen while a filter
+        // change recomputes (no skeleton flash), so only the FIRST visit shows the skeleton.
+        .task(id: needsKey) { await recompute() }
+    }
+
+    // @MainActor so the off-main detached pass resumes here on the main actor for the @State write.
+    @MainActor private func recompute() async {
+        let snapshot = rows, o = orgs, w = ward, asc = ascending
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let result = await Task.detached(priority: .userInitiated) {
+            NeedsView.computeMissing(rows: snapshot, orgs: o, ward: w, ascending: asc)
+        }.value
+        Perf.record("compute.needs", since: t0)
+        missingResult = result
+    }
+
+    /// Lightweight loading placeholder (chips + a few rows) shown only on the first Needs visit.
+    private var needsSkeleton: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            FlowLayout(spacing: 8) {
+                ForEach(0..<5, id: \.self) { _ in Capsule().frame(width: 96, height: 34) }
+            }
+            ForEach(0..<4, id: \.self) { _ in
+                HStack(spacing: 10) {
+                    Circle().frame(width: 44, height: 44)
+                    VStack(alignment: .leading, spacing: 6) {
+                        RoundedRectangle(cornerRadius: 4).frame(width: 170, height: 12)
+                        RoundedRectangle(cornerRadius: 4).frame(width: 110, height: 10)
+                    }
+                    Spacer()
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .redacted(reason: .placeholder)
+        .shimmer()
     }
 
     // MARK: - pieces
@@ -125,9 +161,24 @@ struct NeedsView: View {
         }
     }
 
-    // MARK: - sorting (baptism date, then unit; honoring asc/desc) — mirrors `_cmp`
+    // MARK: - pure computation (runs off the main thread; same logic as before)
 
-    private func compare(_ a: Member, _ b: Member) -> Bool {
+    /// The 11 per-category "still need" lists, sorted by baptism date then unit. Pure function of its
+    /// inputs (value types), so it's safe to run in a detached task.
+    static func computeMissing(rows: [Member], orgs: Set<OrgBucket>,
+                               ward: String?, ascending: Bool) -> [[Member]] {
+        let allOrgs = orgs.count == OrgBucket.allCases.count
+        let base = rows.filter { !$0.isInvestigator }
+        let orgScoped = allOrgs ? base
+            : base.filter { Org.responsible(for: $0).map { orgs.contains($0) } ?? false }
+        let baptized = ward.map { w in orgScoped.filter { ($0.unitName ?? "") == w } } ?? orgScoped
+        return Milestones.needsCategories.map { ms in
+            Milestones.missing(ms, in: baptized).sorted { compareMembers($0, $1, ascending: ascending) }
+        }
+    }
+
+    /// Baptism date, then unit, honoring asc/desc — mirrors `_cmp`.
+    static func compareMembers(_ a: Member, _ b: Member, ascending: Bool) -> Bool {
         let da = MemberDate.parse(a.baptismDate), db = MemberDate.parse(b.baptismDate)
         var c: Int
         switch (da, db) {

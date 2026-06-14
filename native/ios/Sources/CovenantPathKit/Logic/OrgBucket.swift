@@ -47,7 +47,7 @@ public enum Org {
     /// the same `days / 30.44` (floored) approximation as Flutter so the boundary matches exactly.
     public static func responsible(for m: Member) -> OrgBucket? {
         guard let b = MemberDate.parse(m.baptismDate) else { return nil }
-        let days = Calendar.current.dateComponents([.day], from: b, to: Date()).day ?? 0
+        let days = MemberDate.cal.dateComponents([.day], from: b, to: Date()).day ?? 0
         let months = Int(floor(Double(days) / 30.44))
         if months < 12 { return .wml }
         return m.isMale ? .eq : .rs
@@ -85,7 +85,7 @@ public enum Elapsed {
     /// future/unknown date. Faithful port of `monthsDaysAgo` (month/day borrow logic included).
     public static func monthsDaysAgo(_ d: Date?) -> String {
         guard let d else { return "" }
-        let cal = Calendar.current
+        let cal = MemberDate.cal
         let now = Date()
         if d > now { return "" }
 
@@ -116,7 +116,7 @@ public enum Elapsed {
     /// `DateTime(now.year, now.month, 0).day`.
     private static func daysInMonthBefore(year: Int, month: Int) -> Int {
         var comps = DateComponents(); comps.year = year; comps.month = month; comps.day = 0
-        let cal = Calendar.current
+        let cal = MemberDate.cal
         if let d = cal.date(from: comps) {
             return cal.component(.day, from: d)
         }

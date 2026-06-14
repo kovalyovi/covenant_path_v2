@@ -30,7 +30,7 @@ public enum Recency: String, CaseIterable, Identifiable, Sendable {
     public func contains(_ m: Member) -> Bool {
         guard let days else { return true } // .all
         guard let b = MemberDate.parse(m.baptismDate) else { return false }
-        let elapsed = Calendar.current.dateComponents([.day], from: b, to: Date()).day ?? Int.max
+        let elapsed = MemberDate.cal.dateComponents([.day], from: b, to: Date()).day ?? Int.max
         return elapsed <= days
     }
 }

@@ -87,7 +87,7 @@ public enum Kpis {
 
     // MARK: - calendar helpers (port of _dayOnly / _weekStart)
 
-    static var cal: Calendar { Calendar.current }
+    static let cal = MemberDate.cal   // cached (was a computed var allocating a fresh snapshot per access)
 
     static func dayOnly(_ d: Date) -> Date { cal.startOfDay(for: d) }
 

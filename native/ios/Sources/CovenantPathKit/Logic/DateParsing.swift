@@ -17,6 +17,12 @@ public enum MemberDate {
     static let monthAbbrevs = ["jan", "feb", "mar", "apr", "may", "jun",
                                "jul", "aug", "sep", "oct", "nov", "dec"]
 
+    /// One cached current-calendar snapshot, shared across the logic layer. `Calendar.current`
+    /// allocates a fresh snapshot on every access, and the eligibility/ org / date math calls it per
+    /// member per category — recreating it was the dominant cost once the regexes were cached.
+    /// (Trade-off: a mid-session time-zone change isn't picked up — negligible for day-granularity dates.)
+    public static let cal = Calendar.current
+
     /// Parse a backend date string to a local `Date`, or `nil` for empty / sentinel / unparseable.
     public static func parse(_ raw: String?) -> Date? {
         guard let raw else { return nil }
@@ -88,7 +94,7 @@ public enum MemberDate {
         var c = DateComponents()
         c.year = year; c.month = month; c.day = day
         c.hour = 0; c.minute = 0; c.second = 0
-        return Calendar.current.date(from: c)
+        return cal.date(from: c)
     }
 
     /// Compiled-regex cache: `NSRegularExpression(pattern:)` is expensive and was recompiled on EVERY
