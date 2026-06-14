@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Member } from '../lib/member';
 import {
-  ageOf, responsibleParty, orgInfo, orgResponsibilityNote, type OrgBucket, ORG_BUCKETS,
+  ageOf, orgInfo, orgResponsibilityNote, type OrgBucket, ORG_BUCKETS,
 } from '../logic/milestones';
 import {
   parseMemberDate, fmtLong, fmtMonthDayYear, baptismElapsed, ago, staleness, fmtDateTime,
@@ -14,6 +14,7 @@ import {
 import { hexA } from '../theme/tokens';
 import { Icon, type IconName } from './Icon';
 import { Avatar, CountBadge, Segmented, SectionCard } from './ui';
+import { OrgBadge, AttendancePill } from './Badges';
 import { GoldenHourChips } from './GoldenHourChips';
 import { Modal } from './Modal';
 import type { Tier } from '../hooks/useTier';
@@ -336,6 +337,7 @@ interface MemberRowProps {
   chips?: boolean;
   showUnit?: boolean;
   showResp?: boolean;
+  showAttendance?: boolean;
   dateField?: string;
 }
 
@@ -371,7 +373,7 @@ function useLongPress(onLongPress: () => void, ms = 500) {
 }
 
 /** One member row (avatar + name + date/responsibility + optional GH chips). Mirrors `_MemberRow`. */
-export function MemberRow({ m, chips = false, showUnit = false, showResp = false, dateField = 'baptism_date' }: MemberRowProps) {
+export function MemberRow({ m, chips = false, showUnit = false, showResp = false, showAttendance = false, dateField = 'baptism_date' }: MemberRowProps) {
   const navigate = useNavigate();
   const tier = useTier();
   const isMobile = tier === 'mobile';
@@ -379,7 +381,6 @@ export function MemberRow({ m, chips = false, showUnit = false, showResp = false
   const date = parseMemberDate(m[dateField]);
   const age = ageOf(m);
   const isBaptism = dateField === 'baptism_date';
-  const resp = chips || showResp ? responsibleParty(m) : null;
   const id = m['person_uuid'] != null ? String(m['person_uuid']) : '';
   // Long-press a row → open the member detail straight into NOTE EDIT (no separate Edit button); a
   // normal tap/click opens the detail. The press timer fires the edit path and suppresses the click.
@@ -414,10 +415,16 @@ export function MemberRow({ m, chips = false, showUnit = false, showResp = false
             </span>
           </span>
         )}
-        {resp && (
-          <span className="row small" style={{ gap: 4, marginTop: 4, color: resp.color }}>
-            <Icon name={resp.icon as IconName} size={13} color={resp.color} />
-            {resp.label}
+        {/* #1e: a sacrament-attendance row sits ABOVE the org badge (only when asked + data exists). */}
+        {showAttendance && (
+          <span style={{ display: 'block', marginTop: 4 }}>
+            <AttendancePill member={m} />
+          </span>
+        )}
+        {/* #1d: org responsibility as a WML/RS/EQ shorthand badge (color + tooltip), not the long label. */}
+        {showResp && (
+          <span style={{ display: 'block', marginTop: 4 }}>
+            <OrgBadge member={m} />
           </span>
         )}
         <NoteLine uuid={id} />

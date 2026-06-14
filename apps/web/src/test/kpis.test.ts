@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   baptismsByMonth, metricData, attendedDates, lessonsWithMember, membersWithMemberLessons,
-  sacramentWindow,
+  sacramentWindow, attendanceBucket,
 } from '../logic/kpis';
 import { avgCompletion } from '../logic/milestones';
 import type { Member } from '../lib/member';
@@ -168,5 +168,33 @@ describe('sacramentWindow (last-8-weeks attendance, not whole-history "missed")'
       { attended: true },
     ];
     expect(sacramentWindow(list)).toEqual({ attended: 2, total: 3 });
+  });
+});
+
+describe('attendanceBucket (#1e — sacrament-attendance health)', () => {
+  it('buckets by attended count: 8/7 great, 4-6 fair, 1-3 poor, 0 none', () => {
+    expect(attendanceBucket({ attended: 8, total: 8 }).level).toBe('great');
+    expect(attendanceBucket({ attended: 7, total: 8 }).level).toBe('great');
+    expect(attendanceBucket({ attended: 6, total: 8 }).level).toBe('fair');
+    expect(attendanceBucket({ attended: 4, total: 8 }).level).toBe('fair');
+    expect(attendanceBucket({ attended: 3, total: 8 }).level).toBe('poor');
+    expect(attendanceBucket({ attended: 1, total: 8 }).level).toBe('poor');
+    expect(attendanceBucket({ attended: 0, total: 8 }).level).toBe('none');
+  });
+
+  it('marks ONLY the zero case bold (the strongest signal)', () => {
+    expect(attendanceBucket({ attended: 0, total: 8 }).bold).toBe(true);
+    expect(attendanceBucket({ attended: 1, total: 8 }).bold).toBe(false);
+    expect(attendanceBucket({ attended: 8, total: 8 }).bold).toBe(false);
+  });
+
+  it('is unknown (muted, never a red 0) when there is no attendance data', () => {
+    expect(attendanceBucket(null).level).toBe('unknown');
+    expect(attendanceBucket({ attended: 0, total: 0 }).level).toBe('unknown');
+    expect(attendanceBucket(null).label).toBe('—');
+  });
+
+  it('carries the raw attended/total label for short windows', () => {
+    expect(attendanceBucket({ attended: 2, total: 3 }).label).toBe('2/3');
   });
 });

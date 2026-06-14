@@ -284,6 +284,38 @@ export function sacramentWindow(
   return { attended, total: win.length };
 }
 
+/** Sacrament-attendance health bucket over the recent window (#1e). The user's rule (counts out of the
+ *  up-to-8-week window): 8 or 7 → great; 4–6 → fair; 1–3 → poor; 0 → none (the strongest signal, shown
+ *  BOLD with a warning glyph). `unknown` when there's no attendance data at all (rendered muted, never as
+ *  a red "0"). Returns a SEMANTIC level only (the UI maps level→theme color) plus the raw counts and a
+ *  short "attended/total" label so a short window reads honestly. Pure → trivially mirrored to native. */
+export type AttendanceLevel = 'great' | 'fair' | 'poor' | 'none' | 'unknown';
+
+export interface AttendanceBucket {
+  level: AttendanceLevel;
+  attended: number;
+  total: number;
+  bold: boolean; // only true for `none` (0 of window)
+  label: string; // e.g. "7/8" or "—" when unknown
+}
+
+/** Bucket a member's recent sacrament attendance. Pass the `sacramentWindow(...)` result (or null). */
+export function attendanceBucket(win: { attended: number; total: number } | null): AttendanceBucket {
+  if (!win || win.total === 0) {
+    return { level: 'unknown', attended: 0, total: 0, bold: false, label: '—' };
+  }
+  const { attended, total } = win;
+  const level: AttendanceLevel =
+    attended >= 7 ? 'great' : attended >= 4 ? 'fair' : attended >= 1 ? 'poor' : 'none';
+  return { level, attended, total, bold: level === 'none', label: `${attended}/${total}` };
+}
+
+/** Convenience: a member's attendance bucket straight from their details (`details.sacrament`). */
+export function memberAttendance(m: Member): AttendanceBucket {
+  const sac = detailsOf(m)?.['sacrament'];
+  return attendanceBucket(sacramentWindow(Array.isArray(sac) ? (sac as Array<Record<string, unknown>>) : null));
+}
+
 /** Sundays this person was marked present at sacrament. Mirrors `_attendedDates`. */
 export function attendedDates(m: Member): Date[] {
   const d = detailsOf(m);
