@@ -400,8 +400,8 @@ struct PatriarchalBanner: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "book.closed").foregroundStyle(.tint)
-            Text("Patriarchal blessing status isn’t part of the daily Church sync, so \(pending) \(who) "
-                 + "missing it. Re-authorize to refresh it for your stake.")
+            Text("\(pending) \(who) missing profile details the daily Church sync can’t pull "
+                 + "(like patriarchal blessing). Re-authorize to refresh them.")
                 .font(.callout)
             Spacer(minLength: 0)
             Button("Refresh", action: onRefresh).font(.callout)

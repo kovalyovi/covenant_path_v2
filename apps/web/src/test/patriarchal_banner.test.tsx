@@ -17,14 +17,14 @@ describe('PatriarchalBanner', () => {
   it('names the count (pluralized) and calls onRefresh when tapped', () => {
     const onRefresh = vi.fn();
     render(<PatriarchalBanner pending={3} onRefresh={onRefresh} />);
-    expect(screen.getByText(/3 members are missing it/)).toBeInTheDocument();
-    expect(screen.getByText(/isn’t part of the daily Church sync/)).toBeInTheDocument();
+    expect(screen.getByText(/3 members are missing profile details/)).toBeInTheDocument();
+    expect(screen.getByText(/daily Church sync can’t pull/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 
   it('uses the singular for one member', () => {
     render(<PatriarchalBanner pending={1} onRefresh={() => {}} />);
-    expect(screen.getByText(/1 member is missing it/)).toBeInTheDocument();
+    expect(screen.getByText(/1 member is missing profile details/)).toBeInTheDocument();
   });
 });

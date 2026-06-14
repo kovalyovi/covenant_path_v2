@@ -188,18 +188,18 @@ export function StaleBanner({
   );
 }
 
-/** Patriarchal blessing is the ONE covenant-path field absent from the daily Member Tools sync — it
- *  only fills from the per-member LCR profile read during a sync with a LIVE session (i.e. right after
- *  a re-authorization). Offer the credential provider (whose calling can read it) a one-tap re-auth that
- *  refreshes it; `pending` is the count of real members still missing it. Hidden when pending is 0. */
+/** Some member details (patriarchal blessing, and anything a member missed in the bulk directory) only
+ *  fill from the per-member LCR profile read during a sync with a LIVE session — i.e. right after a
+ *  re-authorization. Offer the credential provider (whose calling can read profiles) a one-tap re-auth
+ *  that fills them ALL; `pending` counts real members still missing data. Hidden when pending is 0. */
 export function PatriarchalBanner({ pending, onRefresh }: { pending: number; onRefresh: () => void }) {
   const who = pending === 1 ? 'member is' : 'members are';
   return (
     <div className="banner banner--info" role="status">
       <span className="row" style={{ gap: 8 }}>
         <Icon name="menu_book" size={18} color="var(--primary)" />
-        Patriarchal blessing status isn’t part of the daily Church sync, so {pending} {who} missing it.
-        Re-authorize to refresh it for your stake.
+        {pending} {who} missing profile details the daily Church sync can’t pull (like patriarchal
+        blessing). Re-authorize to refresh them.
       </span>
       <button type="button" className="btn btn--text" onClick={onRefresh}>
         Refresh

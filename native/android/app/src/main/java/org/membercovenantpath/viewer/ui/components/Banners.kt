@@ -134,8 +134,8 @@ fun PatriarchalBanner(pending: Int, onRefresh: () -> Unit) {
             )
             Spacer(Modifier.width(10.dp))
             Text(
-                "Patriarchal blessing status isn’t part of the daily Church sync, so $pending $who " +
-                    "missing it. Re-authorize to refresh it for your stake.",
+                "$pending $who missing profile details the daily Church sync can’t pull " +
+                    "(like patriarchal blessing). Re-authorize to refresh them.",
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
