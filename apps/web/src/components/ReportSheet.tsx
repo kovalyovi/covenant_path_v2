@@ -104,7 +104,7 @@ export function ReportSheet({
     <Modal
       open={open}
       onClose={onClose}
-      sheet
+      side
       title={title}
       actions={
         <Button

@@ -919,6 +919,42 @@ button.card--tappable:active {
   border-bottom-right-radius: 0;
 }
 
+/* #6b: side-sheet — a full-height panel anchored to the RIGHT on desktop/tablet (the previous screen
+   stays visible-but-dimmed at left through the scrim), sliding in from the right. */
+.scrim.side {
+  justify-content: flex-end;
+  align-items: stretch;
+  padding: 0;
+}
+.dialog--side {
+  width: min(460px, 96vw);
+  max-width: none;
+  height: 100dvh;
+  max-height: 100dvh;
+  border-radius: 0;
+  box-shadow: -8px 0 30px rgba(0, 0, 0, 0.3);
+  animation: side-in 0.22s ease;
+}
+@keyframes side-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+/* On a phone a right side-sheet is the wrong pattern (Material/HIG) — fall back to a bottom sheet. */
+@media (max-width: 600px) {
+  .scrim.side {
+    justify-content: center;
+    align-items: flex-end;
+  }
+  .dialog--side {
+    width: 100%;
+    height: auto;
+    max-height: 92dvh;
+    border-radius: var(--radius-card) var(--radius-card) 0 0;
+    box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.3);
+    animation: none;
+  }
+}
+
 /* ---- Toast ----------------------------------------------------------------------------------- */
 .toast-host {
   position: fixed;

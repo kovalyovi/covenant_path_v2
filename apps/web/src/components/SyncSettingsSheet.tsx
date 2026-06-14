@@ -82,7 +82,7 @@ export function SyncSettingsSheet({ open, onClose, initial, onLoaded, onRevoke, 
 
   return (
     <>
-    <Modal open={open} onClose={onClose} sheet title="Sync settings">
+    <Modal open={open} onClose={onClose} side title="Sync settings">
       {loading ? (
         <SyncSettingsSkeleton />
       ) : status == null ? (

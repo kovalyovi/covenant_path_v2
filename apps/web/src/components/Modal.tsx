@@ -13,13 +13,16 @@ interface ModalProps {
   actions?: ReactNode;
   /** Render as a bottom sheet (drag-handle-less but full-width-ish) instead of a centered dialog. */
   sheet?: boolean;
+  /** Render as a right side-sheet on desktop/tablet (slides in from the right, full height, the previous
+   *  screen visible-but-dimmed at left); falls back to a bottom sheet on phones (#6b). */
+  side?: boolean;
   /** Hide the close (×) button in the title row (e.g. when actions already include Cancel). */
   hideClose?: boolean;
   /** Extra class for the body (e.g. `form-stack` to stack fields/buttons with the form gap). */
   bodyClassName?: string;
 }
 
-export function Modal({ open, onClose, title, children, actions, sheet, hideClose, bodyClassName }: ModalProps) {
+export function Modal({ open, onClose, title, children, actions, sheet, side, hideClose, bodyClassName }: ModalProps) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useRef(`modal-${Math.random().toString(36).slice(2)}`).current;
   // Callers pass inline `onClose` arrows, so its identity changes every render. The focus effect
@@ -70,7 +73,7 @@ export function Modal({ open, onClose, title, children, actions, sheet, hideClos
   if (!open) return null;
 
   return createPortal(
-    <div className={sheet ? 'scrim sheet' : 'scrim'}>
+    <div className={`scrim${side ? ' side' : sheet ? ' sheet' : ''}`}>
       {/* Backdrop as a real button so click-to-dismiss is keyboard/SR-accessible. The dialog also
           closes on Escape + the × button. The button is visually the scrim (filled via CSS). */}
       <button
@@ -81,7 +84,7 @@ export function Modal({ open, onClose, title, children, actions, sheet, hideClos
         onClick={onClose}
       />
       <div
-        className="dialog"
+        className={side ? 'dialog dialog--side' : 'dialog'}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

@@ -148,7 +148,7 @@ export function PowerUserBody() {
 /** The compact sheet (#5) — same chrome as Sync settings; opened from the dashboard menu. */
 export function PowerUserSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
-    <Modal open={open} onClose={onClose} sheet title="Power users">
+    <Modal open={open} onClose={onClose} side title="Power users">
       <PowerUserBody />
     </Modal>
   );
