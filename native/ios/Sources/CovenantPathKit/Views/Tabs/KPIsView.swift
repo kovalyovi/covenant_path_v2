@@ -38,7 +38,11 @@ struct KPIsView: View {
                 header
 
                 let cr: (start: Date, end: Date)? = period == .custom ? (customStart, customEnd) : nil
-                let friendsAtSac = Kpis.metricData(investigators, datesOf: Kpis.attendedDates, period: period, customRange: cr)
+                // Instrument one representative metricData pass (all three are the same shape); the
+                // end-to-end tab.switch.KPIs metric captures the full charts+compute cost.
+                let friendsAtSac = Perf.measure("compute.kpis.metric") {
+                    Kpis.metricData(investigators, datesOf: Kpis.attendedDates, period: period, customRange: cr)
+                }
                 let newAtSac = Kpis.metricData(baptized, datesOf: Kpis.attendedDates, period: period, customRange: cr)
                 let newFriends = Kpis.metricData(investigators, datesOf: Kpis.firstLessonDate, period: period, customRange: cr)
 

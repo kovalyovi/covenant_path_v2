@@ -63,6 +63,11 @@ private struct ConfiguredRoot: View {
         .environment(\.appServices, services)
         .preferredColorScheme(theme.mode.colorScheme)
         .task { session.start() }
+        .onAppear {
+            // Route Perf summaries to the broker /log (pull with tools/render_logs.py --text PERF).
+            let broker = services.broker
+            Perf.setSink { summary, ctx in broker.logPerf(summary: summary, context: ctx) }
+        }
     }
 }
 

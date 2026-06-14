@@ -35,6 +35,10 @@ public struct MilestoneStyle: Sendable {
 
 public enum Milestones {
 
+    /// Compiled once (was recompiled on every `memberOneYearPlus` call, which runs per member in
+    /// eligibility scans + list sorts).
+    private static let yearsRegex = try? NSRegularExpression(pattern: #"(\d+)\s*year"#)
+
     /// The ordered milestone list — same order, same labels/abbrs, same predicates as Flutter.
     /// Baptism is intentionally NOT a milestone (see golden_hour.dart).
     public static let all: [Milestone] = [
@@ -93,9 +97,9 @@ public enum Milestones {
             let days = Calendar.current.dateComponents([.day], from: b, to: Date()).day ?? 0
             return days >= 365
         }
-        // `(\d+)\s*year` on the lowercased membership_duration.
+        // `(\d+)\s*year` on the lowercased membership_duration (regex compiled once, not per call).
         let s = (m.membershipDuration ?? "").lowercased()
-        if let re = try? NSRegularExpression(pattern: #"(\d+)\s*year"#),
+        if let re = yearsRegex,
            let match = re.firstMatch(in: s, range: NSRange(s.startIndex..<s.endIndex, in: s)),
            let r = Range(match.range(at: 1), in: s), let n = Int(s[r]) {
             return n >= 1

@@ -91,9 +91,22 @@ public enum MemberDate {
         return Calendar.current.date(from: c)
     }
 
+    /// Compiled-regex cache: `NSRegularExpression(pattern:)` is expensive and was recompiled on EVERY
+    /// `parse`/`yearOf` call — and parse runs O(n·log n) times inside list sorts. There are only a
+    /// handful of distinct patterns, so memoizing them (thread-safe `NSCache`) removes the dominant
+    /// per-row cost across every screen. Behavior is identical (same patterns, same matches).
+    private static let regexCache = NSCache<NSString, NSRegularExpression>()
+
+    private static func compiled(_ pattern: String) -> NSRegularExpression? {
+        if let hit = regexCache.object(forKey: pattern as NSString) { return hit }
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return nil }
+        regexCache.setObject(re, forKey: pattern as NSString)
+        return re
+    }
+
     /// Returns capture groups (group 0 = whole match, then each capture) of the first match, or nil.
     private static func firstMatch(_ pattern: String, in s: String) -> [String]? {
-        guard let re = try? NSRegularExpression(pattern: pattern) else { return nil }
+        guard let re = compiled(pattern) else { return nil }
         let range = NSRange(s.startIndex..<s.endIndex, in: s)
         guard let match = re.firstMatch(in: s, range: range) else { return nil }
         var groups: [String] = []

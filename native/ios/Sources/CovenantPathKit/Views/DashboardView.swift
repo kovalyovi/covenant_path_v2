@@ -16,6 +16,7 @@ struct DashboardView: View {
     @State private var sheet: ActiveSheet?
     @State private var freshnessShown = false
     @State private var toast: String?
+    @State private var switchStartedAt: CFAbsoluteTime?   // tab-switch latency probe (Perf)
 
     init(store: DashboardStore) {
         _store = State(initialValue: store)
@@ -41,8 +42,9 @@ struct DashboardView: View {
                             .tag(t)
                     }
                 }
-                .tint(tab.accent)
                 .cpTabBarMinimizeOnScroll()   // iOS 26: glass tab bar minimizes on scroll (no-op below)
+                // tab-switch latency probe (see Perf): time from selection change to the new tab's onAppear.
+                .onChange(of: tab) { switchStartedAt = CFAbsoluteTimeGetCurrent() }
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
@@ -90,9 +92,17 @@ struct DashboardView: View {
             }
             pageBody(t)
         }
-        // Subtle tab-tinted backdrop so the glass surfaces (cards, nav/tab bars) have something to
+        // Per-tab accent lives on the page now (was `.tint` on the TabView, which re-tinted the glass
+        // tab bar on every switch). Subtle tab-tinted backdrop so the glass surfaces have something to
         // refract over and each tab keeps its color identity.
+        .tint(t.accent)
         .cpScreenBackground(t.accent)
+        .onAppear {
+            if let t0 = switchStartedAt {
+                Perf.record("tab.switch.\(t.title)", since: t0)
+                switchStartedAt = nil
+            }
+        }
     }
 
     @ViewBuilder

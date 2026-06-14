@@ -33,7 +33,9 @@ struct NeedsView: View {
         // every layout pass, which iOS 26's glass layout passes multiplied into a hard hang.)
         let wards = self.wards
         let baptized = self.baptized
-        let missing = Milestones.needsCategories.map { Milestones.missing($0, in: baptized).sorted(by: compare) }
+        let missing = Perf.measure("compute.needs") {
+            Milestones.needsCategories.map { Milestones.missing($0, in: baptized).sorted(by: compare) }
+        }
         let total = missing.reduce(0) { $0 + $1.count }
         let selIdx = selected ?? (missing.firstIndex { !$0.isEmpty } ?? 0)
         return ScrollView {

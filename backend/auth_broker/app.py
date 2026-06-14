@@ -269,6 +269,12 @@ def client_log(req: LogReq) -> dict:
     from backend import observability as obs
     safe = {k: v for k, v in (req.context or {}).items()
             if isinstance(v, (str, int, float, bool))}
+    # Also surface client telemetry in the broker's OWN logs (stdout → Render) so it's pullable via
+    # tools/render_logs.py — obs.event only ships to Axiom (no-op without a token), which isn't
+    # queryable. Client perf summaries (event=client.perf) ride this path too.
+    from lcr_client.logging_setup import get_logger
+    get_logger().info("client %s/%s %s | %s", req.surface or "?", req.event,
+                      (req.message or "")[:300], safe)
     obs.event(req.event, level=req.level, message=(req.message or "")[:500],
               surface=req.surface, **safe)
     obs.flush()

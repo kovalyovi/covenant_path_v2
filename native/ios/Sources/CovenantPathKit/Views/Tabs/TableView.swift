@@ -90,7 +90,7 @@ struct TableView: View {
     private let hdrH: CGFloat = 44
 
     var body: some View {
-        let rowsF = filtered                      // filter + sort once
+        let rowsF = Perf.measure("compute.table") { filtered }   // filter + sort once (instrumented)
         let memberCol = columns[0]                // "Member" — the frozen first column
         let dataCols = Array(columns.dropFirst())
         let frozenW = rowNumWidth + width(memberCol)
@@ -129,8 +129,12 @@ struct TableView: View {
             // scroll so they move together. (Frozen columns have no native SwiftUI support — this is the
             // standard split + offset-mirror pattern.)
             ScrollView(.vertical, showsIndicators: true) {
+                // LazyVStack (was VStack): virtualize rows so switching to Table builds ~a screenful
+                // instead of the whole stake × 17 columns. The frozen row/column come from the pinned
+                // header + offset-mirror, NOT from non-laziness, so this is preserved. Fixed rowH keeps
+                // the two lazy columns aligned.
                 HStack(alignment: .top, spacing: 0) {
-                    VStack(spacing: 0) {
+                    LazyVStack(spacing: 0) {
                         ForEach(Array(rowsF.enumerated()), id: \.element.id) { idx, m in
                             NavigationLink(value: m) { frozenRowCell(idx: idx, m: m, memberCol: memberCol) }
                                 .buttonStyle(.plain)
@@ -142,7 +146,7 @@ struct TableView: View {
                     .zIndex(1)
 
                     ScrollView(.horizontal, showsIndicators: true) {
-                        VStack(spacing: 0) {
+                        LazyVStack(spacing: 0) {
                             ForEach(Array(rowsF.enumerated()), id: \.element.id) { _, m in
                                 NavigationLink(value: m) { dataRowCells(m: m, cols: dataCols) }
                                     .buttonStyle(.plain)

@@ -401,4 +401,22 @@ public final class BrokerService: @unchecked Sendable {
         // Fire-and-forget; telemetry must never surface an error.
         Task { _ = try? await URLSession.shared.data(for: req) }
     }
+
+    /// Ship a performance summary to `/log` (event=client.perf). PII-free (metric + ms only), so it is
+    /// NOT scrubbed. Pull via `python tools/render_logs.py --text PERF`. Fire-and-forget. See `Perf`.
+    public func logPerf(summary: String, context: [String: Any]) {
+        guard available, let u = URL(string: baseURL + "/log") else { return }
+        var ctx = context
+        ctx["kind"] = "perf"
+        let body: [String: Any] = [
+            "level": "info", "event": "client.perf", "surface": "ios",
+            "message": String(summary.prefix(400)), "context": ctx,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return }
+        var req = URLRequest(url: u, timeoutInterval: 10)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = data
+        Task { _ = try? await URLSession.shared.data(for: req) }
+    }
 }
