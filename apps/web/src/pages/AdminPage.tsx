@@ -179,10 +179,9 @@ export function AdminPage() {
           <Panel key={`sys-${nonce}`} title="System" load={() => admin.summary()}>
             {(s) => (
               <>
-                <HealthCard summary={s} />
+                <SystemHealthCard summary={s} />
                 <FreshnessCard summary={s} />
                 <MaintenanceCard summary={s} busy={busy} onRun={dispatch} />
-                <LinksCard summary={s} />
               </>
             )}
           </Panel>
@@ -443,16 +442,59 @@ function Pill({ label, ok, offText = 'down' }: { label: string; ok: boolean; off
   );
 }
 
-function HealthCard({ summary }: { summary: Json }) {
+// #7a: ONE panel merging system health + the external tool/dashboard deeplinks — each system on its
+// own row with a status dot (where we know it), a useful live stat (where we have one), and a deeplink.
+function SystemHealthCard({ summary }: { summary: Json }) {
   const brokerOk = (summary['broker'] as Json)?.['ok'] === true;
   const sb = (summary['supabase'] as Json) ?? {};
   const githubConfigured = summary['github_configured'] === true;
+  const links = ((summary['links'] as Json) ?? {}) as Record<string, string>;
+  const linkEntries = Object.entries(links);
+  const matched = new Set<string>();
+  const linkFor = (needles: string[]): string | undefined => {
+    const hit = linkEntries.find(([k]) => needles.some((n) => k.toLowerCase().includes(n)));
+    if (hit) matched.add(hit[0]);
+    return hit?.[1];
+  };
+
+  type Sys = { name: string; ok?: boolean; stat?: string; offText?: string; url?: string };
+  const systems: Sys[] = [
+    { name: 'Broker (Render)', ok: brokerOk, stat: brokerOk ? 'up' : undefined, offText: 'down', url: linkFor(['render', 'broker']) },
+    { name: 'Supabase', ok: sb['ok'] === true, stat: sb['members'] != null ? `${sb['members']} members` : undefined, url: linkFor(['supabase']) },
+    { name: 'GitHub Actions', ok: githubConfigured, stat: githubConfigured ? 'linked' : undefined, offText: 'not linked', url: linkFor(['github', 'actions']) },
+    { name: 'Axiom — logs', url: linkFor(['axiom', 'log']) },
+    { name: 'Sentry — errors', url: linkFor(['sentry']) },
+  ];
+  // Any links we didn't map to a known system become their own deeplink rows.
+  for (const [k, v] of linkEntries) if (!matched.has(k)) systems.push({ name: k, url: v });
+
+  const shown = systems.filter((s) => s.ok !== undefined || s.url);
   return (
-    <Card title="System health">
-      <div className="wrap" style={{ gap: 10 }}>
-        <Pill label="Broker" ok={brokerOk} />
-        <Pill label="Supabase" ok={sb['ok'] === true} />
-        <Pill label="GitHub Actions" ok={githubConfigured} offText="not linked" />
+    <Card title="System health & tools">
+      <div className="stack" style={{ gap: 2 }}>
+        {shown.map((s) => (
+          <div key={s.name} className="row" style={{ justifyContent: 'space-between', gap: 8, padding: '6px 0' }}>
+            <span className="row" style={{ gap: 8, alignItems: 'center', minWidth: 0 }}>
+              {s.ok !== undefined && (
+                <span
+                  aria-label={s.ok ? 'healthy' : (s.offText ?? 'down')}
+                  title={s.ok ? 'healthy' : (s.offText ?? 'down')}
+                  style={{ width: 9, height: 9, borderRadius: '50%', background: s.ok ? '#2e7d32' : '#bdbdbd', flexShrink: 0 }}
+                />
+              )}
+              <strong style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.name}</strong>
+              {(s.stat || (s.ok === false && s.offText)) && (
+                <span className="small muted">{s.stat ?? s.offText}</span>
+              )}
+            </span>
+            {s.url && (
+              <button type="button" className="chip" onClick={() => openUrl(s.url!)} aria-label={`Open ${s.name}`}>
+                <Icon name="open_in_new" size={14} />
+                Open
+              </button>
+            )}
+          </div>
+        ))}
       </div>
     </Card>
   );
@@ -531,24 +573,6 @@ function MaintenanceCard({
           Link GitHub (set GITHUB_TOKEN on the broker) to enable flows.
         </p>
       )}
-    </Card>
-  );
-}
-
-function LinksCard({ summary }: { summary: Json }) {
-  const links = ((summary['links'] as Json) ?? {}) as Record<string, string>;
-  const entries = Object.entries(links);
-  if (entries.length === 0) return null;
-  return (
-    <Card title="Tools & dashboards">
-      <div className="wrap">
-        {entries.map(([k, v]) => (
-          <button key={k} type="button" className="chip" onClick={() => openUrl(v)}>
-            <Icon name="open_in_new" size={16} />
-            {k}
-          </button>
-        ))}
-      </div>
     </Card>
   );
 }
