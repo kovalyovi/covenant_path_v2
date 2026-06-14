@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from covenant_path.membertools_adapter import (
     MinisteringIndex,
+    _baptism_date_index,
     _calling_index,
     _endowed_index,
     _name_index,
@@ -241,6 +242,68 @@ def test_adapt_sync_rescues_temple_experiences_from_other_commitments():
 def test_ministering_index_absent_when_no_org():
     assert MinisteringIndex({}).present is False
     assert MinisteringIndex(REFERENCE_PAYLOAD).present is True
+
+
+# --- baptism_date RESCUE from the directory ordinance (the Lambert BIC-children leak, 2026-06-13) ---
+# A covenant-path "stub" record (only id/names/unit — NO confirmationDate) used to leak the
+# NEEDS_PROFILE sentinel as baptism_date forever (no confirmationDate, and the /mlt profile merge is
+# dead in steady state). VERIFIED live (stake 503991) that the member DIRECTORY carries the
+# CONFIRMATION/BAPTISM ordinance date for exactly these members — and that confirmationDate == the
+# directory CONFIRMATION date to the day for all 74/74 members that carry both. So we rescue it.
+
+# A payload modelling the Lambert children: a STUB covenant record (no confirmationDate) whose
+# directory record DOES carry BAPTISM + CONFIRMATION ordinances, alongside a normal member whose own
+# record has confirmationDate.
+_BAPTISM_PAYLOAD = {
+    "units": [{"unitNumber": 999, "unitType": "STAKE", "name": "Stake",
+               "childUnits": [{"unitNumber": 100, "unitType": "WARD", "name": "W100"}]}],
+    "households": [
+        {"uuid": "h-stub", "unitNumber": 100, "members": [
+            {"uuid": "u-stub", "displayName": "Child, C", "sex": "MALE", "birthDate": "2015-07-17",
+             "ordinances": [{"type": "BAPTISM", "date": "2024-12-20"},
+                            {"type": "CONFIRMATION", "date": "2024-12-20"}]}]},
+        {"uuid": "h-baponly", "unitNumber": 100, "members": [
+            {"uuid": "u-baponly", "displayName": "Bap, B", "sex": "MALE", "birthDate": "2014-01-01",
+             "ordinances": [{"type": "BAPTISM", "date": "2023-06-10"}]}]},  # baptism, no confirmation row
+        {"uuid": "h-normal", "unitNumber": 100, "members": [
+            {"uuid": "u-normal", "displayName": "Adult, A", "sex": "MALE", "birthDate": "1985-01-01",
+             "ordinances": [{"type": "CONFIRMATION", "date": "2024-03-15"}]}]},
+        {"uuid": "h-nobap", "unitNumber": 100, "members": [
+            {"uuid": "u-nobap", "displayName": "Inv, I", "sex": "MALE", "birthDate": "1990-01-01",
+             "ordinances": []}]},  # in directory, no baptism/confirmation -> not indexed
+    ],
+    "covenantPathMembers": [
+        # STUB record: only id/names/unit — exactly the Lambert-children shape (NO confirmationDate).
+        {"id": "c-stub", "memberUuid": "u-stub", "names": {"listed": "Child, C"}, "unitNumber": 100},
+        {"id": "c-baponly", "memberUuid": "u-baponly", "names": {"listed": "Bap, B"}, "unitNumber": 100},
+        # normal record: its own confirmationDate wins over the directory.
+        {"id": "c-normal", "memberUuid": "u-normal", "names": {"listed": "Adult, A"},
+         "unitNumber": 100, "confirmationDate": "2024-03-15"},
+        # no confirmationDate AND no baptism ordinance anywhere -> genuinely unknown -> sentinel.
+        {"id": "c-nobap", "memberUuid": "u-nobap", "names": {"listed": "Inv, I"}, "unitNumber": 100},
+    ],
+}
+
+
+def test_baptism_date_index_prefers_confirmation_then_baptism():
+    idx = _baptism_date_index(_BAPTISM_PAYLOAD)
+    assert idx.get("u-stub") == "2024-12-20"       # CONFIRMATION (same day as BAPTISM)
+    assert idx.get("u-baponly") == "2023-06-10"     # BAPTISM fallback when no CONFIRMATION row
+    assert idx.get("u-normal") == "2024-03-15"
+    assert "u-nobap" not in idx                      # no baptism/confirmation ordinance -> not indexed
+
+
+def test_adapt_sync_rescues_baptism_date_from_directory_ordinance():
+    members = {m.person_uuid: m for m in adapt_sync(_BAPTISM_PAYLOAD)}
+    # The STUB covenant record (no confirmationDate) — this is the leak: was NEEDS_PROFILE, now rescued.
+    assert members["u-stub"].baptism_date == "2024-12-20"
+    # BAPTISM-only fallback.
+    assert members["u-baponly"].baptism_date == "2023-06-10"
+    # Own confirmationDate is honored (and equals the directory date anyway).
+    assert members["u-normal"].baptism_date == "2024-03-15"
+    # Genuinely no baptism anywhere -> still the sentinel for the /mlt merge / last-good (not a wrong
+    # date, not a leaked literal — the DB scrub turns this into NULL at the boundary; see test_db).
+    assert members["u-nobap"].baptism_date == NEEDS_PROFILE
 
 
 # --- field-gap report: the "why is this blank?" diagnostic ---------------------------------------

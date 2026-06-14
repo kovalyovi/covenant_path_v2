@@ -217,6 +217,36 @@ def _endowed_index(payload: dict) -> dict[str, bool]:
     return idx
 
 
+# The covenant-path `baptism_date` convention IS the CONFIRMATION date (verified live: for all 74/74
+# covenant members that carry both, the person record's `confirmationDate` equals the directory's
+# CONFIRMATION ordinance date, to the day). BAPTISM is the same-day fallback when CONFIRMATION is
+# absent. ISO `YYYY-MM-DD` strings in the live payload.
+_BAPTISM_DATE_ORDINANCE_PREFERENCE = ("CONFIRMATION", "BAPTISM")
+
+
+def _baptism_date_index(payload: dict) -> dict[str, str]:
+    """uuid -> baptism (confirmation) date from the directory's `ordinances[]`. This is the AUTHORITATIVE
+    bulk-payload fallback for `baptism_date` when a covenant person's own record omits `confirmationDate`
+    — the case that left BIC children (e.g. the Lambert children, unit 367575) leaking the NEEDS_PROFILE
+    sentinel as their baptism_date forever, because their `covenantPathMembers` entry is a stub (only
+    id/names/unit) while their DIRECTORY record carries BAPTISM+CONFIRMATION dates. Prefers CONFIRMATION
+    (== the confirmationDate convention) then BAPTISM (same day). Absent -> not indexed (sentinel stays,
+    /mlt merge / last-good preserves)."""
+    idx: dict[str, str] = {}
+    for uuid, m, _unum in _household_members(payload):
+        ords = m.get("ordinances")
+        if not isinstance(ords, list):
+            continue
+        by_type = {o.get("type"): o.get("date") for o in ords
+                   if isinstance(o, dict) and o.get("type") and o.get("date")}
+        for t in _BAPTISM_DATE_ORDINANCE_PREFERENCE:
+            d = by_type.get(t)
+            if isinstance(d, str) and d.strip():
+                idx.setdefault(uuid, d.strip()[:10])  # YYYY-MM-DD; first (CONFIRMATION) wins
+                break
+    return idx
+
+
 # A temple-recommend roster status that means "has a usable/known recommend record" for the label.
 _RECOMMEND_STATUS_LABEL = {"ACTIVE": "Active", "EXPIRED": "Expired"}
 
@@ -545,7 +575,8 @@ def adapt_person(p: dict, kind: str, unit_name_by_number: dict[int, str],
                  endowed_by_uuid: dict[str, bool] | None = None,
                  recommend_by_uuid: dict[str, str] | None = None,
                  directory_uuids: set[str] | None = None,
-                 recommend_present: bool = False) -> CovenantPathMember:
+                 recommend_present: bool = False,
+                 baptism_by_uuid: dict[str, str] | None = None) -> CovenantPathMember:
     """One Member Tools covenant-path person → CovenantPathMember. Covenant-path PROGRESS fields are
     filled from the bulk payload; only patriarchal_blessing stays the NEEDS_PROFILE sentinel (it is
     GENUINELY absent from the whole /api/v5/sync payload — verified live) so the /mlt merge fills it
@@ -553,6 +584,8 @@ def adapt_person(p: dict, kind: str, unit_name_by_number: dict[int, str],
 
     RESCUED from the bulk payload (else they'd persist as the leaking sentinel once the LCR session
     dies — the "better not worse" win):
+      • baptism_date — person `confirmationDate`, else the directory's CONFIRMATION/BAPTISM ordinance
+        (so a stub covenant record — the Lambert BIC children — still gets its date, never the sentinel).
       • birth_date  — person record, else household roster.
       • ministering_brothers_sisters / ministering_assignment — the unit-wide EQ/RS org (`ministering`).
       • calling — the member directory's `positions` (with the calling names in `details`).
@@ -579,9 +612,14 @@ def adapt_person(p: dict, kind: str, unit_name_by_number: dict[int, str],
     # Ministering: the unit-wide org is the authoritative bulk-payload signal (Yes/No/unknown).
     has_min = ministering.has_ministers(uuid) if (ministering and uuid) else None
     gives_min = ministering.has_assignment(uuid) if (ministering and uuid) else None
-    # Priesthood / endowment / temple recommend — rescued from the directory + recommend roster, gated
-    # exactly like report._apply_profile (else the sentinel leaks once the LCR session dies).
-    baptism_for_gate = p.get("confirmationDate")
+    # baptism_date = the CONFIRMATION date (the covenant-path convention). Prefer the covenant person's
+    # own `confirmationDate`; fall back to the DIRECTORY's CONFIRMATION/BAPTISM ordinance (verified
+    # identical to the day for 74/74 members that carry both). A stub covenant record (only id/names/
+    # unit — the Lambert BIC children) has no confirmationDate but DOES carry the ordinance in the
+    # directory, so this rescue stops baptism_date leaking the NEEDS_PROFILE sentinel forever.
+    baptism_date = p.get("confirmationDate") or (
+        (baptism_by_uuid or {}).get(uuid) if uuid else None)
+    baptism_for_gate = baptism_date
     aaronic, melch, living, recommend = _priesthood_endowment_recommend(
         uuid, sex=sex, birth_date=birth, baptism_date=baptism_for_gate,
         office_by_uuid=office_by_uuid, endowed_by_uuid=endowed_by_uuid,
@@ -612,8 +650,10 @@ def adapt_person(p: dict, kind: str, unit_name_by_number: dict[int, str],
         person_uuid=_person_uuid(p),
         kind=kind,
         sex=sex,
-        # covenant-path PROGRESS (from Member Tools — the data we're rescuing from the fragile cluster)
-        baptism_date=p.get("confirmationDate") or NEEDS_PROFILE,
+        # covenant-path PROGRESS (from Member Tools — the data we're rescuing from the fragile cluster).
+        # baptism_date prefers the person's confirmationDate, then the directory ordinance (above); only
+        # genuinely-absent (neither source) leaves the sentinel for the /mlt merge / last-good.
+        baptism_date=baptism_date or NEEDS_PROFILE,
         baptism_goal_date=p.get("baptismGoalDate"),
         friends="Yes" if friend_uuids else "No",   # friends are uuid refs — count the array, not names
         friends_count=len(friend_uuids),
@@ -666,6 +706,7 @@ def adapt_sync(payload: dict, include_returning: bool = True) -> list[CovenantPa
     office_by_uuid = _priesthood_office_index(payload)
     endowed_by_uuid = _endowed_index(payload)
     recommend_by_uuid = _recommend_index(payload)
+    baptism_by_uuid = _baptism_date_index(payload)
     directory_uuids = _directory_uuids(payload)
     # Whether the unit-wide temple-recommend roster is present AT ALL — gates the "directory member with
     # no roster entry = a real 'No'" fallback. If the whole container is missing (degraded sync), every
@@ -687,7 +728,8 @@ def adapt_sync(payload: dict, include_returning: bool = True) -> list[CovenantPa
                                     endowed_by_uuid=endowed_by_uuid,
                                     recommend_by_uuid=recommend_by_uuid,
                                     directory_uuids=directory_uuids,
-                                    recommend_present=recommend_present))
+                                    recommend_present=recommend_present,
+                                    baptism_by_uuid=baptism_by_uuid))
     return out
 
 

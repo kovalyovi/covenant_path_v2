@@ -244,6 +244,81 @@ def test_membertools_build_report():
     return "membertools build report: bulk + /mlt profile merge ok"
 
 
+def test_db_sentinel_scrub_on_insert():
+    """The raw NEEDS_PROFILE/BLOCKED sentinel must NEVER be persisted as a member's value (it would
+    LEAK to the client as the field's text). db._scrub_sentinel maps a GATED column's sentinel -> None
+    at the write boundary, and db.upsert_members applies it to EVERY row's vals — closing the
+    first-INSERT leak (the on-conflict merge only protected the UPDATE path, so a brand-new / restored
+    member with no last-good stored the literal 'needs-profile-api'). Real values + non-gated columns
+    pass through untouched."""
+    from backend import db
+    from covenant_path.report import BLOCKED, NEEDS_PROFILE
+
+    # 1) the pure helper: gated sentinel -> None; real value / non-gated / non-string pass through.
+    assert db._scrub_sentinel("baptism_date", NEEDS_PROFILE) is None
+    assert db._scrub_sentinel("temple_recommend", BLOCKED) is None
+    assert db._scrub_sentinel("baptism_date", "2024-01-01") == "2024-01-01"
+    assert db._scrub_sentinel("calling", "Yes") == "Yes"
+    assert db._scrub_sentinel("name", NEEDS_PROFILE) == NEEDS_PROFILE  # name is NOT gated
+    assert db._scrub_sentinel("baptism_date", None) is None
+
+    # 2) end-to-end through upsert_members: a fresh INSERT of a sentinel-bearing member must put NULL
+    #    (not the literal sentinel) into the gated columns of the captured row. A fake connection
+    #    captures the rows that would be sent to execute_values — no DB, faithful to the real path.
+    captured = {}
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def execute(self, sql, params=None):
+            self._sql = sql  # the prior-meta SELECT; returns no prior rows below
+        def fetchall(self):
+            return []  # no prior members -> every row is a first INSERT
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCursor()
+        def commit(self):
+            pass
+
+    def fake_execute_values(cur, sql, rows):
+        captured["sql"] = sql
+        captured["rows"] = list(rows)
+
+    saved = db.psycopg2.extras.execute_values
+    db.psycopg2.extras.execute_values = fake_execute_values
+    try:
+        member = {
+            "person_uuid": "PU-NEW", "name": "Newby, Nora", "unit": "Ward A",
+            "baptism_date": NEEDS_PROFILE,          # the Lambert-children case (no last-good)
+            "calling": NEEDS_PROFILE, "temple_recommend": BLOCKED,
+            "living_ordinance": NEEDS_PROFILE, "patriarchal_blessing": NEEDS_PROFILE,
+            "birth_date": "1990-02-03",             # a non-gated real value (must survive)
+            "friends": "No", "friends_count": 0, "kind": "new_member",
+        }
+        db.upsert_members(FakeConn(), "stake-1", [member],
+                          unit_id_by_number={}, unit_id_by_name={"Ward A": "unit-A"})
+        assert len(captured["rows"]) == 1, captured["rows"]
+        row = captured["rows"][0]
+        # row layout: (stake_id, unit_id, *_MEMBER_COLUMNS, field_meta)
+        vals = dict(zip(db._MEMBER_COLUMNS, row[2:2 + len(db._MEMBER_COLUMNS)]))
+        # the leak that this fix closes: gated sentinels are NULL in the stored row, NOT the literal.
+        for c in ("baptism_date", "calling", "temple_recommend", "living_ordinance",
+                  "patriarchal_blessing"):
+            assert vals[c] is None, f"{c} leaked sentinel {vals[c]!r} on INSERT"
+        assert vals["birth_date"] == "1990-02-03"  # non-gated real value untouched
+        assert vals["name"] == "Newby, Nora"
+        # field_meta still records the not-fetched fields with a 't' but NO 'f' (staleness preserved).
+        field_meta = row[2 + len(db._MEMBER_COLUMNS)]
+        meta = getattr(field_meta, "adapted", field_meta)
+        assert "f" not in meta.get("baptism_date", {}) and "t" in meta["baptism_date"], meta
+    finally:
+        db.psycopg2.extras.execute_values = saved
+    return "db sentinel scrub: gated sentinel -> NULL on INSERT (no client leak); freshness preserved"
+
+
 def test_membertools_auth():
     """Member Tools bearer mint/refresh/fetch (offline, mocked): silent authorize 302→code→token,
     login_required failure, refresh, invalid_grant→RefreshTokenExpired, and the bulk fetch."""
@@ -832,6 +907,7 @@ def main() -> int:
                test_report_degradation_helpers, test_stale_first_unit_ordering,
                test_endpoint_normalizer, test_milestone_na_exclusion,
                test_membertools_auth, test_membertools_adapter, test_membertools_build_report,
+               test_db_sentinel_scrub_on_insert,
                test_membertools_token_store, test_calling_union_and_neutralize,
                test_http_util_transient_classification, test_http_util_retry_and_breaker,
                test_profile_action_retries_transient_500,

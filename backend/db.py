@@ -46,6 +46,23 @@ _GATED_COLUMNS = frozenset({
 _SENTINELS = ("needs-profile-api", "blocked: insufficient calling access")
 
 
+def _scrub_sentinel(column: str, value):
+    """Map a GATED column's sentinel value -> None at the write boundary, so the RAW sentinel string
+    ('needs-profile-api' / 'blocked: …') is NEVER persisted (and thus never served to a client).
+
+    The sentinel's MEANING ("don't have it this run — preserve last-good") is fully retained: writing
+    None instead is what the ON CONFLICT merge already collapses the sentinel to
+    (`coalesce(nullif(excluded.c, sentinel), members.c)` keys off the STORED last-good, not the incoming
+    value). The gap the old code left was the *first INSERT* of a member: no conflict fires, so the raw
+    `vals` landed verbatim and a brand-new / restored member with no last-good stored the literal
+    sentinel forever (the leak the client showed). Converting here closes both the INSERT and UPDATE
+    paths: INSERT writes NULL; UPDATE's coalesce(NULL, members.c) still preserves last-good. Non-gated
+    columns and non-sentinel values pass through untouched."""
+    if column in _GATED_COLUMNS and isinstance(value, str) and value in _SENTINELS:
+        return None
+    return value
+
+
 def _merge_expr(c: str) -> str:
     """ON CONFLICT update expr: gated columns preserve last-good when the incoming value is a
     sentinel; all other columns take the fresh value. Sentinel literals are constants (safe to inline)."""
@@ -201,7 +218,14 @@ def upsert_members(conn, stake_id: str, members: list[dict],
                 v = m.get("details")
                 vals.append(psycopg2.extras.Json(v) if v is not None else None)
             else:
-                vals.append(m.get(c))
+                # Scrub the raw sentinel -> NULL at the write boundary so a member with no last-good
+                # (a brand-new / restored row, where ON CONFLICT never fires) can never persist the
+                # literal 'needs-profile-api'/'blocked: …' string for the client to read. The
+                # preserve-last-good meaning is unchanged (the on-conflict merge keys off members.c).
+                vals.append(_scrub_sentinel(c, m.get(c)))
+        # field_meta reads the ORIGINAL `m` (with sentinels intact) so a not-fetched field still leaves
+        # its last-fetched `f` stamp untouched (staleness keeps growing) — only the stored VALUE is
+        # scrubbed to NULL, not the freshness signal.
         fm = _field_meta(m, prior_meta.get(m.get("person_uuid")), now)
         rows.append((stake_id, unit_id, *vals, psycopg2.extras.Json(fm)))
     if not rows:
