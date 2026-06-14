@@ -44,14 +44,22 @@ export function DashboardShell() {
   const showStaleBanner = credState === 'revoked' || credState === 'stale';
   // For a HEALTHY credential, nudge the provider (whose calling can read profiles) to re-authorize and
   // refresh patriarchal blessing — the one field the daily sync can't pull. Suppressed when the
-  // stale/revoked banner already prompts re-auth (which refreshes it too).
+  // stale/revoked banner already prompts re-auth (which refreshes it too). GRACE WINDOW: patriarchal
+  // is a one-time ordinance, so it's fine for it to be up to 2 weeks stale — once a re-auth has run
+  // (credential.enrolledAt = its updated_at), stay quiet for 14 days instead of nagging again on the
+  // next load (the "I refreshed but the banner didn't go away" report).
   const cred = d.enrollStatus?.credential;
+  const REFRESH_GRACE_DAYS = 14;
+  const lastReauthMs = cred?.enrolledAt ? new Date(cred.enrolledAt).getTime() : 0;
+  const patriarchalStale =
+    !lastReauthMs || Date.now() - lastReauthMs > REFRESH_GRACE_DAYS * 24 * 60 * 60 * 1000;
   const showPatriarchalBanner =
     !showStaleBanner &&
     !d.syncing &&
     broker.available &&
     cred?.isProvider === true &&
     cred?.canRefreshPatriarchal === true &&
+    patriarchalStale &&
     (d.enrollStatus?.patriarchalPending ?? 0) > 0;
 
   // ---- Menu actions (mirror _appBarActions + the dashboard handlers) --------------------------
