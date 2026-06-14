@@ -50,8 +50,11 @@ function BaptismsBody() {
   }
   items.sort((a, b) => a.date.getTime() - b.date.getTime());
 
-  // The set of units represented (for the missionaries-by-unit section below). Stable, sorted.
-  const unitsInView = [...new Set(items.map((it) => String(it.m['unit_name'] ?? '').trim()).filter(Boolean))].sort();
+  // Every stake unit that has missionaries synced — the full per-unit breakdown for the section
+  // below (item 4); independent of who's in the baptism list, so it's a complete missionary roster.
+  const unitsWithMissionaries = Object.keys(d.missionaries)
+    .filter((u) => u.trim() && (d.missionaries[u]?.length ?? 0) > 0)
+    .sort();
 
   return (
     <PageScaffold
@@ -73,8 +76,10 @@ function BaptismsBody() {
         <PersonCardSections items={items} today={today} tier={tier} />
       )}
 
-      {/* SECOND section (item 3): assigned/full-time missionaries per unit/ward. */}
-      {items.length > 0 && <MissionariesByUnitSection units={unitsInView} tier={tier} />}
+      {/* SECOND section (item 4): assigned/full-time missionaries — a full per-unit breakdown. */}
+      {unitsWithMissionaries.length > 0 && (
+        <MissionariesByUnitSection units={unitsWithMissionaries} tier={tier} />
+      )}
     </PageScaffold>
   );
 }
