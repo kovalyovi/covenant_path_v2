@@ -126,4 +126,39 @@ object DateParse {
         }
         return parts.joinToString(" ")
     }
+
+    /**
+     * Coarse elapsed time for the BAPTISM display (#8.1a): months only once a member is ≥1 month in
+     * ("3 months", not "3 months 12 days"); days only under a month ("5 days"). Empty for a
+     * future/unknown date. Built on [monthsDaysAgo] so the borrow math stays in one place. Mirrors the
+     * web `baptismElapsed`.
+     */
+    fun baptismElapsed(d: LocalDate?, today: LocalDate = LocalDate.now()): String {
+        val full = monthsDaysAgo(d, today)
+        if (full.isEmpty()) return ""
+        // monthsDaysAgo emits "N month(s) M day(s)" once N>0; "M day(s)" under a month. Keep only the
+        // months segment when present, otherwise the days segment unchanged.
+        val m = Regex("""^\d+ months?""").find(full)
+        return m?.value ?: full
+    }
+
+    /**
+     * "Member for" tenure since a past date (#9e): "2 years 3 months" with any ZERO part dropped (never
+     * "0 years"/"0 months"); under 2 months it reads month+days ("1 month 3 days" / "5 days"). Empty
+     * for a future/unknown date. Mirrors the web `tenure`.
+     */
+    fun tenure(d: LocalDate?, today: LocalDate = LocalDate.now()): String {
+        if (d == null || d.isAfter(today)) return ""
+        var months = (today.year - d.year) * 12 + today.monthValue - d.monthValue
+        if (today.dayOfMonth < d.dayOfMonth) months -= 1
+        if (months < 0) return ""
+        if (months < 2) return monthsDaysAgo(d, today)
+        val years = months / 12
+        val rem = months % 12
+        val parts = buildList {
+            if (years > 0) add("$years year${if (years == 1) "" else "s"}")
+            if (rem > 0) add("$rem month${if (rem == 1) "" else "s"}")
+        }
+        return parts.joinToString(" ")
+    }
 }

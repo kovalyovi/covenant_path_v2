@@ -76,9 +76,47 @@ The daily sync now fills `ministering_brothers_sisters`, `ministering_assignment
 native apps read the already-resolved values from Supabase, so **no native code change is required**;
 they benefit automatically once the sync re-runs. (Listed here only so the parity log is complete.)
 
+## E. 12-item overhaul + follow-up batch (web + backend, 2026-06-14)
+
+The big autonomous batch (#0–#12 plus the follow-up feedback round). Backend + **web shipped and
+verified**; the **shared logic layer was mirrored to Swift + Kotlin this session with unit tests**
+(CI `swift test` / Android `testDebugUnitTest` verify it apples-to-apples). What remains for native
+is the **view/UI wiring** of those helpers, flagged here for CI build + AVD/device verification.
+
+### E-logic — shared logic MIRRORED this session (✅ code + tests; CI-verified, no device needed)
+| Helper | Web source | iOS | Android |
+|---|---|---|---|
+| ✅ `tenure` — "2 years 3 months", zero-parts dropped, days only <2 mo (#9e) | `logic/dates.ts` | `Logic/OrgBucket.swift` (`Elapsed.tenure`) | `logic/DateParse.kt` |
+| ✅ `baptismElapsed` — months-only past a month (#8.1a) | `logic/dates.ts` | `Elapsed.baptismElapsed` | `DateParse.baptismElapsed` |
+| ✅ `sacramentWindow` + `attendanceBucket` + `memberAttendance` — 8/7→great, 4–6→fair, 1–3→poor, 0→none+bold, no-data→unknown (#1e/#10b) | `logic/kpis.ts` | `Logic/Kpis.swift` | `logic/Kpis.kt` |
+| ✅ `unitGoldenHour` — per-unit people-fully-complete (sectioned ring) + items-complete (filled ring) rollup (#8d) | `logic/milestones.ts` | `Logic/Milestones.swift` | `logic/Milestones.kt` |
+| ✅ `staffingGaps`/`gapCount`/`REQUIRED_ROLES` — WML, ≥2 ward missionaries, EQ pres, RS pres (#12) | `logic/staffing.ts` | new `Logic/Staffing.swift` | new `logic/Staffing.kt` |
+
+Tests added: `LogicTests.swift` (+ `StaffingTest` cases) and `KpisTest.kt` / `DateParseTest.kt` /
+`MilestonesTest.kt` / new `StaffingTest.kt`.
+
+### E-views — native VIEW wiring still pending (⬜ build + AVD)
+| # | Item (web phase) | iOS | Android | Notes |
+|---|---|---|---|---|
+| E1 | ⬜ Needs filter row — Category dropdown + Units dropdown + colored Org **toggle chips** (never-empty), mobile "Filters" sheet, group-by-unit segmented, hide per-unit snapshot toggle, OrgBadge per card, attendance category/pill (#1) | `Views/Tabs/NeedsView.swift` | `ui/screens/tabs/NeedsScreen.kt` | Org chips already exist natively (`Org.toggleFilter`); add category/units dropdowns + attendance pill (uses `Kpis.attendanceBucket`). |
+| E2 | ⬜ Needs cards — name + age on separate lines, gender, baptism shows "X months" (`baptismElapsed`), snapshot "nicer" toggle | NeedsView rows | NeedsScreen rows | |
+| E3 | ⬜ Person detail — single GH-pill representation (keep ⚠ sentinel), sacrament **timeline** (glyph+color, per-week a11y), section completeness border **+ icon/label**, eligible-only sections, principle dots with check glyph + tap tooltip, header **photo** w/ initials fallback (#10) | `Views/Detail/*`, `PersonDetailView.swift` | `ui/screens/PersonDetailScreen.kt` | Photo URL is `members.photo_url` (signed, from new photos pipeline). |
+| E4 | ⬜ Golden Hour — category **icons**, unit multi-select, WML/RS/EQ abbreviations, per-unit **rings** (sectioned = people via `unitGoldenHour`, filled = items) + numeric labels, baptism time-only, age below name (#8/#8.1) | `Views/Tabs/GoldenHourView.swift` | `GoldenHourScreen.kt` | Ring arc math is a shared spec — match SwiftUI `Canvas` / Compose `Canvas`. |
+| E5 | ⬜ Table — sticky-column right border when scrolled, hide # col on small screens (class-based freeze, not nth-child), header-click sort on **all** columns, remove non-enumerable value filters (keep sort), "member for" via `tenure`, instant filter (no Apply), ≥44px hitboxes (#9) | `Views/Tabs/TableView.swift` | `TableScreen.kt` | |
+| E6 | ⬜ Baptisms / Being-Taught — drop GH pills (notes + path + concerns first), single column, group-by-companionship toggle, date pill on the LEFT outside the card, lesson pills (one per completed lesson) with member-present indicator, Missionaries contact section w/ staleness note (#3) | `Views/Tabs/BaptismsView.swift` | `BaptismsScreen.kt` | Companionship data shape mirrors `membertools_adapter.missionaries_by_unit`. |
+| E7 | ⬜ Side-sheet nav pattern — iOS regular = `NavigationSplitView`/trailing column, compact = push/`.sheet` + detents; Android expanded = Material 3 side sheet, compact = `ModalBottomSheet`; Settings/Ops/Report/Power-user/Person-detail URL-landable equivalents (#6b/#6c, #2/#4/#5) | `DashboardView.swift` | `DashboardScaffold.kt` | A 6th tab overflows both (cap 5) — use toolbar/More/rail, not a 6th compact tab. |
+| E8 | ⬜ Settings "Signed in as" → also show stake / unit(s) / calling(s) + the rights each grants | `SettingsView.swift` | `SettingsScreen.kt` | Reads `user_roles` joined to units/stakes (RLS-scoped). |
+| E9 | ⬜ Admin/Ops — system deeplinks + one live stat each, denser diagnostics (#7) | `AdminView.swift` | `AdminScreen.kt` | |
+| E10 | ⬜ **Leadership tab** (#12 + #3a) — per-unit roster + gap detection (`Staffing.gaps`), missionaries-per-ward; per-surface nav (not a 6th compact tab) | new `Views/Tabs/LeadershipView.swift` | new `ui/screens/tabs/LeadershipScreen.kt` | RLS-scoped: a ward leader sees only their unit. Needs `units.staffing` (migration 0053) + the bulk missionaries — read from Supabase. |
+| E11 | ⬜ Notes as a timestamped **thread** (add/edit/delete individual + all, by in-scope unit leaders) | note thread view | note thread view | Backend `member_comments` widened (migration 0054: `updated_at`/`updated_by` + RLS). |
+| E12 | ⬜ "Refined" alternate theme toggle (chrome-only; identity colors unchanged) — optional, web-first | `Theme.swift`/`Glass.swift` | `Color.kt`/`Theme.kt` | Only if the user adopts it after the web preview. |
+
 ## Already DONE on native this session (NOT backlog — for reference)
 - **OTP-lane removal** (ADR-011): native re-auth is password-only (`ReauthSheet.swift`,
   `ReauthDialog.kt`, `BrokerService`/`BrokerClient` otp methods removed, `MfaCopy` hint removed).
 - **One-MFA enroll → 45-day token** capture flow on native (`/auth/web/*` routing).
 - **Unlinked-sign-in empty state** ("invite or one Church login") — `DashboardView.swift`,
   `StatusScreens.kt`.
+- **E-logic shared mirrors** (this session, 2026-06-14): `tenure`, `baptismElapsed`,
+  `sacramentWindow`/`attendanceBucket`/`memberAttendance`, `unitGoldenHour`, and the new
+  `Staffing` module — all with mirrored unit tests (see section E above).

@@ -294,6 +294,61 @@ public enum Kpis {
         return [d]
     }
 
+    // MARK: - sacrament attendance health (#1e / #10b) — ports of web kpis.ts sacramentWindow/attendanceBucket
+
+    /// Semantic attendance level over the recent window. The UI maps level→theme color (never raw color).
+    public enum AttendanceLevel: String, Sendable { case great, fair, poor, none, unknown }
+
+    /// Recent sacrament-attendance bucket: raw counts + a semantic level + a short "a/t" label.
+    public struct AttendanceBucket: Sendable {
+        public let level: AttendanceLevel
+        public let attended: Int
+        public let total: Int
+        public let bold: Bool   // only true for `.none` (0 of window) — the strongest signal
+        public let label: String
+        public init(level: AttendanceLevel, attended: Int, total: Int, bold: Bool, label: String) {
+            self.level = level; self.attended = attended; self.total = total; self.bold = bold; self.label = label
+        }
+    }
+
+    public static let sacramentWindowWeeks = 8
+
+    /// Most-recent up-to-`weeks` weekly sacrament records → (attended, total). Sorted newest-first when
+    /// dates are present (LCR/Member Tools store either order), else trusts the stored order. Entries
+    /// without `attended == true` count as missed. nil when there's no attendance list at all. Mirrors
+    /// the web `sacramentWindow`.
+    public static func sacramentWindow(
+        _ list: [MemberDetails.SacramentEntry]?,
+        weeks: Int = Kpis.sacramentWindowWeeks
+    ) -> (attended: Int, total: Int)? {
+        guard let list, !list.isEmpty else { return nil }
+        let withDates = list.map { (s: $0, dt: MemberDate.parse($0.date)) }
+        let anyDates = withDates.contains { $0.dt != nil }
+        let ordered = anyDates
+            ? withDates.sorted { ($0.dt ?? .distantPast) > ($1.dt ?? .distantPast) } // newest first; undated sink
+            : withDates
+        let win = ordered.prefix(max(1, weeks))
+        let attended = win.filter { $0.s.attended == true }.count
+        return (attended, win.count)
+    }
+
+    /// Bucket a member's recent sacrament attendance (8/7 → great, 4–6 → fair, 1–3 → poor, 0 → none+bold;
+    /// no data → unknown). Pass the `sacramentWindow(...)` result (or nil). Mirrors `attendanceBucket`.
+    public static func attendanceBucket(_ win: (attended: Int, total: Int)?) -> AttendanceBucket {
+        guard let win, win.total > 0 else {
+            return AttendanceBucket(level: .unknown, attended: 0, total: 0, bold: false, label: "—")
+        }
+        let a = win.attended
+        let level: AttendanceLevel = a >= 7 ? .great : a >= 4 ? .fair : a >= 1 ? .poor : .none
+        return AttendanceBucket(level: level, attended: a, total: win.total,
+                                bold: level == .none, label: "\(a)/\(win.total)")
+    }
+
+    /// Convenience: a member's attendance bucket straight from `details.sacrament`. Mirrors `memberAttendance`.
+    public static func memberAttendance(_ m: Member) -> AttendanceBucket {
+        attendanceBucket(sacramentWindow(m.details?.sacrament))
+    }
+
     /// Count of lessons (across all people) where a member was present for ≥1 principle.
     /// Port of `_lessonsWithMember`.
     public static func lessonsWithMember(_ rows: [Member]) -> Int {

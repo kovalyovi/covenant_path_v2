@@ -254,6 +254,125 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(Elapsed.monthsDaysAgo(nil), "")
     }
 
+    private func daysAgo(_ n: Int) -> Date {
+        Calendar.current.date(byAdding: .day, value: -n, to: Date())!
+    }
+
+    func testBaptismElapsedMonthsOnlyPastAMonth() {
+        // ≥1 month in → months only (no trailing "days"); under a month → days.
+        let threeMonths = Elapsed.baptismElapsed(daysAgo(100))
+        XCTAssertTrue(threeMonths.contains("month"))
+        XCTAssertFalse(threeMonths.contains("day"))
+        XCTAssertEqual(Elapsed.baptismElapsed(daysAgo(5)), "5 days")
+        XCTAssertEqual(Elapsed.baptismElapsed(nil), "")
+        XCTAssertEqual(Elapsed.baptismElapsed(Calendar.current.date(byAdding: .day, value: 10, to: Date())), "")
+    }
+
+    func testTenureUsesYearsAndDropsZeroParts() {
+        // >2 months → years/months format (never days, never "0 years").
+        let t = Elapsed.tenure(daysAgo(800)) // ~2 years 2 months
+        XCTAssertTrue(t.contains("year"))
+        XCTAssertFalse(t.contains("day"))
+        XCTAssertFalse(t.contains("0 year"))
+        XCTAssertFalse(t.contains("0 month"))
+        // Under 2 months → month+days (reuses monthsDaysAgo).
+        XCTAssertEqual(Elapsed.tenure(daysAgo(5)), "5 days")
+        XCTAssertEqual(Elapsed.tenure(nil), "")
+        XCTAssertEqual(Elapsed.tenure(Calendar.current.date(byAdding: .day, value: 10, to: Date())), "")
+    }
+
+    // MARK: - sacrament attendance health (#1e / #10b)
+
+    func testAttendanceBucketLevels() {
+        XCTAssertEqual(Kpis.attendanceBucket(nil).level, .unknown)
+        XCTAssertEqual(Kpis.attendanceBucket(nil).label, "—")
+        XCTAssertEqual(Kpis.attendanceBucket((attended: 8, total: 8)).level, .great)
+        XCTAssertEqual(Kpis.attendanceBucket((attended: 7, total: 8)).level, .great)
+        XCTAssertEqual(Kpis.attendanceBucket((attended: 5, total: 8)).level, .fair)
+        XCTAssertEqual(Kpis.attendanceBucket((attended: 2, total: 8)).level, .poor)
+        let none = Kpis.attendanceBucket((attended: 0, total: 8))
+        XCTAssertEqual(none.level, .none)
+        XCTAssertTrue(none.bold)                                   // 0-of-window is the only BOLD signal
+        XCTAssertEqual(none.label, "0/8")
+        XCTAssertFalse(Kpis.attendanceBucket((attended: 7, total: 8)).bold)
+    }
+
+    func testSacramentWindowTakesEightNewest() {
+        // 10 weekly entries, the 8 newest all attended, the 2 oldest missed; shuffled order.
+        let cal = Calendar.current
+        var entries: [MemberDetails.SacramentEntry] = []
+        for i in 0..<10 {
+            let d = cal.date(byAdding: .day, value: -i * 7, to: Date())!
+            let c = cal.dateComponents([.year, .month, .day], from: d)
+            let iso = String(format: "%04d-%02d-%02d", c.year!, c.month!, c.day!)
+            entries.append(.init(attended: i < 8, date: iso))
+        }
+        let win = Kpis.sacramentWindow(entries.shuffled())!
+        XCTAssertEqual(win.total, 8)     // capped at the window size
+        XCTAssertEqual(win.attended, 8)  // the 8 newest were all attended
+        XCTAssertNil(Kpis.sacramentWindow(nil))
+        XCTAssertNil(Kpis.sacramentWindow([]))
+    }
+
+    // MARK: - #8d per-unit Golden Hour rollup
+
+    func testUnitGoldenHourRollup() {
+        let year = Calendar.current.component(.year, from: Date())
+        // Arguments stay in the init's declaration order (Swift requires it): …sex, friends, aaronic,
+        // melchizedek, calling, ministering*, familyName, firstTempleVisit.
+        let a1 = Member(name: "A1", unitName: "Ward A", baptismDate: "\(year - 2)-01-01",
+                        birthDate: "\(year - 30)-01-01", sex: "M", friends: "Yes",
+                        aaronicPriesthood: "Yes", melchizedekPriesthood: "Yes", calling: "Yes",
+                        ministeringBrothersSisters: "Yes", ministeringAssignment: "Yes",
+                        familyNamePrepared: "Yes", firstTempleVisit: "Yes")
+        let a2 = Member(name: "A2", unitName: "Ward A", baptismDate: "\(year - 2)-01-01",
+                        birthDate: "\(year - 30)-01-01", sex: "M", friends: "Yes",
+                        aaronicPriesthood: "Yes", melchizedekPriesthood: "Yes", calling: "No",
+                        ministeringBrothersSisters: "Yes", ministeringAssignment: "Yes",
+                        familyNamePrepared: "Yes", firstTempleVisit: "Yes") // 7/8
+        let b1 = Member(name: "B1", unitName: "Ward B", baptismDate: "\(year - 2)-01-01",
+                        birthDate: "\(year - 30)-01-01", sex: "M", friends: "Yes",
+                        aaronicPriesthood: "Yes", melchizedekPriesthood: "Yes", calling: "Yes",
+                        ministeringBrothersSisters: "Yes", ministeringAssignment: "Yes",
+                        familyNamePrepared: "Yes", firstTempleVisit: "Yes")
+        let out = Milestones.unitGoldenHour([a1, a2, b1])
+        XCTAssertEqual(out.first?.unit, "Ward A") // ranked by people desc (2 > 1)
+        let a = out.first { $0.unit == "Ward A" }!
+        XCTAssertEqual(a.people, 2)
+        XCTAssertEqual(a.fullyComplete, 1)  // only a1 has every applicable milestone complete
+        XCTAssertEqual(a.itemsDone, 15)     // 8 + 7
+        XCTAssertEqual(a.itemsTotal, 16)    // 8 + 8
+        let b = out.first { $0.unit == "Ward B" }!
+        XCTAssertEqual(b.fullyComplete, 1)
+        XCTAssertEqual(b.itemsTotal, 8)
+    }
+
+    // MARK: - leadership / staffing gaps (#12)
+
+    func testStaffingGapsAndHolders() {
+        let full = [
+            StaffingMember(position: "Ward Mission Leader", person: "Jane"),
+            StaffingMember(position: "Ward Missionary", person: "A"),
+            StaffingMember(position: "Ward Missionary", person: "B"),
+            StaffingMember(position: "Elders Quorum President", person: "C"),
+            StaffingMember(position: "Relief Society President", person: "D"),
+        ]
+        XCTAssertEqual(Staffing.gapCount(full), 0)
+        XCTAssertEqual(Staffing.gaps(full).first { $0.key == "wml" }?.holders, ["Jane"])
+
+        let short = [
+            StaffingMember(position: "Assistant Ward Mission Leader", person: "X"), // must NOT fill WML
+            StaffingMember(position: "Ward Missionary", person: "Y"),               // only 1 < 2
+            StaffingMember(position: "Elders Quorum First Counselor", person: "Z"),  // counselor ≠ president
+        ]
+        let byKey = Dictionary(uniqueKeysWithValues: Staffing.gaps(short).map { ($0.key, $0) })
+        XCTAssertFalse(byKey["wml"]!.ok)
+        XCTAssertFalse(byKey["ward_missionaries"]!.ok)
+        XCTAssertFalse(byKey["eq_pres"]!.ok)
+        XCTAssertFalse(byKey["rs_pres"]!.ok)
+        XCTAssertEqual(Staffing.gapCount(short), 4)
+    }
+
     // MARK: - notes index (mirrors web src/test/notes.test.ts)
 
     private func noteRow(_ uuid: String?, _ body: String?, _ at: String?) -> MemberNoteRow {

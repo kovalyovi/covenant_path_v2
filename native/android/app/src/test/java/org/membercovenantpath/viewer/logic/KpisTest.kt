@@ -2,9 +2,11 @@ package org.membercovenantpath.viewer.logic
 
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.membercovenantpath.viewer.model.Member
+import org.membercovenantpath.viewer.model.SacramentEntry
 import java.time.LocalDate
 
 /**
@@ -139,5 +141,36 @@ class KpisTest {
         assertTrue(Kpis.periodRangeLabel(KpiPeriod.MONTH, today) != null)
         assertTrue(Kpis.periodRangeLabel(KpiPeriod.YEAR, today) != null)
         assertEquals(null, Kpis.periodRangeLabel(KpiPeriod.ALL, today))
+    }
+
+    // ---- sacrament attendance health (#1e / #10b) ----
+
+    @Test fun attendanceBucketLevels() {
+        assertEquals(Kpis.AttendanceLevel.UNKNOWN, Kpis.attendanceBucket(null).level)
+        assertEquals("—", Kpis.attendanceBucket(null).label)
+        assertEquals(Kpis.AttendanceLevel.GREAT, Kpis.attendanceBucket(8 to 8).level)
+        assertEquals(Kpis.AttendanceLevel.GREAT, Kpis.attendanceBucket(7 to 8).level)
+        assertEquals(Kpis.AttendanceLevel.FAIR, Kpis.attendanceBucket(5 to 8).level)
+        assertEquals(Kpis.AttendanceLevel.POOR, Kpis.attendanceBucket(2 to 8).level)
+        val none = Kpis.attendanceBucket(0 to 8)
+        assertEquals(Kpis.AttendanceLevel.NONE, none.level)
+        assertTrue(none.bold)        // 0-of-window is the only BOLD signal
+        assertEquals("0/8", none.label)
+        assertTrue(!Kpis.attendanceBucket(7 to 8).bold)
+    }
+
+    @Test fun sacramentWindowTakesEightNewest() {
+        // 10 weekly entries out of date order; window = the 8 NEWEST. Mark the 2 OLDEST as missed.
+        val entries = (0 until 10).map { i ->
+            SacramentEntry(label = "w$i", attended = i < 8, date = today.minusWeeks(i.toLong()).toString())
+        }.shuffled()
+        val win = Kpis.sacramentWindow(entries)!!
+        assertEquals(8, win.second)  // capped at the window size
+        assertEquals(8, win.first)   // the 8 newest were all attended (oldest-2 misses excluded)
+    }
+
+    @Test fun sacramentWindowNullWhenNoList() {
+        assertNull(Kpis.sacramentWindow(null))
+        assertNull(Kpis.sacramentWindow(emptyList()))
     }
 }

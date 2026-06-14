@@ -112,6 +112,45 @@ public enum Elapsed {
         return parts.joined(separator: " ")
     }
 
+    /// Coarse elapsed time for the BAPTISM display (#8.1a): months only once a member is ≥1 month in
+    /// ("3 months", not "3 months 12 days"); days only under a month ("5 days"). Empty for a
+    /// future/unknown date. Built on `monthsDaysAgo` so the borrow math stays in one place. Mirrors
+    /// the web `baptismElapsed`.
+    public static func baptismElapsed(_ d: Date?) -> String {
+        let full = monthsDaysAgo(d)
+        if full.isEmpty { return "" }
+        // `monthsDaysAgo` emits "N month(s) M day(s)" once N>0; "M day(s)" under a month. Keep only
+        // the months segment when present, otherwise the days segment unchanged.
+        if let r = full.range(of: #"^\d+ months?"#, options: .regularExpression) {
+            return String(full[r])
+        }
+        return full
+    }
+
+    /// "Member for" tenure since a past date (#9e): "2 years 3 months" with any ZERO part dropped
+    /// (never "0 years"/"0 months"); under 2 months it reads month+days ("1 month 3 days" / "5 days").
+    /// Empty for a future/unknown date. Mirrors the web `tenure`.
+    public static func tenure(_ d: Date?) -> String {
+        guard let d else { return "" }
+        let cal = MemberDate.cal
+        let now = Date()
+        if d > now { return "" }
+        let nowC = cal.dateComponents([.year, .month, .day], from: now)
+        let dC = cal.dateComponents([.year, .month, .day], from: d)
+        guard let ny = nowC.year, let nm = nowC.month, let nd = nowC.day,
+              let dy = dC.year, let dm = dC.month, let dd = dC.day else { return "" }
+        var months = (ny - dy) * 12 + nm - dm
+        if nd < dd { months -= 1 }
+        if months < 0 { return "" }
+        if months < 2 { return monthsDaysAgo(d) } // days only under 2 months
+        let years = months / 12
+        let rem = months % 12
+        var parts: [String] = []
+        if years > 0 { parts.append("\(years) year\(years == 1 ? "" : "s")") }
+        if rem > 0 { parts.append("\(rem) month\(rem == 1 ? "" : "s")") }
+        return parts.joined(separator: " ")
+    }
+
     /// Number of days in the month immediately before (year, month) — mirrors Dart's
     /// `DateTime(now.year, now.month, 0).day`.
     private static func daysInMonthBefore(year: Int, month: Int) -> Int {

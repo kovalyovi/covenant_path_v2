@@ -190,6 +190,40 @@ object Milestones {
         return sum / members.size
     }
 
+    /**
+     * Per-unit Golden Hour rollup for the #8d indicators: the share of PEOPLE fully complete (a
+     * SECTIONED ring — one arc/person) and the share of ITEMS complete overall (a FILLED ring).
+     * Eligible-only per member (N/A excluded); a member with no applicable milestones counts as fully
+     * complete (nothing outstanding). Ranked by people desc. Mirrors the web `unitGoldenHour`.
+     */
+    data class UnitGoldenHour(
+        val unit: String,
+        val people: Int,        // members in the unit
+        val fullyComplete: Int, // members with EVERY applicable milestone complete
+        val itemsDone: Int,     // total complete applicable milestones across the unit
+        val itemsTotal: Int,    // total applicable milestones across the unit
+    )
+
+    fun unitGoldenHour(rows: List<Member>, today: LocalDate = LocalDate.now()): List<UnitGoldenHour> {
+        val by = LinkedHashMap<String, MutableList<Member>>()
+        for (m in rows) by.getOrPut(m.unitName ?: "—") { ArrayList() }.add(m)
+        val out = ArrayList<UnitGoldenHour>()
+        for ((unit, members) in by) {
+            var fully = 0
+            var done = 0
+            var total = 0
+            for (m in members) {
+                val applicable = forMember(m, today)
+                val c = applicable.count { it.complete(m) }
+                done += c
+                total += applicable.size
+                if (applicable.isEmpty() || c == applicable.size) fully++
+            }
+            out.add(UnitGoldenHour(unit, members.size, fully, done, total))
+        }
+        return out.sortedByDescending { it.people }
+    }
+
     // Per-field eligibility for the member-detail view (mirrors web milestones.ts so every surface
     // hides the same rows: no priesthood for women, no calling for a child, …).
     fun callingEligible(m: Member, today: LocalDate = LocalDate.now()) = turnsAtLeast(m, 12, today)

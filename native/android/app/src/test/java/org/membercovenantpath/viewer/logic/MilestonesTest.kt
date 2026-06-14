@@ -194,4 +194,33 @@ class MilestonesTest {
         assertTrue("Calling" in steps)
         assertTrue("Melchizedek Priesthood" in steps)
     }
+
+    // --- #8d per-unit Golden Hour rollup (sectioned ring = people, filled ring = items) ---
+
+    @Test fun unitGoldenHourRollsUpPeopleAndItems() {
+        // An adult male, member 1yr+, everything done → 8 applicable, all complete.
+        val a1 = Member(
+            unitName = "Ward A", sex = "M", birthDate = "1990-01-01", baptismDate = "2024-01-01",
+            friends = "Yes", calling = "Yes", ministeringBrothersSisters = "Yes",
+            ministeringAssignment = "Yes", aaronicPriesthood = "Yes", melchizedekPriesthood = "Yes",
+            familyNamePrepared = "Yes", firstTempleVisit = "Yes",
+        )
+        val a2 = a1.copy(calling = "No")        // 7 of 8 → not fully complete
+        val b1 = a1.copy(unitName = "Ward B")   // 8 of 8
+
+        val out = Milestones.unitGoldenHour(listOf(a1, a2, b1), today)
+        assertEquals("Ward A", out.first().unit) // ranked by people desc (2 > 1)
+
+        val a = out.first { it.unit == "Ward A" }
+        assertEquals(2, a.people)
+        assertEquals(1, a.fullyComplete) // only a1 has EVERY applicable milestone complete
+        assertEquals(15, a.itemsDone)    // 8 + 7
+        assertEquals(16, a.itemsTotal)   // 8 + 8
+
+        val b = out.first { it.unit == "Ward B" }
+        assertEquals(1, b.people)
+        assertEquals(1, b.fullyComplete)
+        assertEquals(8, b.itemsDone)
+        assertEquals(8, b.itemsTotal)
+    }
 }

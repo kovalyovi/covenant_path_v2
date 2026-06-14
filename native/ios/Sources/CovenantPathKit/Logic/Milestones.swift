@@ -177,6 +177,42 @@ public enum Milestones {
         return list.firstIndex { !$0.complete(m) }
     }
 
+    /// Per-unit Golden Hour rollup for the #8d indicators: the share of PEOPLE fully complete (a
+    /// SECTIONED ring — one arc/person) and the share of ITEMS complete overall (a FILLED ring).
+    /// Eligible-only per member (N/A excluded); a member with no applicable milestones counts as fully
+    /// complete (nothing outstanding). Ranked by people desc. Mirrors the web `unitGoldenHour`.
+    public struct UnitGoldenHour: Sendable {
+        public let unit: String
+        public let people: Int        // members in the unit
+        public let fullyComplete: Int // members with EVERY applicable milestone complete
+        public let itemsDone: Int     // total complete applicable milestones across the unit
+        public let itemsTotal: Int    // total applicable milestones across the unit
+        public init(unit: String, people: Int, fullyComplete: Int, itemsDone: Int, itemsTotal: Int) {
+            self.unit = unit; self.people = people; self.fullyComplete = fullyComplete
+            self.itemsDone = itemsDone; self.itemsTotal = itemsTotal
+        }
+    }
+
+    public static func unitGoldenHour(_ rows: [Member]) -> [UnitGoldenHour] {
+        var by: [String: [Member]] = [:]
+        for m in rows { by[m.unitName ?? "—", default: []].append(m) }
+        var out: [UnitGoldenHour] = []
+        for (unit, members) in by {
+            var fully = 0, done = 0, total = 0
+            for m in members {
+                let applic = applicable(to: m)
+                let c = applic.filter { $0.complete(m) }.count
+                done += c
+                total += applic.count
+                if applic.isEmpty || c == applic.count { fully += 1 }
+            }
+            out.append(UnitGoldenHour(unit: unit, people: members.count,
+                                      fullyComplete: fully, itemsDone: done, itemsTotal: total))
+        }
+        out.sort { $0.people > $1.people }
+        return out
+    }
+
     // MARK: - per-field eligibility for the member-detail view (mirrors web milestones.ts so every
     // surface hides the same rows: no priesthood for women, no calling for a child, …).
 

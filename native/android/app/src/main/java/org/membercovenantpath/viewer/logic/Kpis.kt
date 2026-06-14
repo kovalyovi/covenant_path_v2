@@ -222,6 +222,67 @@ object Kpis {
         return DateParse.parseMemberDate(fl)?.let { listOf(it) } ?: emptyList()
     }
 
+    // ---- sacrament attendance health (#1e / #10b) — ports of web kpis.ts sacramentWindow/attendanceBucket
+
+    /** Semantic attendance level over the recent window. The UI maps level→theme color (never raw color). */
+    enum class AttendanceLevel { GREAT, FAIR, POOR, NONE, UNKNOWN }
+
+    /** Recent sacrament-attendance bucket: raw counts + a semantic level + a short "a/t" label. */
+    data class AttendanceBucket(
+        val level: AttendanceLevel,
+        val attended: Int,
+        val total: Int,
+        val bold: Boolean, // only true for NONE (0 of window) — the strongest signal
+        val label: String,
+    )
+
+    const val SACRAMENT_WINDOW_WEEKS = 8
+
+    /**
+     * Most-recent up-to-[weeks] weekly sacrament records → (attended, total). Sorted newest-first when
+     * dates are present (LCR/Member Tools store either order), else trusts the stored order. Entries
+     * without `attended == true` count as missed. null when there's no attendance list at all. Mirrors
+     * the web `sacramentWindow`.
+     */
+    fun sacramentWindow(
+        list: List<org.membercovenantpath.viewer.model.SacramentEntry>?,
+        weeks: Int = SACRAMENT_WINDOW_WEEKS,
+    ): Pair<Int, Int>? {
+        if (list.isNullOrEmpty()) return null
+        val withDates = list.map { it to DateParse.parseMemberDate(it.date) }
+        val anyDates = withDates.any { it.second != null }
+        val ordered = if (anyDates) {
+            withDates.sortedByDescending { it.second ?: LocalDate.MIN } // newest first; undated sink
+        } else {
+            withDates
+        }
+        val win = ordered.take(maxOf(1, weeks))
+        val attended = win.count { it.first.attended }
+        return attended to win.size
+    }
+
+    /**
+     * Bucket a member's recent sacrament attendance (8/7 → great, 4–6 → fair, 1–3 → poor, 0 → none+bold;
+     * no data → unknown). Pass the [sacramentWindow] result (or null). Mirrors `attendanceBucket`.
+     */
+    fun attendanceBucket(win: Pair<Int, Int>?): AttendanceBucket {
+        if (win == null || win.second == 0) {
+            return AttendanceBucket(AttendanceLevel.UNKNOWN, 0, 0, false, "—")
+        }
+        val (attended, total) = win
+        val level = when {
+            attended >= 7 -> AttendanceLevel.GREAT
+            attended >= 4 -> AttendanceLevel.FAIR
+            attended >= 1 -> AttendanceLevel.POOR
+            else -> AttendanceLevel.NONE
+        }
+        return AttendanceBucket(level, attended, total, level == AttendanceLevel.NONE, "$attended/$total")
+    }
+
+    /** Convenience: a member's attendance bucket straight from details.sacrament. Mirrors `memberAttendance`. */
+    fun memberAttendance(m: Member): AttendanceBucket =
+        attendanceBucket(sacramentWindow(m.parsedDetails()?.sacrament))
+
     /** Count of lessons (across [rows]) where a member was present for ≥1 principle. Mirrors `_lessonsWithMember`. */
     fun lessonsWithMember(rows: List<Member>): Int {
         var c = 0
