@@ -109,7 +109,8 @@ function KpisBody() {
 
   const rangeLabel = periodRangeLabel();
 
-  const cards: React.ReactNode[] = [
+  // The four trend graphs (the 3 metric charts here + the Baptisms-by-month chart in its own section).
+  const trendCards: React.ReactNode[] = [
     <MetricCard
       key="friends-sac"
       title="Being Taught at Sacrament"
@@ -152,6 +153,9 @@ function KpisBody() {
       suffix="people who started lessons in the period"
       onDrill={setDrill}
     />,
+  ];
+
+  const overviewCards: React.ReactNode[] = [
     <StatGridCard
       key="overview"
       items={[
@@ -280,14 +284,31 @@ function KpisBody() {
           </div>
         }
       >
-        <Columns cols={Math.min(2, colsFor(tier))}>{cards}</Columns>
-        {/* #1: baptisms-by-month chart, folded in from its old "By Month" tab — full-width at the bottom. */}
-        <div style={{ maxWidth: 640, margin: '12px auto 0' }}>
+        {/* #33: KPIs split into clear sections — Baptisms FIRST, then the trend graphs, then Overview. */}
+        <SectionHeading icon="water_drop">Baptisms</SectionHeading>
+        <div style={{ maxWidth: 640 }}>
           <BaptismsCard baptized={baptized} allUnits={allUnits} onDrill={setDrill} />
         </div>
+
+        <SectionHeading icon="leaderboard">Trends</SectionHeading>
+        <Columns cols={Math.min(2, colsFor(tier))}>{trendCards}</Columns>
+
+        <SectionHeading icon="summarize">Overview</SectionHeading>
+        <Columns cols={Math.min(2, colsFor(tier))}>{overviewCards}</Columns>
       </PageScaffold>
       <DrillHost drill={drill} onClose={() => setDrill(null)} />
     </>
+  );
+}
+
+/** #33: a labeled section divider grouping the KPIs page (Baptisms / Trends / Overview). */
+function SectionHeading({ icon, children }: { icon: IconName; children: string }) {
+  return (
+    <div className="row" style={{ gap: 8, alignItems: 'center', margin: '20px 0 6px' }}>
+      <span className="accent-bar" style={{ height: 22 }} />
+      <Icon name={icon} size={18} color="var(--primary)" />
+      <h3 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0 }}>{children}</h3>
+    </div>
   );
 }
 
