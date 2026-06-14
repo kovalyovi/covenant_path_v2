@@ -14,7 +14,7 @@ import { currentAccessToken } from '../lib/supabase';
 import { passkey } from '../lib/passkey';
 import { TABS } from '../theme/tokens';
 import { Icon, type IconName } from '../components/Icon';
-import { IconButton } from '../components/ui';
+import { IconButton, Spinner } from '../components/ui';
 import { Menu, type MenuItem } from '../components/Menu';
 import {
   SyncingBanner, StaleBanner, PatriarchalBanner, LastUpdatedChip,
@@ -160,7 +160,15 @@ export function DashboardShell() {
             onSyncNow={broker.available ? syncNow : undefined}
           />
         )}
-        <IconButton icon="refresh" label="Refresh" onClick={() => void d.refresh()} />
+        {/* #2: a real tooltip + a visible PENDING state — the icon spins while the latest data reloads
+            (the button used to give no feedback, so it felt like it did nothing). */}
+        {d.refreshing ? (
+          <span className="iconbtn" aria-label="Refreshing data" title="Refreshing data" aria-busy="true">
+            <Spinner />
+          </span>
+        ) : (
+          <IconButton icon="refresh" label="Refresh data" onClick={() => void d.refresh()} />
+        )}
         <Menu
           label="Menu"
           items={menuItems}

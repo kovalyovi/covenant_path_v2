@@ -30,6 +30,7 @@ type Missionaries = Record<string, Array<Record<string, unknown>>>;
 
 interface DashboardState {
   loading: boolean;
+  refreshing: boolean;
   error: string | null;
   members: Member[];
   /** person_uuid -> the single editable leader note, for the list-row note lines. */
@@ -100,6 +101,7 @@ const STAKE_COLS = 'id, name, last_synced_at, sync_state, sync_started_at, missi
 
 export function DashboardProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false); // #2: navbar Refresh pending state
   const [error, setError] = useState<string | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [notes, setNotes] = useState<Record<string, NoteSummary>>({});
@@ -372,6 +374,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(async () => {
     setError(null);
+    setRefreshing(true); // #2: drives the navbar Refresh button's spinner so the action is visible
     try {
       const [rows, nts, manuals] = await Promise.all([
         loadMembers(currentIdRef.current), loadNotes(currentIdRef.current),
@@ -380,11 +383,15 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       setMembers(rows);
       setNotes(nts);
       setManualMembers(manuals);
+      // also re-pull the stake's freshness/sync state so "Updated X ago" reflects the latest run.
+      void reloadStakes();
       if (rows.length === 0) void reloadEnrollStatus();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRefreshing(false);
     }
-  }, [loadMembers, loadNotes, loadManualMembers, reloadEnrollStatus]);
+  }, [loadMembers, loadNotes, loadManualMembers, reloadEnrollStatus, reloadStakes]);
 
   const switchStake = useCallback(
     (id: string) => {
@@ -423,7 +430,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<DashboardState>(
     () => ({
-      loading, error, members, notes, reloadNotes, showNotes, setShowNotes,
+      loading, refreshing, error, members, notes, reloadNotes, showNotes, setShowNotes,
       manualMembers, reloadManualMembers, addManualMember, mergeManualMember, deleteManualMember,
       stakes, currentStakeId, stakeName, lastSynced,
       syncing, syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,
@@ -431,7 +438,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       reauthOpen, openReauth, closeReauth,
     }),
     [
-      loading, error, members, notes, reloadNotes, showNotes, setShowNotes,
+      loading, refreshing, error, members, notes, reloadNotes, showNotes, setShowNotes,
       manualMembers, reloadManualMembers, addManualMember, mergeManualMember, deleteManualMember,
       stakes, currentStakeId, stakeName, lastSynced,
       syncing, syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,
