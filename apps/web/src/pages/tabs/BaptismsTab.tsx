@@ -12,10 +12,10 @@ import { useDashboard } from '../../hooks/useDashboard';
 import { usePersistentState } from '../../hooks/usePersistentState';
 import { useTier, colsFor } from '../../hooks/useTier';
 import type { Member } from '../../lib/member';
-import { isInvestigator } from '../../lib/member';
+import { isInvestigator, detailsOf } from '../../lib/member';
 import { parseMemberDate, fmtMonShort, fmtWeekdayShort, dayOnly, daysBetween } from '../../logic/dates';
 import { nextSteps } from '../../logic/milestones';
-import { hexA } from '../../theme/tokens';
+import { hexA, status } from '../../theme/tokens';
 import { Icon } from '../../components/Icon';
 import { Avatar, CountBadge, SectionCard } from '../../components/ui';
 import { PageScaffold, SectionTitle, Columns } from '../../components/dashboard';
@@ -139,6 +139,62 @@ function PersonCardGroup({
   );
 }
 
+function _lessonTaught(level: unknown): boolean {
+  const s = String(level ?? '');
+  return s.length > 0 && s !== '0' && s !== '0.0';
+}
+
+/** #3: one pill per lesson — FILLED green when taught, with a person badge on the corner when a member
+ *  was present for it. Reads `details.lessons[].principles[]` ({taughtLevel, memberPresent}). */
+function LessonPills({ m }: { m: Member }) {
+  const lessons = detailsOf(m)?.['lessons'];
+  if (!Array.isArray(lessons) || lessons.length === 0) return null;
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div className="tiny muted" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 4 }}>
+        Lessons
+      </div>
+      <div className="wrap" style={{ gap: 7 }}>
+        {lessons.map((raw, i) => {
+          const l = (raw ?? {}) as Record<string, unknown>;
+          const principles = (l['principles'] as Array<Record<string, unknown>>) ?? [];
+          const taught = principles.some((p) => _lessonTaught(p?.['taughtLevel']));
+          const present = principles.some((p) => p?.['memberPresent'] === true);
+          const label = String(l['label'] ?? `Lesson ${i + 1}`);
+          return (
+            <span
+              key={i}
+              title={`${label}${taught ? ' · taught' : ' · not yet'}${present ? ' · a member was present' : ''}`}
+              aria-label={`${label}${taught ? ' taught' : ' not yet'}${present ? ', member present' : ''}`}
+              style={{
+                position: 'relative', display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 600,
+                padding: '3px 9px', borderRadius: 'var(--radius-pill)',
+                border: `1.5px solid ${taught ? status.success : 'var(--outline)'}`,
+                background: taught ? hexA(status.success, 0.12) : 'transparent',
+                color: taught ? status.success : 'var(--on-surface-variant)',
+              }}
+            >
+              {label}
+              {present && (
+                <span
+                  title="A member was present"
+                  style={{
+                    position: 'absolute', top: -5, right: -5, width: 15, height: 15, borderRadius: '50%',
+                    background: status.info, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    border: '1.5px solid var(--surface)',
+                  }}
+                >
+                  <Icon name="account" size={9} color="#fff" />
+                </span>
+              )}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /** ONE card for ONE person being taught: date badge + countdown, unit, full notes, Golden Hour next
  *  steps, and the assigned missionaries who teach them (their unit's full-time missionaries). */
 function BaptismPersonCard({ item, today, overdue }: { item: Dated; today: Date; overdue: boolean }) {
@@ -215,6 +271,10 @@ function BaptismPersonCard({ item, today, overdue }: { item: Dated; today: Date;
               </div>
             </div>
           )}
+
+          {/* #3: one pill per lesson — FILLED when taught, with a person indicator on the corner when
+              a member was present for it. */}
+          <LessonPills m={m} />
 
           {/* Missionary info: who teaches them (their unit's assigned missionaries). */}
           <hr className="divider" style={{ margin: '12px 0 10px' }} />
