@@ -5,9 +5,18 @@ import SwiftUI
 /// `member.details` (the rich subtree); when that's nil it falls back to the flat fields so the page
 /// still renders. Faithful port of `person_detail_page.dart`.
 struct PersonDetailView: View {
+    @Environment(DashboardStore.self) private var store: DashboardStore?
     let member: Member
 
     private var d: MemberDetails? { member.details }
+
+    /// The assigned full-time missionaries for this member's unit (from the stake's synced map). We
+    /// don't have a per-person "who teaches THIS person" link, so the unit's missionaries are the best
+    /// available answer (mirrors web `useUnitMissionaries`).
+    private var unitMissionaries: [Missionary] {
+        guard let unit = member.unitName, !unit.isEmpty else { return [] }
+        return store?.missionariesByUnit[unit] ?? []
+    }
 
     private var baptismLine: String? {
         if member.isInvestigator {
@@ -35,10 +44,23 @@ struct PersonDetailView: View {
             VStack(alignment: .leading, spacing: 8) {
                 header
                 // Our covenant-path milestones (data LCR's view lacks). The leading glyph is a
-                // completion RING that fills with eligible-only progress and goes green at 100%.
+                // completion RING that fills with eligible-only progress and goes green at 100%. Below
+                // the quick chip glance, the explicit per-item completion ROWS (✓ done / ○ not done /
+                // ⚠ data issue; N/A rows omitted) — mirrors web GoldenHourRows on the friend/person card.
                 SectionCard(title: "Covenant Path",
                             leading: AnyView(CompletionRing(pct: Milestones.completionOf(member)))) {
-                    GoldenHourChips(member: member, highlightNext: true, labeled: true)
+                    VStack(alignment: .leading, spacing: 14) {
+                        GoldenHourChips(member: member, highlightNext: true, labeled: true)
+                        Divider()
+                        GoldenHourRows(member: member)
+                    }
+                }
+                // For someone being taught, surface their next steps + the missionaries who teach them
+                // (their unit's assigned full-time missionaries) right here on the detail (mirrors the
+                // web friend-detail rework). The unit itself is shown in the header above.
+                if member.isInvestigator {
+                    NextStepsCard(member: member)
+                    MissionariesSection(unitName: member.unitName, missionaries: unitMissionaries)
                 }
                 // Each tracked status that lacks its own rich section, as its own card (eligibility-
                 // gated). Renders with or without `d`.
@@ -160,46 +182,88 @@ struct CompletionRing: View {
 /// shows "N/A" for the not-yet-eligible). Works from flat fields, so it renders with or without the
 /// rich `details` subtree.
 struct StatusSections: View {
+    @Environment(DashboardStore.self) private var store: DashboardStore?
     let member: Member
+    private var isAdmin: Bool { store?.isAdmin == true }
     var body: some View {
         if Milestones.templeRecommendEligible(member) {
             StatusSection(title: "Temple Recommend", systemImage: "checkmark.seal",
-                          value: recordDisp(member.templeRecommend))
+                          rawValue: member.templeRecommend, isAdmin: isAdmin)
         }
         StatusSection(title: "Endowment", systemImage: "building.columns",
-                      value: recordDisp(Milestones.endowmentDisplay(member)))
+                      rawValue: Milestones.endowmentDisplay(member), isAdmin: isAdmin)
         if Milestones.patriarchalEligible(member) {
             StatusSection(title: "Patriarchal Blessing", systemImage: "book.closed",
-                          value: recordDisp(member.patriarchalBlessing))
+                          rawValue: member.patriarchalBlessing, isAdmin: isAdmin)
         }
     }
 }
 
-struct StatusSection: View {
-    let title: String
-    let systemImage: String
-    let value: String
-    private var good: Bool { value == "Active" || value == "Yes" }
+/// The not-yet-done, applicable Golden Hour milestones for someone being taught — their "next steps"
+/// (mirrors the web friend-detail next-steps chips). Hidden when nothing is outstanding.
+struct NextStepsCard: View {
+    let member: Member
+    private var steps: [Milestone] { Milestones.nextSteps(member) }
     var body: some View {
-        // Don't show a "not applicable" status card (e.g. Endowment for a not-yet-eligible friend) —
-        // an N/A card is noise on the detail page.
-        if value == "N/A" {
+        if steps.isEmpty {
             EmptyView()
         } else {
-            SectionCard(title: title, systemImage: systemImage) {
-                Text(value)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(good ? Color(hex: 0x2E7D32) : Color.primary)
+            SectionCard(title: "Next Steps", systemImage: "arrow.forward.circle") {
+                FlowLayout(spacing: 8) {
+                    ForEach(steps) { ms in
+                        HStack(spacing: 5) {
+                            Image(systemName: "circle").font(.caption2)
+                                .foregroundStyle(Color(hex: ms.style.hex))
+                            Text(ms.label).font(.callout)
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Color(.tertiarySystemFill), in: Capsule())
+                    }
+                }
             }
         }
     }
 }
 
-/// Clean a status value for display: sentinels (needs-profile-api / blocked) → "—" (unknown).
-func recordDisp(_ v: String?) -> String {
-    let s = v ?? ""
-    if s.isEmpty || s == "needs-profile-api" || s.hasPrefix("blocked") { return "—" }
-    return s
+/// One tracked status as its own card, honoring the display contract (mirrors web fieldDisplay):
+///   • a real value (Active/Yes/Expired/No) → shown, good values green;
+///   • "N/A" → the card is OMITTED (not applicable — noise on the detail page);
+///   • the sentinel OR empty → a ⚠ "Status unavailable" row, NEVER the raw sentinel (admins see it).
+struct StatusSection: View {
+    let title: String
+    let systemImage: String
+    let rawValue: String?
+    var isAdmin = false
+    private var display: FieldDisplay { FieldDisplayLogic.classify(rawValue, isAdmin: isAdmin) }
+    private var good: Bool { display.text == "Active" || display.text == "Yes" }
+
+    var body: some View {
+        switch display.status {
+        case .na:
+            // Don't show a "not applicable" status card (e.g. Endowment for a not-yet-eligible friend).
+            EmptyView()
+        case .issue:
+            SectionCard(title: title, systemImage: systemImage) {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Color(hex: 0xF9A825))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Status unavailable")
+                            .font(.callout.weight(.medium)).foregroundStyle(.secondary)
+                        if !display.text.isEmpty {   // admin-only raw sentinel for diagnosis
+                            Text(display.text).font(.caption2).foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+            }
+        case .value:
+            SectionCard(title: title, systemImage: systemImage) {
+                Text(display.text)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(good ? Color(hex: 0x2E7D32) : Color.primary)
+            }
+        }
+    }
 }
 
 // MARK: - "recorded yes" fallback note

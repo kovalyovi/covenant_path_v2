@@ -55,6 +55,28 @@ public final class DashboardStore {
         enrollStatus?.credential.isRevoked == true || enrollStatus?.credential.isStale == true
     }
 
+    /// Whether to show the patriarchal-refresh banner (mirrors web `showPatriarchalBanner`):
+    /// for a HEALTHY credential, nudge the PROVIDER (whose calling can read profiles) to re-authorize
+    /// and refresh patriarchal-blessing status — the one field the daily Member Tools sync can't pull.
+    /// Suppressed when the stale/revoked banner already prompts re-auth (which refreshes it too) or a
+    /// sync is running. GRACE WINDOW: patriarchal is a one-time ordinance, so it's fine for it to be up
+    /// to 14 days stale — once a re-auth has run (`credential.enrolledAt` = its updated_at), stay quiet
+    /// for 14 days instead of nagging again on the next load.
+    public var showPatriarchalBanner: Bool {
+        guard !staleCredential, !syncing, brokerAvailable, let cred = enrollStatus?.credential else {
+            return false
+        }
+        guard cred.isProvider, cred.canRefreshPatriarchal,
+              (enrollStatus?.patriarchalPending ?? 0) > 0 else { return false }
+        // Quiet for 14 days after the last re-auth; a missing/unparseable enrolledAt → show it.
+        let graceDays = 14.0
+        guard let last = cred.enrolledAt.flatMap(Freshness.parse) else { return true }
+        return Date().timeIntervalSince(last) > graceDays * 24 * 60 * 60
+    }
+
+    /// Count of real members still missing the patriarchal flag (for the banner copy).
+    public var patriarchalPending: Int { enrollStatus?.patriarchalPending ?? 0 }
+
     public var brokerAvailable: Bool { services.broker.available }
 
     public var newMembers: [Member] { members.filter { !$0.isInvestigator } }

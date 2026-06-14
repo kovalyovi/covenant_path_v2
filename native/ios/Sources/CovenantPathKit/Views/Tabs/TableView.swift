@@ -167,6 +167,10 @@ struct TableView: View {
             ColumnFilterSheet(
                 title: col.title,
                 values: distinctValues(col),
+                // Covenant-path columns route their value labels through the display contract so the
+                // filter list never shows the raw "needs-profile-api"/"blocked:…" sentinel either.
+                isCovenant: col.kind == .yesno || col.kind == .recommend || col.kind == .friends,
+                isAdmin: isAdmin,
                 excluded: excluded[col.id] ?? [],
                 onApply: { newExcluded in
                     if newExcluded.isEmpty { excluded.removeValue(forKey: col.id) }
@@ -241,15 +245,59 @@ struct TableView: View {
         .contentShape(Rectangle())
     }
 
+    /// Whether the signed-in user is an admin — an admin may see the raw sentinel string in a
+    /// data-issue cell (to diagnose); a regular leader sees only the ⚠.
+    private var isAdmin: Bool { store?.isAdmin == true }
+
     @ViewBuilder
     private func cell(_ value: String, _ kind: Kind) -> some View {
-        if let bg = cellColor(value, kind) {
+        // Covenant-path value columns flow through the display contract so the raw "needs-profile-api"
+        // / "blocked: …" sentinel (or an empty value) NEVER leaks into a leader's cell — it shows a ⚠
+        // data-issue marker instead (mirrors web fieldDisplay; the sheet maps the same sentinel to
+        // empty). Non-covenant columns (Member name, Unit, Sex, Age, …) render verbatim.
+        if kind == .yesno || kind == .recommend || kind == .friends {
+            covenantCell(value, kind)
+        } else if let bg = cellColor(value, kind) {
             Text(value).font(.caption.weight(.medium))
                 .padding(.horizontal, 7).padding(.vertical, 3)
                 .background(bg, in: RoundedRectangle(cornerRadius: 6))
                 .foregroundStyle(.black)
         } else {
             Text(value).font(.caption).lineLimit(1)
+        }
+    }
+
+    /// A covenant-path field cell that honors the display contract:
+    ///   • a real value (Yes/No/Active/Expired/a count) → its color-coded chip;
+    ///   • "N/A" → a quiet grey chip, never a warning;
+    ///   • the sentinel OR empty → a ⚠ data-issue marker (admins additionally see the raw string).
+    @ViewBuilder
+    private func covenantCell(_ value: String, _ kind: Kind) -> some View {
+        let d = FieldDisplayLogic.classify(value, isAdmin: isAdmin)
+        switch d.status {
+        case .issue:
+            HStack(spacing: 3) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption2).foregroundStyle(Color(hex: 0xF9A825))
+                if !d.text.isEmpty {   // admins see the raw sentinel for diagnosis
+                    Text(d.text).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            .accessibilityLabel("Data issue — value unavailable")
+        case .na:
+            Text("N/A").font(.caption.weight(.medium))
+                .padding(.horizontal, 7).padding(.vertical, 3)
+                .background(StatusColor.na, in: RoundedRectangle(cornerRadius: 6))
+                .foregroundStyle(.black)
+        case .value:
+            if let bg = cellColor(d.text, kind) {
+                Text(d.text).font(.caption.weight(.medium))
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(bg, in: RoundedRectangle(cornerRadius: 6))
+                    .foregroundStyle(.black)
+            } else {
+                Text(d.text).font(.caption).lineLimit(1)
+            }
         }
     }
 
@@ -314,14 +362,30 @@ struct ColumnFilterSheet: View {
     @Environment(\.dismiss) private var dismiss
     let title: String
     let values: [(value: String, count: Int)]
+    var isCovenant = false
+    var isAdmin = false
     let onApply: (Set<String>) -> Void
 
     @State private var excluded: Set<String>
 
-    init(title: String, values: [(value: String, count: Int)], excluded: Set<String>,
+    init(title: String, values: [(value: String, count: Int)],
+         isCovenant: Bool = false, isAdmin: Bool = false, excluded: Set<String>,
          onApply: @escaping (Set<String>) -> Void) {
-        self.title = title; self.values = values; self.onApply = onApply
+        self.title = title; self.values = values
+        self.isCovenant = isCovenant; self.isAdmin = isAdmin; self.onApply = onApply
         _excluded = State(initialValue: excluded)
+    }
+
+    /// The human-facing label for a filter value: covenant columns never show the raw sentinel to a
+    /// leader (it becomes "Data issue"); an empty value reads "(blank)". Mirrors the cell contract.
+    private func display(_ value: String) -> String {
+        if isCovenant {
+            let d = FieldDisplayLogic.classify(value, isAdmin: isAdmin)
+            if d.status == .issue {
+                return d.text.isEmpty ? "Data issue" : "Data issue (\(d.text))"
+            }
+        }
+        return value.isEmpty ? "(blank)" : value
     }
 
     var body: some View {
@@ -342,7 +406,7 @@ struct ColumnFilterSheet: View {
                         HStack {
                             Image(systemName: excluded.contains(v.value) ? "square" : "checkmark.square.fill")
                                 .foregroundStyle(excluded.contains(v.value) ? .secondary : Color.accentColor)
-                            Text(v.value.isEmpty ? "(blank)" : v.value).foregroundStyle(.primary)
+                            Text(display(v.value)).foregroundStyle(.primary)
                             Spacer()
                             Text("\(v.count)").font(.caption).foregroundStyle(.secondary)
                         }

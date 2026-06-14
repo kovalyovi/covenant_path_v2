@@ -80,6 +80,10 @@ public struct CredentialInfo: Sendable {
     public let enrolledAt: String?
     /// When state == "stale", the last sync error (e.g. "SSO did not complete…").
     public let lastError: String?
+    /// This calling can read the per-member LCR profile that carries the patriarchal-blessing flag —
+    /// so re-authorizing with it would refresh that one field (the daily Member Tools sync can't).
+    /// Drives the patriarchal-refresh banner alongside `isProvider` + `EnrollmentStatus.patriarchalPending`.
+    public let canRefreshPatriarchal: Bool
     public var isActive: Bool { state == "active" }
     /// Stale = the delegated Church session died → daily sync is failing until re-authorized.
     public var isStale: Bool { state == "stale" }
@@ -92,6 +96,7 @@ public struct CredentialInfo: Sendable {
         isProvider = (json["is_provider"] as? Bool) ?? false
         enrolledAt = json["enrolled_at"] as? String
         lastError = json["last_error"] as? String
+        canRefreshPatriarchal = (json["can_refresh_patriarchal"] as? Bool) ?? false
     }
 }
 
@@ -105,6 +110,9 @@ public struct EnrollmentStatus: Sendable {
     public let memberCount: Int
     public let hasData: Bool
     public let noRole: Bool
+    /// Real, baptized members in this stake still missing the profile-only patriarchal-blessing flag —
+    /// the count the patriarchal-refresh banner shows. 0 hides the banner.
+    public let patriarchalPending: Int
     public let credential: CredentialInfo
     init(json: [String: Any]) {
         stakeName = json["stake_name"] as? String
@@ -114,6 +122,7 @@ public struct EnrollmentStatus: Sendable {
         memberCount = (json["member_count"] as? NSNumber)?.intValue ?? 0
         hasData = (json["has_data"] as? Bool) ?? false
         noRole = (json["status"] as? String) == "no_role"
+        patriarchalPending = (json["patriarchal_pending"] as? NSNumber)?.intValue ?? 0
         credential = CredentialInfo(json: (json["credential"] as? [String: Any]) ?? [:])
     }
 }

@@ -14,13 +14,19 @@ public struct Milestone: Identifiable, Sendable {
     public let style: MilestoneStyle  // category identity color + icon
     public let complete: @Sendable (Member) -> Bool
     public let eligible: @Sendable (Member) -> Bool
+    /// The member field this milestone reads (mirrors web `Milestone.field`) — so an N/A value can be
+    /// detected and EXCLUDED from "missing/incomplete" lists, and the raw sentinel/empty value can be
+    /// recognized as a DATA ISSUE in the completion rows. Read via the keyed accessor below; a
+    /// milestone derived purely from logic (none today) can leave it nil.
+    public let field: String?
 
     public var id: String { label }
 
     public init(_ label: String, _ abbr: String, style: MilestoneStyle,
+                field: String? = nil,
                 eligible: @escaping @Sendable (Member) -> Bool = { _ in true },
                 complete: @escaping @Sendable (Member) -> Bool) {
-        self.label = label; self.abbr = abbr; self.style = style
+        self.label = label; self.abbr = abbr; self.style = style; self.field = field
         self.eligible = eligible; self.complete = complete
     }
 }
@@ -44,34 +50,42 @@ public enum Milestones {
     public static let all: [Milestone] = [
         Milestone("Friends", "F",
                   style: .init(hex: 0xD81B60, symbol: "hand.raised.fill"),         // pink · everyone
+                  field: "friends",
                   complete: { $0.friends == "Yes" }),
         Milestone("Calling", "C",
                   style: .init(hex: 0x6A1B9A, symbol: "person.text.rectangle"),    // purple
+                  field: "calling",
                   eligible: { turnsAtLeast($0, 12) },
                   complete: { $0.calling == "Yes" }),
         Milestone("Has ministers", "M",
                   style: .init(hex: 0x00838F, symbol: "person.2.wave.2"),          // cyan · everyone
+                  field: "ministering_brothers_sisters",
                   complete: { $0.ministeringBrothersSisters == "Yes" }),
         Milestone("Ministering assignment", "MA",
                   style: .init(hex: 0xEF6C00, symbol: "hands.sparkles"),           // orange · 14+
+                  field: "ministering_assignment",
                   eligible: { turnsAtLeast($0, 14) },
                   complete: { $0.ministeringAssignment == "Yes" }),
         Milestone("Aaronic Priesthood", "AP",
                   style: .init(hex: 0x1565C0, symbol: "medal"),                    // blue
+                  field: "aaronic_priesthood",
                   eligible: { $0.isMale && turnsAtLeast($0, 12) },
                   complete: { $0.aaronicPriesthood == "Yes" }),
         Milestone("Melchizedek Priesthood", "MP",
                   style: .init(hex: 0x2E7D32, symbol: "rosette"),                  // green
+                  field: "melchizedek_priesthood",
                   eligible: { $0.isMale && ageNowAtLeast($0, 18) && memberOneYearPlus($0) },
                   complete: { $0.melchizedekPriesthood == "Yes" }),
         // Temple Ordinances and Experiences: genealogy + proxy baptisms, both from the year someone
         // turns 12 (limited-use recommend age — same by-year rule as calling/Aaronic).
         Milestone("Family name prepared", "FN",
                   style: .init(hex: 0x6D4C41, symbol: "book.closed"),              // brown · 12+
+                  field: "family_name_prepared",
                   eligible: { turnsAtLeast($0, 12) },
                   complete: { familyNameValue($0) == "Yes" }),
         Milestone("First temple visit", "FT",
                   style: .init(hex: 0x00897B, symbol: "building.columns"),         // teal · 12+
+                  field: "first_temple_visit",
                   eligible: { turnsAtLeast($0, 12) },
                   complete: { firstTempleVisitValue($0) == "Yes" }),
     ]
@@ -246,13 +260,112 @@ public enum Milestones {
     /// but-missing each. `all` stays the integration-only completion basis; this is the superset.
     public static let needsCategories: [Milestone] = all + [
         Milestone("Temple Recommend", "TR", style: .init(hex: 0x5E35B1, symbol: "checkmark.seal"),
+                  field: "temple_recommend",
                   eligible: { templeRecommendEligible($0) },
                   complete: { $0.templeRecommend == "Active" }),
         Milestone("Endowment", "EN", style: .init(hex: 0x00695C, symbol: "building.columns"),
+                  field: "living_ordinance",
                   eligible: { endowmentEligible($0) },
                   complete: { $0.livingOrdinance == "Yes" }),
         Milestone("Patriarchal Blessing", "PB", style: .init(hex: 0xAD1457, symbol: "book.closed"),
+                  field: "patriarchal_blessing",
                   eligible: { patriarchalEligible($0) },
                   complete: { $0.patriarchalBlessing == "Yes" }),
     ]
+
+    // MARK: - raw field value by snake_case key (mirrors web `m[ms.field]`)
+
+    /// The raw flat string value for a milestone's `field` (snake_case DB column key), or nil when the
+    /// milestone has no single field. Used by `expected` / `goldenHourRows` to recognize N/A and the
+    /// sentinel/empty data-issue case. Mirrors the web reading `m[ms.field]`.
+    public static func rawValue(of field: String?, for m: Member) -> String? {
+        guard let field else { return nil }
+        switch field {
+        case "friends": return m.friends
+        case "calling": return m.calling
+        case "ministering_brothers_sisters": return m.ministeringBrothersSisters
+        case "ministering_assignment": return m.ministeringAssignment
+        case "aaronic_priesthood": return m.aaronicPriesthood
+        case "melchizedek_priesthood": return m.melchizedekPriesthood
+        case "family_name_prepared": return m.familyNamePrepared
+        case "first_temple_visit": return m.firstTempleVisit
+        case "temple_recommend": return m.templeRecommend
+        case "living_ordinance": return m.livingOrdinance
+        case "patriarchal_blessing": return m.patriarchalBlessing
+        default: return nil
+        }
+    }
+
+    // MARK: - expected / goldenHourRows / nextSteps (mirror web milestones.ts)
+
+    /// Whether a member is EXPECTED to complete this milestone: eligible AND the underlying field
+    /// isn't N/A. The gate the "needs / missing / incomplete" surfaces use so an N/A field is excluded
+    /// entirely (N/A ≠ not-done). Mirrors web `expected`. The temple-experience + endowment fields
+    /// derive N/A client-side for ineligible-by-age people, so honor that derived value too.
+    public static func expected(_ ms: Milestone, _ m: Member) -> Bool {
+        guard ms.eligible(m) else { return false }
+        if let f = ms.field {
+            if FieldDisplayLogic.isNA(rawValue(of: f, for: m)) { return false }
+            if f == "family_name_prepared" { return !FieldDisplayLogic.isNA(familyNameDisplay(m)) }
+            if f == "first_temple_visit" { return !FieldDisplayLogic.isNA(firstTempleVisitDisplay(m)) }
+            if f == "living_ordinance" { return !FieldDisplayLogic.isNA(endowmentDisplay(m)) }
+        }
+        return true
+    }
+
+    /// A member is "missing" a milestone when they're EXPECTED to have it but haven't completed it.
+    /// The single helper every needs/incomplete/completion surface shares. Mirrors web `isMissing`.
+    public static func isMissing(_ ms: Milestone, _ m: Member) -> Bool {
+        expected(ms, m) && !ms.complete(m)
+    }
+
+    /// Status of one Golden Hour completion ROW (mirrors web `GhRowStatus`).
+    public enum GhRowStatus: Sendable, Equatable { case done, notDone, issue }
+
+    /// One Golden Hour completion row: a milestone + its status (mirrors web `GhRow`).
+    public struct GhRow: Identifiable, Sendable {
+        public let milestone: Milestone
+        public let status: GhRowStatus
+        public var id: String { milestone.abbr }
+    }
+
+    /// Whether a milestone's underlying field value is a DATA ISSUE for this member: the field is
+    /// present on the milestone, it isn't complete, and the raw value is a sentinel OR null/empty.
+    /// A genuine recorded "No"/"Expired"/etc. is an honest not-done, never a data issue. Milestones
+    /// with no single `field` can never be a data issue. Mirrors web `isFieldDataIssue`.
+    private static func isFieldDataIssue(_ ms: Milestone, _ m: Member) -> Bool {
+        guard ms.field != nil else { return false }
+        if ms.complete(m) { return false }
+        let s = (rawValue(of: ms.field, for: m) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !s.isEmpty && !FieldSentinel.isSentinel(s) { return false }
+        return true
+    }
+
+    /// Build the Golden Hour completion ROWS for one member from a milestone list (defaults to the
+    /// integration `all`; pass `needsCategories` to also include temple recommend / endowment /
+    /// patriarchal blessing). N/A milestones are OMITTED (not eligible). Each surviving row is
+    /// classified done / not-done / issue. The order follows the list. Mirrors web `goldenHourRows`.
+    public static func goldenHourRows(_ m: Member, list: [Milestone] = all) -> [GhRow] {
+        var rows: [GhRow] = []
+        for ms in list {
+            // Drop anything that doesn't APPLY: not eligible, or an N/A (not-eligible) field value. A
+            // real "Yes" is still kept (expected already lets a completed milestone through).
+            if !expected(ms, m) && !ms.complete(m) { continue }
+            if ms.complete(m) {
+                rows.append(GhRow(milestone: ms, status: .done))
+            } else if isFieldDataIssue(ms, m) {
+                rows.append(GhRow(milestone: ms, status: .issue))
+            } else {
+                rows.append(GhRow(milestone: ms, status: .notDone))
+            }
+        }
+        return rows
+    }
+
+    /// The milestones this member still NEEDS to do — the not-yet-complete, applicable steps (their
+    /// "next steps"). Excludes N/A and completed; includes data-issue rows (a leader should still see
+    /// the step is outstanding). Defaults to the integration set. Mirrors web `nextSteps`.
+    public static func nextSteps(_ m: Member, list: [Milestone] = all) -> [Milestone] {
+        goldenHourRows(m, list: list).filter { $0.status != .done }.map { $0.milestone }
+    }
 }

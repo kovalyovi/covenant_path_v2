@@ -89,6 +89,11 @@ struct DashboardView: View {
                             lastError: store.enrollStatus?.credential.lastError) {
                     openReauth()
                 }
+            } else if store.showPatriarchalBanner {
+                // For a HEALTHY credential, nudge the provider to re-authorize and refresh the one
+                // covenant-path field the daily sync can't pull (patriarchal blessing). Mirrors web
+                // DashboardShell gating + PatriarchalBanner; its action opens the same re-auth sheet.
+                PatriarchalBanner(pending: store.patriarchalPending) { openReauth() }
             }
             pageBody(t)
         }
@@ -378,6 +383,34 @@ struct StaleBanner: View {
         .cpGlass(in: Rectangle(), tint: .orange)
         .overlay(alignment: .bottom) { Divider() }
         .accessibilityHint(lastError ?? "")
+    }
+}
+
+/// Patriarchal-blessing refresh banner (port of web `PatriarchalBanner`). Patriarchal blessing is the
+/// ONE covenant-path field absent from the daily Member Tools sync — it only fills from the per-member
+/// LCR profile read during a sync with a LIVE session (right after a re-authorization). Offers the
+/// credential provider (whose calling can read it) a one-tap re-auth; `pending` is the count of real
+/// members still missing it. Gating (provider + can-refresh + 14-day grace) lives in DashboardStore.
+struct PatriarchalBanner: View {
+    let pending: Int
+    let onRefresh: () -> Void
+
+    private var who: String { pending == 1 ? "member is" : "members are" }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "book.closed").foregroundStyle(.tint)
+            Text("Patriarchal blessing status isn’t part of the daily Church sync, so \(pending) \(who) "
+                 + "missing it. Re-authorize to refresh it for your stake.")
+                .font(.callout)
+            Spacer(minLength: 0)
+            Button("Refresh", action: onRefresh).font(.callout)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        // Liquid-Glass banner tinted with the app primary (frosted-material fallback below iOS 26).
+        .cpGlass(in: Rectangle(), tint: Color(hex: 0x4554B8))
+        .overlay(alignment: .bottom) { Divider() }
     }
 }
 

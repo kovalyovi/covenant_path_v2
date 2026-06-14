@@ -1,14 +1,20 @@
 #if canImport(UIKit)
 import SwiftUI
 
-/// Investigators with a *planned* baptism date (`baptism_goal_date`), as a date timeline: an overdue
-/// ("date passed") block first, then a "Scheduled" block, each grouped by date. Faithful port of the
-/// combined-timeline path of `_OnDateView` / `_Timeline` / `_DateSection` / `_DateRow`.
+/// Baptisms tab — a CARD PER PERSON (item 1). Each investigator with a planned (future or overdue)
+/// baptism date gets their OWN card showing: the planned date + countdown, their unit, full leader
+/// notes, their Golden Hour chips + next steps, and the assigned (full-time) missionaries for their
+/// unit. Overdue dates (already passed) surface first in a "needs attention" section; genuinely
+/// upcoming dates follow. A SECOND section lists the assigned missionaries per unit (item 3/4).
+///
+/// Faithful port of web `apps/web/src/pages/tabs/BaptismsTab.tsx` (the React rework of the former
+/// combined-timeline baptisms_view). A Unit/Date layout toggle is kept for leaders who prefer the
+/// unit-grouped layout.
 struct BaptismsView: View {
     let rows: [Member]
     let missionariesByUnit: [String: [Missionary]]
 
-    /// Header toggle: combined timeline (false) vs per-unit timelines (true). Port of `_byUnit`.
+    /// Header toggle: card-per-person by date (false) vs per-unit grouping (true). Port of `_byUnit`.
     @State private var byUnit = false
 
     private struct Dated: Identifiable {
@@ -28,13 +34,22 @@ struct BaptismsView: View {
 
     private var today: Date { Calendar.current.startOfDay(for: Date()) }
 
+    /// Every stake unit that has missionaries synced — the full per-unit breakdown for the section
+    /// below (item 4); independent of who's in the baptism list, so it's a complete roster.
+    private var unitsWithMissionaries: [String] {
+        missionariesByUnit
+            .filter { !$0.key.trimmingCharacters(in: .whitespaces).isEmpty && !$0.value.isEmpty }
+            .keys.sorted()
+    }
+
     var body: some View {
-        // Compute the parsed/sorted list ONCE per render (was re-derived on every `items` access).
+        // Compute the parsed/sorted list ONCE per render.
         let items = self.items
+        let units = unitsWithMissionaries
         return ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 18) {
                 HStack {
-                    SectionHeader(title: "Prospective Baptisms", count: items.count,
+                    SectionHeader(title: "Upcoming Baptisms", count: items.count,
                                   accent: DashboardTab.baptisms.accent)
                     Picker("Layout", selection: $byUnit) {
                         Label("Unit", systemImage: "person.3").tag(true)
@@ -45,50 +60,80 @@ struct BaptismsView: View {
                 }
 
                 if items.isEmpty {
-                    EmptyHint("No prospective baptisms with a planned date.")
+                    EmptyHint("No baptisms scheduled yet.")
                 } else if byUnit {
-                    perUnit
+                    perUnit(items)
                 } else {
-                    timeline(items, embedded: false)
+                    personCardSections(items)
+                }
+
+                // SECOND section (item 3/4): assigned/full-time missionaries — a full per-unit breakdown.
+                if !units.isEmpty {
+                    missionariesByUnitSection(units)
                 }
             }
             .padding(16)
-            .frame(maxWidth: 640)
+            .frame(maxWidth: 760)
             .frame(maxWidth: .infinity)
         }
     }
 
-    /// Combined or per-unit timeline body: overdue block then Scheduled block.
+    // MARK: - card-per-person sections (overdue then scheduled)
+
     @ViewBuilder
-    private func timeline(_ items: [Dated], embedded: Bool) -> some View {
+    private func personCardSections(_ items: [Dated]) -> some View {
         let overdue = items.filter { $0.date < today }
         let upcoming = items.filter { $0.date >= today }
-        if !overdue.isEmpty {
-            dateSection(title: "Needs attention — date passed",
-                        symbol: "exclamationmark.triangle.fill",
-                        color: Color(hex: 0xEF6C00), items: overdue, overdue: true, embedded: embedded)
-        }
-        if !upcoming.isEmpty {
-            dateSection(title: "Scheduled", symbol: "calendar.badge.checkmark",
-                        color: DashboardTab.baptisms.accent, items: upcoming, overdue: false, embedded: embedded)
+        VStack(alignment: .leading, spacing: 18) {
+            if !overdue.isEmpty {
+                personCardGroup(title: "Needs attention — date has passed",
+                                symbol: "exclamationmark.triangle.fill",
+                                color: Color(hex: 0xEF6C00), items: overdue, overdue: true)
+            }
+            if !upcoming.isEmpty {
+                personCardGroup(title: "Scheduled", symbol: "calendar.badge.checkmark",
+                                color: DashboardTab.baptisms.accent, items: upcoming, overdue: false)
+            }
         }
     }
 
-    /// Per-unit cards: a missionary strip then that unit's date timeline. Port of `_perUnit`.
-    private var perUnit: some View {
+    private func personCardGroup(title: String, symbol: String, color: Color,
+                                 items: [Dated], overdue: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol).font(.system(size: 14)).foregroundStyle(color)
+                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(color)
+                CountBadge(items.count)
+                Spacer(minLength: 0)
+            }
+            VStack(spacing: 12) {
+                ForEach(items) { it in
+                    BaptismPersonCard(member: it.member, date: it.date, today: today,
+                                      overdue: overdue, missionaries: missionariesByUnit[it.member.unitName ?? ""] ?? [])
+                }
+            }
+        }
+    }
+
+    // MARK: - per-unit grouping (toggle)
+
+    private func perUnit(_ items: [Dated]) -> some View {
         let byUnitMap = Dictionary(grouping: items) { $0.member.unitName ?? "—" }
         let units = byUnitMap.keys.sorted()
         return VStack(spacing: 12) {
             ForEach(units, id: \.self) { u in
                 SectionCard(title: u, systemImage: "person.3",
                             trailing: AnyView(CountBadge((byUnitMap[u] ?? []).count))) {
-                    VStack(alignment: .leading, spacing: 0) {
+                    VStack(alignment: .leading, spacing: 12) {
                         if let miss = missionariesByUnit[u], !miss.isEmpty {
                             MissionaryStrip(missionaries: miss)
-                            Divider().padding(.vertical, 12)
+                            Divider()
                         }
-                        VStack(alignment: .leading, spacing: 8) {
-                            timeline(byUnitMap[u] ?? [], embedded: true)
+                        ForEach(byUnitMap[u] ?? []) { it in
+                            BaptismPersonCard(member: it.member, date: it.date, today: today,
+                                              overdue: it.date < today,
+                                              missionaries: missionariesByUnit[u] ?? [],
+                                              nested: true)
                         }
                     }
                 }
@@ -96,93 +141,142 @@ struct BaptismsView: View {
         }
     }
 
-    /// One block (overdue or scheduled): a date-rail of rows grouped by date. When `embedded`, the
-    /// outer card is dropped (it lives inside a per-unit card) and an inline header is used.
-    @ViewBuilder
-    private func dateSection(title: String, symbol: String, color: Color,
-                             items: [Dated], overdue: Bool, embedded: Bool) -> some View {
-        let groups = Dictionary(grouping: items, by: \.date)
-        let dates = groups.keys.sorted()  // soonest first (overdue: oldest-passed first)
-        let rail = VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(dates.enumerated()), id: \.element) { idx, day in
-                if idx > 0 { Divider().padding(.vertical, 9) }
-                DateRailRow(date: day, people: groups[day] ?? [], today: today,
-                            overdue: overdue, accent: color)
+    // MARK: - Missionaries by Unit (item 4)
+
+    private func missionariesByUnitSection(_ units: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Missionaries by Unit", count: units.count,
+                          accent: DashboardTab.baptisms.accent)
+            ForEach(units, id: \.self) { u in
+                MissionariesSection(unitName: u, title: u,
+                                    missionaries: missionariesByUnit[u] ?? [])
             }
-        }
-        if embedded {
-            VStack(alignment: .leading, spacing: 8) {
-                Label(title, systemImage: symbol)
-                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(color)
-                rail
-            }
-        } else {
-            SectionCard(title: title, systemImage: symbol, iconColor: color) { rail }
         }
     }
+}
 
-    /// One date in the rail: a month/day block on the left, the people planned for that day on the
-    /// right (each a NavigationLink to detail). Mirrors `_DateRow`.
-    private struct DateRailRow: View {
-        @Environment(DashboardStore.self) private var store: DashboardStore?
-        let date: Date
-        let people: [Dated]
-        let today: Date
-        let overdue: Bool
-        let accent: Color
+// MARK: - one card for one person being taught
 
-        private var relative: String {
-            let days = Calendar.current.dateComponents([.day], from: today, to: date).day ?? 0
-            if overdue {
-                let n = -days
-                return "\(n) day\(n == 1 ? "" : "s") ago"
-            }
-            if days == 0 { return "Today" }
-            if days == 1 { return "Tomorrow" }
-            return "in \(days) days"
+/// ONE card for ONE investigator: date badge + countdown, unit, Golden Hour chips + next steps, full
+/// leader note, and the assigned missionaries who teach them (their unit's full-time missionaries).
+/// Mirrors web `BaptismPersonCard`.
+struct BaptismPersonCard: View {
+    @Environment(DashboardStore.self) private var store: DashboardStore?
+    let member: Member
+    let date: Date
+    let today: Date
+    let overdue: Bool
+    let missionaries: [Missionary]
+    /// When this card sits INSIDE a unit SectionCard (the per-unit layout), use a flat tinted fill
+    /// instead of a glass surface so we never nest glass inside glass (per the design-system rule).
+    var nested = false
+
+    private var accent: Color { overdue ? Color(hex: 0xEF6C00) : DashboardTab.baptisms.accent }
+
+    private var relative: String {
+        let days = Calendar.current.dateComponents([.day], from: today, to: date).day ?? 0
+        if overdue {
+            let n = -days
+            return "\(n) day\(n == 1 ? "" : "s") ago"
         }
+        if days == 0 { return "Today" }
+        if days == 1 { return "Tomorrow" }
+        return "in \(days) days"
+    }
 
-        var body: some View {
+    private var note: NoteSummary? {
+        guard let uuid = member.personUUID, !uuid.isEmpty else { return nil }
+        return store?.notes[uuid]
+    }
+
+    private var steps: [Milestone] { Milestones.nextSteps(member) }
+
+    var body: some View {
+        // A plain glass card (no SectionCard header — this card carries its own person header).
+        VStack(alignment: .leading, spacing: 10) {
+            // Header: tappable avatar + name + unit (to detail), date badge on the right.
             HStack(alignment: .top, spacing: 12) {
-                VStack(spacing: 0) {
-                    Text(date.formatted(.dateTime.month(.abbreviated)).uppercased())
-                        .font(.system(size: 11, weight: .bold)).foregroundStyle(accent)
-                    Text(date.formatted(.dateTime.day()))
-                        .font(.system(size: 22, weight: .bold)).foregroundStyle(accent)
-                    Text(date.formatted(.dateTime.weekday(.abbreviated)))
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                }
-                .frame(width: 54)
-                .padding(.vertical, 6)
-                .background(accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(relative)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(overdue ? accent : .secondary)
-                    ForEach(people) { p in
-                        NavigationLink(value: p.member) {
-                            HStack(spacing: 10) {
-                                PhotoAvatar(name: p.member.name, photoURL: p.member.photoURL, size: 36)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(p.member.displayName).fontWeight(.semibold)
-                                    Text(p.member.unitName ?? "")
-                                        .font(.caption).foregroundStyle(.secondary)
-                                    if let uuid = p.member.personUUID, let note = store?.notes[uuid] {
-                                        NoteLine(note: note)
-                                    }
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                NavigationLink(value: member) {
+                    HStack(spacing: 12) {
+                        PhotoAvatar(name: member.name, photoURL: member.photoURL, size: 44)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(member.displayName).fontWeight(.semibold)
+                            if let u = member.unitName, !u.isEmpty {
+                                Text(u).font(.caption).foregroundStyle(.secondary)
                             }
-                            .padding(.vertical, 4)
-                            .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                Spacer(minLength: 0)
+                dateBadge
+            }
+
+            Text("Planned baptism · \(relative)")
+                .font(.caption.weight(.semibold)).foregroundStyle(accent)
+
+            // Golden Hour chips — quick covenant-path glance + suggested next step.
+            GoldenHourChips(member: member, size: 22, highlightNext: true)
+
+            // Next steps (the not-yet-done Golden Hour milestones for this person).
+            if !steps.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("NEXT STEPS")
+                        .font(.caption2.weight(.bold)).foregroundStyle(.secondary).kerning(0.6)
+                    FlowLayout(spacing: 6) {
+                        ForEach(steps) { ms in
+                            HStack(spacing: 4) {
+                                Image(systemName: "circle").font(.caption2)
+                                    .foregroundStyle(Color(hex: ms.style.hex))
+                                Text(ms.label).font(.caption)
+                            }
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(Color(.tertiarySystemFill), in: Capsule())
+                        }
                     }
                 }
             }
+
+            // Full leader note for this person.
+            if let note {
+                HStack(alignment: .top, spacing: 4) {
+                    Image(systemName: "note.text").font(.caption2).foregroundStyle(Color.accentColor)
+                    Text(note.latest).font(.caption).italic().foregroundStyle(.secondary)
+                    if note.count > 1 {
+                        Text("+\(note.count - 1)").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            // Missionary info: who teaches them (their unit's assigned missionaries).
+            Divider()
+            Text("MISSIONARIES")
+                .font(.caption2.weight(.bold)).foregroundStyle(.secondary).kerning(0.6)
+            if missionaries.isEmpty {
+                Text("No assigned missionaries on record for this ward.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                MissionaryStrip(missionaries: missionaries)
+            }
         }
+        .padding(nested ? 12 : 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(CardSurface(nested: nested))
+    }
+
+    private var dateBadge: some View {
+        VStack(spacing: 0) {
+            Text(date.formatted(.dateTime.month(.abbreviated)).uppercased())
+                .font(.system(size: 11, weight: .bold)).foregroundStyle(accent)
+            Text(date.formatted(.dateTime.day()))
+                .font(.system(size: 22, weight: .bold)).foregroundStyle(accent)
+            Text(date.formatted(.dateTime.weekday(.abbreviated)))
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+        }
+        .frame(width: 54)
+        .padding(.vertical, 6)
+        .background(accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
     }
 }
 
@@ -211,6 +305,20 @@ struct EmptyHint: View {
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
             .padding(32)
+    }
+}
+
+/// A card surface that's a glass card at top level, but a flat tinted fill when nested inside another
+/// glass card (so we never stack glass on glass — per the design-system rule in Glass.swift).
+struct CardSurface: ViewModifier {
+    let nested: Bool
+    func body(content: Content) -> some View {
+        if nested {
+            content.background(Color(.secondarySystemBackground),
+                               in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        } else {
+            content.cpGlassCard()
+        }
     }
 }
 
@@ -253,6 +361,52 @@ struct MissionaryStrip: View {
                     } else { Text(email) }
                 }
             } label: { label }
+        }
+    }
+}
+
+/// A detail-style list of a unit's missionaries with contact lines (used in the per-unit section + the
+/// person detail view). Renders a clean empty state when none are synced for the unit. Mirrors web
+/// `MissionariesSection` — but takes the missionary list directly (the data already on the stake) so it
+/// works both inside the dashboard and on the detail page. `title` defaults to "Full-Time Missionaries".
+struct MissionariesSection: View {
+    let unitName: String?
+    var title: String = "Full-Time Missionaries"
+    let missionaries: [Missionary]
+
+    var body: some View {
+        SectionCard(title: title, systemImage: "person.2.fill") {
+            if missionaries.isEmpty {
+                Text("No assigned missionaries on record for "
+                     + (unitName.map { "\($0)." } ?? "this unit."))
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(missionaries.enumerated()), id: \.offset) { _, m in
+                        HStack(alignment: .top, spacing: 10) {
+                            InitialsAvatar(name: m.name ?? "?", size: 32)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(m.name ?? "—")
+                                if let phone = m.phone, !phone.isEmpty {
+                                    if let url = URL(string: "tel:\(phone.filter { !$0.isWhitespace })") {
+                                        Link(phone, destination: url).font(.caption).foregroundStyle(.secondary)
+                                    } else {
+                                        Text(phone).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                                if let email = m.email, !email.isEmpty {
+                                    if let url = URL(string: "mailto:\(email)") {
+                                        Link(email, destination: url).font(.caption).foregroundStyle(.secondary)
+                                    } else {
+                                        Text(email).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+            }
         }
     }
 }
