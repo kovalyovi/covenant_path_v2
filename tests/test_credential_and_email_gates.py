@@ -276,3 +276,29 @@ def test_age_alert_skips_self_renewing_and_revoked_credentials(temp_stake):
     # Old and REVOKED -> the revoked banner owns that story; no aging nudge on top.
     _age_credential(conn, stake_id, 40, has_refresh_token=False, revoked=True)
     assert credentials.claim_age_notification(conn, stake_id, 21) is False
+
+
+def test_age_alert_uses_membertools_token_clock(temp_stake):
+    """#0 fix F3: when a Member Tools 45-day token is stored, the aging nudge keys off its MINT date,
+    not the credential's updated_at. The daily sync renews the bearer off the stored token WITHOUT
+    rewriting the credential blob, so updated_at is NOT the token's clock — keying off it nudges on the
+    wrong date (and re-arms wrongly after a bootstrap mint)."""
+    from backend import credentials
+    conn, stake_id = temp_stake
+
+    # OLD credential row (updated 40d ago) but a FRESH Member Tools token (minted 5d ago): the token
+    # has ~40 days left, so STAY QUIET. (Fails pre-fix: keyed off updated_at=40d, it would nudge.)
+    _age_credential(conn, stake_id, 40, has_refresh_token=False, membertools_refresh_enc="enc-blob")
+    with conn.cursor() as cur:
+        cur.execute("update stake_credentials set membertools_minted_at = now() - make_interval(days => 5) "
+                    "where stake_id = %s", (stake_id,))
+    conn.commit()
+    assert credentials.claim_age_notification(conn, stake_id, 21) is False
+
+    # Age the TOKEN itself past the window → the nudge fires, exactly once per token generation.
+    with conn.cursor() as cur:
+        cur.execute("update stake_credentials set membertools_minted_at = now() - make_interval(days => 40) "
+                    "where stake_id = %s", (stake_id,))
+    conn.commit()
+    assert credentials.claim_age_notification(conn, stake_id, 21) is True
+    assert credentials.claim_age_notification(conn, stake_id, 21) is False

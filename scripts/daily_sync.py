@@ -58,11 +58,20 @@ def _stake_unit_for_token(client) -> int | None:
 # --- Member Tools refresh token: Supabase-persisted (migration 0049) FIRST, local file store as a
 #     dev fallback. Persisting to Supabase is what makes the 45-day token survive the CI runners. ----
 
+class _TokenStoreUnavailable(RuntimeError):
+    """The Member Tools token store could not be READ (DB error) — distinct from 'no token stored'.
+    The caller must SKIP this run (retry next) rather than mint off a possibly-dead Okta session, which
+    on failure would falsely flag the stake needs-reauth (#0 fix F5)."""
+
+
 def _membertools_token(stake_unit: int | None) -> dict:
     """{refresh_token, minted_at} for a stake — Supabase first (persists across CI), else the local
-    file store. {} when neither has one. Never raises (a lookup miss just means we re-mint)."""
+    file store. Returns {} only when the store is READABLE but empty. Raises _TokenStoreUnavailable
+    when the DB read FAILS *and* the file store has nothing either — so a transient DB hiccup can't
+    masquerade as 'no token' and trigger a false re-mint / needs-reauth flag (#0 fix F5)."""
     if not stake_unit:
         return {}
+    db_errored = False
     try:
         from backend import credentials, db
         conn = db.connect()
@@ -73,13 +82,21 @@ def _membertools_token(stake_unit: int | None) -> dict:
                 return tok
         finally:
             conn.close()
-    except Exception as exc:  # noqa: BLE001 — DB hiccup must not break the sync; fall back to file
-        logger.warning("Member Tools token DB read skipped for stake %s: %s", stake_unit, exc)
+    except Exception as exc:  # noqa: BLE001 — DB hiccup: try the file store, but REMEMBER it failed
+        db_errored = True
+        logger.warning("Member Tools token DB read FAILED for stake %s: %s", stake_unit, exc)
     try:
         from lcr_client import token_store
-        return token_store.get_membertools_token(stake_unit) or {}
+        ft = token_store.get_membertools_token(stake_unit) or {}
     except Exception:  # noqa: BLE001
-        return {}
+        ft = {}
+    if ft:
+        return ft
+    if db_errored:
+        raise _TokenStoreUnavailable(
+            f"stake {stake_unit}: Member Tools token store unreadable (DB error) — skipping this run "
+            f"to avoid a false re-mint")
+    return {}
 
 
 def _save_membertools_token(stake_unit: int, refresh_token: str) -> None:
@@ -119,8 +136,18 @@ def _membertools_access_token(client, stake_unit: int | None) -> str | None:
         logger.info("stake %s: renewing the Member Tools bearer off the stored 45-day refresh token "
                     "(no Okta session needed)", stake_unit)
         try:
-            access = membertools.refresh(stored["refresh_token"]).get("access_token")
+            renewed = membertools.refresh(stored["refresh_token"])
+            access = renewed.get("access_token")
             if access:
+                # Rotation-safe (#0 fix F2): Okta keeps the SAME refresh token here (rotation off), but
+                # if it ever hands back a NEW one the old token is now dead — persist the new one or the
+                # NEXT run gets invalid_grant and falsely flags needs-reauth. _save_membertools_token →
+                # save_membertools_refresh preserves the original membertools_minted_at 45-day clock.
+                rotated = renewed.get("refresh_token")
+                if rotated and rotated != stored["refresh_token"] and stake_unit:
+                    _save_membertools_token(stake_unit, rotated)
+                    logger.info("stake %s: Member Tools refresh token ROTATED — re-persisted (45-day "
+                                "clock preserved)", stake_unit)
                 logger.info("stake %s: Member Tools bearer renewed from the stored token", stake_unit)
                 return access
             logger.error("stake %s: Member Tools refresh returned no access token — the stored token "

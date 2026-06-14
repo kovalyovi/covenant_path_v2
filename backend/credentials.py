@@ -215,17 +215,26 @@ def claim_stale_notification(conn, stake_id: str) -> bool:
 
 def claim_age_notification(conn, stake_id: str, min_age_days: int) -> bool:
     """Atomically claim the ONE pre-emptive aging alert per credential GENERATION (migration 0047,
-    B8): fires only when the stored session is older than `min_age_days`, cannot self-renew (no
-    refresh token), isn't revoked, and hasn't been age-notified since it was last (re)stored —
-    every (re-)enroll bumps updated_at, so `age_notified_at < updated_at` re-arms automatically."""
+    B8): fires only when the stored session is older than `min_age_days`, cannot self-renew (no LCR
+    refresh token), isn't revoked, and hasn't been age-notified since it was last (re)stored.
+
+    The aging clock is `coalesce(membertools_minted_at, updated_at)` — the REAL Member Tools 45-day
+    token clock when one is stored, else the cookie-session age. This is the #0 fix (F3): the daily
+    sync renews the bearer off the stored 45-day token WITHOUT rewriting the credential blob, so
+    `updated_at` is NOT the token's clock — a stake kept alive only by the Member Tools token could be
+    nudged on the wrong date (too early after a fresh bootstrap mint, or not aligned with the real
+    expiry). Keying off `membertools_minted_at` lands the ~day-40 nudge ~5 days before the token truly
+    expires; a re-mint (which resets `membertools_minted_at`) re-arms it. When no token is stored
+    (`membertools_minted_at is null`) this is byte-identical to the prior updated_at behavior."""
     with conn.cursor() as cur:
         cur.execute(
             """update stake_credentials set age_notified_at = now()
                where stake_id = %s
                  and not revoked
                  and coalesce(has_refresh_token, false) = false
-                 and updated_at < now() - make_interval(days => %s)
-                 and (age_notified_at is null or age_notified_at < updated_at)""",
+                 and coalesce(membertools_minted_at, updated_at) < now() - make_interval(days => %s)
+                 and (age_notified_at is null
+                      or age_notified_at < coalesce(membertools_minted_at, updated_at))""",
             (stake_id, min_age_days))
         claimed = cur.rowcount > 0
     conn.commit()

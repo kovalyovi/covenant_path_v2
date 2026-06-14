@@ -229,6 +229,59 @@ def test_membertools_expired_refresh_clears_and_remints(monkeypatch):
     assert calls["mint"] == 1 and calls["saved"] == [(503991, "R2")]
 
 
+def test_membertools_rotation_repersists_new_refresh_token(monkeypatch):
+    # #0 fix F2: if a renew ever returns a ROTATED refresh token, persist it (the old one is now dead)
+    # — without it the NEXT run gets invalid_grant and falsely flags needs-reauth. No mint: the renew
+    # succeeded. (Fails pre-fix: the old code read only .access_token and never re-saved.)
+    monkeypatch.setattr(ds, "_membertools_token", lambda u: {"refresh_token": "R"})
+    calls = _patch_membertools(
+        monkeypatch, refresh_result={"access_token": "AT", "refresh_token": "R-ROTATED"})
+    tok = ds._membertools_access_token(_FakeMTClient(), 503991)
+    assert tok == "AT"
+    assert calls["mint"] == 0
+    assert calls["saved"] == [(503991, "R-ROTATED")]
+
+
+def test_membertools_same_refresh_token_not_repersisted(monkeypatch):
+    # The normal (rotation-off) case: the same refresh token comes back → no needless re-write.
+    monkeypatch.setattr(ds, "_membertools_token", lambda u: {"refresh_token": "R"})
+    calls = _patch_membertools(
+        monkeypatch, refresh_result={"access_token": "AT", "refresh_token": "R"})
+    tok = ds._membertools_access_token(_FakeMTClient(), 503991)
+    assert tok == "AT"
+    assert calls["mint"] == 0 and calls["saved"] == []
+
+
+def test_membertools_token_store_db_error_raises_not_empty(monkeypatch):
+    # #0 fix F5: a DB read FAILURE must NOT masquerade as 'no token' (which would mint off a possibly-
+    # dead Okta session and, on failure, falsely flag needs-reauth). With nothing in the file store
+    # either, _membertools_token RAISES so the caller skips and retries next run.
+    from backend import db
+    from lcr_client import token_store
+
+    def _raise_db(*a, **k):
+        raise RuntimeError("DB pooler unreachable")
+
+    monkeypatch.setattr(db, "connect", _raise_db)
+    monkeypatch.setattr(token_store, "get_membertools_token", lambda u: None)
+    with pytest.raises(ds._TokenStoreUnavailable):
+        ds._membertools_token(503991)
+
+
+def test_membertools_token_db_error_falls_back_to_file_store(monkeypatch):
+    # The dev fallback stays intact: a DB read failure with a token still in the local file store uses
+    # it (no raise) — only an UNREADABLE store with nothing anywhere is fatal.
+    from backend import db
+    from lcr_client import token_store
+
+    def _raise_db(*a, **k):
+        raise RuntimeError("DB pooler unreachable")
+
+    monkeypatch.setattr(db, "connect", _raise_db)
+    monkeypatch.setattr(token_store, "get_membertools_token", lambda u: {"refresh_token": "FILE-R"})
+    assert ds._membertools_token(503991) == {"refresh_token": "FILE-R"}
+
+
 # --- E7: Member-Tools-primary resilience (the golden-flow sync, 2026-06-12) ----------------------
 # The covenant-path CORE comes from the Member Tools /api/v5/sync 45-day token; the stake/ward
 # STRUCTURE comes from that same payload (context_from_sync), so the daily sync completes with NO

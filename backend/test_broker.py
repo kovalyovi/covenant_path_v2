@@ -1930,6 +1930,46 @@ def test_mfa_lockout_after_max_fails() -> None:
     check("mfa lockout: pending dropped after the cap", lid not in okta_flow._PENDING)
 
 
+def test_membertools_persist_verifies_after_patch() -> None:
+    """#0 fix F4: persist_membertools_refresh_rest must FAIL LOUDLY when the PATCH matched no row
+    (PostgREST returns 200/204 with an empty effect — RLS or a missing credential row). Without the
+    read-back the token silently vanishes and the daily sync reports needs-reauth days later."""
+    from backend import credentials as _cred
+    saved = (enroll.requests.get, enroll.requests.patch, enroll.SUPABASE_URL, enroll.SERVICE_KEY,
+             _cred._encrypt_envelope)
+    try:
+        enroll.SUPABASE_URL = enroll.SUPABASE_URL or "https://test.supabase.co"
+        enroll.SERVICE_KEY = enroll.SERVICE_KEY or "test-key"
+        _cred._encrypt_envelope = lambda b: "enc-blob"            # no CP_TOKEN_KEY needed offline
+        enroll.requests.patch = lambda *a, **k: _FakeResp(None, status=204)
+
+        # Happy path: stake resolves, PATCH ok, verify-GET shows the token stored -> no raise.
+        def get_ok(url, *a, **k):
+            return _FakeResp([{"membertools_refresh_enc": "enc-blob"}]) if "stake_credentials" in url \
+                else _FakeResp([{"id": "stake-uuid"}])
+        enroll.requests.get = get_ok
+        ok = True
+        try:
+            enroll.persist_membertools_refresh_rest(503991, "R-TOKEN")
+        except Exception:
+            ok = False
+        check("membertools persist: stored token verifies -> no raise", ok)
+
+        # Silent no-op: PATCH 'succeeds' but the verify-GET shows NO row -> must raise (fails pre-fix).
+        def get_empty(url, *a, **k):
+            return _FakeResp([]) if "stake_credentials" in url else _FakeResp([{"id": "stake-uuid"}])
+        enroll.requests.get = get_empty
+        raised = False
+        try:
+            enroll.persist_membertools_refresh_rest(503991, "R-TOKEN")
+        except RuntimeError:
+            raised = True
+        check("membertools persist: empty verify-GET raises (catches the silent no-op)", raised)
+    finally:
+        (enroll.requests.get, enroll.requests.patch, enroll.SUPABASE_URL, enroll.SERVICE_KEY,
+         _cred._encrypt_envelope) = saved
+
+
 def main() -> int:
     print("broker tests")
     test_fast_lane_eval_zero_lcr()
@@ -1958,6 +1998,7 @@ def main() -> int:
     test_endpoint_health_trend()
     test_enrollment_status_patriarchal_signal()
     test_profile_refresh_worker_fills_via_live_session()
+    test_membertools_persist_verifies_after_patch()
     test_mint_misconfig()
     test_mint_empty_email()
     test_mfa_expiry()

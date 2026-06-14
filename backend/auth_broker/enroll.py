@@ -604,6 +604,18 @@ def persist_membertools_refresh_rest(unit_number: int, refresh_token: str) -> No
               "membertools_minted_at": datetime.now(timezone.utc).isoformat()}, timeout=30)
     if r.status_code >= 300:
         raise RuntimeError(f"Member Tools token PATCH failed ({r.status_code}): {r.text[:160]}")
+    # Verify-after-persist (#0 fix F4): a PATCH that matches NO row (RLS, or the stake_id raced away)
+    # returns 200 with an empty body — the write silently vanished and the daily sync would later
+    # report needs-reauth for a stake we *thought* we'd armed. Read the column back and fail loudly if
+    # it's still empty, so the caller's ERROR path fires immediately instead of days later.
+    chk = requests.get(
+        f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=h,
+        params={"stake_id": f"eq.{stake_id}", "select": "membertools_refresh_enc"}, timeout=30)
+    saved = chk.json() if chk.status_code == 200 else []
+    if not saved or not (saved[0] or {}).get("membertools_refresh_enc"):
+        raise RuntimeError(
+            f"Member Tools token PATCH verified empty for stake {stake_id} (no row updated — RLS or "
+            f"missing credential row); the daily sync would report needs-reauth")
 
 
 def persist(cookies: list[dict], identity: dict) -> dict:
