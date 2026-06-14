@@ -1,19 +1,35 @@
-// Row of small circle chips for one member (the iOS Golden Hour pattern). Filled = done. With
-// `highlightNext`, the first not-yet-complete milestone gets an amber ring as the suggested next
-// step. `labeled` renders full-text pills (person detail) instead of compact circles (lists).
-// On the detail view each labeled chip is interactive: hover OR click/tap shows a tooltip explaining
-// what that Golden Hour step means (sourced from the single milestone definition's `description`).
-// Mirrors GoldenHourChips in apps/viewer/lib/golden_hour.dart.
+// Row of small chips for one member (the iOS Golden Hour pattern). Each chip carries the milestone's
+// 3-way status from `goldenHourRows` — ✓ done / ○ not yet / ⚠ DATA ISSUE (the needs-profile-api
+// sentinel or a missing value) — so the chips are the SINGLE covenant-path representation on the detail
+// view (the separate "done-text" rows are gone, #10a). With `highlightNext` the first not-done milestone
+// gets an amber "next step" ring. `labeled` renders full-text pills (detail) instead of compact circles
+// (lists). Each labeled chip is interactive: hover OR click/tap shows a tooltip explaining the step.
+// Mirrors GoldenHourChips in the native surfaces.
 
 import { useEffect, useId, useRef, useState } from 'react';
 import type { Member } from '../lib/member';
-import { milestonesFor, type Milestone } from '../logic/milestones';
+import { goldenHourRows, type Milestone } from '../logic/milestones';
 import { hexA } from '../theme/tokens';
-import { Icon } from './Icon';
+import { Icon, type IconName } from './Icon';
 
 const GREEN = '#43a047';
 const AMBER = '#ffa000';
 const GREY = '#9e9e9e';
+const ISSUE = '#f9a825'; // ⚠ data issue — matches the table/detail ⚠ marker (D22)
+
+/** Chip visual state: 'next' is a not-done milestone flagged as the suggested next step. */
+type ChipState = 'done' | 'next' | 'not-done' | 'issue';
+
+interface Visual { color: string; icon: IconName; word: string; bg?: string; }
+
+function visual(state: ChipState): Visual {
+  switch (state) {
+    case 'done': return { color: GREEN, icon: 'check_circle', word: 'Completed', bg: hexA(GREEN, 0.12) };
+    case 'next': return { color: AMBER, icon: 'arrow_forward', word: 'Suggested next step', bg: hexA(AMBER, 0.12) };
+    case 'issue': return { color: ISSUE, icon: 'warning', word: 'Data issue — value unavailable', bg: hexA(ISSUE, 0.14) };
+    case 'not-done': return { color: GREY, icon: 'circle_outline', word: 'Not yet' };
+  }
+}
 
 interface Props {
   member: Member;
@@ -23,41 +39,43 @@ interface Props {
 }
 
 export function GoldenHourChips({ member, size = 24, highlightNext = false, labeled = false }: Props) {
-  const list = milestonesFor(member);
-  const nextIdx = highlightNext ? list.findIndex((ms) => !ms.complete(member)) : -1;
-  // One open tooltip at a time (clicking another chip moves it). Only used in `labeled` mode.
+  const rows = goldenHourRows(member); // applicable only (N/A omitted), classified done / not-done / issue
+  const nextIdx = highlightNext ? rows.findIndex((r) => r.status !== 'done') : -1;
   const [open, setOpen] = useState<string | null>(null);
   return (
     <div className={labeled ? 'gh-chips labeled' : 'gh-chips'}>
-      {list.map((ms, i) =>
-        labeled ? (
+      {rows.map((r, i) => {
+        // issue ⚠ takes precedence over the "next" highlight; otherwise the first not-done is "next".
+        const state: ChipState =
+          r.status === 'done' ? 'done'
+            : r.status === 'issue' ? 'issue'
+              : i === nextIdx ? 'next' : 'not-done';
+        return labeled ? (
           <LabeledChip
-            key={ms.abbr}
-            ms={ms}
-            done={ms.complete(member)}
-            isNext={i === nextIdx}
-            open={open === ms.abbr}
-            onToggle={() => setOpen((cur) => (cur === ms.abbr ? null : ms.abbr))}
-            onClose={() => setOpen((cur) => (cur === ms.abbr ? null : cur))}
+            key={r.milestone.abbr}
+            ms={r.milestone}
+            state={state}
+            open={open === r.milestone.abbr}
+            onToggle={() => setOpen((cur) => (cur === r.milestone.abbr ? null : r.milestone.abbr))}
+            onClose={() => setOpen((cur) => (cur === r.milestone.abbr ? null : cur))}
           />
         ) : (
-          <CircleChip key={ms.abbr} ms={ms} done={ms.complete(member)} isNext={i === nextIdx} size={size} />
-        ),
-      )}
+          <CircleChip key={r.milestone.abbr} ms={r.milestone} state={state} size={size} />
+        );
+      })}
     </div>
   );
 }
 
 function LabeledChip({
-  ms, done, isNext, open, onToggle, onClose,
+  ms, state, open, onToggle, onClose,
 }: {
-  ms: Milestone; done: boolean; isNext: boolean;
+  ms: Milestone; state: ChipState;
   open: boolean; onToggle: () => void; onClose: () => void;
 }) {
-  const c = done ? GREEN : isNext ? AMBER : GREY;
+  const v = visual(state);
   const tipId = useId();
   const ref = useRef<HTMLSpanElement>(null);
-  const status = done ? 'Completed' : isNext ? 'Suggested next step' : 'Not yet';
 
   // Dismiss an open (click-pinned) tooltip on outside click or Escape.
   useEffect(() => {
@@ -83,35 +101,29 @@ function LabeledChip({
         className="gh-chip gh-chip--labeled gh-chip--tip"
         aria-expanded={open}
         aria-describedby={open ? tipId : undefined}
-        title={`${ms.label} — ${status}. ${ms.description}`}
+        title={`${ms.label} — ${v.word}. ${ms.description}`}
         onClick={onToggle}
         style={{
-          color: c,
-          borderColor: c,
-          borderWidth: isNext ? 1.6 : 1,
-          background: done ? hexA(GREEN, 0.12) : isNext ? hexA(AMBER, 0.12) : undefined,
+          color: v.color,
+          borderColor: v.color,
+          borderWidth: state === 'next' ? 1.6 : 1,
+          background: v.bg,
         }}
       >
-        <Icon name={done ? 'check_circle' : isNext ? 'arrow_forward' : 'circle_outline'} size={15} />
+        <Icon name={v.icon} size={15} />
         {ms.label}
       </button>
-      {/* Hover tooltip (CSS) + click/tap tooltip (open state) share one bubble. */}
-      <span
-        id={tipId}
-        role="tooltip"
-        className={`gh-tip${open ? ' gh-tip--open' : ''}`}
-      >
-        <b>{ms.label}</b> · {status}
+      <span id={tipId} role="tooltip" className={`gh-tip${open ? ' gh-tip--open' : ''}`}>
+        <b>{ms.label}</b> · {v.word}
         <span className="gh-tip__body">{ms.description}</span>
       </span>
     </span>
   );
 }
 
-function CircleChip({ ms, done, isNext, size }: { ms: Milestone; done: boolean; isNext: boolean; size: number }) {
-  const border = done ? GREEN : isNext ? AMBER : GREY;
-  const state = done ? 'done' : isNext ? 'next step' : 'not yet';
-  const tip = `${ms.label}: ${state}. ${ms.description}`;
+function CircleChip({ ms, state, size }: { ms: Milestone; state: ChipState; size: number }) {
+  const v = visual(state);
+  const tip = `${ms.label}: ${v.word}. ${ms.description}`;
   return (
     <span
       className="gh-chip"
@@ -121,10 +133,10 @@ function CircleChip({ ms, done, isNext, size }: { ms: Milestone; done: boolean; 
       style={{
         width: size,
         height: size,
-        borderColor: border,
-        borderWidth: isNext ? 2 : 1.2,
-        background: done ? GREEN : isNext ? hexA(AMBER, 0.15) : 'transparent',
-        color: done ? '#fff' : isNext ? AMBER : 'var(--on-surface-variant)',
+        borderColor: v.color,
+        borderWidth: state === 'next' ? 2 : 1.2,
+        background: state === 'done' ? GREEN : v.bg ?? 'transparent',
+        color: state === 'done' ? '#fff' : v.color,
         fontSize: ms.abbr.length >= 2 ? 8.5 : 11,
       }}
     >

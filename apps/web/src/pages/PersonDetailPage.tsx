@@ -15,11 +15,10 @@ import {
   priesthoodEligible, templeRecommendEligible, patriarchalEligible, ageOf, nextSteps,
 } from '../logic/milestones';
 import { agoOrNever, parseMemberDate } from '../logic/dates';
-import { sacramentWindow, SACRAMENT_WINDOW_WEEKS } from '../logic/kpis';
+import { sacramentWindow, SACRAMENT_WINDOW_WEEKS, attendanceBucket } from '../logic/kpis';
 import { Avatar, IconButton, SectionCard } from '../components/ui';
 import { Icon, type IconName } from '../components/Icon';
 import { GoldenHourChips } from '../components/GoldenHourChips';
-import { GoldenHourRows } from '../components/GoldenHourRows';
 import { MissionariesSection } from '../components/Missionaries';
 import { NotesSection } from '../components/NotesSection';
 
@@ -88,12 +87,10 @@ export function PersonDetailPage() {
             title="Covenant Path"
             iconNode={<CompletionRing pct={completionOf(member)} />}
           >
+            {/* #10a: the labeled chips are the SINGLE covenant-path representation — each carries its
+                ✓ done / ○ not yet / ⚠ data-issue state AND a tap tooltip. The old duplicate "done-text"
+                rows are gone (the ⚠ signal now lives on the chip itself). */}
             <GoldenHourChips member={member} highlightNext labeled />
-            {/* The user-chosen completion layout (item 4): one row per item — ✓ done / ○ not done /
-                ⚠ data issue. N/A items are omitted (not eligible). Complements the chips above. */}
-            <div style={{ marginTop: 12 }}>
-              <GoldenHourRows member={member} />
-            </div>
           </SectionCard>
 
           {/* Investigator (being-taught) extras (item 2): unit, the full-time missionaries who teach
@@ -236,47 +233,66 @@ function SacramentSection({ d }: { d: Record<string, unknown> }) {
   // of 54"). The window is the most recent up-to-8 weekly records; fewer when there's less data.
   const win = sacramentWindow(all);
   if (win == null) return null;
-  const GREEN = '#2e7d32';
-  // newest-first; render the windowed dots oldest→newest so the timeline reads L→R.
+  const bucket = attendanceBucket(win);
+  const PRESENT = '#2e7d32';
+  const ATT_COLOR: Record<string, string> = {
+    great: '#2e7d32', fair: '#ef6c00', poor: '#e53935', none: '#e53935', unknown: '#616161',
+  };
+  const summaryColor = ATT_COLOR[bucket.level];
+  // newest-first; render the windowed markers oldest→newest so the timeline reads L→R.
   const withDates = all.map((s) => ({ s, dt: parseMemberDate(s['date']) }));
   const anyDates = withDates.some((x) => x.dt != null);
   const ordered = anyDates
     ? [...withDates].sort((a, b) => (b.dt?.getTime() ?? -Infinity) - (a.dt?.getTime() ?? -Infinity))
     : withDates;
   const shown = ordered.slice(0, SACRAMENT_WINDOW_WEEKS).map((x) => x.s).reverse();
-  const allPresent = win.attended === win.total;
+  const n = Math.max(1, shown.length);
   return (
     <SectionCard
       title="Sacrament Attendance"
       icon="event_available"
       trailing={
-        <span className="tiny muted">last {win.total} week{win.total === 1 ? '' : 's'}</span>
+        <span className="row" style={{ gap: 4, color: summaryColor, fontWeight: bucket.bold ? 800 : 700 }}>
+          {bucket.level === 'none' && <Icon name="info" size={14} color={summaryColor} />}
+          {bucket.label}
+        </span>
       }
     >
-      <div className="wrap" style={{ gap: 14 }}>
-        {shown.map((s, i) => (
-          <div key={i} style={{ textAlign: 'center' }}>
-            <div className="tiny muted">{String(s['label'] ?? '')}</div>
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: 26,
-                height: 26,
-                marginTop: 4,
-                borderRadius: '50%',
-                background: s['attended'] === true ? GREEN : 'transparent',
-                border: `1.4px solid ${s['attended'] === true ? GREEN : 'var(--outline)'}`,
-                color: '#fff',
-              }}
-            >
-              {s['attended'] === true && <Icon name="check" size={16} />}
-            </span>
-          </div>
-        ))}
+      {/* #10b: a connected timeline (Ricky-style) — a line threads the weekly markers; PRESENT is a
+          filled ✓ and ABSENT is a hollow ✕ (shape, not just color, so it reads for color-blind users).
+          Horizontally scrollable on a narrow phone. */}
+      <div style={{ overflowX: 'auto' }}>
+        <div style={{ position: 'relative', display: 'flex', minWidth: n * 40, padding: '2px 0 0' }}>
+          <div style={{
+            position: 'absolute', top: 13, height: 2, left: `${50 / n}%`, right: `${50 / n}%`,
+            background: 'var(--outline-variant)',
+          }} />
+          {shown.map((s, i) => {
+            const present = s['attended'] === true;
+            const label = String(s['label'] ?? '');
+            return (
+              <div key={i} style={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, minWidth: 0 }}>
+                <span
+                  role="img"
+                  aria-label={`${label || `week ${i + 1}`} — ${present ? 'present' : 'absent'}`}
+                  title={`${label} — ${present ? 'present' : 'absent'}`}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 26, height: 26, borderRadius: '50%',
+                    background: present ? PRESENT : 'var(--surface)',
+                    border: `1.6px solid ${present ? PRESENT : 'var(--outline)'}`,
+                    color: present ? '#fff' : 'var(--on-surface-variant)',
+                  }}
+                >
+                  <Icon name={present ? 'check' : 'close'} size={present ? 15 : 12} color={present ? '#fff' : 'var(--on-surface-variant)'} />
+                </span>
+                <span className="tiny muted" style={{ fontSize: 9, whiteSpace: 'nowrap' }}>{label}</span>
+              </div>
+            );
+          })}
+        </div>
       </div>
-      <p style={{ marginTop: 10, color: allPresent ? GREEN : 'var(--on-surface-variant)' }}>
+      <p style={{ marginTop: 12, color: summaryColor }}>
         Attended <b>{win.attended}</b> of <b>{win.total}</b> over the last{' '}
         {win.total === 1 ? 'week' : `${win.total} weeks`}
       </p>

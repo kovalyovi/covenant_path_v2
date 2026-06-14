@@ -289,6 +289,9 @@ button.card--tappable:active {
   border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--on-surface);
+  /* #10e: inherit the app font — textareas/inputs otherwise fall back to the browser's monospace UA
+     font, which made the Notes editor read in the wrong typeface. */
+  font: inherit;
 }
 .input:focus,
 .textarea:focus,
