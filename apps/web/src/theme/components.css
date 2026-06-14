@@ -616,10 +616,102 @@ button.card--tappable:active {
 .member-row__main {
   flex: 1;
   min-width: 0;
+  /* stack name / gender+age / date / badges each on their OWN line (the spans were inline before, so
+     name and age shared a line). */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
 }
 .member-row__name {
   font-weight: 600;
 }
+
+/* ---- Custom dropdown (filter rows: Category / Units, with icons + colors) --------------------- */
+.dd {
+  position: relative;
+  display: inline-block;
+}
+.dd__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--outline);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--on-surface);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+.dd__trigger:hover {
+  border-color: var(--primary);
+}
+.dd__trigger:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+.dd__label {
+  flex: 1;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dd__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dd__trailing {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-container-highest);
+}
+.dd__menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--surface-container-high);
+  border: 1px solid var(--outline-variant);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  transform-origin: top;
+  animation: dd-in 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes dd-in {
+  from { opacity: 0; transform: translateY(-6px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.dd__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.dd__option--active {
+  background: var(--surface-container-highest);
+}
+.dd__option--selected {
+  font-weight: 700;
+}
+.dd__option .dd__label {
+  flex: 1;
+}
+
 .muted {
   color: var(--on-surface-variant);
 }
@@ -864,6 +956,13 @@ button.card--tappable:active {
 .th-label:hover { text-decoration: underline; }
 
 /* ---- Dialog / modal / sheet ------------------------------------------------------------------ */
+/* The scrim fades IN with the dialog and fades OUT (the `.closing` class) before the dialog unmounts,
+   so every overlay "shows from behind and hides back" smoothly. Easing is a cubic-bezier (not linear)
+   for a natural ease-out-in feel. Under prefers-reduced-motion theme.css zeroes the durations, so the
+   animationend/exit fires near-instantly — no broken half-open state. */
+:root {
+  --ease-sheet: cubic-bezier(0.32, 0.72, 0, 1); /* iOS-style ease — fast out, gentle settle */
+}
 .scrim {
   position: fixed;
   inset: 0;
@@ -873,6 +972,16 @@ button.card--tappable:active {
   justify-content: center;
   z-index: 50;
   padding: var(--lg);
+  animation: scrim-in 0.2s ease both;
+}
+.scrim.closing {
+  animation: scrim-out 0.22s ease both;
+}
+@keyframes scrim-in {
+  from { background: transparent; }
+}
+@keyframes scrim-out {
+  to { background: transparent; }
 }
 .scrim__backdrop {
   position: absolute;
@@ -893,6 +1002,17 @@ button.card--tappable:active {
   display: flex;
   flex-direction: column;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+  animation: dialog-in 0.22s var(--ease-sheet) both;
+}
+/* A gentle pop for the centered dialog on exit. */
+.scrim.closing > .dialog {
+  animation: dialog-out 0.2s ease both;
+}
+@keyframes dialog-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+}
+@keyframes dialog-out {
+  to { opacity: 0; transform: translateY(8px) scale(0.98); }
 }
 .dialog__title {
   padding: var(--xl) var(--xl) var(--sm);
@@ -902,6 +1022,19 @@ button.card--tappable:active {
 .dialog__body {
   padding: 0 var(--xl);
   overflow-y: auto;
+}
+/* Chrome-less body: embedded content (e.g. the Admin pages) supplies its own header + padding. */
+.dialog--bare .dialog__body--bare {
+  padding: 0;
+  flex: 1;
+}
+/* In-sheet loading: a centered spinner over the body, so a flow never needs a full-screen scrim. */
+.dialog__loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  padding: var(--xl) 0;
 }
 .dialog__actions {
   display: flex;
@@ -917,10 +1050,20 @@ button.card--tappable:active {
   max-height: 92vh;
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
+  animation: sheet-up 0.24s var(--ease-sheet) both;
+}
+.scrim.sheet.closing > .dialog {
+  animation: sheet-down 0.22s var(--ease-sheet) both;
+}
+@keyframes sheet-up {
+  from { transform: translateY(100%); }
+}
+@keyframes sheet-down {
+  to { transform: translateY(100%); }
 }
 
 /* #6b: side-sheet — a full-height panel anchored to the RIGHT on desktop/tablet (the previous screen
-   stays visible-but-dimmed at left through the scrim), sliding in from the right. */
+   stays visible-but-dimmed at left through the scrim), sliding in from the right and sliding back out. */
 .scrim.side {
   justify-content: flex-end;
   align-items: stretch;
@@ -933,25 +1076,41 @@ button.card--tappable:active {
   max-height: 100dvh;
   border-radius: 0;
   box-shadow: -8px 0 30px rgba(0, 0, 0, 0.3);
-  animation: side-in 0.22s ease;
+  animation: side-in 0.26s var(--ease-sheet) both;
+}
+/* Wider side-sheet for dense content (the Admin ops console). */
+.dialog--side.dialog--wide {
+  width: min(880px, 96vw);
+}
+.scrim.side.closing > .dialog--side {
+  animation: side-out 0.24s var(--ease-sheet) both;
 }
 @keyframes side-in {
-  from { transform: translateX(100%); }
-  to { transform: translateX(0); }
+  from { transform: translateX(100%); opacity: 0.6; }
+  to { transform: translateX(0); opacity: 1; }
 }
-/* On a phone a right side-sheet is the wrong pattern (Material/HIG) — fall back to a bottom sheet. */
+@keyframes side-out {
+  from { transform: translateX(0); opacity: 1; }
+  to { transform: translateX(100%); opacity: 0.6; }
+}
+/* On a phone a right side-sheet is the wrong pattern (Material/HIG) — fall back to a bottom sheet
+   that slides up/down (the wide variant collapses to full-width too). */
 @media (max-width: 600px) {
   .scrim.side {
     justify-content: center;
     align-items: flex-end;
   }
-  .dialog--side {
+  .dialog--side,
+  .dialog--side.dialog--wide {
     width: 100%;
     height: auto;
     max-height: 92dvh;
     border-radius: var(--radius-card) var(--radius-card) 0 0;
     box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.3);
-    animation: none;
+    animation: sheet-up 0.24s var(--ease-sheet) both;
+  }
+  .scrim.side.closing > .dialog--side {
+    animation: sheet-down 0.22s var(--ease-sheet) both;
   }
 }
 

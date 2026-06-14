@@ -376,10 +376,30 @@ function useLongPress(onLongPress: () => void, ms = 500) {
   };
 }
 
+/** Small gender chip (M = blue, F = pink) shown on member rows. */
+function GenderTag({ sex }: { sex: string }) {
+  if (sex !== 'M' && sex !== 'F') return null;
+  const color = sex === 'M' ? '#1565C0' : '#AD1457';
+  return (
+    <span
+      aria-label={sex === 'M' ? 'Male' : 'Female'}
+      title={sex === 'M' ? 'Male' : 'Female'}
+      style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        minWidth: 16, height: 16, padding: '0 4px', borderRadius: 8, fontSize: 10, fontWeight: 800,
+        background: hexA(color, 0.14), color,
+      }}
+    >
+      {sex}
+    </span>
+  );
+}
+
 /** One member row (avatar + name + date/responsibility + optional GH chips). Mirrors `_MemberRow`. */
-export function MemberRow({ m, chips = false, showUnit = false, showResp = false, showAttendance = false, elapsedBaptism = false, dateField = 'baptism_date' }: MemberRowProps) {
+export function MemberRow({ m, chips = false, showUnit = false, showResp = false, showAttendance = false, elapsedBaptism = true, dateField = 'baptism_date' }: MemberRowProps) {
   const navigate = useNavigate();
   const name = String(m['name'] ?? '—');
+  const sex = String(m['sex'] ?? '').toUpperCase().slice(0, 1); // 'M' / 'F' / ''
   const date = parseMemberDate(m[dateField]);
   const age = ageOf(m);
   const isBaptism = dateField === 'baptism_date';
@@ -400,11 +420,14 @@ export function MemberRow({ m, chips = false, showUnit = false, showResp = false
     >
       <Avatar name={name} photoUrl={m['photo_url'] as string | undefined} size={44} />
       <span className="member-row__main">
-        {/* #12: on a phone the name takes the whole first row and age drops below it (not a cramped
-            second column); inline on wider screens. */}
+        {/* Name on its own line; gender + age on the line BELOW it (member-row__main is a column). */}
         <span className="member-row__name">{name}</span>
-        {/* #8.1b: age always sits BELOW the name (not a cramped inline second column). */}
-        {age && <span className="muted tiny">{age}</span>}
+        {(sex || age) && (
+          <span className="row tiny" style={{ gap: 6, alignItems: 'center' }}>
+            {sex && <GenderTag sex={sex} />}
+            {age && <span className="muted">{age}</span>}
+          </span>
+        )}
         {date && (
           <span className="row small" style={{ gap: 4, marginTop: 2 }}>
             <Icon name={isBaptism ? 'water_drop' : 'event'} size={13} color={isBaptism ? '#29b6f6' : 'var(--on-surface-variant)'} />

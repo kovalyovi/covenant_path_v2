@@ -20,6 +20,7 @@ import {
   PageScaffold, BigHeader, OrgFilterBar, SubtleNote, MemberRow, Columns, orgNoteFor,
 } from '../../components/dashboard';
 import { TabGate } from '../../components/TabGate';
+import { Dropdown, type DropdownOption } from '../../components/Dropdown';
 
 export function NeedsTab() {
   return (
@@ -131,7 +132,7 @@ function NeedsBody() {
       <div style={{ height: 6 }} />
       <div className="wrap" style={{ gap: 8, alignItems: 'center' }}>
         <CategorySelect cats={cats} counts={counts} value={cat.key} onChange={setSelectedKey} />
-        <WardSelect wards={wards} ward={ward} onChange={setWard} />
+        <WardSelect wards={wards} ward={ward} onChange={setWard} unitColors={unitColors} />
         <OrgFilterBar selected={orgs} onToggle={toggleOrg} onClear={() => setOrgs(new Set(ORG_BUCKETS))} />
       </div>
       {!allOrgs && note && <SubtleNote text={note} />}
@@ -151,8 +152,8 @@ function NeedsBody() {
             onClick={() => setAscending((a) => !a)}
           />
         </span>
-        <label className="row small" style={{ gap: 6, alignItems: 'center', cursor: 'pointer' }}>
-          <input type="checkbox" checked={showSnapshot} onChange={(e) => setShowSnapshot(e.target.checked)} />
+        <label className="row small" style={{ gap: 8, alignItems: 'center', cursor: 'pointer' }}>
+          <input type="checkbox" className="switch" checked={showSnapshot} onChange={(e) => setShowSnapshot(e.target.checked)} />
           Unit snapshot
         </label>
       </div>
@@ -281,52 +282,27 @@ function CategorySection({
   );
 }
 
-/** Single-select category dropdown (#1a) — same wording as the milestones, with the outstanding count. */
+/** Single-select category dropdown (#1a) — a custom dropdown showing each milestone's icon + color and
+ *  its outstanding count. */
 function CategorySelect({ cats, counts, value, onChange }: {
   cats: NeedCat[]; counts: number[]; value: string; onChange: (k: string) => void;
 }) {
-  return (
-    <label className="row" style={{ gap: 8, alignItems: 'center' }}>
-      <Icon name="checklist" size={16} color="var(--on-surface-variant)" />
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        aria-label="Category"
-        style={{
-          flex: 1, minWidth: 200, maxWidth: 320, padding: '7px 10px', borderRadius: 10, font: 'inherit',
-          border: '1px solid var(--outline)', background: 'var(--surface)', color: 'var(--on-surface)',
-        }}
-      >
-        {cats.map((c, i) => (
-          <option key={c.key} value={c.key}>{c.label}{counts[i] ? ` (${counts[i]})` : ''}</option>
-        ))}
-      </select>
-    </label>
-  );
+  const options: DropdownOption[] = cats.map((c, i) => ({
+    value: c.key, label: c.label, icon: c.icon, color: c.color,
+    trailing: counts[i] ? String(counts[i]) : undefined,
+  }));
+  return <Dropdown ariaLabel="Category" value={value} options={options} onChange={onChange} minWidth={230} />;
 }
 
-/** Ward picker — one ward or the whole stake (default). A single-unit leader has nothing to pick. */
-function WardSelect({ wards, ward, onChange }: {
-  wards: string[]; ward: string | null; onChange: (w: string | null) => void;
+/** Unit picker — one unit or the whole stake (default), each with its pill color. A single-unit leader
+ *  has nothing to pick. */
+function WardSelect({ wards, ward, onChange, unitColors }: {
+  wards: string[]; ward: string | null; onChange: (w: string | null) => void; unitColors: Map<string, string>;
 }) {
   if (wards.length <= 1) return null;
-  return (
-    <label className="row" style={{ gap: 8, alignItems: 'center' }}>
-      <Icon name="groups" size={16} color="var(--on-surface-variant)" />
-      <select
-        value={ward ?? ''}
-        onChange={(e) => onChange(e.target.value || null)}
-        aria-label="Filter by ward"
-        style={{
-          flex: 1, minWidth: 180, maxWidth: 320, padding: '7px 10px', borderRadius: 10, font: 'inherit',
-          border: '1px solid var(--outline)', background: 'var(--surface)', color: 'var(--on-surface)',
-        }}
-      >
-        <option value="">Stake — all units</option>
-        {wards.map((w) => (
-          <option key={w} value={w}>{w}</option>
-        ))}
-      </select>
-    </label>
-  );
+  const options: DropdownOption[] = [
+    { value: '', label: 'Stake — all units', icon: 'groups' },
+    ...wards.map((w) => ({ value: w, label: w, color: unitColors.get(w) })),
+  ];
+  return <Dropdown ariaLabel="Filter by unit" value={ward ?? ''} options={options} onChange={(v) => onChange(v || null)} minWidth={200} />;
 }
