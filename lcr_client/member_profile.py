@@ -215,21 +215,6 @@ def fetch_member_profile(session, person_uuid: str) -> dict:
     return record
 
 
-def fetch_patriarchal(session, person_uuid: str) -> str | None:
-    """Patriarchal blessing ONLY — the one covenant-path field absent from the bulk `/api/v5/sync`,
-    so it can only come from this LIVE-session `/mlt` record action. Returns "Yes"/"No" (the same raw
-    flag `extract_fields` derives), or **None** when it can't be read — a member with no record, or the
-    common case where the session isn't authenticated for `/mlt` (an aged delegated credential gets a
-    307 redirect to login → no flight record). The caller treats None as "leave the stored value
-    untouched", so a failed fetch never clobbers a good value. Lean: one action, not the 4-action
-    `profile_fields`."""
-    try:
-        record = fetch_member_profile(session, person_uuid)
-    except Exception:  # noqa: BLE001 — 307/no-record/transient: caller leaves the value as-is
-        return None
-    return "Yes" if record.get("hasPatriarchalBlessing") else "No"
-
-
 def fetch_recommend(session, person_uuid: str) -> dict:
     """Temple recommend: {status, expirationDateDisplay, isLimitedUse} or {} if none."""
     def call():

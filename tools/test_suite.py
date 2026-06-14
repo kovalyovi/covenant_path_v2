@@ -437,6 +437,37 @@ def test_endpoint_normalizer():
     return "endpoint normalizer: ids + legacy {id}<hex> artifacts collapse to one route key"
 
 
+def test_refresh_profile_fields():
+    """report.refresh_profile_fields — the broker's re-auth 'fill everything' helper — fetches the live
+    /mlt profile and returns ONLY the gated fields currently EMPTY (None) that the profile now supplies,
+    with _apply_profile's eligibility gating; it never overwrites an existing value, never emits the
+    sentinel, and returns {} for an unreadable member (307/no-record) or a missing uuid."""
+    import types
+    from covenant_path import report
+    saved = report.profile_fields
+    try:
+        report.profile_fields = lambda session, uuid: {
+            "patriarchal_blessing": "Yes", "temple_recommend": "Active",
+            "priesthood_office": "ELDER", "baptism_date": "2020-01-01", "sex": "M"}
+        row = {"person_uuid": "U1", "name": "A", "unit_name": "W", "birth_date": "1 Jan 1990",
+               "sex": "M", "baptism_date": "2020-01-01", "patriarchal_blessing": None,
+               "temple_recommend": "Active", "calling": "No", "aaronic_priesthood": None,
+               "melchizedek_priesthood": None, "living_ordinance": "N/A",
+               "ministering_assignment": "No", "ministering_brothers_sisters": "No"}
+        out = report.refresh_profile_fields(types.SimpleNamespace(session=object()), row)
+        assert out.get("patriarchal_blessing") == "Yes", out                 # was None → filled
+        assert out.get("aaronic_priesthood") == "Yes", out                   # eligible male → filled+gated
+        assert out.get("melchizedek_priesthood") == "Yes", out
+        assert "temple_recommend" not in out, "an EXISTING value must never be refilled"
+        # unreadable member (fetch raises 307) → {}
+        report.profile_fields = lambda session, uuid: (_ for _ in ()).throw(RuntimeError("307"))
+        assert report.refresh_profile_fields(types.SimpleNamespace(session=object()), row) == {}
+        assert report.refresh_profile_fields(types.SimpleNamespace(session=object()), {}) == {}  # no uuid
+    finally:
+        report.profile_fields = saved
+    return "refresh_profile_fields: fills only EMPTY gated fields (eligibility-gated), skips existing/unreadable"
+
+
 def test_milestone_na_exclusion():
     """member_missing EXCLUDES N/A fields (N/A ≠ not-done): a woman's priesthood, a young child's
     age-gated steps. Mirrors the web `isMissing`/`expected` rule."""
@@ -912,7 +943,7 @@ def main() -> int:
     print("== OFFLINE tests ==")
     offline = [test_token_store_roundtrip, test_token_store_key_mismatch,
                test_report_degradation_helpers, test_stale_first_unit_ordering,
-               test_endpoint_normalizer, test_milestone_na_exclusion,
+               test_endpoint_normalizer, test_refresh_profile_fields, test_milestone_na_exclusion,
                test_membertools_auth, test_membertools_adapter, test_membertools_build_report,
                test_db_sentinel_scrub_on_insert,
                test_membertools_token_store, test_calling_union_and_neutralize,

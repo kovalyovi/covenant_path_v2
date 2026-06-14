@@ -41,22 +41,33 @@ def _client_from_cookies(cookies: list[dict]):
     return LcrClient(session=session)
 
 
-def _refresh_patriarchal_async(cookies: list[dict], unit_number: int) -> None:
-    """Spawn the patriarchal-refresh worker on a daemon thread so it NEVER delays or fails the login
+# The profile-fillable gated columns to fetch + check for emptiness. Selected for building the member
+# and for the "any of these is NULL" worklist filter.
+_PROFILE_REFRESH_COLUMNS = (
+    "baptism_date", "temple_recommend", "patriarchal_blessing", "ministering_assignment",
+    "ministering_brothers_sisters", "calling", "aaronic_priesthood", "melchizedek_priesthood",
+    "living_ordinance",
+)
+
+
+def _refresh_profile_async(cookies: list[dict], unit_number: int) -> None:
+    """Spawn the profile-refresh worker on a daemon thread so it NEVER delays or fails the login
     response. The just-captured session's cookies stay valid for `/mlt` for the worker's lifetime."""
     import threading
-    threading.Thread(target=_refresh_patriarchal_worker, args=(cookies, unit_number),
-                     daemon=True, name=f"patriarchal-{unit_number}").start()
+    threading.Thread(target=_refresh_profile_worker, args=(cookies, unit_number),
+                     daemon=True, name=f"profilerefresh-{unit_number}").start()
 
 
-def _refresh_patriarchal_worker(cookies: list[dict], unit_number: int) -> None:
-    """Fill patriarchal blessing for the stake's members still missing it, using the LIVE just-captured
-    session (the only one authenticated for `/mlt`). Best-effort: any failure (a 307 on `/mlt`, a member
-    with no record, a REST hiccup) just leaves that value untouched — patriarchal stays NULL → the app
-    shows a ⚠ and the next re-auth retries. Writes the raw Yes/No (the client age-gates the display, like
-    every other profile field); the gated-merge preserves it through later sentinel syncs (last-good)."""
+def _refresh_profile_worker(cookies: list[dict], unit_number: int) -> None:
+    """Fill EVERY empty profile-sourced field for the stake's members, using the LIVE just-captured
+    session (the only one authenticated for `/mlt`) — so one re-authorization catches up everything a
+    dead-session daily sync can't (the /mlt 307). Patriarchal is the only genuinely-profile-only field,
+    but a member missing from the bulk directory recovers the rest here too. Best-effort: any failure (a
+    307 on `/mlt`, a member with no record, a REST hiccup) just leaves that value NULL → the app shows a
+    ⚠ and the next re-auth retries. `report.refresh_profile_fields` applies the SAME eligibility gating
+    as the sync; the gated merge preserves the filled value through later sentinel syncs (last-good)."""
     try:
-        from lcr_client import member_profile
+        from covenant_path import report
         if not (SUPABASE_URL and SERVICE_KEY):
             return
         h = {"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}", "Content-Type": "application/json"}
@@ -66,34 +77,33 @@ def _refresh_patriarchal_worker(cookies: list[dict], unit_number: int) -> None:
         if not rows:
             return
         stake_id = rows[0]["id"]
-        # Members still missing patriarchal: NULL after the sentinel scrub (db._scrub_sentinel). Only
-        # REAL members can have a /mlt record (an investigator has none) — but we just try and skip None.
+        # Real members (not investigators — they have no /mlt record) with ANY profile-gated field still
+        # empty (NULL after the sentinel scrub). Select everything refresh_profile_fields needs.
+        select = "person_uuid,name,unit_name,birth_date,sex,friends," + ",".join(_PROFILE_REFRESH_COLUMNS)
+        any_null = "(" + ",".join(f"{c}.is.null" for c in _PROFILE_REFRESH_COLUMNS) + ")"
         mr = requests.get(f"{SUPABASE_URL}/rest/v1/members", headers=h,
-                          params={"stake_id": f"eq.{stake_id}", "patriarchal_blessing": "is.null",
-                                  "select": "person_uuid", "limit": "1000"}, timeout=30)
+                          params={"stake_id": f"eq.{stake_id}", "kind": "neq.investigator",
+                                  "or": any_null, "select": select, "limit": "1000"}, timeout=30)
         members = mr.json() if mr.status_code == 200 else []
         if not members:
-            logger.info("patriarchal refresh: nothing to fill for stake %s", unit_number)
+            logger.info("profile refresh: nothing to fill for stake %s", unit_number)
             return
         client = _client_from_cookies(cookies)
         filled = 0
-        for m in members:
-            uuid = m.get("person_uuid")
-            if not uuid:
-                continue
-            val = member_profile.fetch_patriarchal(client.session, uuid)  # None on 307/no-record
-            if val is None:
+        for row in members:
+            patch = report.refresh_profile_fields(client, row)  # {} on 307/no-record
+            if not patch:
                 continue
             pr = requests.patch(f"{SUPABASE_URL}/rest/v1/members", headers={**h, "Prefer": "return=minimal"},
-                                params={"stake_id": f"eq.{stake_id}", "person_uuid": f"eq.{uuid}"},
-                                json={"patriarchal_blessing": val}, timeout=30)
+                                params={"stake_id": f"eq.{stake_id}", "person_uuid": f"eq.{row['person_uuid']}"},
+                                json=patch, timeout=30)
             if pr.status_code < 300:
                 filled += 1
-        logger.info("patriarchal refresh: filled %d/%d members missing it for stake %s "
-                    "(0 filled usually means the captured session can't reach /mlt)",
+        logger.info("profile refresh: filled fields for %d/%d members with gaps in stake %s "
+                    "(0 usually means the captured session can't reach /mlt)",
                     filled, len(members), unit_number)
     except Exception as exc:  # noqa: BLE001 — strictly best-effort; a login must never be affected
-        logger.warning("patriarchal refresh worker failed for stake %s: %s", unit_number, exc)
+        logger.warning("profile refresh worker failed for stake %s: %s", unit_number, exc)
 
 
 def _stored_credential_summary(unit_number: int) -> dict | None:
@@ -545,13 +555,14 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
     initial_sync = _kickoff_initial_sync(ctx.unit_number)
     base["stored"] = True
     base["initial_sync"] = initial_sync
-    # Patriarchal blessing is the ONE covenant-path field absent from the bulk `/api/v5/sync` — it only
-    # comes from the per-member `/mlt` profile read, which needs a LIVE LCR session. The daily sync's
-    # aged delegated credential gets a 307→login on `/mlt` (the Okta `sid` dies even though appSession
-    # lingers), so patriarchal can ONLY be refreshed at re-auth, off the session we JUST captured. Do it
-    # in the background (best-effort; never blocks or fails the login) when this calling can read profiles.
+    # Catch up EVERY empty profile-sourced field off the session we JUST captured — the only one
+    # authenticated for `/mlt`. The daily sync's aged delegated credential gets a 307→login on `/mlt`
+    # (the Okta `sid` dies even though appSession lingers), so the per-member profile fields (patriarchal
+    # is the only genuinely-profile-only one, but anything a member missed in the bulk directory too) can
+    # ONLY refresh at re-auth. Background, best-effort; never blocks or fails the login. Gated on this
+    # calling being able to read member profiles.
     if "menu.view.member.profiles" in (coverage.get("features") or []):
-        _refresh_patriarchal_async(cookies, ctx.unit_number)
+        _refresh_profile_async(cookies, ctx.unit_number)
     # Only email the "daily sync enabled" confirmation when this enroll ESTABLISHES sync that wasn't
     # there before (no usable credential, or the prior one was revoked → active is None). A redundant
     # re-auth of an existing/stale credential is silent — the in-app toast already confirms it. This

@@ -443,6 +443,51 @@ def _apply_profile(member: CovenantPathMember, prof: dict) -> None:
         member.ministering_brothers_sisters = "Yes"
 
 
+def refresh_profile_fields(client, row: dict) -> dict:
+    """Live-session refresh of the profile-sourced fields for ONE member — the broker's re-auth "fill
+    everything" path. Fetches the per-member /mlt profile and returns {field: value} for the gated
+    fields that are currently EMPTY (None in the stored `row`) but the profile now supplies, applying
+    the SAME eligibility gating the daily sync uses (`_apply_profile`). So ONE re-authorization fills
+    every gap a dead-session daily sync can't reach (patriarchal is the only genuinely-profile-only
+    field today, but a member missing from the bulk directory recovers the rest here too). Returns {}
+    on no uuid / fetch failure (307/no-record) / nothing new — so a failure never clobbers a value.
+    NB: family_name_prepared / first_temple_visit have NO /mlt source (only the bulk feed carries the
+    commitments), so they can't be recovered here."""
+    uuid = row.get("person_uuid")
+    if not uuid:
+        return {}
+    try:
+        prof = profile_fields(client.session, uuid)
+    except Exception:  # noqa: BLE001 — 307 / no record / transient: leave every value untouched
+        return {}
+
+    def _seed(f: str) -> str:
+        v = row.get(f)
+        return v if isinstance(v, str) and v else NEEDS_PROFILE
+
+    member = CovenantPathMember(
+        name=row.get("name"), unit=row.get("unit_name"), baptism_date=_seed("baptism_date"),
+        birth_date=row.get("birth_date"), friends=_seed("friends"),
+        aaronic_priesthood=_seed("aaronic_priesthood"),
+        melchizedek_priesthood=_seed("melchizedek_priesthood"), calling=_seed("calling"),
+        ministering_brothers_sisters=_seed("ministering_brothers_sisters"),
+        ministering_assignment=_seed("ministering_assignment"),
+        temple_recommend=_seed("temple_recommend"), patriarchal_blessing=_seed("patriarchal_blessing"),
+        living_ordinance=_seed("living_ordinance"), membership_duration=None,
+        weeks_since_last_attendance=None, baptism_goal_date=None, friends_summary=None,
+        sex=row.get("sex"))
+    _apply_profile(member, prof)
+
+    out: dict = {}
+    for f in ("baptism_date", "temple_recommend", "patriarchal_blessing", "ministering_assignment",
+              "ministering_brothers_sisters", "calling", "aaronic_priesthood",
+              "melchizedek_priesthood", "living_ordinance"):
+        new = getattr(member, f, None)
+        if row.get(f) is None and isinstance(new, str) and new and new not in (NEEDS_PROFILE, BLOCKED):
+            out[f] = new
+    return out
+
+
 # Fields that come from the member profile and must be marked access-blocked (not blanked) when
 # the profile can't be fetched — the merge-upsert preserves last-good for all of these sentinels.
 _BLOCK_WHEN_UNFILLED = _PROFILE_GATED_FIELDS + (
