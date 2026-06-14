@@ -11,6 +11,7 @@ import { useDashboard } from '../../hooks/useDashboard';
 import type { Member } from '../../lib/member';
 import { isInvestigator, displayFieldValue } from '../../lib/member';
 import { endowmentDisplay, templeExperienceDisplay, ageYears } from '../../logic/milestones';
+import { isDataIssue } from '../../logic/fieldDisplay';
 import { Icon } from '../../components/Icon';
 import { Modal } from '../../components/Modal';
 import { Button } from '../../components/ui';
@@ -76,6 +77,25 @@ function display(m: Member, key: string, isAdmin: boolean): string {
   if (SENTINEL_COLS.has(key)) return displayFieldValue(m[key], isAdmin, '—');
   const v = String(m[key] ?? '');
   return key === 'membership_duration' ? v.replace(/^Member for\s*/i, '') : v;
+}
+
+// The covenant-path columns subject to the CLIENT DISPLAY CONTRACT's ⚠ data-issue marker (item 5):
+// the sentinel-able covenant fields plus the eligibility-gated endowment/temple-experience ones. A
+// data issue = the needs-profile-api sentinel OR null/empty (but NOT N/A — N/A is "not eligible").
+const ISSUE_COLS = new Set([
+  ...SENTINEL_COLS, 'living_ordinance', 'first_temple_visit', 'family_name_prepared',
+]);
+
+/** Whether this cell is a DATA ISSUE (⚠) under the display contract — only for the covenant-path
+ *  fields where "missing" is meaningful. Uses the eligibility-gated value so an N/A (not eligible)
+ *  is correctly NOT flagged as an issue. */
+function issueOf(m: Member, key: string): boolean {
+  if (!ISSUE_COLS.has(key)) return false;
+  if (key === 'living_ordinance') return isDataIssue(endowmentDisplay(m));
+  if (key === 'first_temple_visit' || key === 'family_name_prepared') {
+    return isDataIssue(templeExperienceDisplay(m, key));
+  }
+  return isDataIssue(m[key]);
 }
 
 const GREEN = '#c8e6c9';
@@ -228,7 +248,7 @@ function TableBody({ members, isAdmin }: { members: Member[]; isAdmin: boolean }
                         </span>
                       </td>
                     ) : (
-                      <Cell key={c.key} value={display(m, c.key, isAdmin)} kind={c.kind} />
+                      <Cell key={c.key} value={display(m, c.key, isAdmin)} kind={c.kind} issue={issueOf(m, c.key)} />
                     ),
                   )}
                 </tr>
@@ -310,7 +330,7 @@ function Header({
   );
 }
 
-function Cell({ value, kind }: { value: string; kind: Kind }) {
+function Cell({ value, kind, issue = false }: { value: string; kind: Kind; issue?: boolean }) {
   if (kind === 'gender') {
     if (value !== 'M' && value !== 'F') return <td />;
     const bg = value === 'M' ? '#bbdefb' : '#f8bbd0';
@@ -318,6 +338,19 @@ function Cell({ value, kind }: { value: string; kind: Kind }) {
       <td>
         <span className="cell-pill" style={{ background: bg, fontWeight: 600 }}>
           {value}
+        </span>
+      </td>
+    );
+  }
+  // A DATA ISSUE (sentinel / missing — never N/A) gets a ⚠ marker before the friendly text, so a
+  // leader can see at a glance that the value should be known but isn't (item 5). The raw sentinel
+  // string is never shown (display() already mapped it to friendly text).
+  if (issue) {
+    return (
+      <td>
+        <span className="row" style={{ gap: 4, whiteSpace: 'nowrap', color: '#b26a00' }}>
+          <Icon name="warning" size={13} color="#f9a825" title="Data issue — value unavailable" />
+          <span className="tiny">{value || 'Not available'}</span>
         </span>
       </td>
     );

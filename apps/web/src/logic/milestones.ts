@@ -356,6 +356,70 @@ export function initialsOf(name: string): string {
   return s.toUpperCase();
 }
 
+// ---- Golden Hour completion ROWS (item 4: one row per item, ✓ done / ○ not done / ⚠ data issue) ----
+// The user-chosen layout: render each APPLICABLE milestone as one row with a status icon. The three
+// rules, enforced here so the row builder is the single source the view renders:
+//   • OMIT N/A entirely — N/A means NOT ELIGIBLE (a child's patriarchal blessing, a woman's
+//     priesthood), so the row is dropped, never shown.
+//   • ⚠ for a DATA ISSUE — the underlying field is the needs-profile-api sentinel OR null/empty (we
+//     should have it but don't). Distinct from both done and not-done.
+//   • otherwise ✓ done / ○ not done.
+
+export type GhRowStatus = 'done' | 'not-done' | 'issue';
+
+export interface GhRow {
+  milestone: Milestone;
+  status: GhRowStatus;
+}
+
+/** Whether a milestone's underlying field value is a DATA ISSUE for this member: the field is present
+ *  on the milestone, the member is EXPECTED to have it (eligible + not N/A), it isn't complete, and
+ *  the raw value is a sentinel OR null/empty. (A real "No" is NOT an issue — it's an honest not-done.)
+ *  Milestones with no single `field` can never be a data issue (derived purely from logic). */
+function isFieldDataIssue(ms: Milestone, m: Member): boolean {
+  if (ms.field == null) return false;
+  if (ms.complete(m)) return false;
+  const raw = m[ms.field];
+  const s = String(raw ?? '').trim();
+  // A genuine recorded "No"/"Expired"/etc. is an honest not-done, never a data issue.
+  if (s !== '' && !isSentinelLike(s)) return false;
+  return true;
+}
+
+/** Sentinel recognizer kept local so milestones.ts has no import cycle with fieldDisplay (which
+ *  imports isNA from here). Mirrors lib/member.isSentinel. */
+function isSentinelLike(s: string): boolean {
+  return s === 'needs-profile-api' || s.startsWith('blocked');
+}
+
+/** Build the Golden Hour completion ROWS for one member from a milestone list (defaults to the
+ *  integration `milestones`; pass `needsCategories` to also include temple recommend / endowment /
+ *  patriarchal blessing). N/A milestones are OMITTED (not eligible). Each surviving row is classified
+ *  done / not-done / issue. The order follows the milestone list. */
+export function goldenHourRows(m: Member, list: Milestone[] = milestones): GhRow[] {
+  const rows: GhRow[] = [];
+  for (const ms of list) {
+    // Drop anything that doesn't APPLY: not eligible, or an N/A (not-eligible) field value. A real
+    // "Yes" is still kept (expected() already lets a completed milestone through).
+    if (!expected(ms, m) && !ms.complete(m)) continue;
+    if (ms.complete(m)) {
+      rows.push({ milestone: ms, status: 'done' });
+    } else if (isFieldDataIssue(ms, m)) {
+      rows.push({ milestone: ms, status: 'issue' });
+    } else {
+      rows.push({ milestone: ms, status: 'not-done' });
+    }
+  }
+  return rows;
+}
+
+/** The milestones this member still NEEDS to do — the not-yet-complete, applicable steps (their
+ *  "next steps"). Used by the friend/investigator detail view. Excludes N/A and completed; includes
+ *  data-issue rows (a leader should still see the step is outstanding). Defaults to integration set. */
+export function nextSteps(m: Member, list: Milestone[] = milestones): Milestone[] {
+  return goldenHourRows(m, list).filter((r) => r.status !== 'done').map((r) => r.milestone);
+}
+
 /** Average Golden Hour completion across rows (eligible-only per member). Mirrors `_avgCompletion`. */
 export function avgCompletion(rows: Member[]): number {
   if (rows.length === 0) return 0;

@@ -8,16 +8,19 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useDashboard } from '../hooks/useDashboard';
 import type { Member } from '../lib/member';
-import { detailsOf, freshness, displayFieldValue } from '../lib/member';
+import { detailsOf, freshness } from '../lib/member';
+import { fieldDisplay } from '../logic/fieldDisplay';
 import {
   endowmentDisplay, completionOf, callingEligible, ministeringAssignmentEligible,
-  priesthoodEligible, templeRecommendEligible, patriarchalEligible, ageOf,
+  priesthoodEligible, templeRecommendEligible, patriarchalEligible, ageOf, nextSteps,
 } from '../logic/milestones';
 import { agoOrNever, parseMemberDate } from '../logic/dates';
 import { sacramentWindow, SACRAMENT_WINDOW_WEEKS } from '../logic/kpis';
 import { Avatar, IconButton, SectionCard } from '../components/ui';
 import { Icon, type IconName } from '../components/Icon';
 import { GoldenHourChips } from '../components/GoldenHourChips';
+import { GoldenHourRows } from '../components/GoldenHourRows';
+import { MissionariesSection } from '../components/Missionaries';
 import { NotesSection } from '../components/NotesSection';
 
 export function PersonDetailPage() {
@@ -86,7 +89,16 @@ export function PersonDetailPage() {
             iconNode={<CompletionRing pct={completionOf(member)} />}
           >
             <GoldenHourChips member={member} highlightNext labeled />
+            {/* The user-chosen completion layout (item 4): one row per item — ✓ done / ○ not done /
+                ⚠ data issue. N/A items are omitted (not eligible). Complements the chips above. */}
+            <div style={{ marginTop: 12 }}>
+              <GoldenHourRows member={member} />
+            </div>
           </SectionCard>
+
+          {/* Investigator (being-taught) extras (item 2): unit, the full-time missionaries who teach
+              them, and their next steps — the not-yet-done Golden Hour milestones. */}
+          {isInvestigator && <InvestigatorSection member={member} unitName={String(member['unit_name'] ?? '')} />}
 
           {details ? (
             <RichBody member={member} d={details} isAdmin={d.isAdmin} />
@@ -123,6 +135,39 @@ function DetailAppBar({ title, uuid, onBack }: { title: string; uuid?: string; o
         </a>
       )}
     </header>
+  );
+}
+
+/** Item 2 — for a friend / investigator (being taught): their unit, the full-time missionaries who
+ *  teach them (their unit's assigned missionaries — the best link the synced data gives), and the
+ *  next steps they need to take (their not-yet-done Golden Hour milestones, from the shared logic). */
+function InvestigatorSection({ member, unitName }: { member: Member; unitName: string }) {
+  const steps = nextSteps(member);
+  return (
+    <>
+      <SectionCard title="Unit" icon="groups">
+        {unitName ? (
+          <p style={{ margin: 0 }}>{unitName}</p>
+        ) : (
+          <p className="muted" style={{ margin: 0 }}>No unit on record.</p>
+        )}
+      </SectionCard>
+      <MissionariesSection unitName={unitName} title="Missionaries Teaching" />
+      <SectionCard title="Next Steps" icon="checklist">
+        {steps.length === 0 ? (
+          <p className="muted" style={{ margin: 0 }}>All Golden Hour steps are complete — ready for baptism.</p>
+        ) : (
+          <ul className="gh-rows" role="list">
+            {steps.map((ms) => (
+              <li key={ms.abbr} className="gh-row gh-row--not-done" title={ms.description}>
+                <Icon name="circle_outline" size={18} color={ms.color} />
+                <span className="gh-row__label">{ms.label}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </SectionCard>
+    </>
   );
 }
 
@@ -575,28 +620,44 @@ function StatusSections({ member, isAdmin }: { member: Member; isAdmin: boolean 
     <>
       {templeRecommendEligible(member) && (
         <StatusSection title="Temple Recommend" icon="premium" member={member} field="temple_recommend"
-          value={disp(member['temple_recommend'], isAdmin)} />
+          raw={member['temple_recommend']} isAdmin={isAdmin} />
       )}
       <StatusSection title="Endowment" icon="premium" member={member} field="living_ordinance"
-        value={disp(endowmentDisplay(member), isAdmin)} />
+        raw={endowmentDisplay(member)} isAdmin={isAdmin} />
       {patriarchalEligible(member) && (
         <StatusSection title="Patriarchal Blessing" icon="menu_book" member={member} field="patriarchal_blessing"
-          value={disp(member['patriarchal_blessing'], isAdmin)} />
+          raw={member['patriarchal_blessing']} isAdmin={isAdmin} />
       )}
     </>
   );
 }
 
-function StatusSection({ title, icon, member, field, value }: {
-  title: string; icon: IconName; member: Member; field: string; value: string;
+/** A single covenant-path status, rendered under the CLIENT DISPLAY CONTRACT (item 5):
+ *   - a real value (Active/Yes/No/…) shows verbatim (green when it's a "good" Active/Yes);
+ *   - "N/A" (not eligible) shows quietly, NEVER a warning;
+ *   - a DATA ISSUE (the needs-profile-api sentinel OR null/empty) shows a ⚠ warning indicator and
+ *     never the raw sentinel string (admins additionally see the raw sentinel text for diagnosis).
+ *  The separate freshness "schedule" chip (stale-but-known) is still shown for a real value. */
+function StatusSection({ title, icon, member, field, raw, isAdmin }: {
+  title: string; icon: IconName; member: Member; field: string; raw: unknown; isAdmin: boolean;
 }) {
-  const good = value === 'Active' || value === 'Yes';
+  const fd = fieldDisplay(raw, isAdmin);
+  const good = fd.status === 'value' && (fd.text === 'Active' || fd.text === 'Yes');
   const fr = freshness(member, field);
-  const stale = fr.state === 'warn' || fr.state === 'error' || fr.state === 'never';
+  const stale = fd.status === 'value' && (fr.state === 'warn' || fr.state === 'error' || fr.state === 'never');
   return (
     <SectionCard title={title} icon={icon}>
       <span className="row" style={{ gap: 8, alignItems: 'center' }}>
-        <strong style={{ fontSize: '1.05rem', color: good ? '#2e7d32' : undefined }}>{value}</strong>
+        {fd.warn ? (
+          <span className="row" style={{ gap: 6, alignItems: 'center', color: '#f9a825' }}>
+            <Icon name="warning" size={16} color="#f9a825" title="Data issue — value unavailable" />
+            <span className="small">Not available yet</span>
+            {/* Admins see the raw sentinel for diagnosis; leaders never do. */}
+            {isAdmin && fd.text && <span className="tiny muted">({fd.text})</span>}
+          </span>
+        ) : (
+          <strong style={{ fontSize: '1.05rem', color: good ? '#2e7d32' : undefined }}>{fd.text}</strong>
+        )}
         {stale && (
           <Icon name="schedule" size={13} color={fr.state === 'warn' ? '#f9a825' : '#e53935'}
             title={fr.state === 'never' ? 'Not fetched yet' : `Last fetched ${agoOrNever(fr.fetched)}`} />
@@ -604,15 +665,6 @@ function StatusSection({ title, icon, member, field, value }: {
       </span>
     </SectionCard>
   );
-}
-
-/** Clean a status value for display: a real value passes through; a backend sentinel
- *  (needs-profile-api / blocked) shows raw to ADMINS (for diagnosis) and "Not available yet" to
- *  leaders — the techy placeholder must never leak to a regular leader. An empty value → "—". */
-function disp(v: unknown, isAdmin: boolean): string {
-  const s = String(v ?? '');
-  if (!s) return '—';
-  return displayFieldValue(s, isAdmin, 'Not available yet');
 }
 
 // ---- helpers ---------------------------------------------------------------

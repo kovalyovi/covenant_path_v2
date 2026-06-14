@@ -32,6 +32,13 @@ export function isSentinel(v: unknown): boolean {
   return s === NEEDS_PROFILE || s.startsWith(BLOCKED_PREFIX);
 }
 
+/** Alias of `isSentinel` for the field-display contract — names the case where there's a raw,
+ *  TECHY sentinel string an admin may be shown for diagnosis (vs a plain empty/missing value, which
+ *  is a data issue too but carries no string to surface). */
+export function isAdminSentinel(v: unknown): boolean {
+  return isSentinel(v);
+}
+
 /**
  * Map a possibly-sentinel field value to what should be DISPLAYED, audience-aware:
  *  - admins see the raw sentinel verbatim (so they can diagnose "needs-profile-api" / "blocked: …");

@@ -6,6 +6,7 @@ import {
   milestones, milestonesFor, needsCategories, responsibleOrg, completionOf, priesthoodEligible,
   callingEligible, aaronicEligible, endowmentEligible, templeExperienceValue, templeExperienceDisplay,
   isNA, expected, isMissing, patriarchalEligible, templeRecommendEligible,
+  goldenHourRows, nextSteps,
   type OrgBucket,
 } from '../logic/milestones';
 import type { Member } from '../lib/member';
@@ -186,6 +187,73 @@ describe('N/A exclusion + patriarchal/temple-name gate (item 4)', () => {
     // a completed milestone still counts even if oddly N/A-shaped is irrelevant here; verify ring math
     const oneDone = member({ sex: 'F', baptism_date: '1 Jan 2000', calling: 'N/A', friends: 'Yes' });
     expect(completionOf(oneDone)).toBeCloseTo(1 / 5, 5);
+  });
+});
+
+describe('goldenHourRows (item 4: one row per item — done / not-done / ⚠ issue, N/A OMITTED)', () => {
+  const statusByAbbr = (m: Member, list = milestones) =>
+    Object.fromEntries(goldenHourRows(m, list).map((r) => [r.milestone.abbr, r.status]));
+
+  it('OMITS N/A milestones entirely (not eligible — never shown as a row)', () => {
+    // A woman: priesthood (AP/MP) is N/A for her — those rows must be ABSENT, not "issue" or "not-done".
+    const woman = member({ sex: 'F', baptism_date: '1 Jan 2000', birth_date: `1 Jan ${thisYear - 30}` });
+    const abbrsShown = new Set(goldenHourRows(woman).map((r) => r.milestone.abbr));
+    expect(abbrsShown.has('AP')).toBe(false);
+    expect(abbrsShown.has('MP')).toBe(false);
+    // A young child: only the everyone milestones (Friends, Ministers-assigned) — nothing N/A leaks in.
+    const child = member({ sex: 'M', birth_date: `1 Jan ${thisYear - 8}` });
+    expect(new Set(goldenHourRows(child).map((r) => r.milestone.abbr))).toEqual(new Set(['F', 'M']));
+  });
+
+  it('a completed milestone is "done"', () => {
+    const m = member({ friends: 'Yes' });
+    expect(statusByAbbr(m)['F']).toBe('done');
+  });
+
+  it('a real recorded "No" is "not-done" (an honest not-done, NOT a data issue)', () => {
+    const m = member({ friends: 'No' });
+    expect(statusByAbbr(m)['F']).toBe('not-done');
+  });
+
+  it('the needs-profile-api sentinel renders as a ⚠ DATA ISSUE row, not not-done', () => {
+    // calling is eligible (adult), but its value is the sentinel → an "issue" row (we should know it).
+    const m = member({ sex: 'M', birth_date: `1 Jan ${thisYear - 30}`, baptism_date: '1 Jan 2000', calling: 'needs-profile-api' });
+    expect(statusByAbbr(m)['C']).toBe('issue');
+  });
+
+  it('an empty/missing value is also a ⚠ data issue (treated the same as the sentinel)', () => {
+    const m = member({ sex: 'M', birth_date: `1 Jan ${thisYear - 30}`, baptism_date: '1 Jan 2000', calling: '' });
+    expect(statusByAbbr(m)['C']).toBe('issue');
+  });
+
+  it('includes the longer-horizon covenants when given needsCategories', () => {
+    const m = member({
+      sex: 'M', baptism_date: '1 Jan 2000', birth_date: `1 Jan ${thisYear - 40}`,
+      temple_recommend: 'Active', living_ordinance: 'Yes', patriarchal_blessing: 'needs-profile-api',
+    });
+    const s = statusByAbbr(m, needsCategories);
+    expect(s['TR']).toBe('done');     // Active
+    expect(s['EN']).toBe('done');     // endowed
+    expect(s['PB']).toBe('issue');    // sentinel → data issue, never shown as a flat "No"
+  });
+});
+
+describe('nextSteps (the not-yet-done applicable milestones — investigator detail)', () => {
+  it('returns only the incomplete, applicable milestones (excludes done + N/A)', () => {
+    const m = member({ sex: 'F', baptism_date: '1 Jan 2000', friends: 'Yes' }); // friends done
+    const labels = new Set(nextSteps(m).map((ms) => ms.abbr));
+    expect(labels.has('F')).toBe(false);   // done → excluded
+    expect(labels.has('AP')).toBe(false);  // N/A for a woman → excluded
+    expect(labels.has('C')).toBe(true);    // not done → included
+  });
+
+  it('is empty when every applicable milestone is complete', () => {
+    const m = member({
+      sex: 'F', baptism_date: '1 Jan 2000', friends: 'Yes', calling: 'Yes',
+      ministering_brothers_sisters: 'Yes', ministering_assignment: 'Yes',
+      family_name_prepared: 'Yes', first_temple_visit: 'Yes',
+    });
+    expect(nextSteps(m)).toHaveLength(0);
   });
 });
 
