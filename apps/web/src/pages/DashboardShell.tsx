@@ -20,6 +20,7 @@ import {
   SyncingBanner, StaleBanner, PatriarchalBanner, LastUpdatedChip,
 } from '../components/dashboard';
 import { SyncSettingsSheet } from '../components/SyncSettingsSheet';
+import { PowerUserSheet } from '../components/PowerUserSheet';
 import { ReauthDialog } from '../components/ReauthDialog';
 import { ReportSheet } from '../components/ReportSheet';
 import { useToast } from '../components/Toast';
@@ -34,6 +35,7 @@ export function DashboardShell() {
   const toast = useToast();
 
   const [syncOpen, setSyncOpen] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false); // #5: power-user sheet
   const [report, setReport] = useState<Record<string, unknown> | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
@@ -141,7 +143,7 @@ export function DashboardShell() {
     switch (v) {
       case 'sync': return openSyncSettings();
       case 'report': return void generateReport();
-      case 'invite': return navigate('/invite');
+      case 'invite': return setInviteOpen(true);
       case 'admin': return navigate('/admin');
       case 'settings': return navigate('/settings');
     }
@@ -265,6 +267,7 @@ export function DashboardShell() {
         onReauth={d.openReauth}
       />
       <ReauthDialog open={d.reauthOpen} onClose={d.closeReauth} />
+      <PowerUserSheet open={inviteOpen} onClose={() => setInviteOpen(false)} />
       {report && <ReportSheet open onClose={() => setReport(null)} report={report} onEmail={emailReport} />}
       {reportLoading && (
         <div className="scrim">
