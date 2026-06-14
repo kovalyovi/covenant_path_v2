@@ -780,9 +780,9 @@ button.card--tappable:active {
   overflow: auto;
   max-height: calc(100dvh - 150px);
 }
-/* sticky first column group: # is a fixed width so Member's left offset is predictable */
-.page__inner--wide .data-table th:first-child,
-.page__inner--wide .data-table td:first-child {
+/* sticky first column group — CLASS-based (not nth-child) so hiding the # column on a phone (#9b)
+   doesn't shift the Member column's offset; the # is a fixed width so Member's left is predictable. */
+.page__inner--wide .data-table .col-num {
   position: sticky;
   left: 0;
   z-index: 1;
@@ -790,28 +790,37 @@ button.card--tappable:active {
   min-width: 44px;
   max-width: 44px;
 }
-.page__inner--wide .data-table th:nth-child(2),
-.page__inner--wide .data-table td:nth-child(2) {
+.page__inner--wide .data-table .col-member {
   position: sticky;
   left: 44px;
   z-index: 1;
 }
 /* sticky BODY cells need an opaque background so columns scrolling under them don't bleed through */
-.page__inner--wide .data-table td:first-child,
-.page__inner--wide .data-table td:nth-child(2) {
+.page__inner--wide .data-table td.col-num,
+.page__inner--wide .data-table td.col-member {
   background: var(--surface);
 }
-.page__inner--wide .data-table tbody tr:hover td:first-child,
-.page__inner--wide .data-table tbody tr:hover td:nth-child(2) {
+.page__inner--wide .data-table tbody tr:hover td.col-num,
+.page__inner--wide .data-table tbody tr:hover td.col-member {
   background: var(--surface-container);
 }
 /* z-order: header above sticky body cells; the two header corner cells above BOTH sticky axes */
 .page__inner--wide .data-table thead th {
   z-index: 2;
 }
-.page__inner--wide .data-table thead th:first-child,
-.page__inner--wide .data-table thead th:nth-child(2) {
+.page__inner--wide .data-table thead th.col-num,
+.page__inner--wide .data-table thead th.col-member {
   z-index: 3;
+}
+/* #9a: once scrolled horizontally, a semibold right border on the last frozen column signals the
+   view is scrolled (not the default 1-2-3 layout). */
+.page__inner--wide .table-wrap.is-scrolled .data-table .col-member {
+  border-right: 2px solid var(--on-surface-variant);
+}
+/* #9b: on a phone drop the # column and pin Member to the left edge to save space. */
+@media (max-width: 600px) {
+  .page__inner--wide .data-table .col-num { display: none; }
+  .page__inner--wide .data-table .col-member { left: 0; }
 }
 
 .cell-pill {
@@ -827,9 +836,29 @@ button.card--tappable:active {
   color: inherit;
   display: inline-flex;
   align-items: center;
-  padding: 2px;
-  border-radius: 4px;
+  justify-content: center;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 4px;
+  border-radius: 6px;
 }
+.th-btn:hover { background: rgba(255, 255, 255, 0.18); }
+/* #9h: a comfortable touch target for the sort/filter header buttons on a phone. */
+@media (max-width: 600px) {
+  .th-btn { min-width: 40px; min-height: 40px; }
+}
+/* #9c: the header LABEL is itself a sort button — inherits the header look, no chrome. */
+.th-label {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+.th-label:hover { text-decoration: underline; }
 
 /* ---- Dialog / modal / sheet ------------------------------------------------------------------ */
 .scrim {

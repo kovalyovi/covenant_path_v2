@@ -3,7 +3,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  parseMemberDate, fmtLong, monthsDaysAgo, baptismElapsed, etHourToday, fmtEtHourLocal,
+  parseMemberDate, fmtLong, monthsDaysAgo, baptismElapsed, tenure, etHourToday, fmtEtHourLocal,
 } from '../logic/dates';
 
 describe('parseMemberDate', () => {
@@ -89,6 +89,29 @@ describe('baptismElapsed', () => {
     const future = new Date();
     future.setDate(future.getDate() + 10);
     expect(baptismElapsed(future)).toBe('');
+  });
+});
+
+describe('tenure (#9e — "Member for")', () => {
+  function ago(years: number, months: number, days = 0): Date {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - years, d.getMonth() - months, d.getDate() - days);
+    return d;
+  }
+  it('drops zero parts: years+months, never "0 years"/"0 months"', () => {
+    expect(tenure(ago(2, 3))).toBe('2 years 3 months');
+    expect(tenure(ago(1, 0))).toBe('1 year');          // no "0 months"
+    expect(tenure(ago(0, 5))).toBe('5 months');        // no "0 years"
+    expect(tenure(ago(0, 2))).toBe('2 months');        // exactly 2 months: no days
+  });
+  it('shows days only under 2 months', () => {
+    expect(tenure(ago(0, 1, 3))).toBe('1 month 3 days');
+    expect(tenure(ago(0, 0, 5))).toBe('5 days');
+  });
+  it('null and future dates return empty', () => {
+    expect(tenure(null)).toBe('');
+    const f = new Date(); f.setDate(f.getDate() + 10);
+    expect(tenure(f)).toBe('');
   });
 });
 

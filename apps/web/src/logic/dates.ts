@@ -193,6 +193,28 @@ export function baptismElapsed(d: Date | null): string {
   return monthsMatch ? monthsMatch[1] : full;
 }
 
+/**
+ * "Member for" tenure since a past date (#9e): "2 years 3 months" with any ZERO part dropped (never
+ * "0 years" / "0 months"); under 2 months it reads month+days ("1 month 3 days" / "5 days"). Empty for
+ * a future/unknown date. Years+months from the calendar; the sub-2-month case reuses `monthsDaysAgo`
+ * for the day-borrow math.
+ */
+export function tenure(d: Date | null): string {
+  if (d == null) return '';
+  const now = new Date();
+  if (d.getTime() > now.getTime()) return '';
+  let months = (now.getFullYear() - d.getFullYear()) * 12 + now.getMonth() - d.getMonth();
+  if (now.getDate() < d.getDate()) months -= 1;
+  if (months < 0) return '';
+  if (months < 2) return monthsDaysAgo(d); // "1 month 3 days" / "5 days" — days only under 2 months
+  const years = Math.floor(months / 12);
+  const rem = months % 12;
+  const parts: string[] = [];
+  if (years > 0) parts.push(`${years} year${years === 1 ? '' : 's'}`);
+  if (rem > 0) parts.push(`${rem} month${rem === 1 ? '' : 's'}`);
+  return parts.join(' ');
+}
+
 /** "2h ago" relative label for a last-synced ISO. Mirrors `_ago`. */
 export function ago(iso: unknown): string {
   if (iso == null) return String(iso);

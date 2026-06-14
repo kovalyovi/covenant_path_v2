@@ -12,6 +12,7 @@ import type { Member } from '../../lib/member';
 import { isInvestigator, displayFieldValue } from '../../lib/member';
 import { endowmentDisplay, templeExperienceDisplay, ageYears } from '../../logic/milestones';
 import { isDataIssue } from '../../logic/fieldDisplay';
+import { parseMemberDate, tenure } from '../../logic/dates';
 import { Icon } from '../../components/Icon';
 import { Modal } from '../../components/Modal';
 import { Button } from '../../components/ui';
@@ -74,10 +75,21 @@ function display(m: Member, key: string, isAdmin: boolean): string {
     if (c != null && String(c).length > 0) return String(c);
     return String(m['friends'] ?? '');
   }
+  // #9e: "Member for" computed fresh from the baptism date — "2 years 3 months" with zero parts
+  // dropped (never "0 years"/"0 months"), days only under 2 months. No more stale "Member for …" str.
+  if (key === 'membership_duration') return tenure(parseMemberDate(m['baptism_date']));
   if (SENTINEL_COLS.has(key)) return displayFieldValue(m[key], isAdmin, '—');
-  const v = String(m[key] ?? '');
-  return key === 'membership_duration' ? v.replace(/^Member for\s*/i, '') : v;
+  return String(m[key] ?? '');
 }
+
+// #9d/#9f: every column SORTS; only enumerable categorical columns FILTER (unit + the yes/no/recommend
+// status columns). Free-form / continuous columns — name, age, baptism, member-for, sex, friends — sort
+// only, since a per-value filter there is just noise.
+const FILTERABLE = new Set([
+  'unit_name', 'aaronic_priesthood', 'melchizedek_priesthood', 'calling',
+  'ministering_brothers_sisters', 'ministering_assignment', 'temple_recommend',
+  'patriarchal_blessing', 'living_ordinance', 'first_temple_visit', 'family_name_prepared',
+]);
 
 // The covenant-path columns subject to the CLIENT DISPLAY CONTRACT's ⚠ data-issue marker (item 5):
 // the sentinel-able covenant fields plus the eligibility-gated endowment/temple-experience ones. A
@@ -157,6 +169,7 @@ function TableBody({ members, isAdmin }: { members: Member[]; isAdmin: boolean }
     },
   );
   const [filterCol, setFilterCol] = useState<Col | null>(null);
+  const [scrolled, setScrolled] = useState(false); // #9a: horizontal-scroll → pin border
 
   const base = members.filter((m) => !isInvestigator(m));
 
@@ -167,14 +180,45 @@ function TableBody({ members, isAdmin }: { members: Member[]; isAdmin: boolean }
     return true;
   }
 
+  // #9d/#9f: sort EVERY column with a sensible key — age & friends numerically, baptism & member-for by
+  // the baptism instant (member-for == tenure ordering), the rest by their displayed text.
+  function cmpByCol(a: Member, b: Member, col: Col): number {
+    switch (col.key) {
+      case 'age':
+        return (ageYears(a) ?? -1) - (ageYears(b) ?? -1);
+      case 'baptism_date':
+      case 'membership_duration': {
+        const da = parseMemberDate(a['baptism_date'])?.getTime() ?? -Infinity;
+        const db = parseMemberDate(b['baptism_date'])?.getTime() ?? -Infinity;
+        return da - db;
+      }
+      case 'friends': {
+        const num = (m: Member) => {
+          const c = m['friends_count'];
+          if (c != null && String(c).length > 0) return Number(c);
+          return m['friends'] === 'Yes' ? 1 : m['friends'] === 'No' ? 0 : -1;
+        };
+        return num(a) - num(b);
+      }
+      default:
+        return display(a, col.key, isAdmin).toLowerCase()
+          .localeCompare(display(b, col.key, isAdmin).toLowerCase());
+    }
+  }
+
   let rows = base.filter(passes);
   if (sortCol != null) {
-    const key = COLS[sortCol].key;
-    rows = [...rows].sort((a, b) => {
-      const c = key === 'age'
-        ? (ageYears(a) ?? -1) - (ageYears(b) ?? -1) // age sorts numerically, not as a string
-        : display(a, key, isAdmin).toLowerCase().localeCompare(display(b, key, isAdmin).toLowerCase());
-      return sortAsc ? c : -c;
+    const col = COLS[sortCol];
+    rows = [...rows].sort((a, b) => (sortAsc ? 1 : -1) * cmpByCol(a, b, col));
+  }
+
+  // #9g: filters apply IMMEDIATELY (no Apply button) — write the column's excluded set straight through.
+  function applyFilter(key: string, set: Set<string>) {
+    setExcluded((cur) => {
+      const next = { ...cur };
+      if (set.size === 0) delete next[key];
+      else next[key] = set;
+      return next;
     });
   }
 
@@ -205,17 +249,20 @@ function TableBody({ members, isAdmin }: { members: Member[]; isAdmin: boolean }
           </Button>
         )}
       </div>
-      <div className="table-wrap">
+      <div
+        className={`table-wrap${scrolled ? ' is-scrolled' : ''}`}
+        onScroll={(e) => setScrolled((e.target as HTMLDivElement).scrollLeft > 0)}
+      >
         <table className="data-table">
           <thead>
             <tr>
-              <th scope="col">#</th>
+              <th scope="col" className="col-num">#</th>
               {COLS.map((c, i) => (
-                <th key={c.key} scope="col">
+                <th key={c.key} scope="col" className={c.key === 'name' ? 'col-member' : undefined}>
                   <Header
                     col={c}
-                    sortable={c.kind === 'text'}
                     sortState={sortCol === i ? (sortAsc ? 'asc' : 'desc') : null}
+                    filterable={FILTERABLE.has(c.key)}
                     filtered={(excluded[c.key]?.size ?? 0) > 0}
                     onSort={() => onSort(i)}
                     onFilter={() => setFilterCol(c)}
@@ -229,12 +276,12 @@ function TableBody({ members, isAdmin }: { members: Member[]; isAdmin: boolean }
               const id = m['person_uuid'] != null ? String(m['person_uuid']) : '';
               return (
                 <tr key={r} onClick={() => id && navigate(`/person/${encodeURIComponent(id)}`)}>
-                  <td className="muted">{r + 1}</td>
+                  <td className="muted col-num">{r + 1}</td>
                   {COLS.map((c) =>
                     c.key === 'name' ? (
                       /* Member cell carries a note marker (hover = newest note) when leaders have
                          left notes on this person. */
-                      <td key={c.key}>
+                      <td key={c.key} className="col-member">
                         <span className="row" style={{ gap: 4, whiteSpace: 'nowrap' }}>
                           {display(m, c.key, isAdmin)}
                           {showNotes && notes[id] && (
@@ -265,15 +312,7 @@ function TableBody({ members, isAdmin }: { members: Member[]; isAdmin: boolean }
           excluded={excluded[filterCol.key] ?? new Set()}
           isAdmin={isAdmin}
           onClose={() => setFilterCol(null)}
-          onApply={(set) => {
-            setExcluded((cur) => {
-              const next = { ...cur };
-              if (set.size === 0) delete next[filterCol.key];
-              else next[filterCol.key] = set;
-              return next;
-            });
-            setFilterCol(null);
-          }}
+          onChange={(set) => applyFilter(filterCol.key, set)}
         />
       )}
     </div>
@@ -282,50 +321,52 @@ function TableBody({ members, isAdmin }: { members: Member[]; isAdmin: boolean }
 
 function Header({
   col,
-  sortable,
   sortState,
+  filterable,
   filtered,
   onSort,
   onFilter,
 }: {
   col: Col;
-  sortable: boolean;
   sortState: 'asc' | 'desc' | null;
+  filterable: boolean;
   filtered: boolean;
   onSort: () => void;
   onFilter: () => void;
 }) {
   return (
     <span className="row" style={{ gap: 2 }}>
-      <span>{col.header}</span>
-      {sortable && (
-        <button
-          type="button"
-          className="th-btn"
-          onClick={(e) => {
-            e.stopPropagation();
-            onSort();
-          }}
-          aria-label={`Sort by ${col.header}`}
-          title={`Sort by ${col.header}`}
-          style={{ opacity: sortState ? 1 : 0.55 }}
-        >
-          <Icon name={sortState === 'asc' ? 'arrow_up' : sortState === 'desc' ? 'arrow_down' : 'unfold_more'} size={14} />
-        </button>
-      )}
+      {/* #9c: the column TITLE itself sorts (every column is sortable now), alongside the arrow. */}
+      <button
+        type="button"
+        className="th-label"
+        onClick={(e) => { e.stopPropagation(); onSort(); }}
+        aria-label={`Sort by ${col.header}`}
+      >
+        {col.header}
+      </button>
       <button
         type="button"
         className="th-btn"
-        onClick={(e) => {
-          e.stopPropagation();
-          onFilter();
-        }}
-        aria-label={`Filter ${col.header}`}
-        title={`Filter ${col.header}`}
-        style={{ color: filtered ? '#ffe082' : undefined, opacity: filtered ? 1 : 0.7 }}
+        onClick={(e) => { e.stopPropagation(); onSort(); }}
+        aria-label={`Sort by ${col.header}`}
+        title={`Sort by ${col.header}`}
+        style={{ opacity: sortState ? 1 : 0.55 }}
       >
-        <Icon name={filtered ? 'filter' : 'filter_outline'} size={15} />
+        <Icon name={sortState === 'asc' ? 'arrow_up' : sortState === 'desc' ? 'arrow_down' : 'unfold_more'} size={14} />
       </button>
+      {filterable && (
+        <button
+          type="button"
+          className="th-btn"
+          onClick={(e) => { e.stopPropagation(); onFilter(); }}
+          aria-label={`Filter ${col.header}`}
+          title={`Filter ${col.header}`}
+          style={{ color: filtered ? '#ffe082' : undefined, opacity: filtered ? 1 : 0.7 }}
+        >
+          <Icon name={filtered ? 'filter' : 'filter_outline'} size={15} />
+        </button>
+      )}
     </span>
   );
 }
@@ -372,14 +413,14 @@ function FilterDialog({
   excluded,
   isAdmin,
   onClose,
-  onApply,
+  onChange,
 }: {
   col: Col;
   rows: Member[];
   excluded: Set<string>;
   isAdmin: boolean;
   onClose: () => void;
-  onApply: (set: Set<string>) => void;
+  onChange: (set: Set<string>) => void;
 }) {
   const counts = new Map<string, number>();
   for (const m of rows) {
@@ -389,24 +430,23 @@ function FilterDialog({
   const values = [...counts.keys()].sort();
   const [local, setLocal] = useState<Set<string>>(new Set(excluded));
 
+  // #9g: every change applies immediately (no Apply button) — update local state AND lift it up.
+  function set(next: Set<string>) {
+    setLocal(next);
+    onChange(new Set(next));
+  }
+
   return (
     <Modal
       open
       onClose={onClose}
       title={`Filter · ${col.header}`}
       hideClose
-      actions={
-        <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant="filled" onClick={() => onApply(new Set(local))}>
-            Apply
-          </Button>
-        </>
-      }
+      actions={<Button variant="filled" onClick={onClose}>Done</Button>}
     >
       <div className="row" style={{ gap: 8 }}>
-        <Button onClick={() => setLocal(new Set())}>Select all</Button>
-        <Button onClick={() => setLocal(new Set(values))}>Clear all</Button>
+        <Button onClick={() => set(new Set())}>Select all</Button>
+        <Button onClick={() => set(new Set(values))}>Clear all</Button>
       </div>
       <hr className="divider" style={{ margin: '8px 0' }} />
       <div style={{ maxHeight: '50vh', overflowY: 'auto' }}>
@@ -416,12 +456,10 @@ function FilterDialog({
               type="checkbox"
               checked={!local.has(v)}
               onChange={(e) => {
-                setLocal((cur) => {
-                  const next = new Set(cur);
-                  if (e.target.checked) next.delete(v);
-                  else next.add(v);
-                  return next;
-                });
+                const next = new Set(local);
+                if (e.target.checked) next.delete(v);
+                else next.add(v);
+                set(next);
               }}
             />
             <span className="list-tile__main" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -431,6 +469,9 @@ function FilterDialog({
           </label>
         ))}
       </div>
+      <span aria-live="polite" className="tiny muted" style={{ display: 'block', marginTop: 6 }}>
+        {local.size === 0 ? 'Showing all values' : `${local.size} value${local.size === 1 ? '' : 's'} hidden`}
+      </span>
     </Modal>
   );
 }
