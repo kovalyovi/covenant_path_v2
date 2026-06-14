@@ -179,11 +179,23 @@ export async function mockSupabase(page: Page, fixtures: SupabaseFixtures = {}):
       return fulfillJson(route, 200, applyEqFilters(userRoles, url));
     }
     if (path === '/rest/v1/member_comments') {
+      // The note THREAD (migration 0054): POST adds an entry, PATCH edits one, DELETE removes one or all.
       if (method === 'POST') {
         const body = parseBody(request);
         const rows = Array.isArray(body) ? (body as Row[]) : body ? [body] : [];
-        for (const r of rows) comments.push({ created_at: new Date().toISOString(), ...r });
+        for (const r of rows) comments.push({ id: `cmt-${comments.length + 1}-${Date.now()}`, created_at: new Date().toISOString(), ...r });
         return fulfillJson(route, 201); // PostgREST return=minimal: empty body
+      }
+      if (method === 'PATCH') {
+        const body = parseBody(request);
+        const patch = (Array.isArray(body) ? body[0] : body) as Row;
+        for (const c of applyEqFilters(comments, url)) Object.assign(c, patch);
+        return fulfillJson(route, 200, []);
+      }
+      if (method === 'DELETE') {
+        const drop = new Set(applyEqFilters(comments, url));
+        for (let i = comments.length - 1; i >= 0; i--) if (drop.has(comments[i])) comments.splice(i, 1);
+        return fulfillJson(route, 200, []);
       }
       return fulfillJson(route, 200, applyEqFilters(comments, url));
     }

@@ -225,6 +225,7 @@ export function defaultMembers(): Row[] {
 export function defaultComments(): Row[] {
   return [
     {
+      id: 'cmt-avery-1',
       stake_id: STAKE_ID,
       unit_id: 9990011,
       member_person_uuid: AVERY_UUID,

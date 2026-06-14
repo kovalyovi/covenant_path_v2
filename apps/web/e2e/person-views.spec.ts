@@ -78,43 +78,40 @@ test.describe('person views', () => {
     await expect(page.getByText('Attended Sacrament Meeting')).not.toBeVisible();
   });
 
-  test('single note: legacy thread folds in, editing saves to member_notes', async ({ page }) => {
+  test('notes thread: existing entry shows; add appends to member_comments; delete removes', async ({ page }) => {
     const { supabase } = await openDashboard(page, { path: `/person/${AVERY_UUID}` });
 
-    // The legacy member_comments thread is FOLDED into the single note (so nothing is lost).
-    await expect(page.getByText(/Welcomed at sacrament meeting\./)).toBeVisible();
+    // The existing thread entry shows (body, with its author/timestamp line).
+    await expect(page.getByText('Welcomed at sacrament meeting.')).toBeVisible();
 
-    // No separate "Edit" button — tap the note surface to edit, replace the text, save.
-    await page.getByRole('button', { name: /Edit note/ }).click();
-    const noteBox = page.getByPlaceholder('Write a note about this member…');
-    await noteBox.fill('One consolidated note.');
-    await page.getByRole('button', { name: 'Save' }).click();
-
-    // Read-after-write: the saved single note renders in full.
-    await expect(page.getByText('One consolidated note.')).toBeVisible();
-
-    // It was upserted to member_notes (the single-field table), NOT appended to the thread.
+    // Add a new entry → INSERTED into member_comments (the thread), shown after the read-after-write.
+    await page.getByPlaceholder('Add a note…').fill('Visited this week.');
+    await page.getByRole('button', { name: 'Add note' }).click();
+    await expect(page.getByText('Visited this week.')).toBeVisible();
     await expect.poll(() =>
-      supabase.callsTo('/rest/v1/member_notes').filter((c) => c.method === 'POST').length,
+      supabase.callsTo('/rest/v1/member_comments').filter((c) => c.method === 'POST').length,
     ).toBe(1);
-    const posts = supabase.callsTo('/rest/v1/member_notes').filter((c) => c.method === 'POST');
-    expect(posts[0].body).toMatchObject({
-      member_person_uuid: AVERY_UUID,
-      note: 'One consolidated note.',
-    });
+    expect(supabase.callsTo('/rest/v1/member_comments').filter((c) => c.method === 'POST')[0].body)
+      .toMatchObject({ member_person_uuid: AVERY_UUID, body: 'Visited this week.' });
+
+    // Delete an entry → DELETE to member_comments (unit leaders can remove any entry).
+    await page.getByRole('button', { name: 'Delete', exact: true }).first().click();
+    await expect.poll(() =>
+      supabase.callsTo('/rest/v1/member_comments').filter((c) => c.method === 'DELETE').length,
+    ).toBeGreaterThan(0);
   });
 
-  test('long-press a member row opens the note straight into edit', async ({ page }) => {
+  test('long-press a member row opens the note thread with the add field focused', async ({ page }) => {
     await openDashboard(page, { path: '/golden-hour' });
 
-    // A long-press (pointer held ~600ms) on a member row fires the edit path on the press timer and
-    // navigates to the detail with the note open — the row unmounts, so no pointerup is needed.
+    // A long-press (pointer held ~600ms) on a member row navigates to the detail with the note add
+    // field focused — the row unmounts, so no pointerup is needed.
     const row = page.locator('.member-row', { hasText: 'Avery Example' }).first();
     await expect(row).toBeVisible();
     await row.dispatchEvent('pointerdown');
 
     await expect(page).toHaveURL(/editNote=1/);
-    await expect(page.getByPlaceholder('Write a note about this member…')).toBeVisible();
+    await expect(page.getByPlaceholder('Add a note…')).toBeVisible();
   });
 });
 

@@ -25,6 +25,16 @@ export interface NoteSummary {
   updatedAt: string;
 }
 
+/** One thread entry (member_comments) — the model the cards + detail editor render directly. */
+export interface NoteThreadEntry {
+  id?: string;
+  body: string;
+  author_name?: string | null;
+  author_email?: string | null;
+  created_at: string;
+  updated_at?: string | null;
+}
+
 /** "Mar 5, 2026" from an ISO timestamp, for the inline author/date prefix when folding a thread. */
 function shortDate(iso: string): string {
   const d = new Date(iso);

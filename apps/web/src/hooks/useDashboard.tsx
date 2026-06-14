@@ -9,7 +9,7 @@ import {
 } from 'react';
 import { supabase } from '../lib/supabase';
 import { MEMBER_COLUMNS, type Member } from '../lib/member';
-import { buildNotesIndex, type NoteRow, type MemberNoteRow, type NoteSummary } from '../logic/notes';
+import { buildNotesIndex, type NoteRow, type MemberNoteRow, type NoteSummary, type NoteThreadEntry } from '../logic/notes';
 import { mergedNote, type ManualMember, type MergePlan } from '../logic/manualMembers';
 import { broker, type EnrollmentStatus } from '../lib/broker';
 import { getShowNotes, setShowNotes as persistShowNotes } from '../lib/prefs';
@@ -35,7 +35,9 @@ interface DashboardState {
   members: Member[];
   /** person_uuid -> the single editable leader note, for the list-row note lines. */
   notes: Record<string, NoteSummary>;
-  /** Re-pull the notes index (after editing a note on the detail page or via long-press). */
+  /** Per-member note THREAD (member_comments), newest-first — what the cards + detail editor render. */
+  threads: Record<string, NoteThreadEntry[]>;
+  /** Re-pull the notes index + threads (after adding/editing/deleting a note). */
   reloadNotes: () => Promise<void>;
   /** Whether the main screen shows member notes (default true; persisted per the global pref). */
   showNotes: boolean;
@@ -105,6 +107,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [notes, setNotes] = useState<Record<string, NoteSummary>>({});
+  const [threads, setThreads] = useState<Record<string, NoteThreadEntry[]>>({});
   const [stakes, setStakes] = useState<StakeRow[]>([]);
   const [currentStakeId, setCurrentStakeId] = useState<string | null>(null);
   const [stakeName, setStakeName] = useState<string | null>(null);
@@ -140,28 +143,31 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     return (data ?? []) as unknown as Member[];
   }, []);
 
-  const loadNotes = useCallback(async (stakeId: string | null): Promise<Record<string, NoteSummary>> => {
-    // The SINGLE note per member (member_notes) WINS; legacy member_comments threads are folded in
-    // for members not yet migrated, so nothing is lost. Both bulk-queried per stake (RLS-scoped like
-    // members). Best-effort: a notes hiccup must never fail the member load.
+  const loadNotes = useCallback(async (stakeId: string | null): Promise<{ index: Record<string, NoteSummary>; threads: Record<string, NoteThreadEntry[]> }> => {
+    // Notes are a THREAD (member_comments): newest-first per member for the cards + detail editor. The
+    // folded summary index (member_notes single + folded comments) is kept for back-compat. Both
+    // bulk-queried per stake (RLS-scoped like members). Best-effort: a hiccup never fails member load.
     try {
       const noteBase = supabase.from('member_notes').select('member_person_uuid, note, updated_at');
-      const cmtBase = supabase.from('member_comments').select('member_person_uuid, body, author_name, author_email, created_at');
+      const cmtBase = supabase.from('member_comments').select('member_person_uuid, body, author_name, author_email, created_at, updated_at');
       const [notesRes, cmtRes] = await Promise.all([
         stakeId != null ? noteBase.eq('stake_id', stakeId) : noteBase,
         stakeId != null ? cmtBase.eq('stake_id', stakeId) : cmtBase,
       ]);
-      return buildNotesIndex(
-        (notesRes.data ?? []) as MemberNoteRow[],
-        (cmtRes.data ?? []) as NoteRow[],
-      );
+      const cmts = (cmtRes.data ?? []) as Array<NoteThreadEntry & { member_person_uuid: string }>;
+      const threads: Record<string, NoteThreadEntry[]> = {};
+      for (const r of cmts) (threads[r.member_person_uuid] ??= []).push(r);
+      for (const k in threads) threads[k].sort((a, b) => String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')));
+      return { index: buildNotesIndex((notesRes.data ?? []) as MemberNoteRow[], cmts as NoteRow[]), threads };
     } catch {
-      return {};
+      return { index: {}, threads: {} };
     }
   }, []);
 
   const reloadNotes = useCallback(async () => {
-    setNotes(await loadNotes(currentIdRef.current));
+    const { index, threads } = await loadNotes(currentIdRef.current);
+    setNotes(index);
+    setThreads(threads);
   }, [loadNotes]);
 
   const loadManualMembers = useCallback(async (stakeId: string | null): Promise<ManualMember[]> => {
@@ -352,7 +358,8 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         ]);
         if (!active) return;
         setMembers(rows);
-        setNotes(nts);
+        setNotes(nts.index);
+        setThreads(nts.threads);
         setManualMembers(manuals);
         // Not awaited — never delays first paint; caches enrollStatus for the Sync-settings sheet (#11).
         void reloadEnrollStatus();
@@ -381,7 +388,8 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         loadManualMembers(currentIdRef.current),
       ]);
       setMembers(rows);
-      setNotes(nts);
+      setNotes(nts.index);
+      setThreads(nts.threads);
       setManualMembers(manuals);
       // also re-pull the stake's freshness/sync state so "Updated X ago" reflects the latest run.
       void reloadStakes();
@@ -407,7 +415,8 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       Promise.all([loadMembers(id), loadNotes(id), loadManualMembers(id)])
         .then(([rows, nts, manuals]) => {
           setMembers(rows);
-          setNotes(nts);
+          setNotes(nts.index);
+          setThreads(nts.threads);
           setManualMembers(manuals);
           if (rows.length === 0) void reloadEnrollStatus();
         })
@@ -430,7 +439,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<DashboardState>(
     () => ({
-      loading, refreshing, error, members, notes, reloadNotes, showNotes, setShowNotes,
+      loading, refreshing, error, members, notes, threads, reloadNotes, showNotes, setShowNotes,
       manualMembers, reloadManualMembers, addManualMember, mergeManualMember, deleteManualMember,
       stakes, currentStakeId, stakeName, lastSynced,
       syncing, syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,
@@ -438,7 +447,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       reauthOpen, openReauth, closeReauth,
     }),
     [
-      loading, refreshing, error, members, notes, reloadNotes, showNotes, setShowNotes,
+      loading, refreshing, error, members, notes, threads, reloadNotes, showNotes, setShowNotes,
       manualMembers, reloadManualMembers, addManualMember, mergeManualMember, deleteManualMember,
       stakes, currentStakeId, stakeName, lastSynced,
       syncing, syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,

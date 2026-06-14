@@ -471,18 +471,28 @@ export function MemberRow({ m, chips = false, showUnit = false, showResp = false
   );
 }
 
-/** The single leader note under a list row, shown IN FULL — shared by every member list so notes
- *  travel with people in Golden Hour, Needs, by-date lists, and the baptisms timeline. Hidden when the
- *  "show notes" preference is off (item 9). */
+/** The member's note THREAD under a list row — the latest entries, each with a relative timestamp
+ *  (newest first; "+N more" when there are extras). Tapping the row opens the detail thread editor.
+ *  Hidden when the "show notes" preference is off (item 9). */
 export function NoteLine({ uuid }: { uuid: string }) {
-  const { notes, showNotes } = useDashboard();
-  const n = uuid ? notes[uuid] : undefined;
-  if (!n || !showNotes) return null;
+  const { threads, showNotes } = useDashboard();
+  const entries = uuid ? threads[uuid] : undefined;
+  if (!entries || entries.length === 0 || !showNotes) return null;
+  const shown = entries.slice(0, 2);
   return (
-    <span className="row tiny" style={{ gap: 4, marginTop: 4, color: 'var(--on-surface-variant)', minWidth: 0, alignItems: 'flex-start' }}>
-      <Icon name="note" size={13} color="var(--primary)" />
-      {/* full note (multi-line preserved), never truncated */}
-      <span style={{ whiteSpace: 'pre-wrap', fontStyle: 'italic', minWidth: 0 }}>{n.text}</span>
+    <span className="stack tiny" style={{ gap: 3, marginTop: 4, color: 'var(--on-surface-variant)', minWidth: 0 }}>
+      {shown.map((e, i) => (
+        <span key={i} className="row" style={{ gap: 4, alignItems: 'flex-start', minWidth: 0 }}>
+          <Icon name="note" size={13} color="var(--primary)" />
+          <span style={{ minWidth: 0 }}>
+            <span style={{ whiteSpace: 'pre-wrap', fontStyle: 'italic' }}>{e.body}</span>
+            <span className="muted" style={{ marginLeft: 6 }}>· {ago(e.created_at)}</span>
+          </span>
+        </span>
+      ))}
+      {entries.length > shown.length && (
+        <span className="muted" style={{ marginLeft: 17 }}>+{entries.length - shown.length} more</span>
+      )}
     </span>
   );
 }
