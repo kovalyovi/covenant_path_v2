@@ -10,12 +10,14 @@ import type { Member } from '../../lib/member';
 import { isInvestigator } from '../../lib/member';
 import { parseMemberDate, fmtMonShort } from '../../logic/dates';
 import {
-  milestones, responsibleOrg, expected, isMissing, ORG_BUCKETS, type OrgBucket,
+  milestones, responsibleOrg, expected, isMissing, unitGoldenHour, ORG_BUCKETS, type OrgBucket,
 } from '../../logic/milestones';
+import { FilledRing, SectionedRing } from '../../components/Rings';
 import {
   PageScaffold, SectionTitle, OrgFilterBar, SubtleNote, UnitGrid, DateList, orgNoteFor,
 } from '../../components/dashboard';
 import { Segmented, SectionCard, RangePill, Progress } from '../../components/ui';
+import { Icon, type IconName } from '../../components/Icon';
 import { TabGate } from '../../components/TabGate';
 import { DrillHost, type Drill } from '../../components/DrillSheet';
 import { ManualMembersSection } from '../../components/ManualMembers';
@@ -173,19 +175,44 @@ function GoldenHourBody() {
               onAscToggle={() => setAsc(!ascending)}
             />
             <CompletionCard rows={rows} onDrill={setDrill} />
+            <UnitCompletionCard rows={rows} />
           </div>
         }
       >
         {rows.length === 0 ? (
           <p style={{ textAlign: 'center', padding: 32 }}>No new members in this window.</p>
         ) : byDate ? (
-          <DateList rows={rows} chips ascending={ascending} />
+          <DateList rows={rows} chips ascending={ascending} elapsedBaptism />
         ) : (
-          <UnitGrid rows={rows} tier={tier} chips ascending={ascending} />
+          <UnitGrid rows={rows} tier={tier} chips ascending={ascending} elapsedBaptism />
         )}
       </PageScaffold>
       <DrillHost drill={drill} onClose={() => setDrill(null)} />
     </>
+  );
+}
+
+/** Per-unit Golden Hour indicators (#8d): for each unit, a SECTIONED ring (one arc per person, filled
+ *  when fully complete) = % of people done, and a FILLED ring = % of eligible items complete overall.
+ *  Hidden for a single-unit leader (nothing to compare). */
+function UnitCompletionCard({ rows }: { rows: Member[] }) {
+  const units = unitGoldenHour(rows);
+  if (units.length <= 1) return null;
+  return (
+    <SectionCard title="Completion by unit">
+      <div className="tiny muted" style={{ marginBottom: 10 }}>
+        Left: people fully complete (one arc each). Right: items complete overall.
+      </div>
+      <div className="stack" style={{ gap: 14 }}>
+        {units.map((u) => (
+          <div key={u.unit} className="row" style={{ gap: 12, alignItems: 'center' }}>
+            <span className="small" style={{ fontWeight: 600, flex: 1, minWidth: 0 }}>{u.unit}</span>
+            <SectionedRing total={u.people} filled={u.fullyComplete} sublabel="people" />
+            <FilledRing value={u.itemsTotal ? u.itemsDone / u.itemsTotal : 1} sublabel="items" />
+          </div>
+        ))}
+      </div>
+    </SectionCard>
   );
 }
 
@@ -229,7 +256,9 @@ function CompletionCard({ rows, onDrill }: { rows: Member[]; onDrill: (d: Drill)
                 padding: 0,
               }}
             >
-              <div className="row" style={{ gap: 4, alignItems: 'baseline' }}>
+              <div className="row" style={{ gap: 5, alignItems: 'center' }}>
+                {/* #8a: the milestone's own icon + color next to its completion rate. */}
+                <Icon name={ms.icon as IconName} size={17} color={ms.color} />
                 <span style={{ fontSize: '1.25rem', fontWeight: 700 }}>{Math.round(pct * 100)}%</span>
                 <span className="tiny muted">
                   {done.length}/{eligible.length}

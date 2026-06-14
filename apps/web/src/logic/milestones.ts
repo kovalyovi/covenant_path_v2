@@ -431,3 +431,40 @@ export function avgCompletion(rows: Member[]): number {
   }
   return sum / rows.length;
 }
+
+export interface UnitGoldenHour {
+  unit: string;
+  people: number; // members in the unit
+  fullyComplete: number; // members with EVERY applicable milestone complete
+  itemsDone: number; // total complete applicable milestones across the unit
+  itemsTotal: number; // total applicable milestones across the unit
+}
+
+/** Per-unit Golden Hour rollup for the #8d indicators: the share of PEOPLE who are fully complete (a
+ *  SECTIONED ring — one arc per person, filled when they're done) and the share of ITEMS complete
+ *  overall (a FILLED ring). Eligible-only per member (N/A excluded) — a member with no applicable
+ *  milestones counts as fully complete (nothing outstanding). Ranked by people desc. Pure → mirrored. */
+export function unitGoldenHour(rows: Member[]): UnitGoldenHour[] {
+  const by = new Map<string, Member[]>();
+  for (const m of rows) {
+    const u = String(m['unit_name'] ?? '—');
+    if (!by.has(u)) by.set(u, []);
+    by.get(u)!.push(m);
+  }
+  const out: UnitGoldenHour[] = [];
+  for (const [unit, members] of by) {
+    let fully = 0;
+    let done = 0;
+    let total = 0;
+    for (const m of members) {
+      const applicable = milestonesFor(m);
+      const c = applicable.filter((x) => x.complete(m)).length;
+      done += c;
+      total += applicable.length;
+      if (applicable.length === 0 || c === applicable.length) fully += 1;
+    }
+    out.push({ unit, people: members.length, fullyComplete: fully, itemsDone: done, itemsTotal: total });
+  }
+  out.sort((a, b) => b.people - a.people);
+  return out;
+}

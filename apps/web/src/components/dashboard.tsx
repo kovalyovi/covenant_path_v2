@@ -18,7 +18,7 @@ import { OrgBadge, AttendancePill } from './Badges';
 import { GoldenHourChips } from './GoldenHourChips';
 import { Modal } from './Modal';
 import type { Tier } from '../hooks/useTier';
-import { colsFor, useTier } from '../hooks/useTier';
+import { colsFor } from '../hooks/useTier';
 import { useDashboard } from '../hooks/useDashboard';
 
 // ---- Page scaffold ----------------------------------------------------------------------------
@@ -307,6 +307,8 @@ export function OrgFilterBar({
             type="button"
             className="chip"
             aria-pressed={sel}
+            aria-label={`${i.short} — ${i.label}`}
+            title={`${i.short} — ${i.label}`}
             onClick={() => onToggle(b)}
             style={{
               background: hexA(i.color, sel ? 0.22 : 0.06),
@@ -315,8 +317,9 @@ export function OrgFilterBar({
               fontWeight: sel ? 700 : 500,
             }}
           >
+            {/* #8c/#8.1c: compact WML/RS/EQ shorthand (full name in the tooltip), not the long label. */}
             <Icon name={i.icon as IconName} size={16} color={i.color} />
-            {i.label}
+            {i.short}
           </button>
         );
       })}
@@ -338,6 +341,7 @@ interface MemberRowProps {
   showUnit?: boolean;
   showResp?: boolean;
   showAttendance?: boolean;
+  elapsedBaptism?: boolean;
   dateField?: string;
 }
 
@@ -373,10 +377,8 @@ function useLongPress(onLongPress: () => void, ms = 500) {
 }
 
 /** One member row (avatar + name + date/responsibility + optional GH chips). Mirrors `_MemberRow`. */
-export function MemberRow({ m, chips = false, showUnit = false, showResp = false, showAttendance = false, dateField = 'baptism_date' }: MemberRowProps) {
+export function MemberRow({ m, chips = false, showUnit = false, showResp = false, showAttendance = false, elapsedBaptism = false, dateField = 'baptism_date' }: MemberRowProps) {
   const navigate = useNavigate();
-  const tier = useTier();
-  const isMobile = tier === 'mobile';
   const name = String(m['name'] ?? '—');
   const date = parseMemberDate(m[dateField]);
   const age = ageOf(m);
@@ -400,17 +402,18 @@ export function MemberRow({ m, chips = false, showUnit = false, showResp = false
       <span className="member-row__main">
         {/* #12: on a phone the name takes the whole first row and age drops below it (not a cramped
             second column); inline on wider screens. */}
-        <span className="row" style={{ gap: 6 }}>
-          <span className="member-row__name">{name}</span>
-          {!isMobile && age && <span className="muted tiny">· {age}</span>}
-        </span>
-        {isMobile && age && <span className="muted tiny">{age}</span>}
+        <span className="member-row__name">{name}</span>
+        {/* #8.1b: age always sits BELOW the name (not a cramped inline second column). */}
+        {age && <span className="muted tiny">{age}</span>}
         {date && (
           <span className="row small" style={{ gap: 4, marginTop: 2 }}>
             <Icon name={isBaptism ? 'water_drop' : 'event'} size={13} color={isBaptism ? '#29b6f6' : 'var(--on-surface-variant)'} />
             <span className="muted">
+              {/* #8.1a: Golden Hour shows the elapsed TIME since baptism, not the literal date. */}
               {isBaptism
-                ? `${fmtMonthDayYear(date)}${baptismElapsed(date) ? ` (${baptismElapsed(date)})` : ''}`
+                ? elapsedBaptism
+                  ? (baptismElapsed(date) ? `${baptismElapsed(date)} ago` : fmtMonthDayYear(date))
+                  : `${fmtMonthDayYear(date)}${baptismElapsed(date) ? ` (${baptismElapsed(date)})` : ''}`
                 : fmtLong(date)}
             </span>
           </span>
@@ -487,19 +490,21 @@ export function UnitGrid({
   chips,
   dateField = 'baptism_date',
   ascending = false,
+  elapsedBaptism = false,
 }: {
   rows: Member[];
   tier: Tier;
   chips: boolean;
   dateField?: string;
   ascending?: boolean;
+  elapsedBaptism?: boolean;
 }) {
   const groups = groupByUnit(rows, dateField, ascending);
   const cards = groups.map(([unit, list]) => (
     <SectionCard key={unit} title={unit} trailing={<CountBadge n={list.length} />}>
       <div className="stack">
         {list.map((m, i) => (
-          <MemberRow key={i} m={m} chips={chips} dateField={dateField} />
+          <MemberRow key={i} m={m} chips={chips} dateField={dateField} elapsedBaptism={elapsedBaptism} />
         ))}
       </div>
     </SectionCard>
@@ -513,11 +518,13 @@ export function DateList({
   chips,
   dateField = 'baptism_date',
   ascending = false,
+  elapsedBaptism = false,
 }: {
   rows: Member[];
   chips: boolean;
   dateField?: string;
   ascending?: boolean;
+  elapsedBaptism?: boolean;
 }) {
   const sorted = [...rows].sort((a, b) => {
     const da = parseMemberDate(a[dateField]);
@@ -532,7 +539,7 @@ export function DateList({
         <SectionCard key="bydate" title="By date">
           <div className="stack">
             {sorted.map((m, i) => (
-              <MemberRow key={i} m={m} chips={chips} showUnit dateField={dateField} />
+              <MemberRow key={i} m={m} chips={chips} showUnit dateField={dateField} elapsedBaptism={elapsedBaptism} />
             ))}
           </div>
         </SectionCard>,

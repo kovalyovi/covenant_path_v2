@@ -6,7 +6,7 @@ import {
   milestones, milestonesFor, needsCategories, responsibleOrg, completionOf, priesthoodEligible,
   callingEligible, aaronicEligible, endowmentEligible, templeExperienceValue, templeExperienceDisplay,
   isNA, expected, isMissing, patriarchalEligible, templeRecommendEligible,
-  goldenHourRows, nextSteps,
+  goldenHourRows, nextSteps, unitGoldenHour,
   type OrgBucket,
 } from '../logic/milestones';
 import type { Member } from '../lib/member';
@@ -307,5 +307,29 @@ describe('completionOf (detail-page ring) + detail eligibility gates', () => {
     expect(aaronicEligible(member({ sex: 'M', birth_date: `1 Jan ${thisYear - 14}` }))).toBe(true);
     expect(endowmentEligible(member({ birth_date: `1 Jan ${thisYear - 30}`, baptism_date: '1 Jan 2000' }))).toBe(true);
     expect(endowmentEligible(member({ birth_date: `1 Jan ${thisYear - 30}`, baptism_date: `1 Jan ${thisYear}` }))).toBe(false);
+  });
+});
+
+describe('unitGoldenHour (#8d per-unit indicators)', () => {
+  const full = (unit: string) => member({
+    unit_name: unit, sex: 'F', baptism_date: '1 Jan 2000', friends: 'Yes', calling: 'Yes',
+    ministering_brothers_sisters: 'Yes', ministering_assignment: 'Yes',
+    family_name_prepared: 'Yes', first_temple_visit: 'Yes',
+  });
+  it('groups by unit (people desc), counts fully-complete people + items done/total', () => {
+    const out = unitGoldenHour([
+      full('Alpha'),
+      member({ unit_name: 'Alpha', sex: 'F', baptism_date: '1 Jan 2000' }), // nothing done
+      full('Beta'),
+    ]);
+    expect(out.map((u) => u.unit)).toEqual(['Alpha', 'Beta']); // Alpha has 2 people → first
+    const alpha = out.find((u) => u.unit === 'Alpha')!;
+    expect(alpha.people).toBe(2);
+    expect(alpha.fullyComplete).toBe(1); // only the full member
+    expect(alpha.itemsDone).toBeGreaterThan(0);
+    expect(alpha.itemsDone).toBeLessThan(alpha.itemsTotal); // the empty member drags items down
+    const beta = out.find((u) => u.unit === 'Beta')!;
+    expect(beta.fullyComplete).toBe(1);
+    expect(beta.itemsDone).toBe(beta.itemsTotal); // its only member is fully complete
   });
 });
