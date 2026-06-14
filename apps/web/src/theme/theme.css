@@ -173,3 +173,27 @@ button {
 .skip-link:focus {
   top: var(--sm);
 }
+
+/* #6a commit-2: the "Refined" alternate visual style (toggle in Settings; persisted as data-look).
+   A more modern, cohesive chrome — a richer primary, cleaner surfaces, softer radii — previewed LIVE
+   so the user can compare against Classic and choose. The load-bearing milestone / unit / org identity
+   colors live in tokens.ts and are intentionally NOT changed here; this only retunes the app chrome. */
+[data-look='refined'] {
+  --primary: #5a5fe0;
+  --primary-container: #e7e8ff;
+  --secondary-container: #edebfc;
+  --surface: #ffffff;
+  --surface-container: #f5f4fc;
+  --surface-container-high: #efedf9;
+  --radius-card: 18px;
+  --radius-md: 10px;
+  --radius-pill: 22px;
+}
+[data-look='refined'][data-theme='dark'] {
+  --primary: #c5c8ff;
+  --primary-container: #393e9e;
+  --secondary-container: #2c2c3a;
+  --surface: #0f0f15;
+  --surface-container: #181820;
+  --surface-container-high: #20212b;
+}

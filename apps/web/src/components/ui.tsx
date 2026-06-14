@@ -74,11 +74,17 @@ interface SectionCardProps {
   iconNode?: ReactNode;
   trailing?: ReactNode;
   onClick?: () => void;
+  /** #10c: a left-edge completeness border + matching icon (✓ complete / ◐ partial / ⚠ incomplete) —
+   *  green / amber / red. Not color-only: pair with an icon/label at the call site too. */
+  tone?: 'good' | 'warn' | 'bad';
 }
 
+const TONE: Record<'good' | 'warn' | 'bad', string> = { good: '#2E7D32', warn: '#EF6C00', bad: '#E53935' };
+
 /** A titled section as a rounded card — the building block for detail + KPI pages. Mirrors SectionCard. */
-export function SectionCard({ title, children, icon, iconColor, iconNode, trailing, onClick }: SectionCardProps) {
+export function SectionCard({ title, children, icon, iconColor, iconNode, trailing, onClick, tone }: SectionCardProps) {
   const accent = iconColor ?? 'var(--primary)';
+  const toneStyle = tone ? { borderLeft: `3px solid ${TONE[tone]}` } : undefined;
   const head = (
     <div className="section-card__head">
       {iconNode ? (
@@ -102,12 +108,12 @@ export function SectionCard({ title, children, icon, iconColor, iconNode, traili
   );
   if (onClick) {
     return (
-      <button type="button" className="card card--tappable" onClick={onClick}>
+      <button type="button" className="card card--tappable" onClick={onClick} style={toneStyle}>
         {body}
       </button>
     );
   }
-  return <div className="card">{body}</div>;
+  return <div className="card" style={toneStyle}>{body}</div>;
 }
 
 // Accent may be a CSS var (var(--primary)) or a hex. hexA needs a hex; fall back to a neutral indigo

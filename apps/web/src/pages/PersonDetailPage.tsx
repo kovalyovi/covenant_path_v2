@@ -87,6 +87,8 @@ export function PersonDetailPage() {
           <SectionCard
             title="Covenant Path"
             iconNode={<CompletionRing pct={completionOf(member)} />}
+            /* #10c: a completeness border — green at 100%, amber while in progress, red at none. */
+            tone={completionOf(member) >= 1 ? 'good' : completionOf(member) > 0 ? 'warn' : 'bad'}
           >
             {/* #10a: the labeled chips are the SINGLE covenant-path representation — each carries its
                 ✓ done / ○ not yet / ⚠ data-issue state AND a tap tooltip. The old duplicate "done-text"
