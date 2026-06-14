@@ -20,6 +20,7 @@ import {
 } from '../../logic/kpis';
 import { Icon, type IconName } from '../../components/Icon';
 import { SectionCard, Segmented, RangePill, Progress } from '../../components/ui';
+import { useCountUp } from '../../hooks/useCountUp';
 import { PageScaffold, BigHeader, Columns } from '../../components/dashboard';
 import { TrendLine } from '../../components/TrendLine';
 import { TabGate } from '../../components/TabGate';
@@ -550,11 +551,13 @@ function HoverSummary({
 }
 
 function BigStat({ label, v }: { label: string; v: number }) {
+  const n = useCountUp(v); // animate the big stat up on load / period change
+  const display = Number.isInteger(v) ? String(Math.round(n)) : n.toFixed(1);
   return (
     <div style={{ flex: 1 }}>
       <div className="small muted">{label}</div>
-      <div style={{ fontSize: '1.6rem', fontWeight: 700, marginTop: 2 }}>
-        {v === Math.round(v) ? Math.round(v) : v.toFixed(1)}
+      <div style={{ fontSize: '1.6rem', fontWeight: 700, marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
+        {display}
       </div>
     </div>
   );

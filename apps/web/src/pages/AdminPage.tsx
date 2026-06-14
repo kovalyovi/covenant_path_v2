@@ -402,7 +402,8 @@ function Panel<T extends Json>({
       </Card>
     );
   }
-  return <>{children(state.data as T)}</>;
+  // Crossfade the real content in when it resolves (instead of a hard pop after the skeleton).
+  return <div className="reveal">{children(state.data as T)}</div>;
 }
 
 function Card({ title, trailing, children }: { title: string; trailing?: ReactNode; children: ReactNode }) {

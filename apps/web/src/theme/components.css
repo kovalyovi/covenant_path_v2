@@ -1136,6 +1136,47 @@ button.card--tappable:active {
   animation: card-flash 1.25s ease;
 }
 
+/* ---- Shared micro-animations (agent-recommended; all reduced-motion-safe via the global rule) ---- */
+:root {
+  --dur-reveal: 0.26s;
+  --motion-fast: 0.16s;
+}
+/* Content reveal — fade + tiny rise. Used where a skeleton resolves to real content (no hard pop). */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+}
+.reveal {
+  animation: fade-in var(--dur-reveal) ease both;
+}
+/* Toasts: slide-up + fade in, mirror out on dismiss (was a hard blink). */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(12px); }
+}
+@keyframes toast-out {
+  to { opacity: 0; transform: translateY(12px); }
+}
+.toast {
+  animation: toast-in 0.22s var(--ease-sheet) both;
+}
+.toast.toast--leaving {
+  animation: toast-out 0.2s ease both;
+}
+/* Golden Hour rings: a gentle pop on the FilledRing, and a per-arc stagger on the SectionedRing so the
+   "people complete" arcs draw in one by one. The centre number (the truth) is never hidden. */
+@keyframes ring-pop {
+  from { opacity: 0; transform: scale(0.85); }
+}
+.ring-pop {
+  animation: ring-pop 0.45s var(--ease-sheet) both;
+  transform-origin: center;
+}
+@keyframes arc-in {
+  from { opacity: 0; }
+}
+.ring-seg {
+  animation: arc-in 0.4s ease both;
+}
+
 /* #6b: side-sheet — a full-height panel anchored to the RIGHT on desktop/tablet (the previous screen
    stays visible-but-dimmed at left through the scrim), sliding in from the right and sliding back out. */
 .scrim.side {

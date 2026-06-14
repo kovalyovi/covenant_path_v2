@@ -14,6 +14,7 @@ interface ToastItem {
   id: number;
   message: string;
   action?: ToastAction;
+  leaving?: boolean; // drives the exit animation before the node unmounts
 }
 
 interface ToastApi {
@@ -30,13 +31,19 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     setItems((cur) => cur.filter((t) => t.id !== id));
   }, []);
 
+  // Play the exit animation, then unmount (reduced-motion zeroes the keyframe so this is ~instant).
+  const dismiss = useCallback((id: number) => {
+    setItems((cur) => cur.map((t) => (t.id === id ? { ...t, leaving: true } : t)));
+    window.setTimeout(() => remove(id), 200);
+  }, [remove]);
+
   const show = useCallback<ToastApi['show']>(
     ({ message, action, durationMs = 5000 }) => {
       const id = nextId.current++;
       setItems((cur) => [...cur, { id, message, action }]);
-      window.setTimeout(() => remove(id), durationMs);
+      window.setTimeout(() => dismiss(id), durationMs);
     },
-    [remove],
+    [dismiss],
   );
 
   const api = useMemo<ToastApi>(() => ({ show }), [show]);
@@ -47,14 +54,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {createPortal(
         <div className="toast-host" role="region" aria-live="polite" aria-label="Notifications">
           {items.map((t) => (
-            <div className="toast" key={t.id}>
+            <div className={t.leaving ? 'toast toast--leaving' : 'toast'} key={t.id}>
               <span>{t.message}</span>
               {t.action && (
                 <button
                   type="button"
                   onClick={() => {
                     t.action!.onClick();
-                    remove(t.id);
+                    dismiss(t.id);
                   }}
                 >
                   {t.action.label}

@@ -201,6 +201,7 @@ function NeedsBody() {
             showSnapshot={showSnapshot}
             groupByUnit={groupByUnit}
             showAttendance={isAttendance}
+            revealKey={`${cat.key}-${ascending}-${groupByUnit}-${ward ?? ''}`}
           />,
         ]}
       </Columns>
@@ -217,6 +218,7 @@ function CategorySection({
   showSnapshot,
   groupByUnit,
   showAttendance,
+  revealKey,
 }: {
   title: string;
   icon: IconName;
@@ -226,6 +228,8 @@ function CategorySection({
   showSnapshot: boolean;
   groupByUnit: boolean;
   showAttendance: boolean;
+  /** Re-keys the result list so changing category/sort/group/ward replays a quick fade (#anim). */
+  revealKey: string;
 }) {
   const byUnit = new Map<string, Member[]>();
   for (const m of missing) {
@@ -262,21 +266,23 @@ function CategorySection({
             </div>
           )}
           {showSnapshot && <hr className="divider" />}
-          {groupByUnit ? (
-            <div className="stack" style={{ gap: 14 }}>
-              {[...byUnit.keys()].sort().map((unit) => (
-                <div key={unit} className="stack" style={{ gap: 4 }}>
-                  <div className="row small" style={{ gap: 6, fontWeight: 700, color: unitColors.get(unit) ?? 'var(--on-surface)' }}>
-                    <Icon name="groups" size={14} color={unitColors.get(unit) ?? 'var(--on-surface-variant)'} />
-                    {unit} <CountBadge n={byUnit.get(unit)!.length} />
+          <div className="reveal" key={revealKey}>
+            {groupByUnit ? (
+              <div className="stack" style={{ gap: 14 }}>
+                {[...byUnit.keys()].sort().map((unit) => (
+                  <div key={unit} className="stack" style={{ gap: 4 }}>
+                    <div className="row small" style={{ gap: 6, fontWeight: 700, color: unitColors.get(unit) ?? 'var(--on-surface)' }}>
+                      <Icon name="groups" size={14} color={unitColors.get(unit) ?? 'var(--on-surface-variant)'} />
+                      {unit} <CountBadge n={byUnit.get(unit)!.length} />
+                    </div>
+                    <div className="stack">{byUnit.get(unit)!.map(row)}</div>
                   </div>
-                  <div className="stack">{byUnit.get(unit)!.map(row)}</div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="stack">{missing.map(row)}</div>
-          )}
+                ))}
+              </div>
+            ) : (
+              <div className="stack">{missing.map(row)}</div>
+            )}
+          </div>
         </>
       )}
     </SectionCard>

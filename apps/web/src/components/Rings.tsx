@@ -35,7 +35,7 @@ export function FilledRing({ value, color = status.success, label, sublabel, siz
   const g = geom(size);
   return (
     <div className="row" style={{ gap: 8, alignItems: 'center' }}>
-      <svg width={g.size} height={g.size} role="img" aria-label={`${Math.round(pct * 100)} percent ${sublabel ?? 'complete'}`}>
+      <svg className="ring-pop" width={g.size} height={g.size} role="img" aria-label={`${Math.round(pct * 100)} percent ${sublabel ?? 'complete'}`}>
         <circle cx={g.cx} cy={g.cx} r={g.r} fill="none" stroke="var(--outline-variant)" strokeWidth={g.stroke} />
         <circle
           cx={g.cx} cy={g.cx} r={g.r} fill="none" stroke={color} strokeWidth={g.stroke} strokeLinecap="round"
@@ -77,7 +77,8 @@ export function SectionedRing({ total, filled, color = status.info, label, subla
       <svg width={g.size} height={g.size} role="img" aria-label={`${filled} of ${total} people fully complete`}>
         {arcs.map((a) => (
           <path
-            key={a.i} d={arcPath(a.start, a.sweep, g.cx, g.r)} fill="none"
+            key={a.i} className="ring-seg" style={{ animationDelay: `${a.i * 45}ms` }}
+            d={arcPath(a.start, a.sweep, g.cx, g.r)} fill="none"
             stroke={a.on ? color : 'var(--outline-variant)'} strokeWidth={g.stroke} strokeLinecap={n > 1 ? 'butt' : 'round'}
           />
         ))}
