@@ -27,6 +27,7 @@ import { InvitePage } from './pages/InvitePage';
 // initial bundle, so first paint of the dashboard stays lean. lazyWithReload reloads the page once
 // when a chunk 404s because a deploy replaced the hashed assets under an open tab.
 const KpisTab = lazy(lazyWithReload(() => import('./pages/tabs/KpisTab').then((m) => ({ default: m.KpisTab }))));
+const LeadershipTab = lazy(lazyWithReload(() => import('./pages/tabs/LeadershipTab').then((m) => ({ default: m.LeadershipTab }))));
 const AdminPage = lazy(lazyWithReload(() => import('./pages/AdminPage').then((m) => ({ default: m.AdminPage }))));
 const AdminListPage = lazy(lazyWithReload(() => import('./pages/AdminListPage').then((m) => ({ default: m.AdminListPage }))));
 
@@ -80,6 +81,7 @@ export const router = createBrowserRouter([
           { path: 'needs', element: <NeedsTab /> },
           { path: 'kpis', element: <LazyRoute><KpisTab /></LazyRoute> },
           { path: 'table', element: <TableTab /> },
+          { path: 'leadership', element: <LazyRoute><LeadershipTab /></LazyRoute> },
           // "By Month" is no longer its own tab — the chart now lives at the bottom of KPIs (#1).
           { path: 'by-month', element: <Navigate to="/kpis" replace /> },
         ],

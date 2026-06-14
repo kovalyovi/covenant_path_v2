@@ -26,6 +26,7 @@ from covenant_path.membertools_adapter import (
     _recommend_index,
     _sex_index,
     adapt_sync,
+    staffing_by_unit,
 )
 from covenant_path.report import NA, NEEDS_PROFILE
 
@@ -519,3 +520,30 @@ def test_recommend_roster_absent_keeps_directory_member_sentinel():
     assert m.temple_recommend == NEEDS_PROFILE        # roster absent -> unknown, not a false 'No'
     assert m.melchizedek_priesthood == "Yes"          # per-member directory office still resolves
     assert m.living_ordinance == "Yes"                # per-member ordinances still resolve
+
+
+def test_staffing_by_unit_groups_tracked_callings_by_position_unit():
+    # #12: per-unit leadership roster from the household directory. Grouped by the POSITION's unitNumber
+    # (not the household's), and limited to LEADERSHIP-relevant callings (clerks etc. excluded).
+    payload = {
+        "households": [
+            {"unitNumber": 100, "members": [
+                {"uuid": "p1", "names": {"given": "Al", "family": "Pha"}, "positions": [
+                    {"name": "Ward Mission Leader", "unitNumber": 100, "setApart": True},
+                    {"name": "Stake Clerk", "unitNumber": 1, "setApart": True},  # not tracked
+                ]},
+                {"uuid": "p2", "names": {"given": "Be", "family": "Ta"}, "positions": [
+                    {"name": "Ward Missionary", "unitNumber": 100},
+                ]},
+                {"uuid": "p3", "names": {"given": "Ga", "family": "Mma"}, "positions": [
+                    {"name": "Elders Quorum President", "unitNumber": 200},  # held in a DIFFERENT unit
+                ]},
+            ]},
+        ],
+    }
+    sbu = staffing_by_unit(payload)
+    assert any(r["position"] == "Ward Mission Leader" and r["person"] for r in sbu[100])
+    assert any(r["position"] == "Ward Missionary" for r in sbu[100])
+    assert all("Clerk" not in r["position"] for r in sbu[100])           # untracked calling excluded
+    assert any(r["position"] == "Elders Quorum President" for r in sbu.get(200, []))  # by position unit
+    assert 1 not in sbu                                                  # the clerk made no entry

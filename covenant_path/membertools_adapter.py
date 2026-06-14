@@ -20,6 +20,7 @@ match our DB on `memberUuid` (76/76) and investigators (no memberUuid) on `id` (
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from typing import Any
 
@@ -148,6 +149,36 @@ def _calling_index(payload: dict) -> dict[str, list[str]]:
             if n not in cur:
                 cur.append(n)
     return idx
+
+
+# Leadership callings tracked for the staffing view (#12): the ward-mission team, the org presidencies,
+# and the bishopric. Keeps the per-unit roster small (the directory carries ~270 distinct callings).
+_TRACKED_CALLING = re.compile(
+    r"mission leader|missionary|president|counselor|bishop|presidency", re.I)
+
+
+def staffing_by_unit(payload: dict) -> dict[int, list[dict]]:
+    """unitNumber -> [{position, person, person_uuid, set_apart}] for the LEADERSHIP-relevant callings,
+    from the bulk household directory (#12). Grouped by the POSITION's own unitNumber (a person can hold
+    a calling in a different unit than their household), so each unit's roster is correct. Stored on the
+    `units` row (units.staffing) where the existing units_select RLS scopes it per unit."""
+    out: dict[int, list[dict]] = {}
+    for uuid, m, _unum in _household_members(payload):
+        person = _name(m)
+        for pos in (m.get("positions") or []):
+            if not isinstance(pos, dict):
+                continue
+            pname = pos.get("name")
+            punit = pos.get("unitNumber")
+            if not (pname and punit) or not _TRACKED_CALLING.search(pname):
+                continue
+            out.setdefault(int(punit), []).append({
+                "position": pname,
+                "person": person,
+                "person_uuid": uuid,
+                "set_apart": bool(pos.get("setApart")),
+            })
+    return out
 
 
 def _sex_from_household(m: dict) -> str | None:

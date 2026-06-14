@@ -577,8 +577,11 @@ def build_membertools_report(
              "profile_blocked": 0, "profile_error": 0}
     # The stake/ward structure from the payload itself, so the sync needs NO live LCR session for the
     # stake identity (the LCR session dies within days; the 45-day Member Tools token outlives it).
-    from covenant_path.membertools_adapter import context_from_sync
+    from covenant_path.membertools_adapter import context_from_sync, staffing_by_unit
     stats["unit_context"] = context_from_sync(payload)
+    # Per-unit leadership roster for the Leadership tab (#12) — session-independent (from the bulk
+    # household directory); stored on units.staffing in sync_stake, RLS-scoped by units_select.
+    stats["staffing_by_unit"] = staffing_by_unit(payload)
     if verbose:
         print(f"[membertools] /api/v5/sync -> {len(members)} covenant-path members")
 

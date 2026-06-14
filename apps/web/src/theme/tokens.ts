@@ -25,6 +25,8 @@ export const TABS: TabDef[] = [
   { path: 'needs', label: 'Needs', icon: 'checklist', color: '#D84315' },
   { path: 'kpis', label: 'KPIs', icon: 'insights', color: '#2E7D32' },
   { path: 'table', label: 'Table', icon: 'grid_on', color: '#5E35B1' },
+  // #12: per-unit leadership + staffing gaps + missionaries (short label so the 6-item nav fits).
+  { path: 'leadership', label: 'Leaders', icon: 'badge', color: '#00838F' },
   // "By Month" is no longer its own tab — the chart now lives at the bottom of KPIs (#1).
 ];
 

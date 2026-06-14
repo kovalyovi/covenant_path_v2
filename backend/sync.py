@@ -126,6 +126,16 @@ def sync_stake(client: LcrClient, members: list[dict], conn,
             current_unit_numbers.append(u.unit_number)
             if u.name:
                 unit_id_by_name[u.name] = uid
+    # #12: per-unit leadership roster on units.staffing, from the bulk household directory (session-
+    # independent). Best-effort — never fails the data sync. RLS-scoped per unit by units_select (stake
+    # leaders see every unit; a ward leader sees only their own), so no app-side filtering is needed.
+    staffing = (access or {}).get("_run_stats", {}).get("staffing_by_unit") or {}
+    if staffing and unit_id_by_number:
+        for unum, uid in unit_id_by_number.items():
+            try:
+                db.update_unit_staffing(conn, uid, staffing.get(unum) or staffing.get(int(unum)) or [])
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("staffing write skipped for unit %s: %s", unum, exc)
     # Restructuring: drop units that are no longer children of this stake. Gated on a non-empty
     # current list so a failed user_context can never wipe the stake's units (#2).
     if current_unit_numbers:

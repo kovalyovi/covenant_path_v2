@@ -310,6 +310,15 @@ def update_stake_missionaries(conn, stake_id: str, by_unit: dict) -> None:
     conn.commit()
 
 
+def update_unit_staffing(conn, unit_id: str, roster: list) -> None:
+    """Store a unit's leadership roster on units.staffing (#12, migration 0053):
+    [{position, person, person_uuid, set_apart}]. RLS-scoped per unit by units_select."""
+    with conn.cursor() as cur:
+        cur.execute("update units set staffing = %s where id = %s",
+                    (psycopg2.extras.Json(roster), unit_id))
+    conn.commit()
+
+
 def set_sync_state(conn, stake_id: str, state: str) -> None:
     """Coarse live status for the app banner. 'running' stamps sync_started_at; any other
     state ('done'/'error') just updates the flag."""
