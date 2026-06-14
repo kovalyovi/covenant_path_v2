@@ -27,6 +27,7 @@ from covenant_path.membertools_adapter import (
     _sex_index,
     adapt_sync,
     staffing_by_unit,
+    missionaries_by_unit,
 )
 from covenant_path.report import NA, NEEDS_PROFILE
 
@@ -547,3 +548,22 @@ def test_staffing_by_unit_groups_tracked_callings_by_position_unit():
     assert all("Clerk" not in r["position"] for r in sbu[100])           # untracked calling excluded
     assert any(r["position"] == "Elders Quorum President" for r in sbu.get(200, []))  # by position unit
     assert 1 not in sbu                                                  # the clerk made no entry
+
+
+def test_missionaries_by_unit_companionships():
+    # #3a: each missionariesAssigned entry is a COMPANIONSHIP (members + shared phone/email + the
+    # unitNumbers it serves); mission-wide (no unitNumbers) is skipped for the per-unit view.
+    payload = {"missionariesAssigned": [
+        {"unitNumbers": [100], "phone": "555-1", "email": "comp@x", "mission": {"name": "NC Raleigh"},
+         "missionaries": [{"uuid": "e1", "names": {"given": "El", "family": "One"}, "email": "e1@x", "type": "ELDER"},
+                          {"uuid": "e2", "names": {"given": "El", "family": "Two"}, "type": "ELDER"}]},
+        {"unitNumbers": None, "mission": {"name": "Mission-wide"}, "missionaries": [{"uuid": "s1", "names": {}}]},
+        {"unitNumbers": [100, 200], "mission": {}, "missionaries": [{"uuid": "e3", "names": {}}]},
+    ]}
+    out = missionaries_by_unit(payload)
+    assert set(out.keys()) == {100, 200}                      # mission-wide skipped
+    assert len(out[100]) == 2                                 # two companionships serve unit 100
+    comp = next(c for c in out[100] if c["phone"] == "555-1")
+    assert comp["mission_name"] == "NC Raleigh"
+    assert len(comp["missionaries"]) == 2
+    assert any(m["uuid"] == "e1" and m["name"] for m in comp["missionaries"])

@@ -319,6 +319,31 @@ def update_unit_staffing(conn, unit_id: str, roster: list) -> None:
     conn.commit()
 
 
+def attach_missionary_photos(conn, stake_id: str, uuid_to_url: dict) -> None:
+    """Set photo_url on each stored missionary (in stakes.missionaries companionships) whose uuid has an
+    uploaded avatar (#3a/#11). Best-effort; tolerates the new companionship shape + the old flat shape."""
+    if not uuid_to_url:
+        return
+    with conn.cursor() as cur:
+        cur.execute("select missionaries from stakes where id=%s", (stake_id,))
+        row = cur.fetchone()
+        roster = (row[0] if row else None) or {}
+        changed = False
+        for comps in roster.values():
+            for comp in (comps or []):
+                if not isinstance(comp, dict):
+                    continue
+                people = comp.get("missionaries") if isinstance(comp.get("missionaries"), list) else [comp]
+                for m in people:
+                    if isinstance(m, dict) and m.get("uuid") in uuid_to_url:
+                        m["photo_url"] = uuid_to_url[m["uuid"]]
+                        changed = True
+        if changed:
+            cur.execute("update stakes set missionaries=%s where id=%s",
+                        (psycopg2.extras.Json(roster), stake_id))
+    conn.commit()
+
+
 def set_sync_state(conn, stake_id: str, state: str) -> None:
     """Coarse live status for the app banner. 'running' stamps sync_started_at; any other
     state ('done'/'error') just updates the flag."""

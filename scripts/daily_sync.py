@@ -310,7 +310,10 @@ def _sync_one(args) -> dict:
                     # no cmisId (#11). The missionary photo URLs ride back for the roster (best-effort).
                     pres = photopipe.sync_photos_from_bundle(conn, s["stake_id"], s["stake_unit"], at)
                     result["photos"] = pres["stats"]
-                    args._missionary_photo_urls = pres["missionary_urls"]
+                    try:
+                        db.attach_missionary_photos(conn, s["stake_id"], pres["missionary_urls"])
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("missionary photo attach skipped: %s", exc)
                 else:
                     result["photos"] = photopipe.sync_photos_for_stake(client, conn, s["stake_id"], s["stake_unit"])
                 logger.info("photos: %s", result["photos"])

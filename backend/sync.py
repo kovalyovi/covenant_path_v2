@@ -182,17 +182,27 @@ def sync_stake(client: LcrClient, members: list[dict], conn,
         db.update_stake_kpis(conn, stake_id, kpi_subtree(client.dashboard_data()))
     except Exception as exc:  # noqa: BLE001
         logger.warning("KPI dashboard fetch skipped for stake %s: %s", stake_id, exc)
-    # full-time missionaries assigned to each ward/branch (#29) — one cheap action per unit
+    # full-time missionaries per ward (#3a) — PREFER the session-independent bulk COMPANIONSHIPS
+    # (missionariesAssigned) so the roster refreshes every sync even with a dead LCR session; fall back
+    # to the live /mlt action only when the bulk roster is empty (e.g. the legacy one-work path).
     try:
-        from lcr_client.missionaries import fetch_unit_missionaries
+        num_to_name = {c.unit_number: c.name for c in ctx.child_units if c.unit_number}
+        bulk = (access or {}).get("_run_stats", {}).get("missionaries_by_unit") or {}
         by_unit: dict[str, list] = {}
-        for u in ctx.child_units:
-            if u.unit_number and u.type in ("WARD", "BRANCH"):
-                ms = fetch_unit_missionaries(client.session, u.unit_number)
-                if ms:
-                    by_unit[u.name] = ms
+        for unum, comps in bulk.items():
+            name = num_to_name.get(int(unum)) or num_to_name.get(unum)
+            if name:
+                by_unit[name] = comps
+        if not by_unit:
+            from lcr_client.missionaries import fetch_unit_missionaries
+            for u in ctx.child_units:
+                if u.unit_number and u.type in ("WARD", "BRANCH"):
+                    ms = fetch_unit_missionaries(client.session, u.unit_number)
+                    if ms:
+                        by_unit[u.name] = ms
         db.update_stake_missionaries(conn, stake_id, by_unit)
-        logger.info("missionaries: %d units with assignments", len(by_unit))
+        logger.info("missionaries: %d units with companionships (source=%s)",
+                    len(by_unit), "bulk" if bulk else "mlt")
     except Exception as exc:  # noqa: BLE001 — never fail the data sync over the roster
         logger.warning("missionary roster skipped for stake %s: %s", stake_id, exc)
     # rebuild access roles from current callings (no manual role assignment)

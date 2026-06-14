@@ -181,6 +181,37 @@ def staffing_by_unit(payload: dict) -> dict[int, list[dict]]:
     return out
 
 
+def missionaries_by_unit(payload: dict) -> dict[int, list[dict]]:
+    """Per-unit full-time missionary COMPANIONSHIPS from the bulk `missionariesAssigned` — session-
+    independent (no /mlt server action). Each `missionariesAssigned` entry IS a companionship:
+    `{unitNumbers, phone, email, mission, missionaries:[{uuid, names, sex, email, type}]}`. We expand
+    each across every unit it serves and keep the companionship grouping (members + shared phone/email).
+    Mission-wide companionships (no `unitNumbers`) have no ward → skipped for the per-unit view."""
+    out: dict[int, list[dict]] = {}
+    for c in (payload.get("missionariesAssigned") or []):
+        if not isinstance(c, dict):
+            continue
+        units = c.get("unitNumbers") or []
+        if not units:
+            continue
+        mission = c.get("mission") or {}
+        comp = {
+            "phone": c.get("phone") or mission.get("phone"),
+            "email": c.get("email") or mission.get("email"),
+            "mission_name": mission.get("name"),
+            "missionaries": [
+                {"uuid": m.get("uuid"), "name": _name(m), "email": m.get("email"), "type": m.get("type")}
+                for m in (c.get("missionaries") or []) if isinstance(m, dict)
+            ],
+        }
+        for u in units:
+            try:
+                out.setdefault(int(u), []).append(comp)
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
 def _sex_from_household(m: dict) -> str | None:
     s = (m.get("sex") or "").upper()
     return "F" if s.startswith("F") else "M" if s.startswith("M") else None
