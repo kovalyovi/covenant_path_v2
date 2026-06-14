@@ -1085,6 +1085,39 @@ button.card--tappable:active {
   to { transform: translateY(100%); }
 }
 
+/* #25: a clickable "completion by unit" row that jumps to the unit's card. Full-width, transparent,
+   with a gentle hover tint + press feedback so it reads as tappable. */
+.unit-jump {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.14s ease, transform 0.1s ease;
+}
+.unit-jump:hover {
+  background: var(--surface-container);
+}
+.unit-jump:active {
+  transform: scale(0.99);
+}
+
+/* #25: brief highlight when a card is scrolled to ("hey, you landed here"). Ends on the card's own
+   surface so there's no residual tint. Reduced-motion zeroes the duration (instant) via the global rule. */
+@keyframes card-flash {
+  0%, 18% { background: color-mix(in srgb, var(--primary) 16%, var(--surface)); }
+  100% { background: var(--surface); }
+}
+.card--flash {
+  animation: card-flash 1.25s ease;
+}
+
 /* #6b: side-sheet — a full-height panel anchored to the RIGHT on desktop/tablet (the previous screen
    stays visible-but-dimmed at left through the scrim), sliding in from the right and sliding back out. */
 .scrim.side {

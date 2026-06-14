@@ -14,7 +14,7 @@ import {
 } from '../../logic/milestones';
 import { FilledRing, SectionedRing } from '../../components/Rings';
 import {
-  PageScaffold, SectionTitle, OrgFilterBar, SubtleNote, UnitGrid, DateList, orgNoteFor,
+  PageScaffold, SectionTitle, OrgFilterBar, SubtleNote, UnitGrid, DateList, orgNoteFor, scrollToUnit,
 } from '../../components/dashboard';
 import { Segmented, SectionCard, RangePill, Progress } from '../../components/ui';
 import { Icon, type IconName } from '../../components/Icon';
@@ -97,6 +97,7 @@ function GoldenHourBody() {
       <>
         <PageScaffold
           tier={tier}
+          maxWidth={960}
           header={
             <div className="stack" style={{ gap: 8 }}>
               {sectionToggle}
@@ -139,6 +140,7 @@ function GoldenHourBody() {
     <>
       <PageScaffold
         tier={tier}
+        maxWidth={960}
         header={
           <div className="stack" style={{ gap: 10 }}>
             {sectionToggle}
@@ -201,15 +203,23 @@ function UnitCompletionCard({ rows }: { rows: Member[] }) {
   return (
     <SectionCard title="Completion by unit">
       <div className="tiny muted" style={{ marginBottom: 10 }}>
-        Left: people fully complete (one arc each). Right: items complete overall.
+        Left: people fully complete (one arc each). Right: items complete overall. Tap a unit to jump to it.
       </div>
-      <div className="stack" style={{ gap: 14 }}>
+      <div className="stack" style={{ gap: 6 }}>
         {units.map((u) => (
-          <div key={u.unit} className="row" style={{ gap: 12, alignItems: 'center' }}>
-            <span className="small" style={{ fontWeight: 600, flex: 1, minWidth: 0 }}>{u.unit}</span>
-            <SectionedRing total={u.people} filled={u.fullyComplete} sublabel="people" />
-            <FilledRing value={u.itemsTotal ? u.itemsDone / u.itemsTotal : 1} sublabel="items" />
-          </div>
+          // #25: each row jumps to that unit's card below (smooth scroll + a brief flash). Larger rings.
+          <button
+            key={u.unit}
+            type="button"
+            className="unit-jump"
+            onClick={() => scrollToUnit(u.unit)}
+            title={`Jump to ${u.unit}`}
+          >
+            <span className="row" style={{ fontWeight: 600, flex: 1, minWidth: 0, gap: 4 }}>{u.unit}</span>
+            <SectionedRing size={68} total={u.people} filled={u.fullyComplete} sublabel="people" />
+            <FilledRing size={68} value={u.itemsTotal ? u.itemsDone / u.itemsTotal : 1} sublabel="items" />
+            <Icon name="chevron_right" size={18} />
+          </button>
         ))}
       </div>
     </SectionCard>

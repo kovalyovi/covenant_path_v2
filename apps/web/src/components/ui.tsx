@@ -77,12 +77,14 @@ interface SectionCardProps {
   /** #10c: a left-edge completeness border + matching icon (✓ complete / ◐ partial / ⚠ incomplete) —
    *  green / amber / red. Not color-only: pair with an icon/label at the call site too. */
   tone?: 'good' | 'warn' | 'bad';
+  /** DOM id (e.g. so a "jump to unit" link can scrollIntoView + flash this card). */
+  id?: string;
 }
 
 const TONE: Record<'good' | 'warn' | 'bad', string> = { good: '#2E7D32', warn: '#EF6C00', bad: '#E53935' };
 
 /** A titled section as a rounded card — the building block for detail + KPI pages. Mirrors SectionCard. */
-export function SectionCard({ title, children, icon, iconColor, iconNode, trailing, onClick, tone }: SectionCardProps) {
+export function SectionCard({ title, children, icon, iconColor, iconNode, trailing, onClick, tone, id }: SectionCardProps) {
   const accent = iconColor ?? 'var(--primary)';
   const toneStyle = tone ? { borderLeft: `3px solid ${TONE[tone]}` } : undefined;
   const head = (
@@ -108,12 +110,12 @@ export function SectionCard({ title, children, icon, iconColor, iconNode, traili
   );
   if (onClick) {
     return (
-      <button type="button" className="card card--tappable" onClick={onClick} style={toneStyle}>
+      <button type="button" id={id} className="card card--tappable" onClick={onClick} style={toneStyle}>
         {body}
       </button>
     );
   }
-  return <div className="card" style={toneStyle}>{body}</div>;
+  return <div id={id} className="card" style={toneStyle}>{body}</div>;
 }
 
 // Accent may be a CSS var (var(--primary)) or a hex. hexA needs a hex; fall back to a neutral indigo

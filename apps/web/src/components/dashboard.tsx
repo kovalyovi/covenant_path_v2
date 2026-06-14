@@ -536,6 +536,24 @@ function groupByUnit(rows: Member[], dateField: string, ascending: boolean): Arr
   return [...by.keys()].sort().map((k) => [k, by.get(k)!] as [string, Member[]]);
 }
 
+/** Stable DOM id for a unit's card so a "jump to unit" link can scroll to it (#25). */
+export function unitDomId(unit: string): string {
+  return `unit-${unit.replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase()}`;
+}
+
+/** Smooth-scroll to a unit's card and flash it ("hey, you scrolled here") — #25. Respects
+ *  prefers-reduced-motion (snaps instead of smooth-scrolls). No-op if the card isn't on screen. */
+export function scrollToUnit(unit: string) {
+  const el = document.getElementById(unitDomId(unit));
+  if (!el) return;
+  const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+  el.classList.remove('card--flash');
+  void el.offsetWidth; // reflow so re-adding the class restarts the animation
+  el.classList.add('card--flash');
+  window.setTimeout(() => el.classList.remove('card--flash'), 1300);
+}
+
 /** Cards grouped by unit, laid out in 1/2/3 columns by tier. Mirrors `_UnitGrid`. */
 export function UnitGrid({
   rows,
@@ -554,7 +572,7 @@ export function UnitGrid({
 }) {
   const groups = groupByUnit(rows, dateField, ascending);
   const cards = groups.map(([unit, list]) => (
-    <SectionCard key={unit} title={unit} trailing={<CountBadge n={list.length} />}>
+    <SectionCard key={unit} id={unitDomId(unit)} title={unit} trailing={<CountBadge n={list.length} />}>
       <div className="stack">
         {list.map((m, i) => (
           <MemberRow key={i} m={m} chips={chips} dateField={dateField} elapsedBaptism={elapsedBaptism} />
