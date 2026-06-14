@@ -3,9 +3,9 @@
 //   • OrgBadge       — WML/RS/EQ SHORTHAND + org color + a tooltip carrying the full label (#1d/#8c/#8.1c/#3)
 //   • AttendancePill — recent sacrament-attendance health (#1e); 0 is BOLD with a red ⓘ (non-color cue)
 import { responsibleOrg, orgInfo, type OrgBucket } from '../logic/milestones';
-import { memberAttendance, type AttendanceBucket, type AttendanceLevel } from '../logic/kpis';
+import { memberAttendance, type AttendanceBucket } from '../logic/kpis';
 import type { Member } from '../lib/member';
-import { status, hexA } from '../theme/tokens';
+import { hexA, attendanceColor } from '../theme/tokens';
 import { Icon, type IconName } from './Icon';
 
 /** WML/RS/EQ shorthand badge: the org color + a "SHORT — Long" tooltip (hover + screen-reader label).
@@ -31,22 +31,13 @@ export function OrgBadge({ org, member }: { org?: OrgBucket | null; member?: Mem
   );
 }
 
-/** Map the (theme-independent) attendance level to a semantic status color here in the UI layer. */
-const ATT_COLOR: Record<AttendanceLevel, string> = {
-  great: status.success,
-  fair: status.warning,
-  poor: status.danger,
-  none: status.danger,
-  unknown: status.neutral,
-};
-
 /** Sacrament-attendance pill (#1e): "Sacrament 7/8" colored by health. The 0 case is BOLD with a red
  *  ⓘ glyph (so it's not signalled by color alone — WCAG 1.4.1). `unknown` (no data) renders nothing in
  *  compact rows. Pass an explicit `bucket` or a `member` to derive it from `details.sacrament`. */
 export function AttendancePill({ bucket, member }: { bucket?: AttendanceBucket; member?: Member }) {
   const b = bucket ?? (member ? memberAttendance(member) : null);
   if (!b || b.level === 'unknown') return null;
-  const color = ATT_COLOR[b.level];
+  const color = attendanceColor(b.level);
   const attention = b.level === 'none';
   return (
     <span

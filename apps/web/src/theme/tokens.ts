@@ -11,6 +11,28 @@ export const status = {
   neutral: '#616161',
 } as const;
 
+/** Data-table cell fills (Yes / No / N-A / recommend-expired) — centralized here (#6a) so the one set
+ *  of values is shared instead of re-declared in each view. These are FILL backgrounds (3:1 against the
+ *  adjacent surface is the bar to clear), with dark text on top. */
+export const cell = {
+  yes: '#c8e6c9',
+  no: '#ffcdd2',
+  na: '#e0e0e0',
+  amber: '#ffe082',
+} as const;
+
+/** The sacrament-attendance health level → a semantic status hue. One mapping, shared by the pill and
+ *  the detail timeline (#1e/#10b). `level` is the pure logic value from `logic/kpis.attendanceBucket`. */
+export function attendanceColor(level: 'great' | 'fair' | 'poor' | 'none' | 'unknown'): string {
+  switch (level) {
+    case 'great': return status.success;
+    case 'fair': return status.warning;
+    case 'poor':
+    case 'none': return status.danger;
+    case 'unknown': return status.neutral;
+  }
+}
+
 /** The 5 dashboard tabs — each carries its own accent so the nav reads at a glance (#nav). */
 export interface TabDef {
   path: string;

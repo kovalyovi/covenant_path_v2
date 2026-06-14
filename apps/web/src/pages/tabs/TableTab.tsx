@@ -13,6 +13,7 @@ import { isInvestigator, displayFieldValue } from '../../lib/member';
 import { endowmentDisplay, templeExperienceDisplay, ageYears } from '../../logic/milestones';
 import { isDataIssue } from '../../logic/fieldDisplay';
 import { parseMemberDate, tenure } from '../../logic/dates';
+import { cell } from '../../theme/tokens';
 import { Icon } from '../../components/Icon';
 import { Modal } from '../../components/Modal';
 import { Button } from '../../components/ui';
@@ -110,10 +111,11 @@ function issueOf(m: Member, key: string): boolean {
   return isDataIssue(m[key]);
 }
 
-const GREEN = '#c8e6c9';
-const RED = '#ffcdd2';
-const GREY = '#e0e0e0';
-const AMBER = '#ffe082';
+// #6a: table cell fills come from the one shared token set (theme/tokens.cell).
+const GREEN = cell.yes;
+const RED = cell.no;
+const GREY = cell.na;
+const AMBER = cell.amber;
 
 function cellColor(v: string, kind: Kind): string | null {
   if (kind === 'friends') {

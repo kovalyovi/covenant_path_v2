@@ -16,6 +16,7 @@ import {
 } from '../logic/milestones';
 import { agoOrNever, parseMemberDate } from '../logic/dates';
 import { sacramentWindow, SACRAMENT_WINDOW_WEEKS, attendanceBucket } from '../logic/kpis';
+import { attendanceColor } from '../theme/tokens';
 import { Avatar, IconButton, SectionCard } from '../components/ui';
 import { Icon, type IconName } from '../components/Icon';
 import { GoldenHourChips } from '../components/GoldenHourChips';
@@ -235,10 +236,7 @@ function SacramentSection({ d }: { d: Record<string, unknown> }) {
   if (win == null) return null;
   const bucket = attendanceBucket(win);
   const PRESENT = '#2e7d32';
-  const ATT_COLOR: Record<string, string> = {
-    great: '#2e7d32', fair: '#ef6c00', poor: '#e53935', none: '#e53935', unknown: '#616161',
-  };
-  const summaryColor = ATT_COLOR[bucket.level];
+  const summaryColor = attendanceColor(bucket.level);
   // newest-first; render the windowed markers oldest→newest so the timeline reads L→R.
   const withDates = all.map((s) => ({ s, dt: parseMemberDate(s['date']) }));
   const anyDates = withDates.some((x) => x.dt != null);
