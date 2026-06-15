@@ -3,6 +3,7 @@
 // companionship — its missionaries (with avatar photos from /api/v5/sync/files) + a SHARED phone/email.
 // Tolerant of the older flat shape (one missionary per row) for stakes not yet re-synced.
 
+import { useState } from 'react';
 import { useDashboard } from '../hooks/useDashboard';
 import { Icon } from './Icon';
 import { Avatar, SectionCard } from './ui';
@@ -48,23 +49,56 @@ function emailParts(raw?: string): { href: string; text: string } | null {
   return { href: `mailto:${text}`, text };
 }
 
-/** Phone + email as REAL anchors, each on its own row, sanitized so the link is just the number/address
- *  (no trailing label) and copies cleanly. `size` scales the type (default = small). */
-function Contact({ phone, email, size = 'small' }: { phone?: string; email?: string; size?: 'tiny' | 'small' }) {
+/** A small copy-to-clipboard button (icon-only on phones, icon+label on wider screens). */
+function CopyBtn({ text, what }: { text: string; what: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="contact-btn"
+      title={`Copy ${what}`}
+      onClick={() => {
+        navigator.clipboard?.writeText(text).then(
+          () => { setCopied(true); window.setTimeout(() => setCopied(false), 1400); },
+          () => {},
+        );
+      }}
+    >
+      <Icon name={copied ? 'check' : 'copy'} size={15} />
+      <span className="contact-btn__label">{copied ? 'Copied' : 'Copy'}</span>
+    </button>
+  );
+}
+
+/** Phone + email as PLAIN TEXT, each with Copy + a primary action (Call / Email) to the right. The
+ *  values are sanitized (no trailing label like "…Morrisville"). Labels hide on small screens. */
+function Contact({ phone, email }: { phone?: string; email?: string }) {
   const ph = phoneParts(phone);
   const em = emailParts(email);
   if (!ph && !em) return null;
   return (
-    <div className="stack" style={{ gap: 3 }}>
+    <div className="stack" style={{ gap: 6 }}>
       {ph && (
-        <a className={`row ${size}`} href={ph.href} style={{ gap: 5, color: 'var(--primary)', alignItems: 'center' }}>
-          <Icon name="account" size={14} /> {ph.text}
-        </a>
+        <div className="contact-line">
+          <span className="contact-line__value">{ph.text}</span>
+          <span className="contact-line__actions">
+            <CopyBtn text={ph.text} what="number" />
+            <a className="contact-btn" href={ph.href} title="Call">
+              <Icon name="account" size={15} /><span className="contact-btn__label">Call</span>
+            </a>
+          </span>
+        </div>
       )}
       {em && (
-        <a className={`row ${size}`} href={em.href} style={{ gap: 5, color: 'var(--primary)', alignItems: 'center', wordBreak: 'break-all' }}>
-          <Icon name="mail" size={14} /> {em.text}
-        </a>
+        <div className="contact-line">
+          <span className="contact-line__value" style={{ wordBreak: 'break-all' }}>{em.text}</span>
+          <span className="contact-line__actions">
+            <CopyBtn text={em.text} what="email" />
+            <a className="contact-btn" href={em.href} title="Email">
+              <Icon name="mail" size={15} /><span className="contact-btn__label">Email</span>
+            </a>
+          </span>
+        </div>
       )}
     </div>
   );
@@ -79,6 +113,8 @@ export function MissionaryStrip({ missionaries }: { missionaries: MissionaryRec[
     <div className="stack" style={{ gap: 14 }}>
       {comps.map((c, i) => (
         <div key={i} className="stack" style={{ gap: 6 }}>
+          {/* a separator between companionships */}
+          {i > 0 && <hr className="divider" style={{ marginBottom: 8 }} />}
           <div className="row" style={{ gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
             {c.missionaries.map((m, j) => (
               <span key={j} className="row" style={{ gap: 8, alignItems: 'center' }}>
@@ -97,7 +133,7 @@ export function MissionaryStrip({ missionaries }: { missionaries: MissionaryRec[
 /** Detail-style companionship list with photos + shared contact (person detail / by-unit section). */
 export function MissionariesSection({
   unitName,
-  title = 'Full-Time Missionaries',
+  title = 'Missionaries',
 }: {
   unitName: string | null | undefined;
   title?: string;
@@ -106,24 +142,24 @@ export function MissionariesSection({
   return (
     <SectionCard title={title} icon="volunteer">
       {comps.length === 0 ? (
-        <p className="muted">No assigned missionaries on record for {unitName ? `${unitName}.` : 'this unit.'}</p>
+        <p className="row small" style={{ gap: 6, alignItems: 'center', color: 'var(--warning)' }}>
+          <Icon name="warning" size={15} color="var(--warning)" />
+          No missionaries assigned {unitName ? `to ${unitName}.` : 'to this unit.'}
+        </p>
       ) : (
         <div className="stack" style={{ gap: 12 }}>
           {comps.map((c, i) => (
             <div key={i} className="stack" style={{ gap: 6 }}>
-              <div className="stack" style={{ gap: 6 }}>
+              {i > 0 && <hr className="divider" />}
+              <div className="row" style={{ gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
                 {c.missionaries.map((m, j) => (
                   <div key={j} className="row" style={{ gap: 8, alignItems: 'center' }}>
                     <Avatar name={m.name ?? '?'} photoUrl={m.photo_url} size={34} />
-                    <div style={{ minWidth: 0 }}>
-                      <div>{m.name ?? '—'}</div>
-                      {m.type && <div className="tiny muted">{m.type}</div>}
-                    </div>
+                    <span style={{ fontWeight: 600 }}>{m.name ?? '—'}</span>
                   </div>
                 ))}
               </div>
               <Contact phone={c.phone} email={c.email} />
-              {i < comps.length - 1 && <hr className="divider" />}
             </div>
           ))}
         </div>

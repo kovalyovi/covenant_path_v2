@@ -672,6 +672,46 @@ button.card--tappable:active {
   }
 }
 
+/* Missionary contact rows: plain-text value on the left + Copy / Call / Email buttons on the right
+   (icon-only on phones, icon+label on wider screens). */
+.contact-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: space-between;
+}
+.contact-line__value {
+  min-width: 0;
+  font-size: 0.9rem;
+}
+.contact-line__actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.contact-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--primary);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  text-decoration: none;
+}
+.contact-btn:hover {
+  background: var(--surface-container);
+}
+@media (max-width: 600px) {
+  .contact-btn__label {
+    display: none;
+  }
+}
+
 /* ---- Custom dropdown (filter rows: Category / Units, with icons + colors) --------------------- */
 .dd {
   position: relative;

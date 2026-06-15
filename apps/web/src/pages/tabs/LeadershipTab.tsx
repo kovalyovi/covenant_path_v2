@@ -81,8 +81,6 @@ function UnitLeadershipCard({ unit, missionaries }: { unit: UnitRow; missionarie
   const roster = unit.staffing ?? [];
   const gaps = staffingGaps(roster);
   const missing = gaps.filter((g) => !g.ok).length;
-  // Everything we tracked for this unit, sorted, for the "currently serving" list.
-  const serving = [...roster].sort((a, b) => a.position.localeCompare(b.position));
 
   const badge = missing > 0
     ? <span className="chip" style={{ background: hexA(status.danger, 0.14), borderColor: hexA(status.danger, 0.5), color: status.danger, fontSize: 12, fontWeight: 700 }}>
@@ -94,20 +92,14 @@ function UnitLeadershipCard({ unit, missionaries }: { unit: UnitRow; missionarie
 
   return (
     <SectionCard title={unit.name} icon="badge" trailing={badge}>
-      {/* Required-role checklist: the calling label on the LEFT; the RIGHT slot shows a green check +
-          who's serving when the calling EXISTS, or "Not filled" (warning) when it's a gap (#callings). */}
+      {/* Required-role checklist: the calling on the LEFT, just a green CHECK when it's filled, or
+          "Not filled" (warning) when it's a gap. No counts, no holder names (#leaders). */}
       <div className="stack" style={{ gap: 6 }}>
         {gaps.map((g) => (
-          <div key={g.key} className="row" style={{ justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
-            <span className="row" style={{ gap: 4, alignItems: 'center', minWidth: 0 }}>
-              <span style={{ fontWeight: 600 }}>{g.label}</span>
-              {g.min > 1 && <span className="tiny muted">({g.have}/{g.min})</span>}
-            </span>
+          <div key={g.key} className="row" style={{ justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+            <span style={{ fontWeight: 600, minWidth: 0 }}>{g.label}</span>
             {g.ok ? (
-              <span className="row small" style={{ gap: 5, alignItems: 'center', textAlign: 'right', minWidth: 0, color: status.success }}>
-                <Icon name="check_circle" size={15} color={status.success} />
-                <span className="muted" style={{ minWidth: 0 }}>{g.holders.join(', ')}</span>
-              </span>
+              <Icon name="check_circle" size={17} color={status.success} />
             ) : (
               <span className="row small" style={{ gap: 5, alignItems: 'center', color: status.danger, fontWeight: 600 }}>
                 <Icon name="warning" size={15} color={status.danger} /> Not filled
@@ -117,34 +109,20 @@ function UnitLeadershipCard({ unit, missionaries }: { unit: UnitRow; missionarie
         ))}
       </div>
 
-      {serving.length > 0 && (
-        <>
-          <hr className="divider" />
-          <div className="tiny muted" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 }}>
-            Currently serving
-          </div>
-          <div className="stack" style={{ gap: 2 }}>
-            {serving.map((s, i) => (
-              <div key={i} className="row small" style={{ justifyContent: 'space-between', gap: 8 }}>
-                <span style={{ minWidth: 0 }}>{s.position}</span>
-                <span className="muted" style={{ textAlign: 'right', minWidth: 0 }}>{s.person ?? '—'}</span>
-              </div>
-            ))}
-          </div>
-        </>
+      {/* Missionaries — ALWAYS shown; a warning when none are assigned to the unit. */}
+      <hr className="divider" />
+      <div className="tiny muted" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 }}>
+        Missionaries
+      </div>
+      {missionaries.length > 0 ? (
+        <MissionaryStrip missionaries={missionaries} />
+      ) : (
+        <div className="row small" style={{ gap: 6, alignItems: 'center', color: status.warning }}>
+          <Icon name="warning" size={15} color={status.warning} /> No missionaries assigned to this unit
+        </div>
       )}
 
-      {missionaries.length > 0 && (
-        <>
-          <hr className="divider" />
-          <div className="tiny muted" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 }}>
-            Missionaries
-          </div>
-          <MissionaryStrip missionaries={missionaries} />
-        </>
-      )}
-
-      {/* Per-unit deeplink to LCR's ward-leadership page (to view/fill callings). */}
+      {/* Per-unit deeplink to LCR's leadership page (to view/fill callings). */}
       <hr className="divider" />
       <a
         className="row small"
@@ -153,7 +131,7 @@ function UnitLeadershipCard({ unit, missionaries }: { unit: UnitRow; missionarie
         rel="noopener noreferrer"
         style={{ gap: 5, alignItems: 'center', color: 'var(--primary)', fontWeight: 600 }}
       >
-        <Icon name="open_in_new" size={15} /> Ward leadership in LCR
+        <Icon name="open_in_new" size={15} /> {unit.name} leadership in LCR
       </a>
     </SectionCard>
   );
