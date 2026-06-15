@@ -454,7 +454,8 @@ def enrollment_status(email: str, auth_id: str) -> dict:
             # read)? Drives the "refresh patriarchal" banner alongside is_provider + patriarchal_pending.
             "can_refresh_patriarchal": "menu.view.member.profiles" in (coverage.get("features") or []),
             "enrolled_at": cred.get("updated_at"),
-            "last_failed_at": cred.get("last_failed_at"),
+            # last_failed_at is AVAILABLE (used above to derive `state`) but no client reads the raw
+            # timestamp — the staleness verdict lives in `state`; trimmed from the response.
             "last_error": cred.get("last_error"),
         }
     return {
@@ -639,13 +640,17 @@ def _enrolled_stakes() -> list[dict]:
         creds = sc if isinstance(sc, list) else ([sc] if isinstance(sc, dict) else [])
         cred = creds[0] if creds else None
         cov = (cred or {}).get("coverage") or {}
+        # AVAILABLE on the stake/credential rows but NOT emitted — no admin-console surface (web,
+        # iOS, or Android) reads them: stakes.onboarded_at, and credential access_rank /
+        # last_failed_at / last_succeeded_at / membertools_minted_at. (last_failed_at + the
+        # membertools_* columns are still SELECTED above — they drive the computed `state`,
+        # `self_renewing`, and `token_expires_in_days` below; we just don't echo the raw values.)
         out.append({
             "stake_id": s["id"],
             "name": s.get("name"),
             "unit_number": s.get("unit_number"),
             "last_synced_at": s.get("last_synced_at"),
             "sync_state": s.get("sync_state"),
-            "onboarded_at": s.get("onboarded_at"),
             "jobs_7d": jobs.get(s["id"], 0),
             "member_count": counts.get(s["id"], 0),
             "credential": None if not cred else {
@@ -656,20 +661,17 @@ def _enrolled_stakes() -> list[dict]:
                 "principal_email": cred.get("principal_email"),
                 "complete": bool(cov.get("complete")),
                 "missing": cov.get("missing") or [],
-                "access_rank": cred.get("access_rank"),
                 "updated_at": cred.get("updated_at"),
-                "last_failed_at": cred.get("last_failed_at"),
                 "last_error": cred.get("last_error"),
-                "last_succeeded_at": cred.get("last_succeeded_at"),
                 # cadence: self-renewing means the daily sync can renew its own bearer for ~45 days
                 # with no Okta web session. That now lives in the Member Tools refresh token
                 # (migration 0049) — NOT the old LCR refresh token (has_refresh_token, ~always false),
                 # which is what the chip used to read (it showed the OPPOSITE of the truth).
                 "self_renewing": bool(cred.get("has_refresh_token"))
                                  or bool(cred.get("membertools_refresh_enc")),
-                # When the 45-day Member Tools token was last minted + how many days of life it has
-                # left (45 − age; null when no token). Drives the per-stake expiry countdown chip.
-                "membertools_minted_at": cred.get("membertools_minted_at"),
+                # Days of life left in the 45-day Member Tools token (45 − age; null when no token) —
+                # drives the per-stake expiry countdown chip. The raw membertools_minted_at is
+                # AVAILABLE (used here) but not echoed; clients only read the computed days-left.
                 "token_expires_in_days": _token_days_left(
                     cred.get("membertools_minted_at"), cred.get("membertools_refresh_enc")),
                 "reauths_30d": reauths.get(s.get("unit_number"), 0),

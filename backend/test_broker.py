@@ -170,8 +170,9 @@ def test_enrolled_stakes_self_renewing_from_membertools() -> None:
     """A1 (REAL BUG): the self_renewing chip showed the OPPOSITE of truth — it read the OLD LCR
     has_refresh_token (~always false), but 45-day self-renewal now lives in the Member Tools refresh
     token (migration 0049). self_renewing must be true when membertools_refresh_enc is set even with
-    has_refresh_token false; the payload must also carry membertools_minted_at + a derived
-    token_expires_in_days (45 − days since minted; null with no token)."""
+    has_refresh_token false; the payload carries a derived token_expires_in_days
+    (45 − days since minted; null with no token). The raw membertools_minted_at is NOT echoed —
+    no client reads it; clients consume only the computed days-left."""
     from datetime import datetime, timedelta, timezone
     saved = {k: getattr(admin, k) for k in ("_member_counts", "_reauths_30d", "_jobs_last_7d")}
     saved_get = admin.requests.get
@@ -196,7 +197,9 @@ def test_enrolled_stakes_self_renewing_from_membertools() -> None:
         cred = (admin._enrolled_stakes()[0] or {}).get("credential") or {}
         check("self_renewing true from membertools token (not has_refresh_token)",
               cred.get("self_renewing") is True)
-        check("membertools_minted_at returned", cred.get("membertools_minted_at") == minted)
+        # membertools_minted_at is no longer echoed (no client consumer) — only the derived
+        # days-left is surfaced; that's what the chip reads.
+        check("membertools_minted_at not echoed", "membertools_minted_at" not in cred)
         check("token_expires_in_days ~ 45-5 = 40", cred.get("token_expires_in_days") == 40)
 
         # No Member Tools token AND no LCR token -> not self-renewing, null countdown.

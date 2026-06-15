@@ -272,9 +272,11 @@ export function AdminPage({ embedded = false }: { embedded?: boolean } = {}) {
             key={`overrides-${nonce}`}
             title="Calling access overrides"
             load={async () => {
+              // The card renders calling_match + grants_access + note + id (remove). created_by is
+              // AVAILABLE on the table but not fetched (the UI never shows who added an override).
               const { data } = await supabase
                 .from('calling_access_overrides')
-                .select('id, calling_match, grants_access, note, created_by')
+                .select('id, calling_match, grants_access, note')
                 .order('calling_match');
               return { overrides: (data ?? []) as Json[] };
             }}

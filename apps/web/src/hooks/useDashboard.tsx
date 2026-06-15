@@ -149,7 +149,10 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     // bulk-queried per stake (RLS-scoped like members). Best-effort: a hiccup never fails member load.
     try {
       const noteBase = supabase.from('member_notes').select('member_person_uuid, note, updated_at');
-      const cmtBase = supabase.from('member_comments').select('member_person_uuid, body, author_name, author_email, created_at, updated_at');
+      // The list-row threads render body + created_at; the folded index also uses author_name/email.
+      // member_comments.updated_at is AVAILABLE but not fetched here — the per-member detail editor
+      // (NotesSection) selects it on its own to show the "(edited)" marker.
+      const cmtBase = supabase.from('member_comments').select('member_person_uuid, body, author_name, author_email, created_at');
       const [notesRes, cmtRes] = await Promise.all([
         stakeId != null ? noteBase.eq('stake_id', stakeId) : noteBase,
         stakeId != null ? cmtBase.eq('stake_id', stakeId) : cmtBase,
@@ -173,9 +176,12 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const loadManualMembers = useCallback(async (stakeId: string | null): Promise<ManualMember[]> => {
     // Not-yet-merged manual people being taught, scoped to the stake (RLS-gated server-side too).
     try {
+      // Only the columns the manual-member logic + UI read off a row: id (merge/delete),
+      // unit_id/unit_name (match), name, custom_notes (preserved on merge), merged_at (skip merged).
+      // AVAILABLE but not fetched (written, never read back): stake_id, created_by, merged_into_uuid.
       const base = supabase
         .from('manual_members')
-        .select('id, stake_id, unit_id, unit_name, name, custom_notes, created_by, merged_at, merged_into_uuid')
+        .select('id, unit_id, unit_name, name, custom_notes, merged_at')
         .is('merged_at', null);
       const scoped = stakeId != null ? base.eq('stake_id', stakeId) : base;
       const { data } = await scoped;
