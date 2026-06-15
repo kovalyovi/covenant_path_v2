@@ -156,10 +156,13 @@ export function TableTab() {
 function TableBody({ members, isAdmin }: { members: Member[]; isAdmin: boolean }) {
   const navigate = useNavigate();
   const { notes, showNotes } = useDashboard();
-  // Persisted view state (item 9): sort + per-column value filters survive a reload while the global
-  // "remember my filters" pref is on. `filterCol` is the transiently-open panel (not persisted).
-  const [sortCol, setSortCol] = usePersistentState<number | null>('table.sortCol', null);
-  const [sortAsc, setSortAsc] = usePersistentState<boolean>('table.sortAsc', true);
+  // Persisted view state in the URL. Sort column + direction MUST be one value: two separate
+  // usePersistentState setters in the same click would each write the URL from the same `prev`, so the
+  // second clobbers the first (this is exactly why sorting silently did nothing). `filterCol` is the
+  // transiently-open panel (not persisted).
+  const [sort, setSort] = usePersistentState<{ col: number; asc: boolean } | null>('table.sort', null);
+  const sortCol = sort?.col ?? null;
+  const sortAsc = sort?.asc ?? true;
   // per column: the set of values the user UNCHECKED (hidden). Empty/absent = show everything.
   const [excluded, setExcluded] = usePersistentState<Record<string, Set<string>>>(
     'table.excluded', {}, {
@@ -224,14 +227,12 @@ function TableBody({ members, isAdmin }: { members: Member[]; isAdmin: boolean }
     });
   }
 
+  // One setter (asc → desc → off), so the single URL write can't race itself.
   function onSort(col: number) {
-    if (sortCol === col) {
-      if (sortAsc) setSortAsc(false);
-      else setSortCol(null);
-    } else {
-      setSortCol(col);
-      setSortAsc(true);
-    }
+    setSort((cur) => {
+      if (cur && cur.col === col) return cur.asc ? { col, asc: false } : null;
+      return { col, asc: true };
+    });
   }
 
   const activeFilters = Object.keys(excluded).length;
