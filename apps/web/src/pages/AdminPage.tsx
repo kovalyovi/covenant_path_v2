@@ -12,6 +12,7 @@ import { supabase } from '../lib/supabase';
 import { admin } from '../lib/admin';
 import { status as statusColors } from '../theme/tokens';
 import { agoOrNever, dur, fmtDateTime } from '../logic/dates';
+import { fieldGapSeries, humanizeField } from '../logic/fieldGaps';
 import { Icon } from '../components/Icon';
 import { IconButton, Button } from '../components/ui';
 import { CardSkeleton } from '../components/Skeletons';
@@ -248,6 +249,12 @@ export function AdminPage({ embedded = false }: { embedded?: boolean } = {}) {
             {(s) => (
               <AdminsCard admins={(s['admins'] as Json[]) ?? []} busy={busy} onInvite={inviteAdmin} onRevoke={revokeAdmin} />
             )}
+          </Panel>
+          {/* Per-day aggregation of which fields are still missing (PII-free, all stakes) — sits in the
+              middle of the console, above the single-run Diagnostics, so the "track these numbers over
+              time" signal is scannable at a glance. */}
+          <Panel key={`fieldgaps-${nonce}`} title="Field gaps (per day)" load={() => admin.diagnostics()}>
+            {(s) => <FieldGapsCard diag={s} />}
           </Panel>
           <Panel key={`diag-${nonce}`} title="Diagnostics" load={() => admin.diagnostics()}>
             {(s) => <DiagnosticsCard diag={s} onCopy={(t) => navigator.clipboard.writeText(t)} toast={toast} />}
@@ -639,6 +646,86 @@ function groupEndpoints(endpoints: Json[]): EpRow[] {
       max_ms: g.max,
     }))
     .sort((a, b) => b.errors - a.errors || b.calls - a.calls);
+}
+
+// --- Field gaps, aggregated per day (#track-missing-fields) -----------------------------------
+// "Which fields are missing, and is it trending better or worse?" — answered without any PII. Every
+// sync run stamps a structured field-gap report into its diagnostics payload (run_stats.field_gaps:
+// per-field members-missing + WHY) and also emits a live Axiom `sync.field_gaps` event. This card
+// reads the recent diagnostics rows, rolls them up per calendar day (logic/fieldGaps.ts), and charts
+// the daily total per field as a sparkline so a leader's "ministering is blank" is a number you watch
+// fall. The aggregation lives in logic/ (pure, unit-tested) — this file is just the render.
+
+/** A tiny inline bar series (oldest → newest); the last bar is the current day (full opacity). */
+function Spark({ values, color }: { values: number[]; color: string }) {
+  const max = Math.max(1, ...values);
+  return (
+    <span className="row" style={{ gap: 2, alignItems: 'flex-end', height: 22 }} aria-hidden>
+      {values.map((v, i) => (
+        <span
+          key={i}
+          title={String(v)}
+          style={{
+            width: 6,
+            height: Math.max(2, Math.round((v / max) * 22)),
+            background: color,
+            opacity: i === values.length - 1 ? 1 : 0.4,
+            borderRadius: 1,
+          }}
+        />
+      ))}
+    </span>
+  );
+}
+
+function FieldGapsCard({ diag }: { diag: Json }) {
+  const { days, fields, totals, reasons } = fieldGapSeries((diag['runs'] as Json[]) ?? []);
+  if (days.length === 0) {
+    return <Card title="Field gaps (per day)">No field-gap telemetry yet — it appears after the next sync.</Card>;
+  }
+
+  return (
+    <Card title="Field gaps (per day)" trailing={<span className="small muted">last {days.length}d · all stakes</span>}>
+      <p className="small muted" style={{ marginTop: 0 }}>
+        Members still missing each field, summed across stakes and grouped by day (latest run per stake).
+        The live per-sync signal is the Axiom <code>sync.field_gaps</code> event.
+      </p>
+      {fields.length === 0 ? (
+        <p className="small" style={{ color: statusColors.success }}>No gaps — every tracked field is filled. ✓</p>
+      ) : (
+        fields.map((f) => {
+          const series = totals[f];
+          const cur = series[series.length - 1];
+          const prev = series.length > 1 ? series[series.length - 2] : cur;
+          const delta = cur - prev;
+          // Worse (more missing) is red ▲; better is green ▼; flat is muted.
+          const trend =
+            delta > 0
+              ? { glyph: '▲', color: statusColors.danger, label: `up ${delta}` }
+              : delta < 0
+                ? { glyph: '▼', color: statusColors.success, label: `down ${-delta}` }
+                : { glyph: '–', color: 'var(--on-surface-variant)', label: 'no change' };
+          return (
+            <div key={f} className="row" style={{ padding: '8px 0', alignItems: 'center', gap: 12, borderTop: '1px solid var(--outline-variant)' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="row" style={{ gap: 8, alignItems: 'baseline' }}>
+                  <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{humanizeField(f)}</strong>
+                  <span style={{ color: trend.color, fontSize: 12 }} title={trend.label} aria-label={trend.label}>
+                    {trend.glyph} {Math.abs(delta) || ''}
+                  </span>
+                </div>
+                {reasons[f] && (
+                  <div className="small muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{reasons[f]}</div>
+                )}
+              </div>
+              <Spark values={series} color={statusColors.warning} />
+              <span style={{ width: 40, textAlign: 'right', fontWeight: 600 }} aria-label={`${cur} missing`}>{cur}</span>
+            </div>
+          );
+        })
+      )}
+    </Card>
+  );
 }
 
 function DiagnosticsCard({ diag, onCopy, toast }: { diag: Json; onCopy: (t: string) => void; toast: ReturnType<typeof useToast> }) {

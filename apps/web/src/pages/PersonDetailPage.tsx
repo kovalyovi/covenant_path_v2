@@ -315,8 +315,8 @@ function RecordedYesNote() {
     <div className="row" style={{ alignItems: 'flex-start', gap: 6 }}>
       <Icon name="info" size={15} color="var(--warning)" />
       <span className="small" style={{ color: 'var(--warning)' }}>
-        Recorded as yes — names are temporarily unavailable from LCR and will appear once its detail
-        data loads on a future sync.
+        Recorded as yes — the names come from LCR&apos;s per-member detail, which needs a live Church
+        session. Re-authorize to refresh them.
       </span>
     </div>
   );
