@@ -579,12 +579,14 @@ button.card--tappable:active {
 }
 /* Radio-button weekly marker (matches the principle dots): grey ring (absent) / green ring + inner
    green dot (present), via a 3px ring, a 3px gap, then a content-box-clipped fill. */
+/* OPAQUE fills so the connecting timeline line sits BEHIND the dots (it no longer "penetrates" them):
+   absent = a light solid dot, present = solid green — both with a soft semitransparent border. */
 .sacrament-dot {
   width: 22px;
   height: 22px;
   border-radius: 50%;
   border: 2px solid color-mix(in srgb, var(--outline) 50%, transparent);
-  background-color: transparent;
+  background-color: var(--surface-container-highest);
   flex: 0 0 auto;
 }
 .sacrament-dot--present {

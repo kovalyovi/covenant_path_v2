@@ -14,7 +14,7 @@ import {
 } from '../../logic/milestones';
 import { assignUnitColors, memberAttendance } from '../../logic/kpis';
 import { hexA, status } from '../../theme/tokens';
-import { Icon, type IconName } from '../../components/Icon';
+import { type IconName } from '../../components/Icon';
 import { CountBadge, SectionCard, IconButton, Segmented } from '../../components/ui';
 import {
   PageScaffold, BigHeader, OrgFilterBar, SubtleNote, MemberRow, Columns, orgNoteFor,
@@ -283,31 +283,31 @@ function CategorySection({
         )}
       </SectionCard>
 
-      {/* Card 2: the people list, sized to the widest person (not stretched full-width). */}
+      {/* By unit → a CARD PER UNIT (like Golden Hour). Flat → a single content-width people card. */}
       {missing.length > 0 && (
-        <div style={{ width: 'fit-content', maxWidth: '100%' }}>
-          <div className="card">
-            <div className="card__body">
-              <div className="reveal" key={revealKey}>
-                {groupByUnit ? (
-                  <div className="stack" style={{ gap: 14 }}>
-                    {[...byUnit.keys()].sort().map((unit) => (
-                      <div key={unit} className="stack" style={{ gap: 4 }}>
-                        <div className="row small" style={{ gap: 6, fontWeight: 700, color: unitColors.get(unit) ?? 'var(--on-surface)' }}>
-                          <Icon name="groups" size={16} color={unitColors.get(unit) ?? 'var(--on-surface-variant)'} />
-                          {unit} <CountBadge n={byUnit.get(unit)!.length} />
-                        </div>
-                        <div className="stack">{byUnit.get(unit)!.map(row)}</div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="stack">{missing.map(row)}</div>
-                )}
+        groupByUnit ? (
+          <div className="reveal stack" style={{ gap: 12 }} key={revealKey}>
+            {[...byUnit.keys()].sort().map((unit) => (
+              <SectionCard
+                key={unit}
+                title={unit}
+                icon="groups"
+                iconColor={unitColors.get(unit)}
+                trailing={<CountBadge n={byUnit.get(unit)!.length} />}
+              >
+                <div className="stack" style={{ gap: 6 }}>{byUnit.get(unit)!.map(row)}</div>
+              </SectionCard>
+            ))}
+          </div>
+        ) : (
+          <div style={{ width: 'fit-content', maxWidth: '100%' }}>
+            <div className="card">
+              <div className="card__body">
+                <div className="reveal stack" key={revealKey}>{missing.map(row)}</div>
               </div>
             </div>
           </div>
-        </div>
+        )
       )}
     </div>
   );
