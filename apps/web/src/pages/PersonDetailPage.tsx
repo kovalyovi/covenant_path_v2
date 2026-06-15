@@ -14,7 +14,7 @@ import {
   endowmentDisplay, completionOf, callingEligible, ministeringAssignmentEligible,
   priesthoodEligible, templeRecommendEligible, patriarchalEligible, ageOf, nextSteps,
 } from '../logic/milestones';
-import { agoOrNever, parseMemberDate } from '../logic/dates';
+import { agoOrNever, parseMemberDate, tenure } from '../logic/dates';
 import { sacramentWindow, SACRAMENT_WINDOW_WEEKS, attendanceBucket } from '../logic/kpis';
 import { attendanceColor } from '../theme/tokens';
 import { Avatar, IconButton, SectionCard } from '../components/ui';
@@ -50,12 +50,15 @@ export function PersonDetailPage() {
   const isInvestigator = member['kind'] === 'investigator';
   const goalDate = String(member['baptism_goal_date'] ?? '');
   const baptismDate = String(member['baptism_date'] ?? '');
+  const baptismDt = parseMemberDate(baptismDate);
+  const tenureStr = baptismDt ? tenure(baptismDt) : '';
+  // Baptized <date> and, in parentheses, how long they've been a member (#person-detail).
   const baptismLine = isInvestigator
     ? goalDate
       ? `Planned baptism ${goalDate}`
       : null
-    : baptismDate && baptismDate !== 'needs-profile-api'
-      ? `Baptized ${baptismDate}`
+    : baptismDt
+      ? `Baptized ${baptismDate}${tenureStr ? ` (${tenureStr})` : ''}`
       : null;
   const uuid = member['person_uuid'] != null ? String(member['person_uuid']) : undefined;
   const sexLabel = member['sex'] === 'M' ? 'Male' : member['sex'] === 'F' ? 'Female' : '';
@@ -77,9 +80,9 @@ export function PersonDetailPage() {
               <div style={{ color: 'var(--on-primary-container)' }}>
                 <h1 style={{ fontSize: '1.25rem' }}>{name}</h1>
                 {String(member['unit_name'] ?? '') && <div>{String(member['unit_name'])}</div>}
-                {memberSince && <div>{memberSince}</div>}
+                {baptismLine && <div style={{ fontWeight: 600, marginTop: 2 }}>{baptismLine}</div>}
                 {demo && <div className="small">{demo}</div>}
-                {baptismLine && <div className="small">{baptismLine}</div>}
+                {memberSince && memberSince !== baptismLine && <div className="small">{memberSince}</div>}
               </div>
             </div>
           </div>
@@ -261,23 +264,22 @@ function SacramentSection({ d }: { d: Record<string, unknown> }) {
       {/* #10b: a connected timeline (Ricky-style) — a line threads the weekly markers; PRESENT is a
           filled ✓ and ABSENT is a hollow ✕ (shape, not just color, so it reads for color-blind users).
           Horizontally scrollable on a narrow phone. */}
-      <div style={{ overflowX: 'auto' }}>
-        <div style={{ position: 'relative', display: 'flex', minWidth: n * 40, padding: '2px 0 0' }}>
-          <div style={{
-            position: 'absolute', top: 13, height: 2, left: `${50 / n}%`, right: `${50 / n}%`,
-            background: 'var(--outline-variant)',
-          }} />
+      {/* #10b: connected weekly timeline — horizontal on desktop (scrolls if long), a vertical COLUMN on
+          phones (nicer + no sideways scroll). PRESENT = filled ✓, ABSENT = hollow ✕ (shape, not color). */}
+      <div className="sacrament-timeline">
+        <div className="sacrament-track" style={{ minWidth: n * 40 }}>
+          <div className="sacrament-line" style={{ left: `${50 / n}%`, right: `${50 / n}%` }} />
           {shown.map((s, i) => {
             const present = s['attended'] === true;
             const label = String(s['label'] ?? '');
             return (
-              <div key={i} style={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, minWidth: 0 }}>
+              <div key={i} className="sacrament-mark">
                 <span
                   role="img"
                   aria-label={`${label || `week ${i + 1}`} — ${present ? 'present' : 'absent'}`}
                   title={`${label} — ${present ? 'present' : 'absent'}`}
                   style={{
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 auto',
                     width: 26, height: 26, borderRadius: '50%',
                     background: present ? PRESENT : 'var(--surface)',
                     border: `1.6px solid ${present ? PRESENT : 'var(--outline)'}`,
@@ -286,7 +288,7 @@ function SacramentSection({ d }: { d: Record<string, unknown> }) {
                 >
                   <Icon name={present ? 'check' : 'close'} size={present ? 15 : 12} color={present ? '#fff' : 'var(--on-surface-variant)'} />
                 </span>
-                <span className="tiny muted" style={{ fontSize: 9, whiteSpace: 'nowrap' }}>{label}</span>
+                <span className="muted sacrament-mark__label">{label}</span>
               </div>
             );
           })}
@@ -509,10 +511,11 @@ function PrincipleDot({ name, taught, present }: { name: string; taught: boolean
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') setOpen(false);
     }
-    document.addEventListener('mousedown', onDoc);
+    // `click` (not `mousedown`) so the opening tap can't immediately re-close the tooltip.
+    document.addEventListener('click', onDoc);
     document.addEventListener('keydown', onKey);
     return () => {
-      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('click', onDoc);
       document.removeEventListener('keydown', onKey);
     };
   }, [open]);

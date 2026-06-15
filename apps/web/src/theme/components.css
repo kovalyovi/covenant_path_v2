@@ -161,6 +161,10 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* Never scroll horizontally — a too-wide child is clipped, not scrolled (no unexpected sideways
+     scroll on mobile). Intentional horizontal scrollers (the data table, the sacrament timeline) live
+     in their OWN nested overflow containers, so they're unaffected. */
+  overflow-x: hidden;
 }
 .page__inner {
   max-width: 1280px;
@@ -487,26 +491,32 @@ button.card--tappable:active {
   gap: 8px;
   margin-top: 8px;
 }
+/* A radio-button look: a 3px ring, a 3px gap (padding), then the inner circle. Not-taught = grey ring,
+   empty inside; taught = green ring + a green inner dot (the green bg is clipped to the content box). */
 .principle-dot {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 23px;
+  height: 23px;
   border-radius: 50%;
-  border: 1.6px solid var(--cp-green, #2e7d32);
-  background: transparent;
+  border: 3px solid var(--outline);
+  padding: 3px;
+  background-color: transparent;
+  background-clip: content-box;
   color: var(--cp-green, #2e7d32);
   flex: 0 0 auto;
 }
 .principle-dot--filled {
-  background: var(--cp-green, #2e7d32);
+  border-color: var(--cp-green, #2e7d32);
+  background-color: var(--cp-green, #2e7d32);
   color: #fff;
 }
 .principle-dot--legend {
-  width: 13px;
-  height: 13px;
-  border-width: 1.4px;
+  width: 15px;
+  height: 15px;
+  border-width: 2px;
+  padding: 2px;
   vertical-align: middle;
 }
 .principle-dot--btn {
@@ -521,6 +531,58 @@ button.card--tappable:active {
 .principle-dot-wrap {
   position: relative;
   display: inline-flex;
+}
+
+/* Sacrament timeline: a horizontal connected row on desktop (scrolls in its OWN container if long), a
+   clean vertical column on phones (nicer, and no page-level sideways scroll). */
+.sacrament-timeline {
+  overflow-x: auto;
+}
+.sacrament-track {
+  position: relative;
+  display: flex;
+  padding: 2px 0 0;
+}
+.sacrament-line {
+  position: absolute;
+  top: 13px;
+  height: 2px;
+  background: var(--outline-variant);
+}
+.sacrament-mark {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.sacrament-mark__label {
+  font-size: 9px;
+  white-space: nowrap;
+}
+@media (max-width: 600px) {
+  .sacrament-timeline {
+    overflow-x: visible;
+  }
+  .sacrament-track {
+    flex-direction: column;
+    min-width: 0 !important;
+    gap: 10px;
+    align-items: stretch;
+  }
+  .sacrament-line {
+    display: none;
+  }
+  .sacrament-mark {
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 12px;
+  }
+  .sacrament-mark__label {
+    font-size: 0.85rem;
+  }
 }
 
 /* ---- Single editable member note (item 8) --------------------------------------------------- */

@@ -86,10 +86,12 @@ function LabeledChip({
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose();
     }
-    document.addEventListener('mousedown', onDoc);
+    // Use `click` (not `mousedown`): mousedown fires BEFORE the opening click, so the same tap that
+    // opened a tooltip could immediately close it ("shows briefly then disappears"). `click` runs after.
+    document.addEventListener('click', onDoc);
     document.addEventListener('keydown', onKey);
     return () => {
-      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('click', onDoc);
       document.removeEventListener('keydown', onKey);
     };
   }, [open, onClose]);
