@@ -571,6 +571,7 @@ export function UnitGrid({
   ascending = false,
   elapsedBaptism = false,
   showResp = false,
+  stickyHead = false,
 }: {
   rows: Member[];
   tier: Tier;
@@ -579,11 +580,12 @@ export function UnitGrid({
   ascending?: boolean;
   elapsedBaptism?: boolean;
   showResp?: boolean;
+  stickyHead?: boolean;
 }) {
   const groups = groupByUnit(rows, dateField, ascending);
   const cards = groups.map(([unit, list]) => (
-    <SectionCard key={unit} id={unitDomId(unit)} title={unit} trailing={<CountBadge n={list.length} />}>
-      <div className="stack">
+    <SectionCard key={unit} id={unitDomId(unit)} title={unit} trailing={<CountBadge n={list.length} />} stickyHead={stickyHead}>
+      <div className="stack" style={{ gap: 6 }}>
         {list.map((m, i) => (
           <MemberRow key={i} m={m} chips={chips} dateField={dateField} elapsedBaptism={elapsedBaptism} showResp={showResp} />
         ))}

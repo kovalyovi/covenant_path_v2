@@ -79,16 +79,19 @@ interface SectionCardProps {
   tone?: 'good' | 'warn' | 'bad';
   /** DOM id (e.g. so a "jump to unit" link can scrollIntoView + flash this card). */
   id?: string;
+  /** Make the header stick to the top while the card is in view (mobile) — used for the Golden Hour
+   *  per-unit cards so the unit name stays visible until the next unit takes over. */
+  stickyHead?: boolean;
 }
 
 const TONE: Record<'good' | 'warn' | 'bad', string> = { good: '#2E7D32', warn: '#EF6C00', bad: '#E53935' };
 
 /** A titled section as a rounded card — the building block for detail + KPI pages. Mirrors SectionCard. */
-export function SectionCard({ title, children, icon, iconColor, iconNode, trailing, onClick, tone, id }: SectionCardProps) {
+export function SectionCard({ title, children, icon, iconColor, iconNode, trailing, onClick, tone, id, stickyHead }: SectionCardProps) {
   const accent = iconColor ?? 'var(--primary)';
   const toneStyle = tone ? { borderLeft: `3px solid ${TONE[tone]}` } : undefined;
   const head = (
-    <div className="section-card__head">
+    <div className={`section-card__head${stickyHead ? ' section-card__head--sticky' : ''}`}>
       {iconNode ? (
         iconNode
       ) : (

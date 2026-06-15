@@ -186,7 +186,7 @@ function GoldenHourBody() {
         ) : byDate ? (
           <DateList rows={rows} chips ascending={ascending} elapsedBaptism showResp />
         ) : (
-          <UnitGrid rows={rows} tier={tier} chips ascending={ascending} elapsedBaptism showResp />
+          <UnitGrid rows={rows} tier={tier} chips ascending={ascending} elapsedBaptism showResp stickyHead />
         )}
       </PageScaffold>
       <DrillHost drill={drill} onClose={() => setDrill(null)} />
