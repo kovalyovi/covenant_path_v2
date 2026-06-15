@@ -15,8 +15,8 @@ import { parseMemberDate, fmtMonShort, fmtMonYear } from '../../logic/dates';
 import { avgCompletion } from '../../logic/milestones';
 import {
   metricData, attendedDates, firstLessonDate, lessonsWithMember,
-  membersWithMemberLessons, unitCompletion, baptismsByMonth, assignUnitColors,
-  type Period, type Ev, type Series, type BWindow, type DateRange,
+  membersWithMemberLessons, unitCompletion, assignUnitColors,
+  type Period, type Ev, type Series, type DateRange,
 } from '../../logic/kpis';
 import { Icon, type IconName } from '../../components/Icon';
 import { SectionCard, Segmented, RangePill, Progress } from '../../components/ui';
@@ -60,6 +60,9 @@ function KpisBody() {
   const friendsAtSac = metricData(investigators, attendedDates, period, cr);
   const newAtSac = metricData(baptized, attendedDates, period, cr);
   const newFriends = metricData(investigators, firstLessonDate, period, cr);
+  // Baptisms now obey the GENERAL period (counted per week/month bucket like the other charts) instead
+  // of their own YTD/12mo/24mo selector.
+  const baptisms = metricData(baptized, baptismDatesOf, period, cr);
   const lessons = lessonsWithMember(rows);
   const completion = avgCompletion(baptized);
 
@@ -108,6 +111,11 @@ function KpisBody() {
 
   function evs(ms: Member[], dateField: string): Ev[] {
     return ms.map((m) => ({ m, date: parseMemberDate(m[dateField]) ?? new Date(), bucket: 0 }));
+  }
+
+  function baptismDatesOf(m: Member): Date[] {
+    const dt = parseMemberDate(m['baptism_date']);
+    return dt ? [dt] : [];
   }
 
   const rangeLabel = periodRangeLabel();
@@ -196,100 +204,91 @@ function KpisBody() {
       <PageScaffold
         tier={tier}
         header={
-          <div className="row" style={{ alignItems: 'flex-start' }}>
-            <div style={{ flex: 1 }}>
-              <BigHeader text="KPIs" subtitle="From this stake's covenant-path data" />
+          <div className="stack" style={{ gap: 8 }}>
+            <div className="row" style={{ alignItems: 'flex-start' }}>
+              <div style={{ flex: 1 }}>
+                <BigHeader text="KPIs" subtitle="From this stake's covenant-path data" />
+              </div>
+              {units.length > 1 && (
+                <Dropdown
+                  ariaLabel="Unit"
+                  value={unit ?? ''}
+                  options={[
+                    { value: '', label: d.stakeName ?? 'All units', icon: 'groups' },
+                    ...units.map((u): DropdownOption => ({ value: u, label: u, color: unitColors.get(u) })),
+                  ]}
+                  onChange={(v) => setUnit(v || null)}
+                />
+              )}
             </div>
-            {units.length > 1 && (
-              <Dropdown
-                ariaLabel="Unit"
-                value={unit ?? ''}
+            {/* General filters on top — they drive EVERY widget below (Baptisms included). */}
+            <div style={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+              <Segmented<Period>
+                ariaLabel="Period"
+                value={period}
+                onChange={setPeriod}
                 options={[
-                  { value: '', label: d.stakeName ?? 'All units', icon: 'groups' },
-                  ...units.map((u): DropdownOption => ({ value: u, label: u, color: unitColors.get(u) })),
+                  { value: 'month', label: 'Month' },
+                  { value: 'ytd', label: 'YTD' },
+                  { value: 'year', label: 'Year' },
+                  { value: 'all', label: 'All' },
                 ]}
-                onChange={(v) => setUnit(v || null)}
               />
+              <button
+                type="button"
+                className="chip"
+                aria-pressed={period === 'custom'}
+                onClick={activateCustom}
+                style={period === 'custom' ? { background: 'var(--secondary-container)', color: 'var(--on-secondary-container)', borderColor: 'transparent' } : undefined}
+              >
+                <Icon name="event" size={16} color={period === 'custom' ? 'var(--primary)' : undefined} />
+                Custom
+              </button>
+              {period !== 'all' && (
+                <button
+                  type="button"
+                  className="chip"
+                  aria-pressed={compare}
+                  onClick={() => setCompare((c) => !c)}
+                  style={compare ? { background: 'var(--secondary-container)', color: 'var(--on-secondary-container)', borderColor: 'transparent' } : undefined}
+                >
+                  <Icon name="compare" size={18} color={compare ? 'var(--primary)' : undefined} />
+                  Compare to previous
+                </button>
+              )}
+            </div>
+            {period === 'custom' && customRange && (
+              <div className="row" style={{ justifyContent: 'center', gap: 8, alignItems: 'center' }}>
+                <input type="date" className="input" style={{ width: 'auto' }} aria-label="Custom range start"
+                  max={toISO(customRange.end)} value={toISO(customRange.start)} onChange={(e) => onCustomStart(e.target.value)} />
+                <span className="muted">–</span>
+                <input type="date" className="input" style={{ width: 'auto' }} aria-label="Custom range end"
+                  min={toISO(customRange.start)} value={toISO(customRange.end)} onChange={(e) => onCustomEnd(e.target.value)} />
+              </div>
+            )}
+            {rangeLabel && (
+              <div style={{ display: 'flex', justifyContent: 'center' }}>
+                <RangePill text={rangeLabel} />
+              </div>
             )}
           </div>
         }
       >
-        {/* #33 + reorg: Baptisms FIRST (own window), then Trends with its OWN period filters under the
-            heading, then Overview. */}
+        {/* Baptisms FIRST — now a per-period trend chart (counts baptisms per bucket) using the general
+            filters + Compare, then the other Trends, then Overview. */}
         <SectionHeading icon="water_drop">Baptisms</SectionHeading>
         <div style={{ maxWidth: 640 }}>
-          <BaptismsCard baptized={baptized} allUnits={allUnits} onDrill={setDrill} />
+          <BaptismsCard
+            series={baptisms.series}
+            events={baptisms.events}
+            allUnits={allUnits}
+            showCompare={compare}
+            compareLabels={compareLabels}
+            onDrill={setDrill}
+          />
         </div>
 
         <SectionHeading icon="leaderboard">Trends</SectionHeading>
-        <div className="stack" style={{ gap: 8, marginBottom: 6 }}>
-          <div style={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-            <Segmented<Period>
-              ariaLabel="Period"
-              value={period}
-              onChange={setPeriod}
-              options={[
-                { value: 'month', label: 'Month' },
-                { value: 'ytd', label: 'YTD' },
-                { value: 'year', label: 'Year' },
-                { value: 'all', label: 'All' },
-              ]}
-            />
-            {/* #7: custom date range — toggles two native date inputs below. */}
-            <button
-              type="button"
-              className="chip"
-              aria-pressed={period === 'custom'}
-              onClick={activateCustom}
-              style={period === 'custom' ? { background: 'var(--secondary-container)', color: 'var(--on-secondary-container)', borderColor: 'transparent' } : undefined}
-            >
-              <Icon name="event" size={16} color={period === 'custom' ? 'var(--primary)' : undefined} />
-              Custom
-            </button>
-          </div>
-          {period === 'custom' && customRange && (
-            <div className="row" style={{ justifyContent: 'center', gap: 8, alignItems: 'center' }}>
-              <input
-                type="date"
-                className="input"
-                style={{ width: 'auto' }}
-                aria-label="Custom range start"
-                max={toISO(customRange.end)}
-                value={toISO(customRange.start)}
-                onChange={(e) => onCustomStart(e.target.value)}
-              />
-              <span className="muted">–</span>
-              <input
-                type="date"
-                className="input"
-                style={{ width: 'auto' }}
-                aria-label="Custom range end"
-                min={toISO(customRange.start)}
-                value={toISO(customRange.end)}
-                onChange={(e) => onCustomEnd(e.target.value)}
-              />
-            </div>
-          )}
-          {rangeLabel && (
-            <div style={{ display: 'flex', justifyContent: 'center' }}>
-              <RangePill text={rangeLabel} />
-            </div>
-          )}
-          {period !== 'all' && (
-            <div style={{ display: 'flex', justifyContent: 'center' }}>
-              <button
-                type="button"
-                className="chip"
-                aria-pressed={compare}
-                onClick={() => setCompare((c) => !c)}
-                style={compare ? { background: 'var(--secondary-container)', color: 'var(--on-secondary-container)', borderColor: 'transparent' } : undefined}
-              >
-                <Icon name="compare" size={18} color={compare ? 'var(--primary)' : undefined} />
-                Compare to previous
-              </button>
-            </div>
-          )}
-        </div>
         <Columns cols={Math.min(2, colsFor(tier))}>{trendCards}</Columns>
 
         <SectionHeading icon="summarize">Overview</SectionHeading>
@@ -311,82 +310,77 @@ function SectionHeading({ icon, children }: { icon: IconName; children: string }
   );
 }
 
-// ---- Baptisms by month (#1/#2) — own window selector, defaults to YTD (folded in from "By Month") --
+/** A chart card footer: the descriptive text on its OWN full-width row, then the "By unit" button
+ *  right-aligned on the row below — so neither wraps awkwardly or pushes the other off (#kpis). */
+function ChartFooter({ suffix, onByUnit }: { suffix: string; onByUnit: () => void }) {
+  return (
+    <div className="stack" style={{ gap: 4, marginTop: 6 }}>
+      <span className="small muted">{suffix}</span>
+      <div className="row" style={{ justifyContent: 'flex-end' }}>
+        <button type="button" className="btn btn--text" onClick={(e) => { e.stopPropagation(); onByUnit(); }}>
+          <Icon name="groups" size={16} /> By unit
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---- Baptisms (#1/#2) — a per-period trend chart, driven by the general filters (like every chart) --
 
 function BaptismsCard({
-  baptized,
+  series,
+  events,
   allUnits,
+  showCompare,
+  compareLabels,
   onDrill,
 }: {
-  baptized: Member[];
+  series: Series;
+  events: Ev[];
   allUnits: Set<string>;
+  showCompare: boolean;
+  compareLabels: [string, string];
   onDrill: (d: Drill) => void;
 }) {
-  const [w, setW] = useState<BWindow>('ytd'); // default to year-to-date
-  const [sel, setSel] = useState<number | null>(null); // tapped month → filter the card to it
   const color = '#0277BD';
-  const d = baptismsByMonth(baptized, w);
-  // Tapping a month FILTERS this card to that month (no detail sheet pops). The detail list stays
-  // reachable via the explicit "By unit" button, scoped to the selected month when one is chosen.
-  const selEvents = sel == null ? d.events : d.events.filter((e) => e.bucket === sel);
+  const values = series.current;
+  const total = values.reduce((a, b) => a + b, 0);
+  const priorTotal = series.prev.reduce((a, b) => a + b, 0);
+  let bi = -1;
+  let bc = 0;
+  values.forEach((v, i) => { if (v > bc) { bc = v; bi = i; } });
+  const bestLabel = bi >= 0 ? series.labels[bi] : null;
+  const delta = total - priorTotal;
   return (
-    <SectionCard title="Baptisms by month" icon="water_drop" iconColor={color}>
-      <div style={{ display: 'flex', justifyContent: 'center' }}>
-        <Segmented<BWindow>
-          ariaLabel="Baptisms window"
-          value={w}
-          onChange={(nw) => {
-            setW(nw);
-            setSel(null);
-          }}
-          options={[
-            { value: 'ytd', label: 'YTD' },
-            { value: 'm12', label: '12 mo' },
-            { value: 'm24', label: '24 mo' },
-            { value: 'all', label: 'All' },
-          ]}
-        />
-      </div>
-      <div style={{ height: 14 }} />
+    <SectionCard
+      title="Baptisms"
+      icon="water_drop"
+      iconColor={color}
+      trailing={showCompare && series.prev.length > 0 ? <DeltaBadge delta={delta} /> : undefined}
+      onClick={events.length === 0 ? undefined : () => onDrill({ kind: 'metric', title: 'Baptisms', events, allUnits })}
+    >
       <div className="row" style={{ alignItems: 'stretch' }}>
-        <Kv
-          label={sel == null ? 'Baptized in window' : (d.labels[sel] ?? 'Selected month')}
-          value={String(sel == null ? d.total : (d.counts[sel] ?? 0))}
-        />
+        <Kv label={`Baptized · ${compareLabels[1]}`} value={String(total)} />
         <div style={{ width: 1, background: 'var(--outline-variant)', margin: '0 14px' }} />
-        <Kv label="Best month" value={d.bestLabel == null ? '—' : `${d.bestLabel}  ·  ${d.bestCount}`} />
+        <Kv label="Best period" value={bestLabel == null ? '—' : `${bestLabel}  ·  ${bc}`} />
       </div>
       <div style={{ height: 14 }} />
       <TrendLine
-        values={d.counts}
-        labels={d.labels}
+        values={values}
+        labels={series.labels}
         color={color}
-        onBucketTap={(i) => setSel((c) => (c === i ? null : i))}
+        prev={showCompare ? series.prev : []}
+        onBucketTap={(i) =>
+          onDrill({
+            kind: 'metric',
+            title: 'Baptisms',
+            events: events.filter((e) => e.bucket === i),
+            allUnits,
+            bucketLabel: i < series.labels.length ? series.labels[i] : null,
+          })
+        }
       />
-      <div className="row" style={{ justifyContent: 'space-between', marginTop: 4 }}>
-        <span className="small muted">
-          {sel == null
-            ? 'Tap a month to filter; counted by baptism month.'
-            : `Showing ${d.labels[sel] ?? ''} — tap it again to clear.`}
-        </span>
-        <button
-          type="button"
-          className="btn btn--text"
-          disabled={selEvents.length === 0}
-          onClick={() =>
-            onDrill({
-              kind: 'metric',
-              title: 'Baptisms',
-              events: selEvents,
-              allUnits,
-              bucketLabel: sel == null ? null : (d.labels[sel] ?? null),
-            })
-          }
-        >
-          <Icon name="groups" size={16} />
-          By unit
-        </button>
-      </div>
+      <ChartFooter suffix="baptisms, counted in their week/month bucket" onByUnit={() => onDrill({ kind: 'metric', title: 'Baptisms', events, allUnits })} />
     </SectionCard>
   );
 }
@@ -480,20 +474,7 @@ function MetricCard({
         }
       />
       <HoverSummary series={series} events={events} hovered={hovered} color={color} />
-      <div className="row" style={{ justifyContent: 'space-between', marginTop: 4 }}>
-        <span className="small muted">{suffix}</span>
-        <button
-          type="button"
-          className="btn btn--text"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDrill({ kind: 'metric', title, events, allUnits });
-          }}
-        >
-          <Icon name="groups" size={16} />
-          By unit
-        </button>
-      </div>
+      <ChartFooter suffix={suffix} onByUnit={() => onDrill({ kind: 'metric', title, events, allUnits })} />
     </SectionCard>
   );
 }
