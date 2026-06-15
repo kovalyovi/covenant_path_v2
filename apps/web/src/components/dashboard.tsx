@@ -11,6 +11,7 @@ import {
 import {
   parseMemberDate, fmtLong, fmtMonthDayYear, baptismElapsed, ago, staleness, fmtDateTime,
 } from '../logic/dates';
+import { assignUnitColors } from '../logic/kpis';
 import { hexA } from '../theme/tokens';
 import { Icon, type IconName } from './Icon';
 import { Avatar, CountBadge, Segmented, SectionCard } from './ui';
@@ -355,6 +356,8 @@ interface MemberRowProps {
   showAttendance?: boolean;
   elapsedBaptism?: boolean;
   dateField?: string;
+  /** Accent for the unit pill (from the same per-unit palette as the filter chips). */
+  unitColor?: string;
 }
 
 /** Long-press detector for a clickable surface: fires `onLongPress` after ~500ms held, and marks the
@@ -407,18 +410,44 @@ function GenderTag({ sex }: { sex: string }) {
   );
 }
 
-/** One member row (avatar + name + date/responsibility + optional GH chips). Mirrors `_MemberRow`. */
-export function MemberRow({ m, chips = false, showUnit = false, showResp = false, showAttendance = false, elapsedBaptism = true, dateField = 'baptism_date' }: MemberRowProps) {
+/** One member row (avatar + name + a single metadata line + optional GH chips + unit pill). The
+ *  metadata line reads `gender · age · baptised-ago · org` separated by a faint divider; the unit
+ *  (when shown) is a colored pill BELOW it (one placement only — no right/bottom duplication). */
+export function MemberRow({ m, chips = false, showUnit = false, showResp = false, showAttendance = false, elapsedBaptism = true, dateField = 'baptism_date', unitColor }: MemberRowProps) {
   const navigate = useNavigate();
   const name = String(m['name'] ?? '—');
   const sex = String(m['sex'] ?? '').toUpperCase().slice(0, 1); // 'M' / 'F' / ''
   const date = parseMemberDate(m[dateField]);
   const age = ageOf(m);
   const isBaptism = dateField === 'baptism_date';
+  const unit = String(m['unit_name'] ?? '');
   const id = m['person_uuid'] != null ? String(m['person_uuid']) : '';
   // Long-press a row → open the member detail straight into NOTE EDIT (no separate Edit button); a
   // normal tap/click opens the detail. The press timer fires the edit path and suppresses the click.
   const press = useLongPress(() => id && navigate(`/person/${encodeURIComponent(id)}?editNote=1`));
+
+  // The date segment for the metadata line: elapsed "X ago" for a baptism (#8.1a), else the date.
+  const dateSeg: ReactNode = date
+    ? isBaptism
+      ? (elapsedBaptism
+          ? (baptismElapsed(date) ? `${baptismElapsed(date)} ago` : fmtMonthDayYear(date))
+          : `${fmtMonthDayYear(date)}${baptismElapsed(date) ? ` (${baptismElapsed(date)})` : ''}`)
+      : fmtLong(date)
+    : null;
+
+  // Build the single metadata line: gender · age · baptised-ago · org-badge, joined by a faint sep.
+  const segs: ReactNode[] = [];
+  if (sex) segs.push(<GenderTag key="g" sex={sex} />);
+  if (age) segs.push(<span key="a">{age}</span>);
+  if (dateSeg) {
+    segs.push(
+      <span key="d" className="row" style={{ gap: 3, alignItems: 'center' }}>
+        <Icon name={isBaptism ? 'water_drop' : 'event'} size={15} color={isBaptism ? '#29b6f6' : 'var(--on-surface-variant)'} />
+        {dateSeg}
+      </span>,
+    );
+  }
+  if (showResp) segs.push(<OrgBadge key="o" member={m} />);
 
   return (
     <button
@@ -432,37 +461,21 @@ export function MemberRow({ m, chips = false, showUnit = false, showResp = false
     >
       <Avatar name={name} photoUrl={m['photo_url'] as string | undefined} size={44} />
       <span className="member-row__main">
-        {/* Name on its own line; gender + age on the line BELOW it (member-row__main is a column). */}
         <span className="member-row__name">{name}</span>
-        {(sex || age) && (
-          <span className="row tiny" style={{ gap: 6, alignItems: 'center' }}>
-            {sex && <GenderTag sex={sex} />}
-            {age && <span className="muted">{age}</span>}
+        {segs.length > 0 && (
+          <span className="member-row__meta">
+            {segs.map((s, i) => (
+              <span key={i} className="row" style={{ gap: 4, alignItems: 'center' }}>
+                {i > 0 && <span className="member-row__sep" aria-hidden="true">|</span>}
+                {s}
+              </span>
+            ))}
           </span>
         )}
-        {date && (
-          <span className="row small" style={{ gap: 4, marginTop: 2 }}>
-            <Icon name={isBaptism ? 'water_drop' : 'event'} size={13} color={isBaptism ? '#29b6f6' : 'var(--on-surface-variant)'} />
-            <span className="muted">
-              {/* #8.1a: Golden Hour shows the elapsed TIME since baptism, not the literal date. */}
-              {isBaptism
-                ? elapsedBaptism
-                  ? (baptismElapsed(date) ? `${baptismElapsed(date)} ago` : fmtMonthDayYear(date))
-                  : `${fmtMonthDayYear(date)}${baptismElapsed(date) ? ` (${baptismElapsed(date)})` : ''}`
-                : fmtLong(date)}
-            </span>
-          </span>
-        )}
-        {/* #1e: a sacrament-attendance row sits ABOVE the org badge (only when asked + data exists). */}
+        {/* #1e: a sacrament-attendance pill on its own line (only when asked + data exists). */}
         {showAttendance && (
           <span style={{ display: 'block', marginTop: 4 }}>
             <AttendancePill member={m} />
-          </span>
-        )}
-        {/* #1d: org responsibility as a WML/RS/EQ shorthand badge (color + tooltip), not the long label. */}
-        {showResp && (
-          <span style={{ display: 'block', marginTop: 4 }}>
-            <OrgBadge member={m} />
           </span>
         )}
         <NoteLine uuid={id} />
@@ -471,22 +484,21 @@ export function MemberRow({ m, chips = false, showUnit = false, showResp = false
             <GoldenHourChips member={m} size={22} highlightNext />
           </span>
         )}
-        {/* #24: on a narrow screen the unit drops UNDER the name (inline) instead of eating a fixed
-            right-hand column. CSS toggles which copy shows by breakpoint. */}
-        {showUnit && (
-          <span className="member-row__unit-inline row tiny" style={{ gap: 4, marginTop: 2 }}>
-            <Icon name="groups" size={12} color="var(--on-surface-variant)" />
-            <span className="muted">{String(m['unit_name'] ?? '')}</span>
+        {/* The unit as a colored pill below the metadata (one placement; uses the filter palette). */}
+        {showUnit && unit && (
+          <span
+            className="unit-pill"
+            style={{
+              background: hexA(unitColor ?? '#607D8B', 0.14),
+              borderColor: hexA(unitColor ?? '#607D8B', 0.4),
+              color: unitColor ?? 'var(--on-surface-variant)',
+            }}
+          >
+            <Icon name="groups" size={13} color={unitColor ?? 'var(--on-surface-variant)'} /> {unit}
           </span>
         )}
       </span>
-      {showUnit ? (
-        <span className="member-row__unit-right muted tiny" style={{ width: 130, textAlign: 'right' }}>
-          {String(m['unit_name'] ?? '')}
-        </span>
-      ) : (
-        <Icon name="chevron_right" size={18} />
-      )}
+      <Icon name="chevron_right" size={18} />
     </button>
   );
 }
@@ -562,6 +574,7 @@ export function UnitGrid({
   dateField = 'baptism_date',
   ascending = false,
   elapsedBaptism = false,
+  showResp = false,
 }: {
   rows: Member[];
   tier: Tier;
@@ -569,13 +582,14 @@ export function UnitGrid({
   dateField?: string;
   ascending?: boolean;
   elapsedBaptism?: boolean;
+  showResp?: boolean;
 }) {
   const groups = groupByUnit(rows, dateField, ascending);
   const cards = groups.map(([unit, list]) => (
     <SectionCard key={unit} id={unitDomId(unit)} title={unit} trailing={<CountBadge n={list.length} />}>
       <div className="stack">
         {list.map((m, i) => (
-          <MemberRow key={i} m={m} chips={chips} dateField={dateField} elapsedBaptism={elapsedBaptism} />
+          <MemberRow key={i} m={m} chips={chips} dateField={dateField} elapsedBaptism={elapsedBaptism} showResp={showResp} />
         ))}
       </div>
     </SectionCard>
@@ -590,12 +604,14 @@ export function DateList({
   dateField = 'baptism_date',
   ascending = false,
   elapsedBaptism = false,
+  showResp = false,
 }: {
   rows: Member[];
   chips: boolean;
   dateField?: string;
   ascending?: boolean;
   elapsedBaptism?: boolean;
+  showResp?: boolean;
 }) {
   const sorted = [...rows].sort((a, b) => {
     const da = parseMemberDate(a[dateField]);
@@ -604,13 +620,14 @@ export function DateList({
     if (db == null) return -1;
     return ascending ? da.getTime() - db.getTime() : db.getTime() - da.getTime();
   });
+  const colors = assignUnitColors(rows);
   return (
     <Columns cols={1}>
       {[
         <SectionCard key="bydate" title="By date">
           <div className="stack">
             {sorted.map((m, i) => (
-              <MemberRow key={i} m={m} chips={chips} showUnit dateField={dateField} elapsedBaptism={elapsedBaptism} />
+              <MemberRow key={i} m={m} chips={chips} showUnit dateField={dateField} elapsedBaptism={elapsedBaptism} showResp={showResp} unitColor={colors.get(String(m['unit_name'] ?? '—'))} />
             ))}
           </div>
         </SectionCard>,

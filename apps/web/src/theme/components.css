@@ -658,18 +658,30 @@ button.card--tappable:active {
 .member-row__name {
   font-weight: 600;
 }
-/* #24: the member's unit shows in a right-hand column on tablet/desktop, but INLINE under the name on
-   phones (so it doesn't steal a fixed 130px of a narrow row). */
-.member-row__unit-inline {
-  display: none;
+/* One metadata line: gender · age · baptised-ago · org, joined by a faint divider; supplementary text
+   bumped ~1px for legibility. The unit (when shown) is a colored pill below — one placement only. */
+.member-row__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 3px;
+  font-size: 0.8rem;
+  color: var(--on-surface-variant);
 }
-@media (max-width: 600px) {
-  .member-row__unit-inline {
-    display: inline-flex;
-  }
-  .member-row__unit-right {
-    display: none;
-  }
+.member-row__sep {
+  opacity: 0.35;
+  padding: 0 8px;
+}
+.unit-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+  padding: 2px 9px;
+  border: 1px solid;
+  border-radius: var(--radius-pill);
+  font-size: 0.78rem;
+  font-weight: 600;
 }
 
 /* Missionary contact rows: plain-text value on the left + Copy / Call / Email buttons on the right
@@ -1175,14 +1187,16 @@ button.card--tappable:active {
   transform: scale(0.99);
 }
 
-/* #25: brief highlight when a card is scrolled to ("hey, you landed here"). Ends on the card's own
-   surface so there's no residual tint. Reduced-motion zeroes the duration (instant) via the global rule. */
+/* #25: when a card is scrolled to, it pops up and bounces back ("hey, you landed here") — 400ms with
+   an overshoot ease. Transform-only (composited, no layout shift). */
 @keyframes card-flash {
-  0%, 18% { background: color-mix(in srgb, var(--primary) 16%, var(--surface)); }
-  100% { background: var(--surface); }
+  0% { transform: scale(1); }
+  40% { transform: scale(1.045); }
+  70% { transform: scale(0.99); }
+  100% { transform: scale(1); }
 }
 .card--flash {
-  animation: card-flash 1.25s ease;
+  animation: card-flash 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 /* ---- Shared micro-animations (agent-recommended; all reduced-motion-safe via the global rule) ---- */

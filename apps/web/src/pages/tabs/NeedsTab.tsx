@@ -83,6 +83,9 @@ function NeedsBody() {
 
   const all = d.members.filter((m) => !isInvestigator(m));
   const wards = [...new Set(all.map((m) => String(m['unit_name'] ?? '')).filter(Boolean))].sort();
+  // A single unit (one ward in the stake, or a specific ward picked) makes the per-unit snapshot
+  // redundant — the count is already shown next to "still working toward".
+  const singleUnit = ward != null || wards.length <= 1;
   const allOrgs = orgs.size === ORG_BUCKETS.length;
   const orgScoped = allOrgs ? all : all.filter((m) => orgs.has(responsibleOrg(m) as OrgBucket));
   const baptized = ward == null ? orgScoped : orgScoped.filter((m) => String(m['unit_name'] ?? '') === ward);
@@ -152,10 +155,12 @@ function NeedsBody() {
             onClick={() => setAscending((a) => !a)}
           />
         </span>
-        <label className="row small" style={{ gap: 8, alignItems: 'center', cursor: 'pointer' }}>
-          <input type="checkbox" className="switch" checked={showSnapshot} onChange={(e) => setShowSnapshot(e.target.checked)} />
-          Unit snapshot
-        </label>
+        {!singleUnit && (
+          <label className="row small" style={{ gap: 8, alignItems: 'center', cursor: 'pointer' }}>
+            <input type="checkbox" className="switch" checked={showSnapshot} onChange={(e) => setShowSnapshot(e.target.checked)} />
+            Unit snapshot
+          </label>
+        )}
       </div>
     </div>
   );
@@ -198,7 +203,7 @@ function NeedsBody() {
             iconColor={cat.color}
             missing={missing}
             unitColors={unitColors}
-            showSnapshot={showSnapshot}
+            showSnapshot={showSnapshot && !singleUnit}
             groupByUnit={groupByUnit}
             showAttendance={isAttendance}
             revealKey={`${cat.key}-${ascending}-${groupByUnit}-${ward ?? ''}`}
@@ -240,52 +245,71 @@ function CategorySection({
   const unitsByCount = [...byUnit.entries()].sort((a, b) => b[1].length - a[1].length);
 
   const row = (m: Member, i: number) => (
-    <MemberRow key={i} m={m} showUnit={!groupByUnit} showResp showAttendance={showAttendance} />
+    <MemberRow
+      key={i}
+      m={m}
+      showUnit={!groupByUnit}
+      showResp
+      showAttendance={showAttendance}
+      unitColor={unitColors.get(String(m['unit_name'] ?? '—'))}
+    />
   );
 
   return (
-    <SectionCard title={title} icon={icon} iconColor={iconColor} trailing={<CountBadge n={missing.length} />}>
-      {missing.length === 0 ? (
-        <p style={{ padding: '16px 0' }}>Everyone eligible has this. 🎉</p>
-      ) : (
-        <>
-          {showSnapshot && (
-            <div className="wrap" style={{ gap: 6 }}>
-              {unitsByCount.map(([unit, list]) => {
-                const color = unitColors.get(unit) ?? '#37474F';
-                return (
-                  <span
-                    key={unit}
-                    className="chip"
-                    style={{ background: hexA(color, 0.1), borderColor: hexA(color, 0.35), color, fontSize: 12 }}
-                  >
-                    {unit} · {list.length}
-                  </span>
-                );
-              })}
-            </div>
-          )}
-          {showSnapshot && <hr className="divider" />}
-          <div className="reveal" key={revealKey}>
-            {groupByUnit ? (
-              <div className="stack" style={{ gap: 14 }}>
-                {[...byUnit.keys()].sort().map((unit) => (
-                  <div key={unit} className="stack" style={{ gap: 4 }}>
-                    <div className="row small" style={{ gap: 6, fontWeight: 700, color: unitColors.get(unit) ?? 'var(--on-surface)' }}>
-                      <Icon name="groups" size={14} color={unitColors.get(unit) ?? 'var(--on-surface-variant)'} />
-                      {unit} <CountBadge n={byUnit.get(unit)!.length} />
-                    </div>
-                    <div className="stack">{byUnit.get(unit)!.map(row)}</div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="stack">{missing.map(row)}</div>
-            )}
+    <div className="stack" style={{ gap: 12 }}>
+      {/* Card 1: the "still working toward …" heading + the per-unit snapshot pills. */}
+      <SectionCard title={title} icon={icon} iconColor={iconColor} trailing={<CountBadge n={missing.length} />}>
+        {missing.length === 0 ? (
+          <p style={{ padding: '8px 0' }}>Everyone eligible has this. 🎉</p>
+        ) : showSnapshot ? (
+          <div className="wrap" style={{ gap: 6 }}>
+            {unitsByCount.map(([unit, list]) => {
+              const color = unitColors.get(unit) ?? '#37474F';
+              return (
+                <span
+                  key={unit}
+                  className="chip"
+                  style={{ background: hexA(color, 0.1), borderColor: hexA(color, 0.35), color, fontSize: 13 }}
+                >
+                  {unit} · {list.length}
+                </span>
+              );
+            })}
           </div>
-        </>
+        ) : (
+          <p className="small muted" style={{ margin: 0 }}>
+            {missing.length} outstanding across {unitsByCount.length} unit{unitsByCount.length === 1 ? '' : 's'}.
+          </p>
+        )}
+      </SectionCard>
+
+      {/* Card 2: the people list, sized to the widest person (not stretched full-width). */}
+      {missing.length > 0 && (
+        <div style={{ width: 'fit-content', maxWidth: '100%' }}>
+          <div className="card">
+            <div className="card__body">
+              <div className="reveal" key={revealKey}>
+                {groupByUnit ? (
+                  <div className="stack" style={{ gap: 14 }}>
+                    {[...byUnit.keys()].sort().map((unit) => (
+                      <div key={unit} className="stack" style={{ gap: 4 }}>
+                        <div className="row small" style={{ gap: 6, fontWeight: 700, color: unitColors.get(unit) ?? 'var(--on-surface)' }}>
+                          <Icon name="groups" size={16} color={unitColors.get(unit) ?? 'var(--on-surface-variant)'} />
+                          {unit} <CountBadge n={byUnit.get(unit)!.length} />
+                        </div>
+                        <div className="stack">{byUnit.get(unit)!.map(row)}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="stack">{missing.map(row)}</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
       )}
-    </SectionCard>
+    </div>
   );
 }
 

@@ -184,9 +184,9 @@ function GoldenHourBody() {
         {rows.length === 0 ? (
           <p style={{ textAlign: 'center', padding: 32 }}>No new members in this window.</p>
         ) : byDate ? (
-          <DateList rows={rows} chips ascending={ascending} elapsedBaptism />
+          <DateList rows={rows} chips ascending={ascending} elapsedBaptism showResp />
         ) : (
-          <UnitGrid rows={rows} tier={tier} chips ascending={ascending} elapsedBaptism />
+          <UnitGrid rows={rows} tier={tier} chips ascending={ascending} elapsedBaptism showResp />
         )}
       </PageScaffold>
       <DrillHost drill={drill} onClose={() => setDrill(null)} />
@@ -201,28 +201,34 @@ function UnitCompletionCard({ rows }: { rows: Member[] }) {
   const units = unitGoldenHour(rows);
   if (units.length <= 1) return null;
   return (
-    <SectionCard title="Completion by unit">
-      <div className="tiny muted" style={{ marginBottom: 10 }}>
-        Left: people fully complete (one arc each). Right: items complete overall. Tap a unit to jump to it.
-      </div>
-      <div className="stack" style={{ gap: 6 }}>
-        {units.map((u) => (
-          // #25: each row jumps to that unit's card below (smooth scroll + a brief flash). Larger rings.
-          <button
-            key={u.unit}
-            type="button"
-            className="unit-jump"
-            onClick={() => scrollToUnit(u.unit)}
-            title={`Jump to ${u.unit}`}
-          >
-            <span className="row" style={{ fontWeight: 600, flex: 1, minWidth: 0, gap: 4 }}>{u.unit}</span>
-            <SectionedRing size={68} total={u.people} filled={u.fullyComplete} sublabel="people" />
-            <FilledRing size={68} value={u.itemsTotal ? u.itemsDone / u.itemsTotal : 1} sublabel="items" />
-            <Icon name="chevron_right" size={18} />
-          </button>
-        ))}
-      </div>
-    </SectionCard>
+    // Sized to its content (~half width), not stretched edge-to-edge.
+    <div style={{ maxWidth: 540 }}>
+      <SectionCard title="Completion by unit">
+        <div className="tiny muted" style={{ marginBottom: 10 }}>
+          Left: people fully complete (one arc each). Right: items complete overall. Tap a unit to jump to it.
+        </div>
+        <div className="stack" style={{ gap: 6 }}>
+          {units.map((u) => (
+            // #25: each row jumps to that unit's card below (smooth scroll + a brief pop). The unit name
+            // takes the spare width; the rings sit 36px to its right and never wrap.
+            <button
+              key={u.unit}
+              type="button"
+              className="unit-jump"
+              onClick={() => scrollToUnit(u.unit)}
+              title={`Jump to ${u.unit}`}
+            >
+              <span style={{ fontWeight: 600, flex: 1, minWidth: 0 }}>{u.unit}</span>
+              <span className="row" style={{ gap: 12, marginLeft: 24, flexShrink: 0, alignItems: 'center' }}>
+                <SectionedRing size={64} total={u.people} filled={u.fullyComplete} sublabel="people" />
+                <FilledRing size={64} value={u.itemsTotal ? u.itemsDone / u.itemsTotal : 1} sublabel="items" />
+                <Icon name="chevron_right" size={18} />
+              </span>
+            </button>
+          ))}
+        </div>
+      </SectionCard>
+    </div>
   );
 }
 
@@ -233,14 +239,7 @@ function CompletionCard({ rows, onDrill }: { rows: Member[]; onDrill: (d: Drill)
       {/* Balanced 2-column grid that spans the FULL width (esp. on mobile). `grid-auto-rows: 1fr`
           keeps sibling cells the SAME height even when one label wraps to two lines, so it reads as
           a clean two-column flow; full label text — never truncated with "…". */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-          gridAutoRows: '1fr',
-          gap: 14,
-        }}
-      >
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14 }}>
         {milestones.map((ms) => {
           // Expected-only: eligible AND not N/A (N/A ≠ not-done), so the % + drill exclude
           // not-applicable members entirely.
@@ -257,8 +256,8 @@ function CompletionCard({ rows, onDrill }: { rows: Member[]; onDrill: (d: Drill)
               style={{
                 display: 'flex',
                 flexDirection: 'column',
-                width: '100%',
-                height: '100%',
+                flex: '1 1 calc(50% - 7px)',
+                minWidth: 150,
                 background: 'transparent',
                 border: 'none',
                 textAlign: 'left',
