@@ -14,7 +14,7 @@ import { Modal } from './Modal';
 interface Invitation {
   invited_email: string;
   role?: string;
-  unit_id?: string | null;
+  // unit_id is AVAILABLE on the row but not fetched/rendered (the list shows email+role+status only).
   status?: string;
   invited_by_email?: string | null;
   created_at?: string;
@@ -37,7 +37,7 @@ export function PowerUserBody() {
   async function loadInvites() {
     const { data } = await supabase
       .from('invitations')
-      .select('invited_email, role, unit_id, status, invited_by_email, created_at')
+      .select('invited_email, role, status, invited_by_email, created_at')
       .order('created_at', { ascending: false });
     setInvites((data ?? []) as Invitation[]);
   }
