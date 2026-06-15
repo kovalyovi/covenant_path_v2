@@ -50,6 +50,16 @@ export const COLS: Col[] = [
   { header: 'Family name', key: 'family_name_prepared', kind: 'yesno' },
 ];
 
+/** When the table is scrolled right, the frozen name shrinks to "Lastinitial, First" (e.g.
+ *  "Kovaliov, Ilya" → "K, Ilya") so the frozen column reclaims width. Names are stored "Last, First". */
+function abbreviateName(n: string): string {
+  const i = n.indexOf(',');
+  if (i <= 0) return n;
+  const last = n.slice(0, i).trim();
+  const first = n.slice(i + 1).trim();
+  return first ? `${last.charAt(0)}, ${first}` : n;
+}
+
 // The sentinel-able covenant-path columns: a backend sentinel here ('needs-profile-api' / 'blocked:…')
 // must show as friendly text to leaders and only raw to admins (handled via displayFieldValue).
 const SENTINEL_COLS = new Set([
@@ -287,7 +297,8 @@ function TableBody({ members, isAdmin }: { members: Member[]; isAdmin: boolean }
                          left notes on this person. */
                       <td key={c.key} className="col-member">
                         <span className="row" style={{ gap: 4, whiteSpace: 'nowrap' }}>
-                          {display(m, c.key, isAdmin)}
+                          {/* On horizontal scroll, abbreviate to reclaim the frozen column's width. */}
+                          {scrolled ? abbreviateName(display(m, c.key, isAdmin)) : display(m, c.key, isAdmin)}
                           {showNotes && notes[id] && (
                             <Icon
                               name="note"

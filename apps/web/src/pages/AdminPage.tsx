@@ -497,7 +497,7 @@ function SystemHealthCard({ summary }: { summary: Json }) {
 
   const shown = systems.filter((s) => s.ok !== undefined || s.url);
   return (
-    <Card title="System health & tools">
+    <Card title="System health">
       <div className="stack" style={{ gap: 2 }}>
         {shown.map((s) => (
           <div key={s.name} className="row" style={{ justifyContent: 'space-between', gap: 8, padding: '6px 0' }}>
