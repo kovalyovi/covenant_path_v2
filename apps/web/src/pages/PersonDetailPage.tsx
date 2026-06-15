@@ -281,15 +281,25 @@ function FriendsSection({ d, recordedYes, count }: { d: Record<string, unknown>;
       ) : (
         <div className="stack">
           {friends.some((f) => f['inStake'] === true) && <p className="small muted" style={{ marginBottom: 4 }}>Inside the Stake</p>}
-          {friends.map((f, i) => (
-            <div key={i} className="row" style={{ padding: '3px 0' }}>
-              <Avatar name={String(f['name'] ?? '?')} size={30} />
-              <div>
-                <div>{String(f['name'] ?? '—')}</div>
-                {String(f['unit'] ?? '') && <div className="small muted">{String(f['unit'])}</div>}
+          {/* A friend is stored as a member-uuid reference; the NAME is resolved from this stake's
+              synced directory. A friend in a unit you can't see (or not yet in the directory) won't
+              resolve — show an honest placeholder rather than a bare "—". */}
+          {friends.map((f, i) => {
+            const fname = String(f['name'] ?? '').trim();
+            return (
+              <div key={i} className="row" style={{ padding: '3px 0' }}>
+                <Avatar name={fname || '?'} size={30} />
+                <div style={{ minWidth: 0 }}>
+                  {fname ? (
+                    <div>{fname}</div>
+                  ) : (
+                    <div className="muted" style={{ fontStyle: 'italic' }}>Name not available (outside your synced units)</div>
+                  )}
+                  {String(f['unit'] ?? '') && <div className="small muted">{String(f['unit'])}</div>}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </SectionCard>

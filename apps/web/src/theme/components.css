@@ -497,32 +497,28 @@ button.card--tappable:active {
   gap: 8px;
   margin-top: 8px;
 }
-/* A radio-button look: a 3px ring, a 3px gap (padding), then the inner circle. Not-taught = grey ring,
-   empty inside; taught = green ring + a green inner dot (the green bg is clipped to the content box). */
+/* A solid filled circle with a SEMITRANSPARENT border (a soft halo), no padding: not-taught = empty
+   with a faint border; taught = green fill + a semitransparent green border. Same look everywhere it's
+   used (the actual dots AND the legend). */
 .principle-dot {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 23px;
-  height: 23px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
-  border: 3px solid var(--outline);
-  padding: 3px;
+  border: 2px solid color-mix(in srgb, var(--outline) 50%, transparent);
   background-color: transparent;
-  background-clip: content-box;
-  color: var(--cp-green, #2e7d32);
+  color: #fff;
   flex: 0 0 auto;
 }
 .principle-dot--filled {
-  border-color: var(--cp-green, #2e7d32);
   background-color: var(--cp-green, #2e7d32);
-  color: #fff;
+  border-color: color-mix(in srgb, var(--cp-green, #2e7d32) 45%, transparent);
 }
 .principle-dot--legend {
   width: 15px;
   height: 15px;
-  border-width: 2px;
-  padding: 2px;
   vertical-align: middle;
 }
 .principle-dot--btn {
@@ -571,18 +567,16 @@ button.card--tappable:active {
 /* Radio-button weekly marker (matches the principle dots): grey ring (absent) / green ring + inner
    green dot (present), via a 3px ring, a 3px gap, then a content-box-clipped fill. */
 .sacrament-dot {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
-  border: 3px solid var(--outline);
-  padding: 3px;
+  border: 2px solid color-mix(in srgb, var(--outline) 50%, transparent);
   background-color: transparent;
-  background-clip: content-box;
   flex: 0 0 auto;
 }
 .sacrament-dot--present {
-  border-color: #2e7d32;
   background-color: #2e7d32;
+  border-color: color-mix(in srgb, #2e7d32 45%, transparent);
 }
 @media (max-width: 600px) {
   .sacrament-timeline {
@@ -1227,6 +1221,9 @@ button.card--tappable:active {
 .dialog__body {
   padding: 0 var(--xl);
   overflow-y: auto;
+  /* Never scroll sideways — a too-wide child is clipped, not scrolled (the person sheet had a stray
+     horizontal scroll on mobile). Nested scrollers (e.g. the desktop sacrament row) keep their own. */
+  overflow-x: hidden;
 }
 /* Chrome-less body: embedded content (e.g. the Admin pages) supplies its own header + padding. */
 .dialog--bare .dialog__body--bare {
@@ -1394,6 +1391,31 @@ button.card--tappable:active {
   .scrim.side.closing > .dialog--side {
     animation: sheet-down 0.22s var(--ease-sheet) both;
   }
+  /* Swipe-to-dismiss: the header is the drag handle (the body still scrolls). A grab pill hints it. */
+  .scrim.side .dialog__title,
+  .scrim.sheet .dialog__title {
+    touch-action: none;
+    cursor: grab;
+    position: relative;
+    padding-top: 22px;
+  }
+  .scrim.side .dialog__title::before,
+  .scrim.sheet .dialog__title::before {
+    content: '';
+    position: absolute;
+    top: 9px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--outline-variant);
+  }
+}
+/* After the open animation finishes, turn it off so the live swipe transform isn't overridden by the
+   keyframe's fill. The (more specific) `.closing` rules still re-enable the exit animation. */
+.dialog--entered {
+  animation: none;
 }
 
 /* ---- Toast ----------------------------------------------------------------------------------- */

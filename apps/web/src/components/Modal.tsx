@@ -64,6 +64,40 @@ export function Modal({
   const [closing, setClosing] = useState(false);
   const exitTimer = useRef<number | null>(null);
 
+  // Swipe-to-dismiss on the HEADER for the mobile bottom sheet (the body keeps scrolling normally, so
+  // there's no scroll-vs-dismiss conflict). `entered` flips after the open animation so the live drag
+  // transform isn't fought by the keyframe's fill (`.dialog--entered` turns the entrance animation off).
+  const [entered, setEntered] = useState(false);
+  const [dragY, setDragY] = useState(0);
+  const dragStartY = useRef<number | null>(null);
+  const draggingRef = useRef(false);
+  useEffect(() => {
+    if (open) { setEntered(false); setDragY(0); }
+  }, [open]);
+
+  const isBottomSheet = () =>
+    (side || sheet) && typeof window !== 'undefined' && window.matchMedia('(max-width: 600px)').matches;
+  function onHeaderPointerDown(e: React.PointerEvent) {
+    if (!entered || !isBottomSheet()) return;
+    dragStartY.current = e.clientY;
+    draggingRef.current = true;
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  }
+  function onHeaderPointerMove(e: React.PointerEvent) {
+    if (dragStartY.current == null) return;
+    const dy = e.clientY - dragStartY.current;
+    setDragY(dy > 0 ? dy : 0); // downward only
+  }
+  function onHeaderPointerUp(e: React.PointerEvent) {
+    if (dragStartY.current == null) return;
+    const dy = e.clientY - dragStartY.current;
+    dragStartY.current = null;
+    draggingRef.current = false;
+    (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    if (dy > 110) onClose();   // far enough → dismiss
+    else setDragY(0);          // snap back
+  }
+
   useEffect(() => {
     if (open) {
       if (exitTimer.current != null) {
@@ -155,7 +189,7 @@ export function Modal({
         onClick={onClose}
       />
       <div
-        className={`${side ? sideClass : 'dialog'}${bare ? ' dialog--bare' : ''}`}
+        className={`${side ? sideClass : 'dialog'}${bare ? ' dialog--bare' : ''}${entered ? ' dialog--entered' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-label={bare ? title : undefined}
@@ -163,9 +197,18 @@ export function Modal({
         aria-busy={loading || undefined}
         tabIndex={-1}
         ref={ref}
+        onAnimationEnd={() => setEntered(true)}
+        style={dragY > 0 ? { transform: `translateY(${dragY}px)`, transition: draggingRef.current ? 'none' : 'transform 0.24s var(--ease-sheet)' } : undefined}
       >
         {!bare && (
-          <div className="dialog__title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div
+            className="dialog__title"
+            style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+            onPointerDown={onHeaderPointerDown}
+            onPointerMove={onHeaderPointerMove}
+            onPointerUp={onHeaderPointerUp}
+            onPointerCancel={onHeaderPointerUp}
+          >
             <span id={titleId} style={{ flex: 1 }}>
               {title}
             </span>
