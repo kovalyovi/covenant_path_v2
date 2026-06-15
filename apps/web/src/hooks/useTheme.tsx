@@ -4,18 +4,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
-export type ThemeLook = 'classic' | 'refined';
 const KEY = 'theme_mode';
-const LOOK_KEY = 'theme_look';
 
 interface ThemeApi {
   mode: ThemeMode;
   label: string;
   setMode: (m: ThemeMode) => void;
   cycle: () => void;
-  /** #6a commit-2: an alternate "Refined" visual style, previewed live + chosen by the user. */
-  look: ThemeLook;
-  setLook: (l: ThemeLook) => void;
 }
 
 const ThemeContext = createContext<ThemeApi | null>(null);
@@ -36,22 +31,12 @@ function load(): ThemeMode {
   return v === 'light' || v === 'dark' || v === 'system' ? v : 'system';
 }
 
-function loadLook(): ThemeLook {
-  return localStorage.getItem(LOOK_KEY) === 'refined' ? 'refined' : 'classic';
-}
-
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [mode, setModeState] = useState<ThemeMode>(() => load());
-  const [look, setLookState] = useState<ThemeLook>(() => loadLook());
 
   useEffect(() => {
     apply(mode);
   }, [mode]);
-
-  // #6a commit-2: the alternate visual style is a `data-look` attribute the CSS keys off.
-  useEffect(() => {
-    document.documentElement.setAttribute('data-look', look);
-  }, [look]);
 
   // Track OS changes while in system mode.
   useEffect(() => {
@@ -71,14 +56,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setMode(mode === 'system' ? 'light' : mode === 'light' ? 'dark' : 'system');
   }, [mode, setMode]);
 
-  const setLook = useCallback((l: ThemeLook) => {
-    localStorage.setItem(LOOK_KEY, l);
-    setLookState(l);
-  }, []);
-
   const label = mode === 'system' ? 'System' : mode === 'light' ? 'Light' : 'Dark';
 
-  const api = useMemo<ThemeApi>(() => ({ mode, label, setMode, cycle, look, setLook }), [mode, label, setMode, cycle, look, setLook]);
+  const api = useMemo<ThemeApi>(() => ({ mode, label, setMode, cycle }), [mode, label, setMode, cycle]);
   return <ThemeContext.Provider value={api}>{children}</ThemeContext.Provider>;
 }
 

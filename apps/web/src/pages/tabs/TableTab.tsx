@@ -236,10 +236,9 @@ function TableBody({ members, isAdmin }: { members: Member[]; isAdmin: boolean }
   }
 
   const activeFilters = Object.keys(excluded).length;
-  const isMobile = typeof window !== 'undefined' && window.innerWidth < 600;
 
   return (
-    <div className="page__inner page__inner--wide" style={{ paddingTop: 8, paddingBottom: isMobile ? 92 : 12 }}>
+    <div className="page__inner page__inner--wide" style={{ paddingTop: 8, paddingBottom: 12 }}>
       <div className="row" style={{ padding: '8px 0 4px' }}>
         <span className="small">
           {rows.length} member{rows.length === 1 ? '' : 's'}

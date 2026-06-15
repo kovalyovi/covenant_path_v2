@@ -115,6 +115,11 @@
   -webkit-backdrop-filter: blur(18px);
   border-top: 1px solid var(--outline-variant);
   padding: 6px 0 max(6px, env(safe-area-inset-bottom));
+  transition: transform 0.25s ease;
+}
+/* Hidden while scrolling down (slides below the fold; the strip left behind matches the page bg). */
+.bottomnav--hidden {
+  transform: translateY(100%);
 }
 .bottomnav__item {
   display: flex;

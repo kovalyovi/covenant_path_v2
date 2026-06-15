@@ -3,16 +3,17 @@
    [data-theme] on <html> to switch. Spacing/radii mirror apps/viewer/lib/theme/tokens.dart. */
 
 :root {
-  /* Light scheme (indigo seed) */
-  --primary: #4554b8;
+  /* Light scheme — the "Refined" palette is now the one and only theme (the Classic/Refined toggle
+     was removed): a richer primary, cleaner near-white surfaces, softer radii. */
+  --primary: #5a5fe0;
   --on-primary: #ffffff;
-  --primary-container: #dfe0ff;
+  --primary-container: #e7e8ff;
   --on-primary-container: #00105c;
-  --secondary-container: #e1e0f9;
+  --secondary-container: #edebfc;
   --on-secondary-container: #191a2c;
-  --surface: #fbf8ff;
-  --surface-container: #f0eef7;
-  --surface-container-high: #eae7f1;
+  --surface: #ffffff;
+  --surface-container: #f5f4fc;
+  --surface-container-high: #efedf9;
   --surface-container-highest: #e4e1ec;
   --on-surface: #1b1b21;
   --on-surface-variant: #46464f;
@@ -37,11 +38,11 @@
   --xl: 24px;
   --xxl: 32px;
 
-  /* Radii (mirrors AppRadius) */
-  --radius-md: 8px;
+  /* Radii (mirrors AppRadius) — softened with the Refined palette. */
+  --radius-md: 10px;
   --radius-lg: 12px;
-  --radius-card: 16px;
-  --radius-pill: 20px;
+  --radius-card: 18px;
+  --radius-pill: 22px;
 
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.06);
   /* Card elevation (item 10): a soft resting shadow + a slightly deeper one on hover for the gentle
@@ -53,15 +54,16 @@
 }
 
 :root[data-theme='dark'] {
-  --primary: #bcc2ff;
+  /* Dark — the Refined dark palette (now the only dark theme). */
+  --primary: #c5c8ff;
   --on-primary: #1b2678;
-  --primary-container: #333e90;
+  --primary-container: #393e9e;
   --on-primary-container: #dfe0ff;
-  --secondary-container: #3e3e52;
+  --secondary-container: #2c2c3a;
   --on-secondary-container: #e1e0f9;
-  --surface: #131318;
-  --surface-container: #1f1f25;
-  --surface-container-high: #2a2930;
+  --surface: #0f0f15;
+  --surface-container: #181820;
+  --surface-container-high: #20212b;
   --surface-container-highest: #35343b;
   --on-surface: #e4e1e9;
   --on-surface-variant: #c8c5d0;
@@ -187,28 +189,4 @@ button {
 }
 .skip-link:focus {
   top: var(--sm);
-}
-
-/* #6a commit-2: the "Refined" alternate visual style (toggle in Settings; persisted as data-look).
-   A more modern, cohesive chrome — a richer primary, cleaner surfaces, softer radii — previewed LIVE
-   so the user can compare against Classic and choose. The load-bearing milestone / unit / org identity
-   colors live in tokens.ts and are intentionally NOT changed here; this only retunes the app chrome. */
-[data-look='refined'] {
-  --primary: #5a5fe0;
-  --primary-container: #e7e8ff;
-  --secondary-container: #edebfc;
-  --surface: #ffffff;
-  --surface-container: #f5f4fc;
-  --surface-container-high: #efedf9;
-  --radius-card: 18px;
-  --radius-md: 10px;
-  --radius-pill: 22px;
-}
-[data-look='refined'][data-theme='dark'] {
-  --primary: #c5c8ff;
-  --primary-container: #393e9e;
-  --secondary-container: #2c2c3a;
-  --surface: #0f0f15;
-  --surface-container: #181820;
-  --surface-container-high: #20212b;
 }

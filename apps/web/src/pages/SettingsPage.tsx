@@ -100,14 +100,6 @@ export function SettingsPage() {
     <div style={{ paddingBottom: 24 }}>
       <SectionHead>Appearance</SectionHead>
       <Tile icon="brightness" title="Theme" subtitle={theme.label} onClick={theme.cycle} chevron />
-      {/* #6a commit-2: preview the alternate "Refined" visual style live, then keep whichever you prefer. */}
-      <Tile
-        icon="favorite"
-        title="Style"
-        subtitle={theme.look === 'refined' ? 'Refined (preview)' : 'Classic'}
-        onClick={() => theme.setLook(theme.look === 'refined' ? 'classic' : 'refined')}
-        chevron
-      />
       <hr className="divider" style={{ margin: 0 }} />
 
       <SectionHead>Preferences</SectionHead>

@@ -50,6 +50,16 @@ export function DashboardShell() {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
   const [adminNonce, setAdminNonce] = useState(0); // #28: header Refresh remounts the console → reloads all panels
+  // Mobile: hide the bottom nav while scrolling DOWN, reveal it when scrolling back up.
+  const [navHidden, setNavHidden] = useState(false);
+  const lastScrollY = useRef(0);
+  function onPageScroll(e: React.UIEvent<HTMLElement>) {
+    const y = e.currentTarget.scrollTop;
+    const last = lastScrollY.current;
+    if (y > last + 6 && y > 56) setNavHidden(true);
+    else if (y < last - 6) setNavHidden(false);
+    lastScrollY.current = y;
+  }
 
   // Settings + Admin are URL-driven side sheets overlaying the dashboard. They're "open" purely as a
   // function of the path, so a deep link / refresh on /settings or /admin lands on the dashboard with
@@ -293,13 +303,14 @@ export function DashboardShell() {
           id="main"
           className={`page${settingsOpen || adminOpen ? ' page--backdrop' : ''}`}
           aria-label="Dashboard content"
+          onScroll={tier === 'mobile' ? onPageScroll : undefined}
         >
           {banners}
           <Outlet />
         </main>
       </div>
       {tier === 'mobile' && (
-        <nav className="bottomnav" aria-label="Primary">
+        <nav className={`bottomnav${navHidden ? ' bottomnav--hidden' : ''}`} aria-label="Primary">
           {/* #31: a sliding indicator that glides to the active tab (hidden when a sheet route has no
               active tab). Width = one slot; it translates by activeIndex slots. */}
           {(() => {
