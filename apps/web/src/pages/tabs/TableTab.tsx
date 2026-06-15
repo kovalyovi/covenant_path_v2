@@ -29,7 +29,8 @@ interface Col {
 }
 
 // (header, member key, kind). 'text' columns also sort; every column filters by value.
-const COLS: Col[] = [
+// Exported so a unit test can pin the "every enumerable tracked field is filterable" contract.
+export const COLS: Col[] = [
   { header: 'Member', key: 'name', kind: 'text' },
   { header: 'Sex', key: 'sex', kind: 'gender' },
   { header: 'Age', key: 'age', kind: 'text' },
@@ -83,11 +84,12 @@ function display(m: Member, key: string, isAdmin: boolean): string {
   return String(m[key] ?? '');
 }
 
-// #9d/#9f: every column SORTS; only enumerable categorical columns FILTER (unit + the yes/no/recommend
-// status columns). Free-form / continuous columns — name, age, baptism, member-for, sex, friends — sort
-// only, since a per-value filter there is just noise.
-const FILTERABLE = new Set([
-  'unit_name', 'aaronic_priesthood', 'melchizedek_priesthood', 'calling',
+// #9d/#9f: every column SORTS; only enumerable categorical columns FILTER (unit, sex, and the
+// yes/no/recommend status columns). Genuinely continuous/free-form columns — name, age, baptism,
+// member-for, friends-count — stay sort-only, since a per-value filter there is just noise. Sex is
+// a small enum (M/F) like the status columns, so "show only sisters" is a useful filter — it gets one.
+export const FILTERABLE = new Set([
+  'unit_name', 'sex', 'aaronic_priesthood', 'melchizedek_priesthood', 'calling',
   'ministering_brothers_sisters', 'ministering_assignment', 'temple_recommend',
   'patriarchal_blessing', 'living_ordinance', 'first_temple_visit', 'family_name_prepared',
 ]);
