@@ -205,8 +205,8 @@ function KpisBody() {
         tier={tier}
         header={
           <div className="stack" style={{ gap: 8 }}>
-            <div className="row" style={{ alignItems: 'flex-start' }}>
-              <div style={{ flex: 1 }}>
+            <div className="row" style={{ alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
+              <div style={{ flex: '1 1 240px', minWidth: 0 }}>
                 <BigHeader text="KPIs" subtitle="From this stake's covenant-path data" />
               </div>
               {units.length > 1 && (

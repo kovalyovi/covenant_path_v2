@@ -273,7 +273,13 @@ export function sacramentWindow(
   weeks: number = SACRAMENT_WINDOW_WEEKS,
 ): { attended: number; total: number } | null {
   if (!Array.isArray(list) || list.length === 0) return null;
-  const withDates = list.map((s) => ({ s, dt: parseMemberDate(s?.['date']) }));
+  // Drop FUTURE-dated Sundays (a synced calendar can include upcoming weeks) — only meetings up to
+  // today count toward the "most recent 8" window; undated rows are kept (order-trusted).
+  const now = Date.now();
+  const withDates = list
+    .map((s) => ({ s, dt: parseMemberDate(s?.['date']) }))
+    .filter((x) => x.dt == null || x.dt.getTime() <= now);
+  if (withDates.length === 0) return null;
   const anyDates = withDates.some((x) => x.dt != null);
   const ordered = anyDates
     // newest first; undated rows sink to the end so dated recents win the window

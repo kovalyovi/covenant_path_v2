@@ -507,32 +507,37 @@ button.card--tappable:active {
 .principle-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 14px;
   margin-top: 8px;
 }
-/* A solid filled circle with a SEMITRANSPARENT border (a soft halo), no padding: not-taught = empty
-   with a faint border; taught = green fill + a semitransparent green border. Same look everywhere it's
-   used (the actual dots AND the legend). */
+/* A solid filled circle with a soft, same-color HALO ring around it (a semitransparent box-shadow),
+   no border — the iOS-style timeline dot. Not-taught = muted solid + grey halo; taught = green + green
+   halo. Same look everywhere (the real dots AND the legend). */
 .principle-dot {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  border: 2px solid color-mix(in srgb, var(--outline) 50%, transparent);
-  background-color: transparent;
+  border: none;
+  background-color: var(--surface-container-highest);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--outline) 16%, transparent);
   color: #fff;
   flex: 0 0 auto;
 }
 .principle-dot--filled {
   background-color: var(--cp-green, #2e7d32);
-  border-color: color-mix(in srgb, var(--cp-green, #2e7d32) 45%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--cp-green, #2e7d32) 20%, transparent);
 }
 .principle-dot--legend {
-  width: 15px;
-  height: 15px;
+  width: 13px;
+  height: 13px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--outline) 16%, transparent);
   vertical-align: middle;
+}
+.principle-dot--legend.principle-dot--filled {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cp-green, #2e7d32) 20%, transparent);
 }
 .principle-dot--btn {
   cursor: pointer;
@@ -560,7 +565,7 @@ button.card--tappable:active {
 }
 .sacrament-line {
   position: absolute;
-  top: 13px;
+  top: 10px; /* centered on the 18px dots (track pad 2 + radius 9 − half line) */
   height: 2px;
   background: var(--outline-variant);
 }
@@ -579,19 +584,20 @@ button.card--tappable:active {
 }
 /* Radio-button weekly marker (matches the principle dots): grey ring (absent) / green ring + inner
    green dot (present), via a 3px ring, a 3px gap, then a content-box-clipped fill. */
-/* OPAQUE fills so the connecting timeline line sits BEHIND the dots (it no longer "penetrates" them):
-   absent = a light solid dot, present = solid green — both with a soft semitransparent border. */
+/* Solid center + soft same-color HALO (matches the principle dots / the iOS reference). The solid
+   centre is opaque so the connecting line sits BEHIND it (no longer penetrates). */
 .sacrament-dot {
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  border: 2px solid color-mix(in srgb, var(--outline) 50%, transparent);
+  border: none;
   background-color: var(--surface-container-highest);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--outline) 16%, transparent);
   flex: 0 0 auto;
 }
 .sacrament-dot--present {
   background-color: #2e7d32;
-  border-color: color-mix(in srgb, #2e7d32 45%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, #2e7d32 20%, transparent);
 }
 @media (max-width: 600px) {
   .sacrament-timeline {
@@ -603,10 +609,10 @@ button.card--tappable:active {
     gap: 12px;
     align-items: stretch;
   }
-  /* The connector becomes a VERTICAL gray line down the marker centres (timeline). */
+  /* The connector becomes a VERTICAL gray line down the marker centres (18px dot → centre at 9px). */
   .sacrament-line {
     display: block;
-    left: 11px !important;
+    left: 8px !important;
     right: auto !important;
     top: 12px;
     bottom: 12px;

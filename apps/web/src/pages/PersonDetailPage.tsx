@@ -209,8 +209,12 @@ function SacramentSection({ d }: { d: Record<string, unknown> }) {
   if (win == null) return null;
   const bucket = attendanceBucket(win);
   const summaryColor = attendanceColor(bucket.level);
-  // newest-first; render the windowed markers oldest→newest so the timeline reads L→R.
-  const withDates = all.map((s) => ({ s, dt: parseMemberDate(s['date']) }));
+  // newest-first; drop FUTURE-dated Sundays (upcoming weeks a synced calendar may include) so only
+  // meetings up to today show in the most-recent-8 window.
+  const now = Date.now();
+  const withDates = all
+    .map((s) => ({ s, dt: parseMemberDate(s['date']) }))
+    .filter((x) => x.dt == null || x.dt.getTime() <= now);
   const anyDates = withDates.some((x) => x.dt != null);
   const ordered = anyDates
     ? [...withDates].sort((a, b) => (b.dt?.getTime() ?? -Infinity) - (a.dt?.getTime() ?? -Infinity))
