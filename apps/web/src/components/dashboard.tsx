@@ -9,7 +9,7 @@ import {
   ageOf, orgInfo, orgResponsibilityNote, type OrgBucket, ORG_BUCKETS,
 } from '../logic/milestones';
 import {
-  parseMemberDate, fmtLong, fmtMonthDayYear, baptismElapsed, ago, staleness, fmtDateTime,
+  parseMemberDate, fmtLong, fmtMonthDayYear, tenure, ago, staleness, fmtDateTime,
 } from '../logic/dates';
 import { assignUnitColors } from '../logic/kpis';
 import { hexA } from '../theme/tokens';
@@ -426,12 +426,13 @@ export function MemberRow({ m, chips = false, showUnit = false, showResp = false
   // normal tap/click opens the detail. The press timer fires the edit path and suppresses the click.
   const press = useLongPress(() => id && navigate(`/person/${encodeURIComponent(id)}?editNote=1`));
 
-  // The date segment for the metadata line: elapsed "X ago" for a baptism (#8.1a), else the date.
+  // The date segment for the metadata line: time as a member ("2 years 3 months", years when they
+  // apply + months — no redundant "ago") for a baptism, else the date.
   const dateSeg: ReactNode = date
     ? isBaptism
       ? (elapsedBaptism
-          ? (baptismElapsed(date) ? `${baptismElapsed(date)} ago` : fmtMonthDayYear(date))
-          : `${fmtMonthDayYear(date)}${baptismElapsed(date) ? ` (${baptismElapsed(date)})` : ''}`)
+          ? (tenure(date) || fmtMonthDayYear(date))
+          : `${fmtMonthDayYear(date)}${tenure(date) ? ` (${tenure(date)})` : ''}`)
       : fmtLong(date)
     : null;
 
@@ -459,9 +460,15 @@ export function MemberRow({ m, chips = false, showUnit = false, showResp = false
       onPointerLeave={press.onPointerUp}
       onContextMenu={(e) => e.preventDefault()}
     >
-      <Avatar name={name} photoUrl={m['photo_url'] as string | undefined} size={44} />
-      <span className="member-row__main">
+      {/* Top: avatar + name centered beside it, chevron on the right. */}
+      <span className="member-row__top">
+        <Avatar name={name} photoUrl={m['photo_url'] as string | undefined} size={44} />
         <span className="member-row__name">{name}</span>
+        <Icon name="chevron_right" size={16} />
+      </span>
+      {/* Body: the metadata line + pills span the FULL row width (starting under the photo) — more
+          room, so the gender · age · tenure · org line never wraps. */}
+      <span className="member-row__body">
         {segs.length > 0 && (
           <span className="member-row__meta">
             {segs.map((s, i) => (
@@ -472,19 +479,9 @@ export function MemberRow({ m, chips = false, showUnit = false, showResp = false
             ))}
           </span>
         )}
-        {/* #1e: a sacrament-attendance pill on its own line (only when asked + data exists). */}
-        {showAttendance && (
-          <span style={{ display: 'block', marginTop: 4 }}>
-            <AttendancePill member={m} />
-          </span>
-        )}
+        {showAttendance && <AttendancePill member={m} />}
         <NoteLine uuid={id} />
-        {chips && (
-          <span style={{ display: 'block', marginTop: 6 }}>
-            <GoldenHourChips member={m} size={22} highlightNext />
-          </span>
-        )}
-        {/* The unit as a colored pill below the metadata (one placement; uses the filter palette). */}
+        {chips && <GoldenHourChips member={m} size={22} highlightNext />}
         {showUnit && unit && (
           <span
             className="unit-pill"
@@ -498,7 +495,6 @@ export function MemberRow({ m, chips = false, showUnit = false, showResp = false
           </span>
         )}
       </span>
-      <Icon name="chevron_right" size={18} />
     </button>
   );
 }

@@ -240,7 +240,6 @@ function SacramentSection({ d }: { d: Record<string, unknown> }) {
   const win = sacramentWindow(all);
   if (win == null) return null;
   const bucket = attendanceBucket(win);
-  const PRESENT = '#2e7d32';
   const summaryColor = attendanceColor(bucket.level);
   // newest-first; render the windowed markers oldest→newest so the timeline reads L→R.
   const withDates = all.map((s) => ({ s, dt: parseMemberDate(s['date']) }));
@@ -248,7 +247,8 @@ function SacramentSection({ d }: { d: Record<string, unknown> }) {
   const ordered = anyDates
     ? [...withDates].sort((a, b) => (b.dt?.getTime() ?? -Infinity) - (a.dt?.getTime() ?? -Infinity))
     : withDates;
-  const shown = ordered.slice(0, SACRAMENT_WINDOW_WEEKS).map((x) => x.s).reverse();
+  // Newest → oldest (most recent week first).
+  const shown = ordered.slice(0, SACRAMENT_WINDOW_WEEKS).map((x) => x.s);
   const n = Math.max(1, shown.length);
   return (
     <SectionCard
@@ -274,20 +274,13 @@ function SacramentSection({ d }: { d: Record<string, unknown> }) {
             const label = String(s['label'] ?? '');
             return (
               <div key={i} className="sacrament-mark">
+                {/* Radio-button marker (matches the principle dots): present = filled, absent = empty. */}
                 <span
                   role="img"
                   aria-label={`${label || `week ${i + 1}`} — ${present ? 'present' : 'absent'}`}
                   title={`${label} — ${present ? 'present' : 'absent'}`}
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 auto',
-                    width: 26, height: 26, borderRadius: '50%',
-                    background: present ? PRESENT : 'var(--surface)',
-                    border: `1.6px solid ${present ? PRESENT : 'var(--outline)'}`,
-                    color: present ? '#fff' : 'var(--on-surface-variant)',
-                  }}
-                >
-                  <Icon name={present ? 'check' : 'close'} size={present ? 15 : 12} color={present ? '#fff' : 'var(--on-surface-variant)'} />
-                </span>
+                  className={`sacrament-dot${present ? ' sacrament-dot--present' : ''}`}
+                />
                 <span className="muted sacrament-mark__label">{label}</span>
               </div>
             );

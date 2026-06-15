@@ -5,7 +5,7 @@
 import { useState } from 'react';
 import { useDashboard } from '../../hooks/useDashboard';
 import { usePersistentState, setCodec } from '../../hooks/usePersistentState';
-import { useTier } from '../../hooks/useTier';
+import { useTier, type Tier } from '../../hooks/useTier';
 import type { Member } from '../../lib/member';
 import { isInvestigator } from '../../lib/member';
 import { parseMemberDate, fmtMonShort } from '../../logic/dates';
@@ -177,7 +177,7 @@ function GoldenHourBody() {
               onAscToggle={() => setAsc(!ascending)}
             />
             <CompletionCard rows={rows} onDrill={setDrill} />
-            <UnitCompletionCard rows={rows} />
+            <UnitCompletionCard rows={rows} tier={tier} />
           </div>
         }
       >
@@ -197,9 +197,12 @@ function GoldenHourBody() {
 /** Per-unit Golden Hour indicators (#8d): for each unit, a SECTIONED ring (one arc per person, filled
  *  when fully complete) = % of people done, and a FILLED ring = % of eligible items complete overall.
  *  Hidden for a single-unit leader (nothing to compare). */
-function UnitCompletionCard({ rows }: { rows: Member[] }) {
+function UnitCompletionCard({ rows, tier }: { rows: Member[]; tier: Tier }) {
   const units = unitGoldenHour(rows);
   if (units.length <= 1) return null;
+  // On phones: smaller rings + no sublabels + tighter gap so each unit fits on ONE line.
+  const mobile = tier === 'mobile';
+  const ring = mobile ? 44 : 64;
   return (
     // Sized to its content (~half width), not stretched edge-to-edge.
     <div style={{ maxWidth: 540 }}>
@@ -209,8 +212,7 @@ function UnitCompletionCard({ rows }: { rows: Member[] }) {
         </div>
         <div className="stack" style={{ gap: 6 }}>
           {units.map((u) => (
-            // #25: each row jumps to that unit's card below (smooth scroll + a brief pop). The unit name
-            // takes the spare width; the rings sit 36px to its right and never wrap.
+            // #25: each row jumps to that unit's card below (smooth scroll + a brief pop).
             <button
               key={u.unit}
               type="button"
@@ -218,11 +220,11 @@ function UnitCompletionCard({ rows }: { rows: Member[] }) {
               onClick={() => scrollToUnit(u.unit)}
               title={`Jump to ${u.unit}`}
             >
-              <span style={{ fontWeight: 600, flex: 1, minWidth: 0 }}>{u.unit}</span>
-              <span className="row" style={{ gap: 12, marginLeft: 24, flexShrink: 0, alignItems: 'center' }}>
-                <SectionedRing size={64} total={u.people} filled={u.fullyComplete} sublabel="people" />
-                <FilledRing size={64} value={u.itemsTotal ? u.itemsDone / u.itemsTotal : 1} sublabel="items" />
-                <Icon name="chevron_right" size={18} />
+              <span style={{ fontWeight: 600, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.unit}</span>
+              <span className="row" style={{ gap: mobile ? 8 : 12, marginLeft: mobile ? 8 : 24, flexShrink: 0, alignItems: 'center' }}>
+                <SectionedRing size={ring} total={u.people} filled={u.fullyComplete} sublabel={mobile ? undefined : 'people'} />
+                <FilledRing size={ring} value={u.itemsTotal ? u.itemsDone / u.itemsTotal : 1} sublabel={mobile ? undefined : 'items'} />
+                {!mobile && <Icon name="chevron_right" size={18} />}
               </span>
             </button>
           ))}

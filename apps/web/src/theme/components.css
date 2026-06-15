@@ -115,11 +115,17 @@
   -webkit-backdrop-filter: blur(18px);
   border-top: 1px solid var(--outline-variant);
   padding: 6px 0 max(6px, env(safe-area-inset-bottom));
-  transition: transform 0.25s ease;
+  overflow: hidden;
+  max-height: 96px;
+  transition: max-height 0.25s ease, padding 0.25s ease, border-color 0.25s ease;
 }
-/* Hidden while scrolling down (slides below the fold; the strip left behind matches the page bg). */
+/* Hidden while scrolling down: COLLAPSE it (max-height + padding → 0) so the page reclaims the space
+   instead of leaving an empty strip. */
 .bottomnav--hidden {
-  transform: translateY(100%);
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-top-color: transparent;
 }
 .bottomnav__item {
   display: flex;
@@ -562,6 +568,22 @@ button.card--tappable:active {
   font-size: 9px;
   white-space: nowrap;
 }
+/* Radio-button weekly marker (matches the principle dots): grey ring (absent) / green ring + inner
+   green dot (present), via a 3px ring, a 3px gap, then a content-box-clipped fill. */
+.sacrament-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 3px solid var(--outline);
+  padding: 3px;
+  background-color: transparent;
+  background-clip: content-box;
+  flex: 0 0 auto;
+}
+.sacrament-dot--present {
+  border-color: #2e7d32;
+  background-color: #2e7d32;
+}
 @media (max-width: 600px) {
   .sacrament-timeline {
     overflow-x: visible;
@@ -569,11 +591,18 @@ button.card--tappable:active {
   .sacrament-track {
     flex-direction: column;
     min-width: 0 !important;
-    gap: 10px;
+    gap: 12px;
     align-items: stretch;
   }
+  /* The connector becomes a VERTICAL gray line down the marker centres (timeline). */
   .sacrament-line {
-    display: none;
+    display: block;
+    left: 11px !important;
+    right: auto !important;
+    top: 12px;
+    bottom: 12px;
+    height: auto;
+    width: 2px;
   }
   .sacrament-mark {
     flex-direction: row;
@@ -693,10 +722,13 @@ button.card--tappable:active {
 }
 
 /* ---- Member rows / lists --------------------------------------------------------------------- */
+/* The row is a COLUMN: a top line (avatar + name + chevron) and a full-width body (metadata + pills)
+   that starts under the photo — giving the meta/chips the whole row's width (so nothing wraps). */
 .member-row {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
   padding: 8px;
   border: none;
   border-radius: var(--radius-md);
@@ -713,31 +745,35 @@ button.card--tappable:active {
 .member-row + .member-row {
   border-top: 1px solid var(--outline-variant);
 }
-.member-row__main {
-  flex: 1;
-  min-width: 0;
-  /* stack name / gender+age / date / badges each on their OWN line (the spans were inline before, so
-     name and age shared a line). */
+.member-row__top {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
+  gap: 10px;
 }
 .member-row__name {
   font-weight: 600;
+  flex: 1;
+  min-width: 0;
 }
-/* One metadata line: gender · age · baptised-ago · org, joined by a faint divider; supplementary text
-   bumped ~1px for legibility. The unit (when shown) is a colored pill below — one placement only. */
+.member-row__body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+/* One metadata line: gender · age · tenure · org, joined by a faint divider; supplementary text bumped
+   ~1px for legibility. Full row width now, so it stays on one line. */
 .member-row__meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  margin-top: 3px;
   font-size: 0.8rem;
   color: var(--on-surface-variant);
 }
 .member-row__sep {
   opacity: 0.35;
-  padding: 0 8px;
+  padding: 0 7px;
 }
 .unit-pill {
   display: inline-flex;
