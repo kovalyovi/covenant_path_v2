@@ -5,11 +5,11 @@
 // no session → /login; an authed user at /login → /. A no-access member is blocked at login (N2),
 // so they never reach a session here.
 //
-// Settings + Admin are SIDE SHEETS that overlay the dashboard (not standalone pages), yet stay
-// URL-landable: `/settings` · `/admin` · `/admin/:section` are children of the DashboardShell that
-// render the dashboard underneath (the default Baptisms tab) with the sheet open on top — so a
-// refresh or a deep link lands on the dashboard + the open sheet, and closing the sheet navigates
-// back to the underlying tab. The shell reads the pathname to decide which sheet to overlay.
+// Settings, Admin AND Person detail are SIDE/BOTTOM SHEETS that overlay the dashboard (not standalone
+// pages), yet stay URL-landable: `/settings` · `/admin` · `/admin/:section` · `/person/:id` are children
+// of the DashboardShell that render the last-visited tab underneath (via BackgroundTab) with the sheet
+// open on top — so a refresh or a deep link lands on the dashboard + the open sheet, and closing the
+// sheet navigates back to the underlying tab. The shell reads the pathname to decide which to overlay.
 
 import { lazy, Suspense } from 'react';
 import { createBrowserRouter, Navigate, Outlet, useLocation } from 'react-router-dom';
@@ -24,7 +24,6 @@ import { BaptismsTab } from './pages/tabs/BaptismsTab';
 import { GoldenHourTab } from './pages/tabs/GoldenHourTab';
 import { NeedsTab } from './pages/tabs/NeedsTab';
 import { TableTab } from './pages/tabs/TableTab';
-import { PersonDetailPage } from './pages/PersonDetailPage';
 import { ReauthPage } from './pages/ReauthPage';
 import { InvitePage } from './pages/InvitePage';
 
@@ -115,9 +114,11 @@ export const router = createBrowserRouter([
           { path: 'admin', element: <BackgroundTab /> },
           // Full-history ops views (#7): /admin/runs · /admin/changelog · /admin/logins · /admin/endpoints (paginated).
           { path: 'admin/:section', element: <BackgroundTab /> },
+          // Person detail is ALSO a URL-landable side/bottom sheet over the dashboard (same pattern):
+          // the route renders the last tab as backdrop; DashboardShell overlays the detail sheet.
+          { path: 'person/:id', element: <BackgroundTab /> },
         ],
       },
-      { path: 'person/:id', element: <PersonDetailPage /> },
       // Deep link from the day-40 "re-authorize your sync" email — opens the one-MFA dialog (Piece 3).
       { path: 'reauth', element: <ReauthPage /> },
       { path: 'invite', element: <InvitePage /> },

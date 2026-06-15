@@ -29,6 +29,7 @@ import { Modal } from '../components/Modal';
 import { Button } from '../components/ui';
 import { AdminSkeleton } from '../components/Skeletons';
 import { SettingsPage } from './SettingsPage';
+import { PersonDetailBody, personLcrUrl } from './PersonDetailPage';
 
 // Settings + Admin render as side sheets OVER the dashboard (see router). The console is heavy
 // (dense tables) + rarely opened, so its content is code-split out of the dashboard bundle and lazy-
@@ -69,12 +70,23 @@ export function DashboardShell() {
   const settingsOpen = path === '/settings';
   const adminOpen = path === '/admin' || path.startsWith('/admin/');
   const adminSection = path.startsWith('/admin/') ? path.slice('/admin/'.length) : '';
+  // Person detail is a URL-landable side/bottom sheet too. Parse the id from the path (not useParams,
+  // since the matched route element is BackgroundTab, not this shell), and the optional ?editNote.
+  const personMatch = /^\/person\/(.+)$/.exec(path);
+  const personId = personMatch ? decodeURIComponent(personMatch[1]) : null;
+  const personOpen = personId != null;
+  const editNote = new URLSearchParams(location.search).get('editNote') === '1';
+  const personMember = personId != null
+    ? d.members.find((m) => String(m['person_uuid'] ?? '') === personId)
+    : undefined;
+  const personTitle = personMember ? String(personMember['name'] ?? 'Member') : 'Member';
+  const anyOverlay = settingsOpen || adminOpen || personOpen;
 
   // Remember the last real tab so closing a sheet returns there AND the sheet renders that tab as its
   // backdrop (BackgroundTab in router.tsx reads this) — opening Settings/Admin no longer resets the
   // view to Baptisms. Persisted to sessionStorage so a URL-landed sheet still shows the right backdrop.
   const lastTabRef = useRef<string>('/baptisms');
-  if (!settingsOpen && !adminOpen && path !== '/') {
+  if (!anyOverlay && path !== '/') {
     lastTabRef.current = path;
     try { sessionStorage.setItem('cp:lastTab', path); } catch { /* private mode */ }
   }
@@ -301,7 +313,7 @@ export function DashboardShell() {
             don't replay its entrance animation (that was the "blink" behind the sheet). */}
         <main
           id="main"
-          className={`page${settingsOpen || adminOpen ? ' page--backdrop' : ''}`}
+          className={`page${anyOverlay ? ' page--backdrop' : ''}`}
           aria-label="Dashboard content"
           onScroll={tier === 'mobile' ? onPageScroll : undefined}
         >
@@ -360,7 +372,30 @@ export function DashboardShell() {
       )}
       {report && <ReportSheet open onClose={closeReport} report={report} onEmail={emailReport} />}
 
-      {/* Settings + Admin overlay the dashboard as URL-landable side sheets (open is path-driven). */}
+      {/* Person detail, Settings + Admin all overlay the dashboard as URL-landable side sheets
+          (open is path-driven; on phones the `side` variant falls back to a bottom sheet). */}
+      <Modal
+        open={personOpen}
+        side
+        wide
+        title={personTitle}
+        onClose={closeOverlay}
+        headerExtra={personId ? (
+          <a
+            className="iconbtn"
+            href={personLcrUrl(personId)}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Open this person in LCR"
+            title="Open this person in LCR"
+          >
+            <Icon name="open_in_new" size={20} />
+          </a>
+        ) : undefined}
+      >
+        {personOpen && personId && <PersonDetailBody id={personId} autoEdit={editNote} />}
+      </Modal>
+
       <Modal open={settingsOpen} side title="Settings" onClose={closeOverlay}>
         {settingsOpen && <SettingsPage />}
       </Modal>

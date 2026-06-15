@@ -5,7 +5,6 @@
 // plus leader notes (RLS-scoped). The member is read from the loaded dashboard data by person_uuid.
 
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useDashboard } from '../hooks/useDashboard';
 import type { Member } from '../lib/member';
 import { detailsOf, freshness } from '../lib/member';
@@ -17,29 +16,29 @@ import {
 import { agoOrNever, parseMemberDate, tenure } from '../logic/dates';
 import { sacramentWindow, SACRAMENT_WINDOW_WEEKS, attendanceBucket } from '../logic/kpis';
 import { attendanceColor } from '../theme/tokens';
-import { Avatar, IconButton, SectionCard } from '../components/ui';
+import { Avatar, SectionCard } from '../components/ui';
 import { Icon, type IconName } from '../components/Icon';
 import { GoldenHourChips } from '../components/GoldenHourChips';
 import { MissionariesSection } from '../components/Missionaries';
 import { NotesSection } from '../components/NotesSection';
 
-export function PersonDetailPage() {
-  const { id } = useParams();
-  const [searchParams] = useSearchParams();
-  const editNote = searchParams.get('editNote') === '1'; // long-press on a main-screen row opens edit
+/** LCR "member profile" deep link for a person uuid. (/mlt = the Member List Tool app, which renders
+ *  the covenant-path record; the bare /records path is a raw RSC route the browser just downloads.) */
+export function personLcrUrl(uuid: string): string {
+  return `https://lcr.churchofjesuschrist.org/mlt/records/member-profile/${uuid}?lang=eng`;
+}
+
+/** The person-detail BODY — rendered inside the dashboard's side/bottom sheet (the Modal supplies the
+ *  frame: title = the member's name, the "open in LCR" action, and close). `id` is the person_uuid;
+ *  `autoEdit` opens the note editor straight away (from a long-press on a list row). */
+export function PersonDetailBody({ id, autoEdit }: { id: string; autoEdit: boolean }) {
   const d = useDashboard();
-  const navigate = useNavigate();
   const member = d.members.find((m) => String(m['person_uuid'] ?? '') === id);
 
   if (!member) {
     return (
-      <div className="app-shell">
-        <DetailAppBar title="Member" uuid={undefined} onBack={() => navigate(-1)} />
-        <main className="page">
-          <div className="center-col" style={{ minHeight: '50vh' }}>
-            <p className="muted">This member isn't in the current view.</p>
-          </div>
-        </main>
+      <div className="center-col" style={{ minHeight: 200 }}>
+        <p className="muted">{d.loading ? 'Loading…' : "This member isn't in the current view."}</p>
       </div>
     );
   }
@@ -66,78 +65,47 @@ export function PersonDetailPage() {
   const demo = [sexLabel, age].filter(Boolean).join(' · ');
 
   return (
-    <div className="app-shell">
-      <DetailAppBar title={name} uuid={uuid} onBack={() => navigate(-1)} />
-      <main className="page">
-        <div className="maxw" style={{ padding: '16px 16px 32px' }}>
-          {/* header card */}
-          <div
-            className="card"
-            style={{ background: 'var(--primary-container)', border: 'none', borderRadius: 'var(--radius-card)' }}
-          >
-            <div className="card__body row" style={{ alignItems: 'center', gap: 16 }}>
-              <Avatar name={name} photoUrl={member['photo_url'] as string | undefined} size={60} />
-              <div style={{ color: 'var(--on-primary-container)' }}>
-                <h1 style={{ fontSize: '1.25rem' }}>{name}</h1>
-                {String(member['unit_name'] ?? '') && <div>{String(member['unit_name'])}</div>}
-                {baptismLine && <div style={{ fontWeight: 600, marginTop: 2 }}>{baptismLine}</div>}
-                {demo && <div className="small">{demo}</div>}
-                {memberSince && memberSince !== baptismLine && <div className="small">{memberSince}</div>}
-              </div>
-            </div>
+    <div style={{ paddingTop: 4, paddingBottom: 16 }}>
+      {/* header card */}
+      <div
+        className="card"
+        style={{ background: 'var(--primary-container)', border: 'none', borderRadius: 'var(--radius-card)' }}
+      >
+        <div className="card__body row" style={{ alignItems: 'center', gap: 16 }}>
+          <Avatar name={name} photoUrl={member['photo_url'] as string | undefined} size={60} />
+          <div style={{ color: 'var(--on-primary-container)' }}>
+            <h1 style={{ fontSize: '1.25rem' }}>{name}</h1>
+            {String(member['unit_name'] ?? '') && <div>{String(member['unit_name'])}</div>}
+            {baptismLine && <div style={{ fontWeight: 600, marginTop: 2 }}>{baptismLine}</div>}
+            {demo && <div className="small">{demo}</div>}
+            {memberSince && memberSince !== baptismLine && <div className="small">{memberSince}</div>}
           </div>
-
-          <SectionCard
-            title="Covenant Path"
-            iconNode={<CompletionRing pct={completionOf(member)} />}
-            /* #10c: a completeness border — green at 100%, amber while in progress, red at none. */
-            tone={completionOf(member) >= 1 ? 'good' : completionOf(member) > 0 ? 'warn' : 'bad'}
-          >
-            {/* #10a: the labeled chips are the SINGLE covenant-path representation — each carries its
-                ✓ done / ○ not yet / ⚠ data-issue state AND a tap tooltip. The old duplicate "done-text"
-                rows are gone (the ⚠ signal now lives on the chip itself). */}
-            <GoldenHourChips member={member} highlightNext labeled />
-          </SectionCard>
-
-          {/* Investigator (being-taught) extras (item 2): unit, the full-time missionaries who teach
-              them, and their next steps — the not-yet-done Golden Hour milestones. */}
-          {isInvestigator && <InvestigatorSection member={member} unitName={String(member['unit_name'] ?? '')} />}
-
-          {details ? (
-            <RichBody member={member} d={details} isAdmin={d.isAdmin} />
-          ) : (
-            <StatusSections member={member} isAdmin={d.isAdmin} />
-          )}
-
-          {uuid && <NotesSection member={member} autoEdit={editNote} />}
         </div>
-      </main>
-    </div>
-  );
-}
+      </div>
 
-function DetailAppBar({ title, uuid, onBack }: { title: string; uuid?: string; onBack: () => void }) {
-  return (
-    <header className="appbar">
-      <IconButton icon="chevron_left" label="Back" onClick={onBack} />
-      <h1 className="appbar__title">{title}</h1>
-      <span className="appbar__spacer" />
-      {uuid && (
-        <a
-          className="iconbtn"
-          /* /mlt = Member List Tool app: renders the person's covenant-path / "new member"
-             record. The bare /records/member-profile/{uuid} path is a raw RSC data route the
-             browser downloads instead of showing — hence the /mlt prefix. */
-          href={`https://lcr.churchofjesuschrist.org/mlt/records/member-profile/${uuid}?lang=eng`}
-          target="_blank"
-          rel="noopener"
-          aria-label="Open this person in LCR"
-          title="Open this person in LCR"
-        >
-          <Icon name="open_in_new" size={22} />
-        </a>
+      <SectionCard
+        title="Covenant Path"
+        iconNode={<CompletionRing pct={completionOf(member)} />}
+        /* #10c: a completeness border — green at 100%, amber while in progress, red at none. */
+        tone={completionOf(member) >= 1 ? 'good' : completionOf(member) > 0 ? 'warn' : 'bad'}
+      >
+        {/* #10a: the labeled chips are the SINGLE covenant-path representation — each carries its
+            ✓ done / ○ not yet / ⚠ data-issue state AND a tap tooltip. */}
+        <GoldenHourChips member={member} highlightNext labeled />
+      </SectionCard>
+
+      {/* Investigator (being-taught) extras (item 2): unit, the full-time missionaries who teach them,
+          and their next steps — the not-yet-done Golden Hour milestones. */}
+      {isInvestigator && <InvestigatorSection member={member} unitName={String(member['unit_name'] ?? '')} />}
+
+      {details ? (
+        <RichBody member={member} d={details} isAdmin={d.isAdmin} />
+      ) : (
+        <StatusSections member={member} isAdmin={d.isAdmin} />
       )}
-    </header>
+
+      {uuid && <NotesSection member={member} autoEdit={autoEdit} />}
+    </div>
   );
 }
 
