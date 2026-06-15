@@ -310,6 +310,16 @@ function SectionHeading({ icon, children }: { icon: IconName; children: string }
   );
 }
 
+/** Make a chart bucket label human-readable for the "Best period" stat: a weekly bucket reads as
+ *  "M/d" (e.g. "5/5") → render it as "May 5, '26". Monthly/yearly labels ("May", "May '25") are
+ *  already readable and pass through. */
+function prettyBucket(label: string): string {
+  const m = /^(\d{1,2})\/(\d{1,2})$/.exec(label);
+  if (!m) return label;
+  const dt = new Date(new Date().getFullYear(), Number(m[1]) - 1, Number(m[2]));
+  return `${fmtMonShort(dt)} ${dt.getDate()}, '${String(dt.getFullYear()).slice(2)}`;
+}
+
 /** A chart card footer: the descriptive text on its OWN full-width row, then the "By unit" button
  *  right-aligned on the row below — so neither wraps awkwardly or pushes the other off (#kpis). */
 function ChartFooter({ suffix, onByUnit }: { suffix: string; onByUnit: () => void }) {
@@ -349,7 +359,7 @@ function BaptismsCard({
   let bi = -1;
   let bc = 0;
   values.forEach((v, i) => { if (v > bc) { bc = v; bi = i; } });
-  const bestLabel = bi >= 0 ? series.labels[bi] : null;
+  const bestLabel = bi >= 0 ? prettyBucket(series.labels[bi]) : null;
   const delta = total - priorTotal;
   return (
     <SectionCard
