@@ -168,6 +168,11 @@
 @keyframes page-enter {
   from { opacity: 0; transform: translateY(8px); }
 }
+/* The tab rendered only as a sheet backdrop must NOT replay its entrance (that caused a blink behind
+   the side sheet) — it isn't a real navigation. */
+.page--backdrop .page__inner {
+  animation: none;
+}
 .page__inner--mobile {
   /* The bottom nav now sits OUTSIDE the scroll area (a fixed shell row), so the old 96px clearance is
      no longer needed — just a little breathing room at the end of the list. */
@@ -676,7 +681,9 @@ button.card--tappable:active {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  /* Size to the selected option's content (no fixed width / truncation). */
   width: 100%;
+  max-width: 100%;
   padding: 7px 10px;
   border: 1px solid var(--outline);
   border-radius: 10px;
@@ -694,11 +701,9 @@ button.card--tappable:active {
   outline-offset: 1px;
 }
 .dd__label {
-  flex: 1;
+  flex: 1 0 auto;
   text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: nowrap; /* no ellipsis — the trigger grows to fit the label instead of truncating */
 }
 .dd__dot {
   width: 10px;
@@ -718,7 +723,11 @@ button.card--tappable:active {
   z-index: 30;
   top: calc(100% + 4px);
   left: 0;
-  right: 0;
+  /* Menu is at least as wide as the trigger and grows to the widest option (no truncation). */
+  right: auto;
+  min-width: 100%;
+  width: max-content;
+  max-width: min(92vw, 460px);
   margin: 0;
   padding: 4px;
   list-style: none;

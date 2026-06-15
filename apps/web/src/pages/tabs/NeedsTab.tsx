@@ -132,7 +132,7 @@ function NeedsBody() {
       <div style={{ height: 6 }} />
       <div className="wrap" style={{ gap: 8, alignItems: 'center' }}>
         <CategorySelect cats={cats} counts={counts} value={cat.key} onChange={setSelectedKey} />
-        <WardSelect wards={wards} ward={ward} onChange={setWard} unitColors={unitColors} />
+        <WardSelect wards={wards} ward={ward} onChange={setWard} unitColors={unitColors} stakeName={d.stakeName} />
         <OrgFilterBar selected={orgs} onToggle={toggleOrg} onClear={() => setOrgs(new Set(ORG_BUCKETS))} />
       </div>
       {!allOrgs && note && <SubtleNote text={note} />}
@@ -298,18 +298,19 @@ function CategorySelect({ cats, counts, value, onChange }: {
     value: c.key, label: c.label, icon: c.icon, color: c.color,
     trailing: counts[i] ? String(counts[i]) : undefined,
   }));
-  return <Dropdown ariaLabel="Category" value={value} options={options} onChange={onChange} minWidth={230} />;
+  return <Dropdown ariaLabel="Category" value={value} options={options} onChange={onChange} />;
 }
 
 /** Unit picker — one unit or the whole stake (default), each with its pill color. A single-unit leader
- *  has nothing to pick. */
-function WardSelect({ wards, ward, onChange, unitColors }: {
+ *  has nothing to pick. The "all" option reads as the stake's name (not "Stake — all units"). */
+function WardSelect({ wards, ward, onChange, unitColors, stakeName }: {
   wards: string[]; ward: string | null; onChange: (w: string | null) => void; unitColors: Map<string, string>;
+  stakeName: string | null;
 }) {
   if (wards.length <= 1) return null;
   const options: DropdownOption[] = [
-    { value: '', label: 'Stake — all units', icon: 'groups' },
+    { value: '', label: stakeName ?? 'All units', icon: 'groups' },
     ...wards.map((w) => ({ value: w, label: w, color: unitColors.get(w) })),
   ];
-  return <Dropdown ariaLabel="Filter by unit" value={ward ?? ''} options={options} onChange={(v) => onChange(v || null)} minWidth={200} />;
+  return <Dropdown ariaLabel="Filter by unit" value={ward ?? ''} options={options} onChange={(v) => onChange(v || null)} />;
 }

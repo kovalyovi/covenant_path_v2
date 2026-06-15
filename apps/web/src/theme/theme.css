@@ -143,6 +143,20 @@ button {
     animation-duration: 0.8s !important;
     animation-iteration-count: infinite !important;
   }
+  /* Keep the SHORT, ORIENTING UI transitions on even under reduced-motion — a side sheet that
+     teleports in is more disorienting than a brief slide. These are transform/opacity-only, don't
+     block input, and the user explicitly wants them. (Element selectors beat the `*` rule, so these
+     restore the authored durations.) Decorative micro-motion stays disabled. */
+  .scrim { animation-duration: 0.2s !important; }
+  .scrim.closing { animation-duration: 0.22s !important; }
+  .dialog--side { animation-duration: 0.32s !important; }
+  .scrim.side.closing > .dialog--side { animation-duration: 0.24s !important; }
+  .sheet .dialog { animation-duration: 0.24s !important; }
+  .scrim.sheet.closing > .dialog { animation-duration: 0.22s !important; }
+  .page__inner { animation-duration: 0.22s !important; }
+  .bottomnav__indicator { transition-duration: 0.28s !important; }
+  .toast { animation-duration: 0.22s !important; }
+  .toast.toast--leaving { animation-duration: 0.2s !important; }
 }
 
 /* Screen-reader-only utility. */

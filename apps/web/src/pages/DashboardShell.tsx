@@ -287,7 +287,13 @@ export function DashboardShell() {
             ))}
           </nav>
         )}
-        <main id="main" className="page" aria-label="Dashboard content">
+        {/* When a side sheet (Settings/Admin) is open, the tab behind it is just a static backdrop —
+            don't replay its entrance animation (that was the "blink" behind the sheet). */}
+        <main
+          id="main"
+          className={`page${settingsOpen || adminOpen ? ' page--backdrop' : ''}`}
+          aria-label="Dashboard content"
+        >
           {banners}
           <Outlet />
         </main>

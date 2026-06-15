@@ -15,11 +15,12 @@ import { parseMemberDate, fmtMonShort, fmtMonYear } from '../../logic/dates';
 import { avgCompletion } from '../../logic/milestones';
 import {
   metricData, attendedDates, firstLessonDate, lessonsWithMember,
-  membersWithMemberLessons, unitCompletion, baptismsByMonth,
+  membersWithMemberLessons, unitCompletion, baptismsByMonth, assignUnitColors,
   type Period, type Ev, type Series, type BWindow, type DateRange,
 } from '../../logic/kpis';
 import { Icon, type IconName } from '../../components/Icon';
 import { SectionCard, Segmented, RangePill, Progress } from '../../components/ui';
+import { Dropdown, type DropdownOption } from '../../components/Dropdown';
 import { useCountUp } from '../../hooks/useCountUp';
 import { PageScaffold, BigHeader, Columns } from '../../components/dashboard';
 import { TrendLine } from '../../components/TrendLine';
@@ -47,6 +48,7 @@ function KpisBody() {
   const [drill, setDrill] = useState<Drill | null>(null);
 
   const units = [...new Set(d.members.map((m) => String(m['unit_name'] ?? '')).filter(Boolean))].sort();
+  const unitColors = assignUnitColors(d.members);
   const rows = unit == null ? d.members : d.members.filter((m) => m['unit_name'] === unit);
   const baptized = rows.filter((m) => !isInvestigator(m));
   const investigators = rows.filter(isInvestigator);
@@ -194,104 +196,100 @@ function KpisBody() {
       <PageScaffold
         tier={tier}
         header={
-          <div className="stack" style={{ gap: 8 }}>
-            <div className="row" style={{ alignItems: 'flex-start' }}>
-              <div style={{ flex: 1 }}>
-                <BigHeader text="KPIs" subtitle="From this stake's covenant-path data" />
-              </div>
-              {units.length > 1 && (
-                <select
-                  className="select"
-                  style={{ width: 'auto' }}
-                  value={unit ?? ''}
-                  onChange={(e) => setUnit(e.target.value || null)}
-                  aria-label="Unit"
-                >
-                  <option value="">All units</option>
-                  {units.map((u) => (
-                    <option key={u} value={u}>
-                      {u}
-                    </option>
-                  ))}
-                </select>
-              )}
+          <div className="row" style={{ alignItems: 'flex-start' }}>
+            <div style={{ flex: 1 }}>
+              <BigHeader text="KPIs" subtitle="From this stake's covenant-path data" />
             </div>
-            <div style={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-              <Segmented<Period>
-                ariaLabel="Period"
-                value={period}
-                onChange={setPeriod}
+            {units.length > 1 && (
+              <Dropdown
+                ariaLabel="Unit"
+                value={unit ?? ''}
                 options={[
-                  { value: 'month', label: 'Month' },
-                  { value: 'ytd', label: 'YTD' },
-                  { value: 'year', label: 'Year' },
-                  { value: 'all', label: 'All' },
+                  { value: '', label: d.stakeName ?? 'All units', icon: 'groups' },
+                  ...units.map((u): DropdownOption => ({ value: u, label: u, color: unitColors.get(u) })),
                 ]}
+                onChange={(v) => setUnit(v || null)}
               />
-              {/* #7: custom date range — toggles two native date inputs below. */}
-              <button
-                type="button"
-                className="chip"
-                aria-pressed={period === 'custom'}
-                onClick={activateCustom}
-                style={period === 'custom' ? { background: 'var(--secondary-container)', color: 'var(--on-secondary-container)', borderColor: 'transparent' } : undefined}
-              >
-                <Icon name="event" size={16} color={period === 'custom' ? 'var(--primary)' : undefined} />
-                Custom
-              </button>
-            </div>
-            {period === 'custom' && customRange && (
-              <div className="row" style={{ justifyContent: 'center', gap: 8, alignItems: 'center' }}>
-                <input
-                  type="date"
-                  className="input"
-                  style={{ width: 'auto' }}
-                  aria-label="Custom range start"
-                  max={toISO(customRange.end)}
-                  value={toISO(customRange.start)}
-                  onChange={(e) => onCustomStart(e.target.value)}
-                />
-                <span className="muted">–</span>
-                <input
-                  type="date"
-                  className="input"
-                  style={{ width: 'auto' }}
-                  aria-label="Custom range end"
-                  min={toISO(customRange.start)}
-                  value={toISO(customRange.end)}
-                  onChange={(e) => onCustomEnd(e.target.value)}
-                />
-              </div>
-            )}
-            {rangeLabel && (
-              <div style={{ display: 'flex', justifyContent: 'center' }}>
-                <RangePill text={rangeLabel} />
-              </div>
-            )}
-            {period !== 'all' && (
-              <div style={{ display: 'flex', justifyContent: 'center' }}>
-                <button
-                  type="button"
-                  className="chip"
-                  aria-pressed={compare}
-                  onClick={() => setCompare((c) => !c)}
-                  style={compare ? { background: 'var(--secondary-container)', color: 'var(--on-secondary-container)', borderColor: 'transparent' } : undefined}
-                >
-                  <Icon name="compare" size={18} color={compare ? 'var(--primary)' : undefined} />
-                  Compare to previous
-                </button>
-              </div>
             )}
           </div>
         }
       >
-        {/* #33: KPIs split into clear sections — Baptisms FIRST, then the trend graphs, then Overview. */}
+        {/* #33 + reorg: Baptisms FIRST (own window), then Trends with its OWN period filters under the
+            heading, then Overview. */}
         <SectionHeading icon="water_drop">Baptisms</SectionHeading>
         <div style={{ maxWidth: 640 }}>
           <BaptismsCard baptized={baptized} allUnits={allUnits} onDrill={setDrill} />
         </div>
 
         <SectionHeading icon="leaderboard">Trends</SectionHeading>
+        <div className="stack" style={{ gap: 8, marginBottom: 6 }}>
+          <div style={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+            <Segmented<Period>
+              ariaLabel="Period"
+              value={period}
+              onChange={setPeriod}
+              options={[
+                { value: 'month', label: 'Month' },
+                { value: 'ytd', label: 'YTD' },
+                { value: 'year', label: 'Year' },
+                { value: 'all', label: 'All' },
+              ]}
+            />
+            {/* #7: custom date range — toggles two native date inputs below. */}
+            <button
+              type="button"
+              className="chip"
+              aria-pressed={period === 'custom'}
+              onClick={activateCustom}
+              style={period === 'custom' ? { background: 'var(--secondary-container)', color: 'var(--on-secondary-container)', borderColor: 'transparent' } : undefined}
+            >
+              <Icon name="event" size={16} color={period === 'custom' ? 'var(--primary)' : undefined} />
+              Custom
+            </button>
+          </div>
+          {period === 'custom' && customRange && (
+            <div className="row" style={{ justifyContent: 'center', gap: 8, alignItems: 'center' }}>
+              <input
+                type="date"
+                className="input"
+                style={{ width: 'auto' }}
+                aria-label="Custom range start"
+                max={toISO(customRange.end)}
+                value={toISO(customRange.start)}
+                onChange={(e) => onCustomStart(e.target.value)}
+              />
+              <span className="muted">–</span>
+              <input
+                type="date"
+                className="input"
+                style={{ width: 'auto' }}
+                aria-label="Custom range end"
+                min={toISO(customRange.start)}
+                value={toISO(customRange.end)}
+                onChange={(e) => onCustomEnd(e.target.value)}
+              />
+            </div>
+          )}
+          {rangeLabel && (
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <RangePill text={rangeLabel} />
+            </div>
+          )}
+          {period !== 'all' && (
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <button
+                type="button"
+                className="chip"
+                aria-pressed={compare}
+                onClick={() => setCompare((c) => !c)}
+                style={compare ? { background: 'var(--secondary-container)', color: 'var(--on-secondary-container)', borderColor: 'transparent' } : undefined}
+              >
+                <Icon name="compare" size={18} color={compare ? 'var(--primary)' : undefined} />
+                Compare to previous
+              </button>
+            </div>
+          )}
+        </div>
         <Columns cols={Math.min(2, colsFor(tier))}>{trendCards}</Columns>
 
         <SectionHeading icon="summarize">Overview</SectionHeading>

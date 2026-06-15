@@ -16,12 +16,13 @@ export interface DropdownOption {
 }
 
 export function Dropdown({
-  value, options, onChange, ariaLabel, minWidth = 200,
+  value, options, onChange, ariaLabel, minWidth,
 }: {
   value: string;
   options: DropdownOption[];
   onChange: (value: string) => void;
   ariaLabel: string;
+  /** Optional floor; by default the trigger sizes to the selected option's content. */
   minWidth?: number;
 }) {
   const [open, setOpen] = useState(false);
@@ -85,7 +86,7 @@ export function Dropdown({
   }
 
   return (
-    <div className="dd" ref={wrapRef} style={{ minWidth }}>
+    <div className="dd" ref={wrapRef} style={minWidth ? { minWidth } : undefined}>
       <button
         type="button"
         className="dd__trigger"
