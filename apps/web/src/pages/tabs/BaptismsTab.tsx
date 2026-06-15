@@ -49,11 +49,12 @@ function BaptismsBody() {
   }
   items.sort((a, b) => a.date.getTime() - b.date.getTime());
 
-  // Every stake unit that has missionaries synced — the full per-unit breakdown for the section
-  // below (item 4); independent of who's in the baptism list, so it's a complete missionary roster.
-  const unitsWithMissionaries = Object.keys(d.missionaries)
-    .filter((u) => u.trim() && (d.missionaries[u]?.length ?? 0) > 0)
-    .sort();
+  // EVERY unit the user can see (from members + the missionary roster), so the section below lists
+  // wards WITHOUT missionaries too — each highlighted with a warning so the gap is obvious.
+  const allUnits = [...new Set([
+    ...d.members.map((m) => String(m['unit_name'] ?? '')),
+    ...Object.keys(d.missionaries),
+  ])].filter((u) => u.trim()).sort();
 
   return (
     <PageScaffold
@@ -75,9 +76,10 @@ function BaptismsBody() {
         <PersonCardSections items={items} today={today} />
       )}
 
-      {/* SECOND section (item 4): assigned/full-time missionaries — a full per-unit breakdown. */}
-      {unitsWithMissionaries.length > 0 && (
-        <MissionariesByUnitSection units={unitsWithMissionaries} tier={tier} />
+      {/* SECOND section (item 4): assigned missionaries — a full per-unit breakdown, INCLUDING wards
+          with none (highlighted with a warning). */}
+      {allUnits.length > 0 && (
+        <MissionariesByUnitSection units={allUnits} tier={tier} />
       )}
     </PageScaffold>
   );

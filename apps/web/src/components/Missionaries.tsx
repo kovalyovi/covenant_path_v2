@@ -139,9 +139,16 @@ export function MissionariesSection({
   title?: string;
 }) {
   const comps = useUnitMissionaries(unitName);
+  const empty = comps.length === 0;
   return (
-    <SectionCard title={title} icon="volunteer">
-      {comps.length === 0 ? (
+    // Highlight a unit with NO assigned missionaries: a warning-tone left border + a warning icon.
+    <SectionCard
+      title={title}
+      icon={empty ? 'warning' : 'volunteer'}
+      iconColor={empty ? 'var(--warning)' : undefined}
+      tone={empty ? 'warn' : undefined}
+    >
+      {empty ? (
         <p className="row small" style={{ gap: 6, alignItems: 'center', color: 'var(--warning)' }}>
           <Icon name="warning" size={15} color="var(--warning)" />
           No missionaries assigned {unitName ? `to ${unitName}.` : 'to this unit.'}
