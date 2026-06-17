@@ -137,7 +137,11 @@ jobs:
       - name: Sync stake ${{ matrix.stake }}
         env:
           TARGETS: ${{ github.event.inputs.targets || 'both' }}
-          PHOTOS: ${{ github.event.inputs.photos || 'false' }}
+          # Scheduled runs (no dispatch input) refresh avatars by DEFAULT so the 7-day signed URLs stay
+          # fresh and the per-sync roster rebuild keeps its photos (carry-forward) — a manual dispatch
+          # still controls it explicitly (unchecked = 'false' wins over the default). The pass is
+          # best-effort: daily_sync.py swallows any photo error so the data sync never fails over it.
+          PHOTOS: ${{ github.event.inputs.photos || 'true' }}
           ONLY_UNIT: ${{ inputs.unit }}
         run: |
           ARGS="--stake ${{ matrix.stake }} --with-profile"

@@ -302,21 +302,28 @@ def _sync_one(args) -> dict:
                 # beneath the stake the session can see — see CredentialScopeMismatch.
                 expected_stake_unit=getattr(args, "_stake_unit", None))
             if args.photos:
-                from backend import photos as photopipe
-                s = result["supabase"]
-                at = getattr(args, "_mt_access_token", None)
-                if at:
-                    # Member + missionary avatars from the /api/v5/sync/files bundle — no LCR session,
-                    # no cmisId (#11). The missionary photo URLs ride back for the roster (best-effort).
-                    pres = photopipe.sync_photos_from_bundle(conn, s["stake_id"], s["stake_unit"], at)
-                    result["photos"] = pres["stats"]
-                    try:
-                        db.attach_missionary_photos(conn, s["stake_id"], pres["missionary_urls"])
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("missionary photo attach skipped: %s", exc)
-                else:
-                    result["photos"] = photopipe.sync_photos_for_stake(client, conn, s["stake_id"], s["stake_unit"])
-                logger.info("photos: %s", result["photos"])
+                # Avatars are cosmetic — a 50MB-bundle hiccup must NEVER fail the (critical) data sync,
+                # now that photos run on the daily SCHEDULE (not just manual dispatch) to keep the
+                # 7-day signed URLs fresh. Any error here is logged and swallowed.
+                try:
+                    from backend import photos as photopipe
+                    s = result["supabase"]
+                    at = getattr(args, "_mt_access_token", None)
+                    if at:
+                        # Member + missionary avatars from the /api/v5/sync/files bundle — no LCR session,
+                        # no cmisId (#11). The missionary photo URLs ride back for the roster (best-effort).
+                        pres = photopipe.sync_photos_from_bundle(conn, s["stake_id"], s["stake_unit"], at)
+                        result["photos"] = pres["stats"]
+                        try:
+                            db.attach_missionary_photos(conn, s["stake_id"], pres["missionary_urls"])
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning("missionary photo attach skipped: %s", exc)
+                    else:
+                        result["photos"] = photopipe.sync_photos_for_stake(client, conn, s["stake_id"], s["stake_unit"])
+                    logger.info("photos: %s", result["photos"])
+                except Exception as exc:  # noqa: BLE001 — never fail the data sync over avatars
+                    logger.warning("photo pass skipped for stake %s: %s", getattr(args, "stake", "?"), exc)
+                    result["photos"] = {"error": str(exc)[:200]}
             # persist a diagnostics row: run stats + field parity + request metrics
             try:
                 from lcr_client import metrics
