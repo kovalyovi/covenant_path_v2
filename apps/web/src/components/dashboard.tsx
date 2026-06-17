@@ -46,11 +46,34 @@ export function PageScaffold({
   );
 }
 
-/** Lays children into `cols` balanced columns (CSS grid). Mirrors `_Columns`. */
-export function Columns({ cols, children }: { cols: number; children: ReactNode[] }) {
+/** Lays children into `cols` balanced columns (CSS grid). Mirrors `_Columns`.
+ *  When `minColWidth` is set, columns instead flow into a FLUID grid that keeps every column at least
+ *  that wide and drops to fewer columns (down to 1) when the container can't fit `cols` of them — so a
+ *  card's contents (a member row's metadata line) are never squeezed onto two lines on a narrow desktop. */
+export function Columns({ cols, children, minColWidth }: { cols: number; children: ReactNode[]; minColWidth?: number }) {
   const list = children.filter(Boolean);
   if (cols <= 1 || list.length <= 1) {
     return <div className="stack" style={{ gap: 0 }}>{list}</div>;
+  }
+  if (minColWidth) {
+    // "RAM with a max column count": the min track is the LARGER of `minColWidth` and each column's
+    // fair share at exactly `cols` columns — so it never exceeds `cols`, but auto-fill drops a column
+    // whenever the fair share would fall below `minColWidth`. Cards flow (auto-placement) so the
+    // column count can change responsively (round-robin assumes a fixed count).
+    const GAP = 12;
+    const fairShare = `(100% - ${(cols - 1) * GAP}px) / ${cols}`;
+    return (
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: `repeat(auto-fill, minmax(max(${minColWidth}px, ${fairShare}), 1fr))`,
+          gap: GAP,
+          alignItems: 'start',
+        }}
+      >
+        {list}
+      </div>
+    );
   }
   // Distribute round-robin into N column stacks (variable-height friendly), like the Flutter version.
   const buckets: ReactNode[][] = Array.from({ length: cols }, () => []);
@@ -592,7 +615,9 @@ export function UnitGrid({
       </div>
     </SectionCard>
   ));
-  return <Columns cols={colsFor(tier)}>{cards}</Columns>;
+  // Keep every unit card ≥350px wide so a member row's "gender · age · tenure · org" line stays on
+  // one line — on a narrow desktop this drops 3 columns to 2 rather than squeezing the content.
+  return <Columns cols={colsFor(tier)} minColWidth={350}>{cards}</Columns>;
 }
 
 /** Flat list sorted by date; unit shown as right-side metadata. Mirrors `_DateList`. */

@@ -197,7 +197,12 @@ export function Modal({
         aria-busy={loading || undefined}
         tabIndex={-1}
         ref={ref}
-        onAnimationEnd={() => setEntered(true)}
+        // Only the dialog's OWN entrance animation marks it entered. `animationend` bubbles, so a
+        // child's animation finishing (or ANY child under prefers-reduced-motion, where children
+        // finish in ~0.001ms) would otherwise flip `entered` early — and `.dialog--entered` turns the
+        // side-sheet's `side-in` off, so the panel would never finish sliding in (the slide-OUT on
+        // close still played because its rule out-specifies `.dialog--entered`).
+        onAnimationEnd={(e) => { if (e.target === e.currentTarget) setEntered(true); }}
         style={dragY > 0 ? { transform: `translateY(${dragY}px)`, transition: draggingRef.current ? 'none' : 'transform 0.24s var(--ease-sheet)' } : undefined}
       >
         {!bare && (

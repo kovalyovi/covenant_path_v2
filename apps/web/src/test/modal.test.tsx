@@ -43,3 +43,26 @@ describe('Modal focus handling', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
+
+// Regression for "side sheets don't slide in but slide out" (2026-06-17): the side-sheet entrance
+// (`animation: side-in`) is turned off by `.dialog--entered`, and `entered` was flipped by ANY
+// `animationend` bubbling up from a child (or every child under prefers-reduced-motion). That killed
+// the slide-IN partway, while the slide-OUT on close still played (its rule out-specifies
+// `.dialog--entered`). Only the dialog's OWN animation should mark it entered.
+describe('Modal side-sheet entrance', () => {
+  it('a child animationend does not mark the dialog entered (only its own does)', () => {
+    render(
+      <Modal open side title="Settings" onClose={() => {}}>
+        <button data-testid="child">x</button>
+      </Modal>,
+    );
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.className).not.toContain('dialog--entered');
+    // A CHILD's animationend bubbles up — it must NOT flip `entered` (which would disable side-in).
+    fireEvent.animationEnd(screen.getByTestId('child'));
+    expect(dialog.className).not.toContain('dialog--entered');
+    // The dialog's OWN entrance animation finishing is what marks it entered.
+    fireEvent.animationEnd(dialog);
+    expect(dialog.className).toContain('dialog--entered');
+  });
+});
