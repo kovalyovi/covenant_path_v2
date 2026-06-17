@@ -97,7 +97,7 @@ function GoldenHourBody() {
       <>
         <PageScaffold
           tier={tier}
-          maxWidth={960}
+          maxWidth={1140}
           header={
             <div className="stack" style={{ gap: 8 }}>
               {sectionToggle}

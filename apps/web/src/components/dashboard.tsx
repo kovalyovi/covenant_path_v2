@@ -2,7 +2,7 @@
 // `_BigHeader`, `_SyncingBanner`, the freshness chip, `_MemberRow`, `_UnitGrid`, `_DateList`,
 // `_OrgFilterBar`, and the small notes/pills. The tab views compose these so the layouts match.
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Member } from '../lib/member';
 import {
@@ -46,40 +46,43 @@ export function PageScaffold({
   );
 }
 
-/** Lays children into `cols` balanced columns (CSS grid). Mirrors `_Columns`.
- *  When `minColWidth` is set, columns instead flow into a FLUID grid that keeps every column at least
- *  that wide and drops to fewer columns (down to 1) when the container can't fit `cols` of them — so a
- *  card's contents (a member row's metadata line) are never squeezed onto two lines on a narrow desktop. */
+const COL_GAP = 12;
+
+/** Lays children into up to `cols` balanced columns — round-robin into vertical stacks, so each column
+ *  packs tightly (no dead space under a shorter column). Mirrors `_Columns`.
+ *  When `minColWidth` is set the column COUNT comes from the MEASURED available width instead of the
+ *  viewport tier: as many columns of ≥`minColWidth` as fit, capped at `cols`. So a wide desktop shows
+ *  the full `cols` (e.g. 3), and it steps down to 2 then 1 as the window narrows — never squeezing a
+ *  card's contents below `minColWidth`. */
 export function Columns({ cols, children, minColWidth }: { cols: number; children: ReactNode[]; minColWidth?: number }) {
   const list = children.filter(Boolean);
-  if (cols <= 1 || list.length <= 1) {
-    return <div className="stack" style={{ gap: 0 }}>{list}</div>;
-  }
-  if (minColWidth) {
-    // "RAM with a max column count": the min track is the LARGER of `minColWidth` and each column's
-    // fair share at exactly `cols` columns — so it never exceeds `cols`, but auto-fill drops a column
-    // whenever the fair share would fall below `minColWidth`. Cards flow (auto-placement) so the
-    // column count can change responsively (round-robin assumes a fixed count).
-    const GAP = 12;
-    const fairShare = `(100% - ${(cols - 1) * GAP}px) / ${cols}`;
-    return (
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: `repeat(auto-fill, minmax(max(${minColWidth}px, ${fairShare}), 1fr))`,
-          gap: GAP,
-          alignItems: 'start',
-        }}
-      >
-        {list}
-      </div>
-    );
+  const ref = useRef<HTMLDivElement>(null);
+  const [fitCols, setFitCols] = useState(cols);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!minColWidth || !el || typeof ResizeObserver === 'undefined') return;
+    const measure = () => {
+      const w = el.clientWidth;
+      if (w <= 0) return; // not laid out yet (or jsdom) — keep the current count
+      const fit = Math.max(1, Math.floor((w + COL_GAP) / (minColWidth + COL_GAP)));
+      setFitCols(Math.min(cols, fit));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [cols, minColWidth]);
+
+  const n = minColWidth ? fitCols : cols;
+  if (n <= 1 || list.length <= 1) {
+    // ref stays on the same <div> across branches so the observer keeps measuring and can grow back.
+    return <div ref={ref} className="stack" style={{ gap: 0 }}>{list}</div>;
   }
   // Distribute round-robin into N column stacks (variable-height friendly), like the Flutter version.
-  const buckets: ReactNode[][] = Array.from({ length: cols }, () => []);
-  list.forEach((c, i) => buckets[i % cols].push(c));
+  const buckets: ReactNode[][] = Array.from({ length: n }, () => []);
+  list.forEach((c, i) => buckets[i % n].push(c));
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 12, alignItems: 'start' }}>
+    <div ref={ref} style={{ display: 'grid', gridTemplateColumns: `repeat(${n}, 1fr)`, gap: COL_GAP, alignItems: 'start' }}>
       {buckets.map((b, i) => (
         <div key={i} className="stack" style={{ gap: 0 }}>
           {b}

@@ -131,8 +131,10 @@ function PersonCardGroup({
         </strong>
         <CountBadge n={items.length} />
       </div>
-      {/* #3c: a SINGLE column of [date pill | person card] rows for easier tracking + conversations. */}
-      <div className="stack" style={{ gap: 12 }}>
+      {/* #3c: a SINGLE column of [date pill | person card] rows for easier tracking + conversations.
+          On desktop the column shrinks to the WIDEST card's content (capped) and all rows match it —
+          so the cards aren't stretched edge-to-edge across a wide screen (see `.baptism-card-list`). */}
+      <div className="baptism-card-list">
         {items.map((it) => (
           <BaptismPersonCard key={String(it.m['person_uuid'] ?? it.m['name'])} item={it} today={today} overdue={overdue} />
         ))}

@@ -1639,6 +1639,24 @@ button.card--tappable:active {
 }
 
 /* ---- Baptisms: one card PER PERSON (item 1) ------------------------------------------------- */
+/* The by-date list. On a phone the [date | card] rows fill the width (a single full-width column).
+   On tablet/desktop the column SHRINKS to fit its content instead of stretching edge-to-edge: a
+   single grid track sized `fit-content` clamps to the widest card's content (so every row matches the
+   largest one — "take the largest content card and match it"), up to a sane cap so a long note can't
+   blow it out; `justify-content: start` keeps it left-aligned rather than centered in dead space. */
+.baptism-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+@media (min-width: 600px) {
+  .baptism-card-list {
+    display: grid;
+    grid-template-columns: fit-content(600px);
+    justify-content: start;
+    gap: 12px;
+  }
+}
 .baptism-card {
   height: 100%;
 }
