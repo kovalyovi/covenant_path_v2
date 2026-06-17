@@ -29,6 +29,31 @@ export function useUnitMissionaries(unitName: string | null | undefined): Compan
   return normalize(missionaries[unitName] ?? []);
 }
 
+/** Surname out of a missionary name — "Surname, Given" (the synced shape) → the part before the comma,
+ *  else the last whitespace token ("Given Surname"). Lower-cased for comparison. */
+function surnameOf(name?: string): string {
+  const n = (name ?? '').trim();
+  if (!n) return '';
+  if (n.includes(',')) return n.slice(0, n.indexOf(',')).trim().toLowerCase();
+  const parts = n.split(/\s+/);
+  return parts[parts.length - 1].toLowerCase();
+}
+
+/** A SENIOR (couple) companionship — a husband & wife serving together: two or more missionaries who
+ *  share a surname. Young proselytizing companionships are same-gender with DIFFERENT surnames, so a
+ *  shared surname cleanly identifies the senior couples. */
+export function isSeniorCouple(c: Companionship): boolean {
+  const surnames = (c.missionaries ?? []).map((m) => surnameOf(m.name)).filter(Boolean);
+  return surnames.length >= 2 && new Set(surnames).size < surnames.length;
+}
+
+/** The teaching companionship to show on a per-person BAPTISM card: senior couples removed (they don't
+ *  teach toward baptism — but they still appear in the "Missionaries by Unit" section), and capped at
+ *  ONE companionship per card. */
+export function baptismCardMissionaries(comps: Companionship[]): Companionship[] {
+  return comps.filter((c) => !isSeniorCouple(c)).slice(0, 1);
+}
+
 /** Pull a clean phone out of a raw directory value that may carry trailing label text (e.g.
  *  "(919) 555-1234 Morrisville"). `href` is digits-only (a valid `tel:`), `text` is the human number
  *  without the label. Null when no number is present. */

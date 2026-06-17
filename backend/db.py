@@ -302,8 +302,45 @@ def update_stake_kpis(conn, stake_id: str, kpis: dict) -> None:
     conn.commit()
 
 
+def _iter_missionaries(comp):
+    """Yield each person dict of a companionship entry — the new `{missionaries:[...]}` shape or a
+    legacy flat record (one missionary per entry)."""
+    if not isinstance(comp, dict):
+        return
+    people = comp.get("missionaries") if isinstance(comp.get("missionaries"), list) else [comp]
+    for m in people:
+        if isinstance(m, dict):
+            yield m
+
+
+def carry_forward_missionary_photos(prev: dict, new: dict) -> None:
+    """Mutate `new` (the freshly-built roster) so each missionary KEEPS the photo_url it had in `prev`.
+    The bulk companionships carry no avatar — those are attached only by the periodic `--photos` bundle
+    pass (attach_missionary_photos). Without this carry-forward every plain daily sync (no `--photos`)
+    would rebuild the roster and WIPE the avatars, so missionary pictures vanished after a nightly run
+    even though member photos (stored on the member row) survived. Tolerant of both roster shapes."""
+    photos: dict[str, str] = {}
+    for comps in (prev.values() if isinstance(prev, dict) else []):
+        for comp in (comps or []):
+            for m in _iter_missionaries(comp):
+                if m.get("uuid") and m.get("photo_url"):
+                    photos[m["uuid"]] = m["photo_url"]
+    if not photos:
+        return
+    for comps in (new.values() if isinstance(new, dict) else []):
+        for comp in (comps or []):
+            for m in _iter_missionaries(comp):
+                if not m.get("photo_url") and m.get("uuid") in photos:
+                    m["photo_url"] = photos[m["uuid"]]
+
+
 def update_stake_missionaries(conn, stake_id: str, by_unit: dict) -> None:
-    """Store the per-ward full-time-missionary roster (#29): {unit_name: [{name,phone,email}, ...]}."""
+    """Store the per-ward full-time-missionary roster (#29): {unit_name: [{name,phone,email}, ...]}.
+    Carries forward any avatar already attached so a plain sync doesn't wipe missionary photos."""
+    with conn.cursor() as cur:
+        cur.execute("select missionaries from stakes where id=%s", (stake_id,))
+        row = cur.fetchone()
+    carry_forward_missionary_photos((row[0] if row else None) or {}, by_unit)
     with conn.cursor() as cur:
         cur.execute("update stakes set missionaries = %s where id = %s",
                     (psycopg2.extras.Json(by_unit), stake_id))
@@ -331,11 +368,8 @@ def attach_missionary_photos(conn, stake_id: str, uuid_to_url: dict) -> None:
         changed = False
         for comps in roster.values():
             for comp in (comps or []):
-                if not isinstance(comp, dict):
-                    continue
-                people = comp.get("missionaries") if isinstance(comp.get("missionaries"), list) else [comp]
-                for m in people:
-                    if isinstance(m, dict) and m.get("uuid") in uuid_to_url:
+                for m in _iter_missionaries(comp):
+                    if m.get("uuid") in uuid_to_url:
                         m["photo_url"] = uuid_to_url[m["uuid"]]
                         changed = True
         if changed:

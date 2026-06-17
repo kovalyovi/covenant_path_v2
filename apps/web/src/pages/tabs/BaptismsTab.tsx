@@ -19,7 +19,7 @@ import { hexA, status } from '../../theme/tokens';
 import { Icon } from '../../components/Icon';
 import { Avatar, CountBadge, SectionCard } from '../../components/ui';
 import { PageScaffold, SectionTitle, Columns } from '../../components/dashboard';
-import { MissionaryStrip, MissionariesSection, useUnitMissionaries } from '../../components/Missionaries';
+import { MissionaryStrip, MissionariesSection, useUnitMissionaries, baptismCardMissionaries } from '../../components/Missionaries';
 import { TabGate } from '../../components/TabGate';
 
 interface Dated {
@@ -208,7 +208,9 @@ function BaptismPersonCard({ item, today, overdue }: { item: Dated; today: Date;
   const id = m['person_uuid'] != null ? String(m['person_uuid']) : '';
   const name = String(m['name'] ?? '—');
   const unitName = String(m['unit_name'] ?? '').trim();
-  const missionaries = useUnitMissionaries(unitName);
+  // Per-person card shows the (one) TEACHING companionship — senior couples are dropped here (they
+  // still appear in the "Missionaries by Unit" section below).
+  const missionaries = baptismCardMissionaries(useUnitMissionaries(unitName));
   const note = id ? notes[id] : undefined;
   const steps = nextSteps(m);
 
