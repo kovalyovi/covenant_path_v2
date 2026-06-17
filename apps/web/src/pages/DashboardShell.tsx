@@ -3,7 +3,7 @@
 // (Sync settings / Generate report / Invite / Admin / Settings). Responsive nav: a side rail on
 // tablet/desktop, a frosted bottom nav on mobile. Hosts the syncing/stale banners and the sheets.
 
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useDashboard } from '../hooks/useDashboard';
 import { useTier } from '../hooks/useTier';
@@ -37,6 +37,11 @@ import { PersonDetailBody, personLcrUrl } from './PersonDetailPage';
 const AdminPage = lazy(lazyWithReload(() => import('./AdminPage').then((m) => ({ default: m.AdminPage }))));
 const AdminListPage = lazy(lazyWithReload(() => import('./AdminListPage').then((m) => ({ default: m.AdminListPage }))));
 
+// The top-level tab routes that share the one scroll container (`main`). Each remembers its OWN
+// scroll offset across tab switches (overlay routes — settings/admin/person — aren't tabs and leave
+// the backdrop's scroll untouched).
+const TAB_PATHS = new Set(TABS.map((t) => `/${t.path}`));
+
 export function DashboardShell() {
   const d = useDashboard();
   const tier = useTier();
@@ -54,13 +59,31 @@ export function DashboardShell() {
   // Mobile: hide the bottom nav while scrolling DOWN, reveal it when scrolling back up.
   const [navHidden, setNavHidden] = useState(false);
   const lastScrollY = useRef(0);
-  function onPageScroll(e: React.UIEvent<HTMLElement>) {
-    const y = e.currentTarget.scrollTop;
+  // Per-tab scroll memory: the one `main` scroll container is shared by every tab, so without this its
+  // offset would carry across tab switches. We record each tab's offset on scroll (keyed by path) and
+  // restore it on tab entry, so every tab keeps its OWN position.
+  const mainRef = useRef<HTMLElement>(null);
+  const tabScroll = useRef<Record<string, number>>({});
+  function onMainScroll(e: React.UIEvent<HTMLElement>) {
+    const el = e.currentTarget;
+    if (TAB_PATHS.has(location.pathname)) tabScroll.current[location.pathname] = el.scrollTop;
+    if (tier !== 'mobile') return;
+    // Mobile bottom-nav hide-on-scroll-down.
+    const y = el.scrollTop;
     const last = lastScrollY.current;
     if (y > last + 6 && y > 56) setNavHidden(true);
     else if (y < last - 6) setNavHidden(false);
     lastScrollY.current = y;
   }
+  // Restore the entered tab's saved offset (or top) before paint, so switching tabs lands where you
+  // left that tab — not at the previous tab's scroll position.
+  useLayoutEffect(() => {
+    const el = mainRef.current;
+    if (el && TAB_PATHS.has(location.pathname)) {
+      el.scrollTop = tabScroll.current[location.pathname] ?? 0;
+      lastScrollY.current = el.scrollTop;
+    }
+  }, [location.pathname]);
 
   // Settings + Admin are URL-driven side sheets overlaying the dashboard. They're "open" purely as a
   // function of the path, so a deep link / refresh on /settings or /admin lands on the dashboard with
@@ -312,10 +335,11 @@ export function DashboardShell() {
         {/* When a side sheet (Settings/Admin) is open, the tab behind it is just a static backdrop —
             don't replay its entrance animation (that was the "blink" behind the sheet). */}
         <main
+          ref={mainRef}
           id="main"
           className={`page${anyOverlay ? ' page--backdrop' : ''}`}
           aria-label="Dashboard content"
-          onScroll={tier === 'mobile' ? onPageScroll : undefined}
+          onScroll={onMainScroll}
         >
           {banners}
           <Outlet />

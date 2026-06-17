@@ -3,7 +3,7 @@
 // empty message — never someone else's data.
 
 import { test, expect } from '@playwright/test';
-import { openDashboard, enrollmentStatus, stakeRow, daysAgoIso } from './support';
+import { openDashboard, enrollmentStatus, stakeRow, daysAgoIso, averyExample } from './support';
 
 test.describe('navigation and gates', () => {
   test('all five tabs navigate via the rail', async ({ page }) => {
@@ -32,6 +32,37 @@ test.describe('navigation and gates', () => {
 
     await rail.getByRole('link', { name: 'Baptisms' }).click();
     await expect(page).toHaveURL(/\/baptisms$/);
+  });
+
+  test('each tab keeps its own scroll position', async ({ page }) => {
+    // A long member list + a short viewport so each tab's content overflows and scrolls.
+    const many = Array.from({ length: 30 }, (_, i) =>
+      averyExample({ person_uuid: `bulk-${i}`, name: `Member ${String(i).padStart(2, '0')}` }));
+    await page.setViewportSize({ width: 1280, height: 500 });
+    await openDashboard(page, { supabase: { members: many } });
+
+    const rail = page.getByRole('navigation', { name: 'Primary' });
+    const main = page.locator('#main');
+    const scrollTop = () => main.evaluate((el) => el.scrollTop);
+
+    // Golden Hour: scroll down a fair bit.
+    await rail.getByRole('link', { name: 'Golden Hour' }).click();
+    await expect(page.getByText('Recently Baptized')).toBeVisible();
+    await main.evaluate((el) => el.scrollTo(0, 260));
+    await expect.poll(scrollTop).toBeGreaterThan(100);
+    const ghScroll = await scrollTop();
+
+    // Needs starts at the TOP — it must NOT inherit Golden Hour's offset (the reported bug).
+    await rail.getByRole('link', { name: 'Needs' }).click();
+    await expect(page.getByText('Action Needed')).toBeVisible();
+    await expect.poll(scrollTop).toBe(0);
+    await main.evaluate((el) => el.scrollTo(0, 130));
+    await expect.poll(scrollTop).toBeGreaterThan(50);
+
+    // Back to Golden Hour — its OWN remembered offset is restored (not Needs').
+    await rail.getByRole('link', { name: 'Golden Hour' }).click();
+    await expect(page).toHaveURL(/\/golden-hour$/);
+    await expect.poll(scrollTop).toBe(ghScroll);
   });
 
   test('the freshness chip reflects a stale last-synced date', async ({ page }) => {
