@@ -228,15 +228,19 @@ function LoginTile({ r }: { r: Json }) {
 function EndpointTile({ ep }: { ep: Json }) {
   const errPct = Number(ep['error_pct'] ?? 0);
   const verdict = String(ep['verdict'] ?? 'healthy');
-  const c = verdict === 'hot' ? statusColors.danger : verdict === 'watch' ? statusColors.warning : statusColors.success;
+  const c = verdict === 'hot' ? statusColors.danger
+    : verdict === 'watch' ? statusColors.warning
+      // 'expected'/'best_effort' are by-design conditions (deprecated/probe-only or LCR-session-lapsed) — muted.
+      : verdict === 'expected' || verdict === 'best_effort' ? 'var(--on-surface-variant)'
+        : statusColors.success;
   return (
     <div className="row" style={{ padding: '6px 0', alignItems: 'center', borderBottom: '1px solid var(--outline-variant)' }}>
       <code style={{ flex: 1, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis' }}>{String(ep['endpoint'])}</code>
       <span className="small" style={{ marginLeft: 8, color: errPct > 0 ? statusColors.danger : undefined }}>
         {String(ep['calls'])} calls · {String(ep['avg_ms'])}ms avg{errPct > 0 ? ` · ${errPct}% err` : ''}
       </span>
-      <span className="chip" style={{ marginLeft: 8, padding: '1px 8px', fontSize: 11, borderColor: c, color: c }}>
-        {verdict}
+      <span className="chip" title={String(ep['class'] ?? '')} style={{ marginLeft: 8, padding: '1px 8px', fontSize: 11, borderColor: c, color: c }}>
+        {verdict.replace(/_/g, '-')}
       </span>
     </div>
   );

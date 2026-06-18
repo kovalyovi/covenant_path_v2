@@ -846,7 +846,12 @@ function EndpointHealthCard({ data }: { data: Json }) {
     .map((k) => ({ k, local: (((Number(k) + offH) % 24) + 24) % 24 }))
     .sort((a, b) => a.local - b.local);
   const verdictColor = (v: string) =>
-    v === 'hot' ? statusColors.danger : v === 'watch' ? statusColors.warning : statusColors.success;
+    v === 'hot' ? statusColors.danger
+      : v === 'watch' ? statusColors.warning
+        // 'expected' (dead/deprecated routes) + 'best_effort' (401 when the LCR session lapses, by
+        // design) are not problems — render them muted so they don't read as alarms.
+        : v === 'expected' || v === 'best_effort' ? 'var(--on-surface-variant)'
+          : statusColors.success;
   const hourColor = (pct: number) =>
     pct >= 10 ? statusColors.danger : pct >= 2 ? statusColors.warning : statusColors.success;
   return (
@@ -861,7 +866,10 @@ function EndpointHealthCard({ data }: { data: Json }) {
     >
       <p className="small muted" style={{ marginTop: 0 }}>
         Passive read from telemetry the sync/probe already record — zero added load on LCR. error% is at the
-        sync&apos;s current pace; for the safe ceiling, run the rate finder (tools/rate_finder.py).
+        sync&apos;s current pace; for the safe ceiling, run the rate finder (tools/rate_finder.py). Rows marked
+        {' '}<b>expected</b> (deprecated/probe-only routes) or <b>best-effort</b> (need a live Church session —
+        they 401 when the delegated session lapses while the 45-day token carries the sync) aren&apos;t problems;
+        only <b>load-bearing</b> rows turn amber/red.
       </p>
       {shown.map((ep, i) => {
         const errPct = Number(ep['error_pct'] ?? 0);
@@ -876,9 +884,10 @@ function EndpointHealthCard({ data }: { data: Json }) {
             </span>
             <span
               className="chip"
+              title={String(ep['class'] ?? '')}
               style={{ marginLeft: 8, padding: '1px 8px', fontSize: 11, borderColor: verdictColor(verdict), color: verdictColor(verdict) }}
             >
-              {verdict}
+              {verdict.replace(/_/g, '-')}
             </span>
           </div>
         );

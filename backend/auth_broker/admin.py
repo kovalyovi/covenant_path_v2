@@ -218,12 +218,21 @@ def endpoint_health(days: int = 14) -> dict:
             continue
         runs += 1
         hour = _hour_of(row.get("run_at"))
+        is_probe = row.get("kind") == "probe"  # the probe deliberately hammers dead/legacy routes
         for ep in eps:
             name = _norm_endpoint(str(ep.get("endpoint") or ""))
-            a = agg.setdefault(name, {"calls": 0, "errors": 0, "ms_sum": 0, "max_ms": 0, "runs": 0})
+            a = agg.setdefault(name, {"calls": 0, "errors": 0, "sync_calls": 0, "sync_errors": 0,
+                                      "probe_errors": 0, "ms_sum": 0, "max_ms": 0, "runs": 0})
             calls, errors = int(ep.get("calls") or 0), int(ep.get("errors") or 0)
             a["calls"] += calls
             a["errors"] += errors
+            # Split probe vs sync so the verdict can ignore the probe's deliberate stress-test of dead
+            # routes (the probe's whole job is to poke known-bad endpoints).
+            if is_probe:
+                a["probe_errors"] += errors
+            else:
+                a["sync_calls"] += calls
+                a["sync_errors"] += errors
             a["ms_sum"] += int(ep.get("avg_ms") or 0) * calls  # weight avg by call volume
             a["max_ms"] = max(a["max_ms"], int(ep.get("max_ms") or 0))
             a["runs"] += 1
@@ -234,12 +243,19 @@ def endpoint_health(days: int = 14) -> dict:
     endpoints = []
     for name, a in sorted(agg.items(), key=lambda kv: kv[1]["errors"], reverse=True):
         err_pct = round(100 * a["errors"] / a["calls"], 1) if a["calls"] else 0.0
+        sync_err_pct = round(100 * a["sync_errors"] / a["sync_calls"], 1) if a["sync_calls"] else 0.0
+        cls = _classify_endpoint(name)
         endpoints.append({
             "endpoint": name, "calls": a["calls"], "errors": a["errors"], "error_pct": err_pct,
+            "sync_calls": a["sync_calls"], "sync_errors": a["sync_errors"],
+            "probe_errors": a["probe_errors"], "sync_error_pct": sync_err_pct,
             "avg_ms": round(a["ms_sum"] / a["calls"]) if a["calls"] else 0, "max_ms": a["max_ms"],
-            "runs_seen": a["runs"],
-            # verdict at the sync's CURRENT pace — the passive read on whether we're already too hot.
-            "verdict": ("healthy" if err_pct < 2 else "watch" if err_pct < 10 else "hot"),
+            "runs_seen": a["runs"], "class": cls,
+            # verdict respects classification: dead/deprecated routes are probe-only legacy and
+            # best-effort routes 401 by design when the delegated LCR session lapses (the 45-day
+            # Member Tools token still carries the core sync) — neither should alarm. Only LOAD-BEARING
+            # endpoints go red, on their SYNC error rate (the probe's stress-test is excluded).
+            "verdict": _endpoint_verdict(cls, sync_err_pct),
         })
     by_hour = {str(h): {"calls": hour_calls[h], "errors": hour_err.get(h, 0),
                         "error_pct": round(100 * hour_err.get(h, 0) / hour_calls[h], 1)}
@@ -278,6 +294,40 @@ def _norm_endpoint(ep: str) -> str:
         return "{id}" if (s.startswith("{id}") or _ID_SEG.match(s)) else s
 
     return "/".join(_seg(seg) if seg else seg for seg in path.split("/"))
+
+
+# Endpoint CLASSIFICATION so the ops trend doesn't render EXPECTED conditions as a scary "hot":
+#   dead         — route removed by LCR (404, circuit-broken); probe-only now
+#   deprecated   — legacy one-work fan-out, replaced by the Member Tools bulk /api/v5/sync; probe/--unit only
+#   best_effort  — needs a LIVE LCR session; 401s by design when the delegated session lapses (the
+#                  45-day Member Tools token still carries the core sync) — failures are expected
+#   load_bearing — production leans on it; its errors are the real signal
+# Keyed by the _norm_endpoint output. Unknown endpoints default to load_bearing (fail loud).
+_EP_CLASS = {
+    "/api/umlu/report/member-list": "dead",
+    "/api/report/one-work/progress-record": "deprecated",
+    "/api/report/one-work/details/{id}": "deprecated",
+    "/api/user-context": "best_effort",
+    "/api/dashboard/data": "best_effort",
+    "/mlt/api/orgs": "load_bearing",
+    "/mlt/records/member-profile/{id}": "load_bearing",
+}
+
+
+def _classify_endpoint(name: str) -> str:
+    return _EP_CLASS.get(name, "load_bearing")
+
+
+def _endpoint_verdict(cls: str, sync_err_pct: float) -> str:
+    """Ops verdict for an endpoint row. dead/deprecated -> 'expected' (probe-only legacy, never alarm);
+    best_effort -> 'best_effort' (401s when the delegated LCR session lapses, by design); load_bearing
+    -> healthy/watch/hot on its SYNC error rate (so the probe's stress-test of dead routes never drives
+    the operator's verdict)."""
+    if cls in ("dead", "deprecated"):
+        return "expected"
+    if cls == "best_effort":
+        return "best_effort"
+    return "healthy" if sync_err_pct < 2 else "watch" if sync_err_pct < 10 else "hot"
 
 
 def _reauths_30d() -> dict:
