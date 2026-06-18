@@ -39,8 +39,9 @@ def _state_tree() -> str:
     return quote(json.dumps(_ORGS_STATE, separators=(",", ":")))
 
 
-def fetch_leadership(session) -> list:
-    """POST the leadership server action; return parsed React-flight objects."""
+def _post_leadership(session):
+    """POST the leadership server action; return the raw response so callers can tell a DEAD session
+    (non-200 / login redirect) from a genuinely stale action id (a 200 whose shape lost positionType)."""
     action = action_config.load().get("leadership", action_config.DEFAULTS["leadership"])
     headers = {
         "Next-Action": action,
@@ -50,9 +51,13 @@ def fetch_leadership(session) -> list:
         "Origin": LCR_BASE,
         "Referer": ORGS_URL,
     }
-    resp = session.session.post(ORGS_URL, headers=headers, data='["eng"]',
+    return session.session.post(ORGS_URL, headers=headers, data='["eng"]',
                                 timeout=60, allow_redirects=False)
-    return flight_objects(resp.text)
+
+
+def fetch_leadership(session) -> list:
+    """POST the leadership server action; return parsed React-flight objects."""
+    return flight_objects(_post_leadership(session).text)
 
 
 def harvest_role_names(objs: list) -> dict[int, str]:
@@ -76,10 +81,19 @@ def harvest_role_names(objs: list) -> dict[int, str]:
 
 def enrich_role_names(client) -> int:
     """Fetch the leadership directory and merge discovered calling names into the cache."""
-    pairs = harvest_role_names(fetch_leadership(client.session))
+    resp = _post_leadership(client.session)
+    pairs = harvest_role_names(flight_objects(resp.text))
     if not pairs:
-        logger.warning("leadership action returned no positionType data — the 'leadership' "
-                       "action id may be stale; re-capture with tools/capture_callings.py")
+        # An empty harvest has two very different causes: a genuinely STALE action id (a real 200 whose
+        # shape no longer carries positionType), OR — far more common in the steady state — a DEAD
+        # delegated LCR session, where this POST (allow_redirects=False) comes back non-200 / redirected
+        # to login with no flight rows. Only the former is actionable; the old code warned "re-capture
+        # the action id" for BOTH, a false alarm that fired twice per run on a dead session (503991).
+        if resp.status_code != 200:
+            logger.debug("leadership enrich skipped — LCR session not live (HTTP %s)", resp.status_code)
+        else:
+            logger.warning("leadership action returned no positionType data — the 'leadership' "
+                           "action id may be stale; re-capture with tools/capture_callings.py")
         return 0
     added = access.register_names(pairs)
     logger.info("leadership enrich: %d calling names seen, %d new", len(pairs), added)

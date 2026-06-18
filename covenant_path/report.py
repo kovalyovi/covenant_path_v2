@@ -896,6 +896,30 @@ def _emit_field_gap_report(rows: list["CovenantPathMember"], stats: dict, *,
     report = field_gap_report(rows, profile_merge_ran=profile_merge_ran, can_profiles=can_profiles)
     stats["field_gaps"] = report
     gaps = report.get("fields") or {}
+    # Distinct LOUD alarm for a DEGRADED bulk payload: a field that CAN be rescued from /api/v5/sync
+    # showing 100% missing across a populated stake is the signature of a partial payload (a dropped
+    # household directory / templeRecommendStatus sub-tree) — NOT a dead LCR session (that only blocks
+    # PROFILE-only fields like patriarchal) and NOT a normal partial sync. Today it silently degrades the
+    # WHOLE stake to sentinels with only a soft, mixed-in field-gap line. Surface it separately
+    # (error-level + its own event + a stats key) so an operator can tell "the payload came back gutted"
+    # apart from routine per-field gaps. Read-only over the already-computed counts; never writes data.
+    members_n = report.get("members") or 0
+    degraded = [f for f in _BULK_RESCUED_FIELDS
+                if members_n >= 20 and gaps.get(f, {}).get("missing") == members_n]
+    if degraded:
+        stats["degraded_payload_fields"] = degraded
+        logger.error(
+            "DEGRADED /api/v5/sync (stake %s): %d bulk-rescuable field(s) 100%% missing across all %d "
+            "members — likely a partial bulk payload (dropped directory / recommend roster), NOT a dead "
+            "session; last-good preserved. Fields: %s",
+            stake if stake is not None else "?", len(degraded), members_n, ", ".join(degraded))
+        try:
+            from backend import observability as obs
+            obs.event("sync.degraded_payload", level="error", stake=stake,
+                      correlation_id=correlation_id, status="degraded", members=members_n,
+                      fields=degraded, message=f"{len(degraded)} bulk-rescuable field(s) 100% missing")
+        except Exception as exc:  # noqa: BLE001 — observability must never break the sync
+            logger.debug("degraded-payload event skipped: %s", exc)
     if gaps:
         summary = ", ".join(f"{f}={gaps[f]['missing']}/{report['members']} ({gaps[f]['reason']})"
                             for f in report["worst"])
