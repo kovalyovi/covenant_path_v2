@@ -42,7 +42,11 @@ def _sb() -> tuple[str, str]:
     url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
     if not (url and key):
-        raise SystemExit("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY required")
+        # MUST be a normal Exception, NOT SystemExit: the photo pass is best-effort and the daily sync
+        # wraps it in `except Exception` ("never fail the data sync over avatars"). SystemExit is a
+        # BaseException, so it slipped past that guard and exited the whole sync with code 1 when the
+        # service-role key was absent (the 2026-06-18 CI exit-1 bug). RuntimeError is caught and logged.
+        raise RuntimeError("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY required")
     return url, key
 
 

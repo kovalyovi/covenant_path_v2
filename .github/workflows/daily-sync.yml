@@ -98,6 +98,10 @@ jobs:
       CP_TOKEN_KEY: ${{ secrets.CP_TOKEN_KEY }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      # Required by the --photos pass (backend/photos.py uses the REST Storage API, keyed by the
+      # service-role key) — without it member/missionary avatar uploads never run. Data writes use
+      # SUPABASE_DB_URL (psycopg2), so the core sync worked even while this was missing.
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
