@@ -249,15 +249,19 @@ struct BaptismPersonCard: View {
                 }
             }
 
-            // Missionary info: who teaches them (their unit's assigned missionaries).
-            Divider()
-            Text("MISSIONARIES")
-                .font(.caption2.weight(.bold)).foregroundStyle(.secondary).kerning(0.6)
-            if missionaries.isEmpty {
-                Text("No assigned missionaries on record for this ward.")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
-                MissionaryStrip(missionaries: missionaries)
+            // Missionary info: who teaches them (their unit's assigned missionaries). Hidden when nested
+            // in a by-unit SectionCard — that view already shows the unit's missionaries once at the top,
+            // so showing them again per card would double them (web parity, fix 2026-06-18).
+            if !nested {
+                Divider()
+                Text("MISSIONARIES")
+                    .font(.caption2.weight(.bold)).foregroundStyle(.secondary).kerning(0.6)
+                if missionaries.isEmpty {
+                    Text("No assigned missionaries on record for this ward.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    MissionaryStrip(missionaries: missionaries)
+                }
             }
         }
         .padding(nested ? 12 : 18)

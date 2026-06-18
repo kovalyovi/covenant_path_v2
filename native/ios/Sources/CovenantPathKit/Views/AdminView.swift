@@ -336,7 +336,10 @@ struct AdminView: View {
                     .font(.caption).foregroundStyle(AppColors.danger)
             }
             if let missing = cred?["missing"] as? [Any], !missing.isEmpty, (cred?["complete"] as? Bool) != true {
-                Text("Missing: \(missing.map { "\($0)" }.joined(separator: ", "))")
+                // `missing` entries are {feature, granted_by, …} objects (lcr_client access `_clean_missing`);
+                // stringifying the dict shows raw JSON, so map each to its feature label (web parity — the
+                // "[object Object]" fix 2026-06-18). Tolerant of the legacy plain-string shape.
+                Text("Missing: \(missing.map { (($0 as? [String: Any])?["feature"]).map { "\($0)" } ?? "\($0)" }.joined(separator: ", "))")
                     .font(.caption).foregroundStyle(.orange)
             }
         }

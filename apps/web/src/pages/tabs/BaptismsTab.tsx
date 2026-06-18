@@ -201,7 +201,11 @@ function LessonPills({ m }: { m: Member }) {
 
 /** ONE card for ONE person being taught: date badge + countdown, unit, full notes, Golden Hour next
  *  steps, and the assigned missionaries who teach them (their unit's full-time missionaries). */
-function BaptismPersonCard({ item, today, overdue }: { item: Dated; today: Date; overdue: boolean }) {
+// `nested` = this card sits inside a by-unit SectionCard, which already shows the unit's missionary
+// strip — so we suppress the per-card Missionaries section to avoid showing them twice (the by-date
+// view leaves nested=false and keeps the per-person strip). Exported for the regression test.
+export function BaptismPersonCard({ item, today, overdue, nested = false }:
+  { item: Dated; today: Date; overdue: boolean; nested?: boolean }) {
   const navigate = useNavigate();
   const { notes } = useDashboard();
   const m = item.m;
@@ -282,15 +286,20 @@ function BaptismPersonCard({ item, today, overdue }: { item: Dated; today: Date;
               a member was present for it. */}
           <LessonPills m={m} />
 
-          {/* Missionary info: who teaches them (their unit's assigned missionaries). */}
-          <hr className="divider" style={{ margin: '12px 0 10px' }} />
-          <div className="tiny muted" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 }}>
-            Missionaries
-          </div>
-          {missionaries.length > 0 ? (
-            <MissionaryStrip missionaries={missionaries} />
-          ) : (
-            <p className="tiny muted" style={{ margin: 0 }}>No assigned missionaries on record for this ward.</p>
+          {/* Missionary info: who teaches them (their unit's assigned missionaries). Hidden in the
+              by-unit grouping (nested) — that view shows the unit's missionaries once at the card top. */}
+          {!nested && (
+            <>
+              <hr className="divider" style={{ margin: '12px 0 10px' }} />
+              <div className="tiny muted" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 }}>
+                Missionaries
+              </div>
+              {missionaries.length > 0 ? (
+                <MissionaryStrip missionaries={missionaries} />
+              ) : (
+                <p className="tiny muted" style={{ margin: 0 }}>No assigned missionaries on record for this ward.</p>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -315,7 +324,7 @@ function PerUnit({ items, today, tier }: { items: Dated[]; today: Date; tier: Re
           <UnitMissionaryStrip unitName={u} />
           <div className="stack" style={{ gap: 12 }}>
             {byUnit.get(u)!.map((it) => (
-              <BaptismPersonCard key={String(it.m['person_uuid'] ?? it.m['name'])} item={it} today={today} overdue={it.date.getTime() < today.getTime()} />
+              <BaptismPersonCard key={String(it.m['person_uuid'] ?? it.m['name'])} item={it} today={today} overdue={it.date.getTime() < today.getTime()} nested />
             ))}
           </div>
         </SectionCard>

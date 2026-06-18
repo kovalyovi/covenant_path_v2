@@ -13,6 +13,7 @@ import { admin } from '../lib/admin';
 import { status as statusColors } from '../theme/tokens';
 import { agoOrNever, dur, fmtDateTime } from '../logic/dates';
 import { fieldGapSeries, humanizeField } from '../logic/fieldGaps';
+import { formatMissingFeatures } from '../logic/coverage';
 import { Icon } from '../components/Icon';
 import { IconButton, Button } from '../components/ui';
 import { CardSkeleton } from '../components/Skeletons';
@@ -1169,7 +1170,7 @@ function EnrolledStakesCard({
             )}
             {cred && cred['complete'] !== true && missing.length > 0 && (
               <p className="tiny" style={{ marginTop: 2, color: statusColors.warning }}>
-                Missing: {missing.join(', ')}
+                Missing: {formatMissingFeatures(missing)}
               </p>
             )}
             <hr className="divider" style={{ margin: '8px 0 0' }} />

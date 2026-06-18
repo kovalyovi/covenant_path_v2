@@ -282,20 +282,24 @@ private fun BaptismPersonCard(
                 NoteLine(it)
             }
 
-            // Missionary info: who teaches them (their unit's assigned missionaries).
-            HorizontalDivider(Modifier.padding(top = 12.dp, bottom = 10.dp))
-            Text(
-                "MISSIONARIES", fontSize = 10.sp, fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, letterSpacing = 0.6.sp,
-            )
-            Spacer(Modifier.size(6.dp))
-            if (missionaries.isNotEmpty()) {
-                MissionaryStrip(missionaries)
-            } else {
+            // Missionary info: who teaches them (their unit's assigned missionaries). Hidden when
+            // embedded in a by-unit SectionCard — that view already shows the unit's missionaries once at
+            // the top, so showing them again per card would double them (web parity, fix 2026-06-18).
+            if (!embedded) {
+                HorizontalDivider(Modifier.padding(top = 12.dp, bottom = 10.dp))
                 Text(
-                    "No assigned missionaries on record for this ward.",
-                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    "MISSIONARIES", fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, letterSpacing = 0.6.sp,
                 )
+                Spacer(Modifier.size(6.dp))
+                if (missionaries.isNotEmpty()) {
+                    MissionaryStrip(missionaries)
+                } else {
+                    Text(
+                        "No assigned missionaries on record for this ward.",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }
