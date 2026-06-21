@@ -16,6 +16,7 @@ import { FilledRing, SectionedRing } from '../../components/Rings';
 import {
   PageScaffold, SectionTitle, OrgFilterBar, SubtleNote, UnitGrid, DateList, orgNoteFor, scrollToUnit,
 } from '../../components/dashboard';
+import { MemberRowSkeleton } from '../../components/Skeletons';
 import { Segmented, SectionCard, RangePill, Progress } from '../../components/ui';
 import { Icon, type IconName } from '../../components/Icon';
 import { TabGate } from '../../components/TabGate';
@@ -91,6 +92,20 @@ function GoldenHourBody() {
       />
     </div>
   );
+
+  // While the stake data loads, glimmer the page with the section toggle + a member-row list (with GH
+  // chips, as the Golden Hour rows show) so it never flashes an empty/zero state before data arrives.
+  if (d.loading && d.members.length === 0) {
+    return (
+      <PageScaffold
+        tier={tier}
+        maxWidth={1140}
+        header={<div className="stack" style={{ gap: 8 }}>{sectionToggle}</div>}
+      >
+        <MemberRowSkeleton rows={8} chips />
+      </PageScaffold>
+    );
+  }
 
   if (section === 'beingTaught') {
     return (

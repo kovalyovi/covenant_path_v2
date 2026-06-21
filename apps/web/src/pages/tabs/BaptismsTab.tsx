@@ -19,6 +19,7 @@ import { hexA, status } from '../../theme/tokens';
 import { Icon } from '../../components/Icon';
 import { Avatar, CountBadge, SectionCard } from '../../components/ui';
 import { PageScaffold, SectionTitle, Columns } from '../../components/dashboard';
+import { SectionCardSkeleton } from '../../components/Skeletons';
 import { MissionaryStrip, MissionariesSection, useUnitMissionaries, baptismCardMissionaries } from '../../components/Missionaries';
 import { TabGate } from '../../components/TabGate';
 
@@ -55,6 +56,23 @@ function BaptismsBody() {
     ...d.members.map((m) => String(m['unit_name'] ?? '')),
     ...Object.keys(d.missionaries),
   ])].filter((u) => u.trim()).sort();
+
+  // While the stake data loads, glimmer the page with the real "Upcoming Baptisms" header + a grid of
+  // person-card skeletons, so the baptism cards fade in over their own shapes.
+  if (d.loading && d.members.length === 0) {
+    return (
+      <PageScaffold
+        tier={tier}
+        header={<SectionTitle title="Upcoming Baptisms" count={0} byDate={!byUnit} onToggle={(v) => setByUnit(!v)} />}
+      >
+        <Columns cols={tier === 'mobile' ? 1 : 2}>
+          {Array.from({ length: 4 }, (_, i) => (
+            <SectionCardSkeleton key={i} lines={5} titleWidth={150} />
+          ))}
+        </Columns>
+      </PageScaffold>
+    );
+  }
 
   return (
     <PageScaffold

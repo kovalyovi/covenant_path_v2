@@ -23,6 +23,7 @@ import { SectionCard, Segmented, RangePill, Progress } from '../../components/ui
 import { Dropdown, type DropdownOption } from '../../components/Dropdown';
 import { useCountUp } from '../../hooks/useCountUp';
 import { PageScaffold, BigHeader, Columns } from '../../components/dashboard';
+import { SkeletonBox } from '../../components/Skeletons';
 import { TrendLine } from '../../components/TrendLine';
 import { TabGate } from '../../components/TabGate';
 import { DrillHost, type Drill } from '../../components/DrillSheet';
@@ -198,6 +199,19 @@ function KpisBody() {
       <UnitCompletionCard key="unit-completion" rows={baptized} onSelectUnit={setUnit} />
     ) : null,
   ];
+
+  // While the stake data loads, glimmer the page with the real "KPIs" header + the Overview stat grid
+  // and the trend-chart cards, so it never flashes a zeros/empty state before the numbers arrive.
+  if (d.loading && d.members.length === 0) {
+    return (
+      <PageScaffold
+        tier={tier}
+        header={<BigHeader text="KPIs" subtitle="From this stake's covenant-path data" />}
+      >
+        <KpisSkeleton />
+      </PageScaffold>
+    );
+  }
 
   return (
     <>
@@ -565,6 +579,44 @@ function DeltaBadge({ delta }: { delta: number }) {
 }
 
 // ---- Overview stat grid -----------------------------------------------------------------------
+
+/** Loading glimmer for the KPIs tab: the Overview stat grid (4 tiles, matching `StatGridCard`) and the
+ *  three trend-chart cards (title + a chart-area rectangle, matching `MetricCard`). Reuses the real
+ *  `.card`/`.section-card__head`/`.wrap` chrome so cards and tiles land in the same places. */
+function KpisSkeleton() {
+  return (
+    <div aria-hidden="true">
+      <div className="card">
+        <div className="card__body">
+          <div className="section-card__head">
+            <SkeletonBox width={26} height={26} radius={8} />
+            <span className="section-card__title"><SkeletonBox width={96} height={16} /></span>
+          </div>
+          <div className="wrap" style={{ gap: 24 }}>
+            {Array.from({ length: 4 }, (_, i) => (
+              <div key={i} style={{ width: 124 }}>
+                <SkeletonBox width={56} height={28} />
+                <div style={{ height: 7 }} />
+                <SkeletonBox width={104} height={11} />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      {Array.from({ length: 3 }, (_, i) => (
+        <div key={i} className="card">
+          <div className="card__body">
+            <div className="section-card__head">
+              <SkeletonBox width={26} height={26} radius={8} />
+              <span className="section-card__title"><SkeletonBox width={170} height={16} /></span>
+            </div>
+            <SkeletonBox width="100%" height={120} radius={8} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function StatGridCard({ items }: { items: Array<{ label: string; value: string; onClick: () => void }> }) {
   return (

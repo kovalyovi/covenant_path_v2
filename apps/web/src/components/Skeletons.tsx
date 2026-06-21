@@ -29,6 +29,60 @@ export function MemberListSkeleton({ rows = 8 }: { rows?: number }) {
   );
 }
 
+/** Member-row glimmer — mirrors the real `.member-row` (`MemberRow`): avatar + name on the top line,
+ *  a metadata line, and (optionally) the Golden-Hour chip strip. Reuses the real classes so the row
+ *  geometry is identical and real rows swap in without a jump. Used by the Needs/Leadership lists. */
+export function MemberRowSkeleton({ rows = 8, chips = false }: { rows?: number; chips?: boolean }) {
+  return (
+    <div aria-hidden="true">
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} className="member-row" style={{ pointerEvents: 'none', cursor: 'default' }}>
+          <span className="member-row__top">
+            <SkeletonBox width={44} height={44} radius={22} />
+            <span className="member-row__name">
+              <SkeletonBox width={150} height={14} />
+            </span>
+          </span>
+          <span className="member-row__body">
+            <span className="member-row__meta">
+              <SkeletonBox width={190} height={11} />
+            </span>
+            {chips && (
+              <span className="row" style={{ gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                {Array.from({ length: 6 }, (_, j) => (
+                  <SkeletonBox key={j} width={22} height={22} radius={11} />
+                ))}
+              </span>
+            )}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** A section-card-shaped glimmer: the real `.card` > `.card__body` > `.section-card__head` (icon +
+ *  title) + a few body lines — the shared shape every `SectionCard` uses, so margins/chrome match. */
+export function SectionCardSkeleton({ lines = 3, titleWidth = 130 }: { lines?: number; titleWidth?: number }) {
+  return (
+    <div className="card" aria-hidden="true">
+      <div className="card__body">
+        <div className="section-card__head">
+          <SkeletonBox width={26} height={26} radius={8} />
+          <span className="section-card__title">
+            <SkeletonBox width={titleWidth} height={16} />
+          </span>
+        </div>
+        <div className="stack" style={{ gap: 8 }}>
+          {Array.from({ length: lines }, (_, i) => (
+            <SkeletonLine key={i} widthFactor={i % 2 ? 0.6 : 0.9} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Skeleton for the Sync-settings sheet: title + label/value rows + a button block. */
 export function SyncSettingsSkeleton({ rows = 5 }: { rows?: number }) {
   return (

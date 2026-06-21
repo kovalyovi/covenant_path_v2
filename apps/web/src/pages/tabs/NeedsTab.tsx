@@ -19,6 +19,7 @@ import { CountBadge, SectionCard, IconButton, Segmented } from '../../components
 import {
   PageScaffold, BigHeader, OrgFilterBar, SubtleNote, MemberRow, Columns, orgNoteFor,
 } from '../../components/dashboard';
+import { MemberRowSkeleton } from '../../components/Skeletons';
 import { TabGate } from '../../components/TabGate';
 import { Dropdown, type DropdownOption } from '../../components/Dropdown';
 
@@ -164,6 +165,20 @@ function NeedsBody() {
       </div>
     </div>
   );
+
+  // While the stake data loads, glimmer the page with the real header + a member-row list (with GH
+  // chips, as the Needs rows show) so it never renders an empty/zero state mid-load.
+  if (d.loading && d.members.length === 0) {
+    return (
+      <PageScaffold
+        tier={tier}
+        maxWidth={880}
+        header={<BigHeader text="Action Needed" subtitle="Eligible members still working toward each step" />}
+      >
+        <MemberRowSkeleton rows={8} chips />
+      </PageScaffold>
+    );
+  }
 
   if (total === 0) {
     return (

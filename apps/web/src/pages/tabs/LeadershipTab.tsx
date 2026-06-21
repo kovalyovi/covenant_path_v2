@@ -13,7 +13,7 @@ import { Icon } from '../../components/Icon';
 import { SectionCard } from '../../components/ui';
 import { PageScaffold, BigHeader, Columns } from '../../components/dashboard';
 import { MissionaryStrip } from '../../components/Missionaries';
-import { MemberListSkeleton } from '../../components/Skeletons';
+import { SectionCardSkeleton } from '../../components/Skeletons';
 import { TabGate } from '../../components/TabGate';
 
 interface UnitRow {
@@ -51,7 +51,17 @@ function LeadershipBody() {
   );
 
   if (units == null) {
-    return <PageScaffold tier={tier} header={header}><MemberListSkeleton /></PageScaffold>;
+    // Glimmer the SAME column grid of unit cards the loaded view renders, so staffing cards fade in
+    // over their own shapes instead of an avatar-list skeleton (which was the wrong shape here).
+    return (
+      <PageScaffold tier={tier} header={header}>
+        <Columns cols={colsFor(tier)}>
+          {Array.from({ length: 6 }, (_, i) => (
+            <SectionCardSkeleton key={i} lines={5} titleWidth={150} />
+          ))}
+        </Columns>
+      </PageScaffold>
+    );
   }
   if (units.length === 0) {
     return (
