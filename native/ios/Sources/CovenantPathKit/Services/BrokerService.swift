@@ -113,6 +113,10 @@ public struct EnrollmentStatus: Sendable {
     /// Real, baptized members in this stake still missing the profile-only patriarchal-blessing flag —
     /// the count the patriarchal-refresh banner shows. 0 hides the banner.
     public let patriarchalPending: Int
+    /// This viewer holds a STAKE-level role here — so they may take over the sync with their own
+    /// (equal-or-higher) Church account even when another leader currently provides it. Ward leaders and
+    /// no-role members can't enroll, so they're never offered take-over (the Raleigh/Ricky bug fix).
+    public let viewerIsStakeLeader: Bool
     public let credential: CredentialInfo
     init(json: [String: Any]) {
         stakeName = json["stake_name"] as? String
@@ -123,6 +127,7 @@ public struct EnrollmentStatus: Sendable {
         hasData = (json["has_data"] as? Bool) ?? false
         noRole = (json["status"] as? String) == "no_role"
         patriarchalPending = (json["patriarchal_pending"] as? NSNumber)?.intValue ?? 0
+        viewerIsStakeLeader = (json["viewer_is_stake_leader"] as? Bool) ?? false
         credential = CredentialInfo(json: (json["credential"] as? [String: Any]) ?? [:])
     }
 }

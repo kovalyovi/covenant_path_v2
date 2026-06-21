@@ -77,6 +77,12 @@ fun SyncSettingsSheet(
     // A revoked/stale credential needs RE-AUTHORIZATION (any authorized leader may provide it);
     // it can't "Sync now", and a revoked one can't be re-revoked (web-parity, 2026-06-10).
     val needsReauth = cred != null && (cred.isRevoked || cred.isStale)
+    // TAKE-OVER (the Raleigh/Ricky bug, 2026-06-18): an ACTIVE credential provided by SOMEONE ELSE used
+    // to leave a higher-access stake leader with no action — they couldn't put their own (broader)
+    // credential in place. Offer it to any stake-level leader who isn't already the provider. The
+    // broker's most-elevated-wins rule decides on submit (a strictly lower account is told nothing
+    // changed), so a lower leader can never clobber a higher one.
+    val canTakeOver = cred?.isActive == true && !isProvider && status?.viewerIsStakeLeader == true
 
     LaunchedEffect(isProvider) {
         if (isProvider) vm.loadSchedule()
@@ -145,6 +151,20 @@ fun SyncSettingsSheet(
                 FilledTonalButton(onClick = { onDismiss(); onReauth() }, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Filled.Key, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text("  Re-authorize daily sync")
+                }
+            }
+            if (canTakeOver) {
+                Spacer(Modifier.size(16.dp))
+                Text(
+                    "This stake's sync is provided by ${cred?.principalName ?: "another leader"}. If your " +
+                        "calling has the same or broader access, you can take it over with your own Church account.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.size(8.dp))
+                OutlinedButton(onClick = { onDismiss(); onReauth() }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.Key, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("  Use my account for sync")
                 }
             }
             if (isProvider && cred?.isActive == true) {

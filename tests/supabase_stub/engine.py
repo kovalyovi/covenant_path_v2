@@ -252,20 +252,21 @@ class Store:
                 self.tables[table] = [r for r in rows
                                       if _as_str(r.get(col)) != _as_str(stake_id)]
 
-    # ---- the 0041 enroll RPC ------------------------------------------------------------
+    # ---- the 0055 enroll RPC ------------------------------------------------------------
     def rpc_enroll_stake_credential(self, body: dict) -> str:
-        """Replicates backend/migrations/0041_credential_cadence.sql:
+        """Replicates backend/migrations/0055_credential_most_elevated_wins.sql:
 
           insert into stakes ... on conflict (unit_number) do update set name -> stake id
           insert into stake_credentials ... on conflict (stake_id) do update set
               <all enroll columns>, revoked=false, revoked_at=null, updated_at=now(),
               last_failed_at=null, last_error=null, stale_notified_at=null
-          WHERE existing.revoked
-             OR coalesce((existing.coverage->>'complete')::boolean, false) = false
-             OR excluded.access_rank >= coalesce(existing.access_rank, -1)
-             OR lower(excluded.principal_email) = lower(coalesce(existing.principal_email, ''))
-             OR existing.last_failed_at IS NOT NULL
+          WHERE lower(existing.principal_email) = lower(excluded.principal_email)  -- same leader refresh
+             OR existing.revoked                                                   -- dead -> anyone
+             OR excluded.access_rank >= coalesce(existing.access_rank, -1)         -- most-elevated-wins
 
+        STRICT most-elevated-wins: a LOWER-access leader can no longer clobber a higher one via the old
+        incomplete/last_failed_at hatches (the Raleigh/Ricky incident). One stake_credential_history row
+        is appended per attempt (enrolled | refreshed | took_over | blocked_downgrade).
         (A false WHERE leaves the existing row untouched; the stake id is returned either way.)
         """
         with self.lock:
@@ -300,24 +301,43 @@ class Store:
                 "stale_notified_at": None,
             }
             creds = self.tables.setdefault("stake_credentials", [])
+            history = self.tables.setdefault("stake_credential_history", [])
+            in_email = new["principal_email"]
+
+            def _log(action, prior_email, prior_rank):
+                history.append({
+                    "id": str(uuid.uuid4()), "stake_id": stake_id, "action": action,
+                    "principal_name": new.get("principal_name"), "principal_email": in_email,
+                    "access_rank": new.get("access_rank"),
+                    "coverage_complete": bool((new.get("coverage") or {}).get("complete")),
+                    "has_refresh_token": new.get("has_refresh_token"),
+                    "prior_principal_email": prior_email, "prior_access_rank": prior_rank,
+                    "created_at": _now()})
+
             existing = next((c for c in creds
                              if _as_str(c.get("stake_id")) == _as_str(stake_id)), None)
             if existing is None:
-                row = {"id": str(uuid.uuid4()), **new}
-                creds.append(row)
+                creds.append({"id": str(uuid.uuid4()), **new})
+                _log("enrolled", None, None)
                 return stake_id
 
-            cov_complete = bool((existing.get("coverage") or {}).get("complete"))
+            prior_email = (existing.get("principal_email") or "").lower()
+            prior_rank = existing.get("access_rank")
             new_rank = new.get("access_rank")
             old_rank = existing.get("access_rank")
-            arms = (
-                bool(existing.get("revoked"))
-                or not cov_complete
-                # SQL: `null >= x` is NULL -> falsy, so a missing excluded rank can't win this arm
+            # STRICT most-elevated-wins (0055): same leader refresh, OR existing revoked, OR incoming
+            # rank >= existing. The incomplete/last_failed_at hatches are GONE — a lower-access leader
+            # can no longer clobber a higher one. `null >= x` is falsy (rank-less incoming can't win).
+            replaced = (
+                in_email == prior_email
+                or bool(existing.get("revoked"))
                 or (new_rank is not None and new_rank >= (old_rank if old_rank is not None else -1))
-                or new["principal_email"] == (existing.get("principal_email") or "").lower()
-                or existing.get("last_failed_at") is not None
             )
-            if arms:
+            if replaced:
                 existing.update(new)
+                action = ("refreshed" if in_email == prior_email
+                          else "took_over" if prior_email else "enrolled")
+            else:
+                action = "blocked_downgrade"
+            _log(action, prior_email or None, prior_rank)
             return stake_id

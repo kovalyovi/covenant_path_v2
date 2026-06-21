@@ -48,6 +48,12 @@ struct SyncSettingsSheet: View {
         // A revoked/stale credential needs RE-AUTHORIZATION (any authorized leader may provide it);
         // it can't "Sync now", and a revoked one can't be re-revoked (web-parity, 2026-06-10).
         let needsReauth = cred.isRevoked || cred.state == "stale"
+        // TAKE-OVER (the Raleigh/Ricky bug, 2026-06-18): an ACTIVE credential provided by SOMEONE ELSE
+        // used to leave a higher-access stake leader with no action — they couldn't put their own
+        // (broader) credential in place. Offer it to any stake-level leader who isn't already the
+        // provider. The broker's most-elevated-wins rule decides on submit (a strictly lower account is
+        // told nothing changed), so a lower leader can never clobber a higher one.
+        let canTakeOver = cred.state == "active" && !isProvider && s.viewerIsStakeLeader
 
         InfoRow(label: "Stake", value: s.stakeName ?? "—")
         // Stable LCR stake ID — stakes get renamed, so the ID reliably identifies the stake (#9).
@@ -96,6 +102,21 @@ struct SyncSettingsSheet: View {
                 Label("Re-authorize daily sync", systemImage: "key.fill").frame(maxWidth: .infinity)
             }
             .cpGlassButton(prominent: true).padding(.top, 16)
+        }
+
+        if canTakeOver {
+            Label("This stake’s sync is provided by \(cred.principalName ?? "another leader"). If your "
+                  + "calling has the same or broader access, you can take it over with your own Church account.",
+                  systemImage: "key.fill")
+                .font(.footnote).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 16)
+            Button {
+                dismiss()
+                onReauth()
+            } label: {
+                Label("Use my account for sync", systemImage: "key.fill").frame(maxWidth: .infinity)
+            }
+            .cpGlassButton().padding(.top, 8)
         }
 
         if isProvider, cred.state == "active" {

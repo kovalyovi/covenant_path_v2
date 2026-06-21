@@ -1330,24 +1330,28 @@ def scenario_credential_save_roundtrip_encrypted():
 
 
 def scenario_enroll_most_elevated_wins():
-    """AXIS 2 (same/higher/lower/none access vs existing credential): the enroll RPC's most-elevated-
-    wins + same-principal + stale-takeover rule. Pure-logic mirror of the WHERE clause in migration
-    0038 (the SQL is what runs in prod; this asserts the decision table the broker relies on)."""
+    """AXIS 2 (same/higher/lower/none access vs existing credential): the enroll RPC's STRICT most-
+    elevated-wins + same-principal rule. Pure-logic mirror of the WHERE clause in migration 0055 (the
+    SQL is what runs in prod; this asserts the decision table the broker relies on).
+
+    The Raleigh/Ricky incident (2026-06-18) reversed the old policy: a LOWER-access leader can no longer
+    take over a higher one's credential just because it is incomplete or temporarily failing. Those two
+    rank-ungated hatches let a rank-4 high councilor clobber a rank-1000 clerk whose session had aged
+    out. Now: same-leader refresh, OR existing fully revoked, OR incoming rank >= existing — nothing
+    else. A failing/incomplete HIGHER credential heals only via its own leader (or an equal/higher) re-
+    authorizing, or is freed when _revoke_if_ineligible revokes a lapsed calling."""
     def enroll_replaces(existing, incoming):
-        """Returns True iff ON CONFLICT would replace the stored credential (migration 0038 WHERE)."""
+        """Returns True iff ON CONFLICT would replace the stored credential (migration 0055 WHERE)."""
         if existing is None:
             return True  # fresh insert
-        if existing.get("revoked"):
-            return True
-        if not bool((existing.get("coverage") or {}).get("complete")):
-            return True
-        if incoming["access_rank"] >= (existing.get("access_rank") if existing.get("access_rank") is not None else -1):
-            return True
         if incoming["principal_email"].lower() == (existing.get("principal_email") or "").lower():
-            return True
-        if existing.get("last_failed_at") is not None:
-            return True
-        return False
+            return True  # (1) same leader re-authorizing
+        if existing.get("revoked"):
+            return True  # (2) dead/invalid credential -> anyone may take over
+        # (3) most-elevated-wins: incoming at least as privileged. A strictly LOWER rank never wins,
+        #     even against an incomplete/failing holder.
+        return incoming["access_rank"] >= (existing.get("access_rank")
+                                           if existing.get("access_rank") is not None else -1)
 
     healthy_high = {"access_rank": 100, "principal_email": "boss@x.org",
                     "coverage": {"complete": True}, "revoked": False, "last_failed_at": None}
@@ -1357,8 +1361,9 @@ def scenario_enroll_most_elevated_wins():
     equal_other = {"access_rank": 100, "principal_email": "peer@x.org"}        # equal, different leader
     lower_other = {"access_rank": 50, "principal_email": "junior@x.org"}       # lower, different leader
 
-    healthy_failing = dict(healthy_high, last_failed_at="2026-06-01T00:00:00")  # stale -> takeover
-    incomplete = dict(healthy_high, coverage={"complete": False})
+    healthy_failing = dict(healthy_high, last_failed_at="2026-06-01T00:00:00")  # stale (still HIGHER)
+    incomplete = dict(healthy_high, coverage={"complete": False})               # partial (still HIGHER)
+    revoked_high = dict(healthy_high, revoked=True)                             # explicitly dead
 
     return [
         ("none existing -> insert", enroll_replaces(None, lower_other), True),
@@ -1366,8 +1371,13 @@ def scenario_enroll_most_elevated_wins():
         ("higher access wins", enroll_replaces(healthy_high, higher), True),
         ("equal access (fresher session) wins", enroll_replaces(healthy_high, equal_other), True),
         ("lower access different leader CANNOT clobber healthy", enroll_replaces(healthy_high, lower_other), False),
-        ("lower access CAN take over a FAILING credential", enroll_replaces(healthy_failing, lower_other), True),
-        ("lower access CAN take over an INCOMPLETE credential", enroll_replaces(incomplete, lower_other), True),
+        # Raleigh/Ricky regression: a LOWER credential must NOT win against a higher one that is merely
+        # failing or incomplete (it used to — that was the bug).
+        ("lower access CANNOT take over a FAILING higher credential", enroll_replaces(healthy_failing, lower_other), False),
+        ("lower access CANNOT take over an INCOMPLETE higher credential", enroll_replaces(incomplete, lower_other), False),
+        # A genuinely revoked credential is still reclaimable by anyone (incl. lower) so a stake whose
+        # leader is gone is never permanently stuck.
+        ("any access CAN take over a REVOKED credential", enroll_replaces(revoked_high, lower_other), True),
     ]
 
 

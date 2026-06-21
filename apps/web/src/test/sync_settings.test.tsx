@@ -20,7 +20,7 @@ Object.assign(broker, {
   googleDriveStatus: vi.fn().mockResolvedValue({ eligible: false }),
 });
 
-function status(cred: Partial<CredentialInfo>): EnrollmentStatus {
+function status(cred: Partial<CredentialInfo>, extra: Partial<EnrollmentStatus> = {}): EnrollmentStatus {
   return {
     stakeName: 'Test Stake',
     stakeId: 'stake-1',
@@ -30,6 +30,7 @@ function status(cred: Partial<CredentialInfo>): EnrollmentStatus {
     hasData: true,
     patriarchalPending: 0,
     noRole: false,
+    viewerIsStakeLeader: false,
     credential: {
       state: 'active',
       complete: true,
@@ -39,6 +40,7 @@ function status(cred: Partial<CredentialInfo>): EnrollmentStatus {
       lastError: null,
       ...cred,
     },
+    ...extra,
   };
 }
 
@@ -64,6 +66,7 @@ function renderSheet(s: EnrollmentStatus) {
 const reauthBtn = () => screen.queryByRole('button', { name: /re-authorize daily sync/i });
 const syncNowBtn = () => screen.queryByRole('button', { name: /sync my stake now/i });
 const revokeBtn = () => screen.queryByRole('button', { name: /revoke my sync access/i });
+const takeOverBtn = () => screen.queryByRole('button', { name: /use my account for sync/i });
 
 describe('SyncSettingsSheet credential states', () => {
   it('revoked: shows Re-authorize, hides Sync now and Revoke', () => {
@@ -94,11 +97,27 @@ describe('SyncSettingsSheet credential states', () => {
     expect(revokeBtn()).toBeTruthy();
   });
 
-  it('active non-provider: status only, no action buttons', () => {
-    renderSheet(status({ state: 'active', isProvider: false }));
+  it('active non-provider, NOT a stake leader: status only, no action buttons', () => {
+    renderSheet(status({ state: 'active', isProvider: false }, { viewerIsStakeLeader: false }));
     expect(reauthBtn()).toBeNull();
     expect(syncNowBtn()).toBeNull();
     expect(revokeBtn()).toBeNull();
+    expect(takeOverBtn()).toBeNull();
+  });
+
+  // The Raleigh/Ricky bug (2026-06-18): a stake leader who isn't the current provider had NO way to
+  // put their own (broader-access) credential in place. They must now get a take-over action.
+  it('active non-provider STAKE LEADER: offers "Use my account for sync"', () => {
+    const { onReauth, onClose } = renderSheet(
+      status({ state: 'active', isProvider: false, principalName: 'Ricky' }, { viewerIsStakeLeader: true }),
+    );
+    expect(syncNowBtn()).toBeNull(); // not the provider → can't sync/revoke theirs
+    expect(revokeBtn()).toBeNull();
+    const takeOver = takeOverBtn();
+    expect(takeOver).toBeTruthy();
+    fireEvent.click(takeOver!);
+    expect(onReauth).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('no credential: offers the set-up CTA', () => {

@@ -508,6 +508,12 @@ def enrollment_status(email: str, auth_id: str) -> dict:
             # timestamp — the staleness verdict lives in `state`; trimmed from the response.
             "last_error": cred.get("last_error"),
         }
+    # Does THIS viewer hold a stake-level role here? Only a stake leader may take over the sync with
+    # their own (equal-or-higher) account when another leader currently provides it — ward leaders and
+    # no-role members can't enroll, so the client never offers them the take-over action. (The broker's
+    # enroll path + the most-elevated-wins RPC are the real gates; this just hides a button that would
+    # only ever 404 for them.)
+    viewer_is_stake_leader = any((r.get("role") or "") == "stake_leader" for r in roles)
     return {
         "stake_name": stake.get("name"),
         "stake_id": stake_id,
@@ -516,6 +522,7 @@ def enrollment_status(email: str, auth_id: str) -> dict:
         "member_count": member_count,
         "has_data": member_count > 0,
         "patriarchal_pending": patriarchal_pending,
+        "viewer_is_stake_leader": viewer_is_stake_leader,
         "credential": cred_info,
     }
 

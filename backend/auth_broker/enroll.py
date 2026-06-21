@@ -525,6 +525,28 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
         timeout=60)
     if r.status_code >= 300:
         raise RuntimeError(f"enroll RPC failed ({r.status_code}): {r.text[:160]}")
+    # Did the STRICT most-elevated-wins RPC (migration 0055) actually accept this session, or refuse it
+    # as a downgrade of a stronger on-file credential? The RPC returns the stake id either way (a false
+    # ON CONFLICT WHERE simply leaves the existing row untouched), so re-read the current holder: if it
+    # is NOT us, a higher/equal leader still provides the sync and we changed nothing. Report that
+    # honestly instead of a false "sync enabled" — the Raleigh/Ricky lesson: a LOWER-access leader must
+    # never appear to have taken over a higher one's credential (and must not trigger a kickoff sync).
+    post = _stored_credential_summary(ctx.unit_number)
+    stored_email = ((post or {}).get("provider_email") or "").lower()
+    if stored_email and stored_email != (identity.get("email") or "").lower():
+        logger.info("enroll: RPC refused a downgrade for stake %s — sync stays with %s (rank %s); this "
+                    "session (rank %s) did not replace it", ctx.unit_number,
+                    (post or {}).get("provider_name"), (post or {}).get("access_rank"), rank)
+        base["enroll_blocked"] = "downgrade"
+        base["would_downgrade"] = True  # the client's "left in place, no change needed" copy
+        base["enroll_block_reason"] = (
+            f"This stake's daily sync is already provided by "
+            f"{(post or {}).get('provider_name') or 'another leader'} with broader access, so your "
+            "account was left as-is to avoid reducing coverage. Ask them to re-authorize if the sync "
+            "needs refreshing.")
+        base["existing_provider"] = (post or {}).get("provider_name")
+        _audit("blocked", error="downgrade refused — stronger credential already on file")
+        return base
     logger.info("enrolled stake %s (%s): coverage_complete=%s rank=%s",
                 ctx.unit_name, ctx.unit_number, coverage["complete"], rank)
     # The Member Tools 45-day token is minted by the credential-capture login flow (web_session.py) —

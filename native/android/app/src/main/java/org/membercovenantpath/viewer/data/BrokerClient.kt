@@ -99,6 +99,10 @@ data class EnrollmentStatus(
      *  (hidden at 0). Patriarchal blessing isn't part of the daily sync; it only refreshes on a
      *  re-authorization with a live session. */
     val patriarchalPending: Int = 0,
+    /** This viewer holds a STAKE-level role here — so they may take over the sync with their own
+     *  (equal-or-higher) Church account even when another leader currently provides it. Ward leaders and
+     *  no-role members can't enroll, so they're never offered take-over (the Raleigh/Ricky bug fix). */
+    val viewerIsStakeLeader: Boolean = false,
 ) {
     companion object {
         fun from(j: JsonObject) = EnrollmentStatus(
@@ -111,6 +115,7 @@ data class EnrollmentStatus(
             noRole = j.str("status") == "no_role",
             credential = CredentialInfo.from(j.obj("credential")),
             patriarchalPending = j.int("patriarchal_pending"),
+            viewerIsStakeLeader = j.bool("viewer_is_stake_leader"),
         )
     }
 }

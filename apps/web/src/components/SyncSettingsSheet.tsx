@@ -59,6 +59,13 @@ export function SyncSettingsSheet({ open, onClose, initial, onLoaded, onRevoke, 
   // broker enforces who can take over). It can't "Sync now", and a revoked one can't be re-revoked
   // (the "status says Revoked but offers Revoke" report, 2026-06-10).
   const needsReauth = credState === 'revoked' || credState === 'stale';
+  // TAKE-OVER (the Raleigh/Ricky bug, 2026-06-18): an ACTIVE credential provided by SOMEONE ELSE used
+  // to leave a higher-access stake leader with no action at all — they couldn't put their own (broader)
+  // credential in place. Offer it now to any stake-level leader who isn't already the provider. The
+  // broker's most-elevated-wins rule decides on submit: a higher/equal account takes over; a strictly
+  // lower one is told its access is narrower and nothing changed (so a lower leader can't clobber).
+  const canTakeOver =
+    credState === 'active' && !isProvider && status?.viewerIsStakeLeader === true;
 
   /** Provider self-service wipe: deletes the stake's MEMBER records (access + the sync credential
    *  stay; data re-populates on the next sync) — the self-serve mirror of the admin "Wipe data". */
@@ -158,6 +165,29 @@ export function SyncSettingsSheet({ open, onClose, initial, onLoaded, onRevoke, 
             >
               Re-authorize daily sync
             </Button>
+          )}
+          {canTakeOver && (
+            <>
+              <div className="row" style={{ alignItems: 'flex-start', gap: 6, marginTop: 16 }}>
+                <Icon name="key" size={15} color="var(--primary)" />
+                <span className="small muted">
+                  This stake's sync is provided by {cred?.principalName || 'another leader'}. If your
+                  calling has the same or broader access, you can take it over with your own Church
+                  account.
+                </span>
+              </div>
+              <Button
+                variant="outlined"
+                icon="key"
+                onClick={() => {
+                  onClose();
+                  onReauth();
+                }}
+                style={{ marginTop: 8 }}
+              >
+                Use my account for sync
+              </Button>
+            </>
           )}
           {isProvider && credState === 'active' && (
             <Button variant="filled" icon="sync" onClick={onSyncNow} style={{ marginTop: 16 }}>

@@ -89,6 +89,10 @@ export interface EnrollmentStatus {
    *  absent from the daily Member Tools sync. >0 ⇒ a re-authorize-to-refresh nudge is worthwhile. */
   patriarchalPending: number;
   noRole: boolean;
+  /** This viewer holds a STAKE-level role here — so they may take over the sync with their own
+   *  (equal-or-higher) Church account even when another leader currently provides it. Ward leaders
+   *  and no-role members can't enroll, so they're never offered take-over. */
+  viewerIsStakeLeader: boolean;
   credential: CredentialInfo;
 }
 
@@ -122,6 +126,7 @@ function enrollmentFromJson(j: Record<string, unknown>): EnrollmentStatus {
     hasData: j['has_data'] === true,
     patriarchalPending: Number(j['patriarchal_pending'] ?? 0) || 0,
     noRole: j['status'] === 'no_role',
+    viewerIsStakeLeader: j['viewer_is_stake_leader'] === true,
     credential: credFromJson((j['credential'] as Record<string, unknown>) ?? {}),
   };
 }
