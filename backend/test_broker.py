@@ -368,7 +368,13 @@ def test_endpoint_health_trend() -> None:
         det = eps.get("/api/report/one-work/details/{id}", {})
         check("endpoint-health: details calls summed (50+50)", det.get("calls") == 100)
         check("endpoint-health: details error_pct = 14/100", det.get("error_pct") == 14.0)
-        check("endpoint-health: details verdict 'hot' (>=10%)", det.get("verdict") == "hot")
+        # /api/report/one-work/details/{id} is DEPRECATED (replaced by the Member Tools bulk /api/v5/sync),
+        # so a high error rate on it is EXPECTED probe noise — verdict 'expected', never a "hot" alarm
+        # (D47, 2026-06-18: the verdict respects classification + keys off the SYNC error rate, not raw
+        # error_pct). The error-%-only 'hot' assertion here went stale when that shipped; the new
+        # behavior is covered in full by tests/test_endpoint_health.py.
+        check("endpoint-health: details classified deprecated", det.get("class") == "deprecated")
+        check("endpoint-health: deprecated verdict is 'expected', not 'hot'", det.get("verdict") == "expected")
         pr = eps.get("/api/report/one-work/progress-record", {})
         check("endpoint-health: progress-record errors summed (5+1)", pr.get("errors") == 6)
         check("endpoint-health: by-hour buckets present (02 worse than 14 for progress)",
