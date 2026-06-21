@@ -70,7 +70,13 @@ public struct Missionary: Codable, Hashable, Sendable {
     public let name: String?
     public let phone: String?
     public let email: String?
-    public init(name: String? = nil, phone: String? = nil, email: String? = nil) {
-        self.name = name; self.phone = phone; self.email = email
+    /// Cached avatar (a signed Supabase Storage URL re-signed each sync); nil → initials fallback.
+    public let photoURL: String?
+    enum CodingKeys: String, CodingKey {
+        case name, phone, email
+        case photoURL = "photo_url"
+    }
+    public init(name: String? = nil, phone: String? = nil, email: String? = nil, photoURL: String? = nil) {
+        self.name = name; self.phone = phone; self.email = email; self.photoURL = photoURL
     }
 }

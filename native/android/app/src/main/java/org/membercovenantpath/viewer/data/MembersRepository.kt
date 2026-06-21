@@ -74,6 +74,7 @@ class MembersRepository(
                     name = o["name"]?.jsonPrimitive?.contentOrNull,
                     phone = o["phone"]?.jsonPrimitive?.contentOrNull,
                     email = o["email"]?.jsonPrimitive?.contentOrNull,
+                    photoUrl = o["photo_url"]?.jsonPrimitive?.contentOrNull,
                 )
             }
         }

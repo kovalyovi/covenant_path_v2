@@ -25,4 +25,6 @@ data class Missionary(
     @SerialName("name") val name: String? = null,
     @SerialName("phone") val phone: String? = null,
     @SerialName("email") val email: String? = null,
+    /** Cached avatar (a signed Supabase Storage URL re-signed each sync); null → initials fallback. */
+    @SerialName("photo_url") val photoUrl: String? = null,
 )

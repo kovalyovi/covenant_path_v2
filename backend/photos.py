@@ -240,6 +240,50 @@ def sync_photos_from_bundle(conn, stake_id: str, stake_unit: int, access_token: 
     return {"stats": stats, "missionary_urls": missionary_urls}
 
 
+def attach_cached_missionary_photos(conn, stake_id: str) -> dict:
+    """Re-attach + RE-SIGN missionary avatars from the photo CACHE on EVERY sync — independent of the
+    heavy 50MB `--photos` bundle pass.
+
+    Why this exists: the bundle pass (sync_photos_from_bundle) UPLOADS missionary photos to Storage
+    (`missionaries/<uuid>.jpg`) and attaches a signed URL onto the roster, but only DURING that pass.
+    Between passes the 7-day signed URLs expire and a roster rebuild can drop them, so missionary
+    pictures kept disappearing (the 2026-06-20 "still not seeing missionary photos" report: 36 avatars
+    cached in Storage, 0 attached to the roster). The whole point of caching avatars in our own bucket is
+    to STOP depending on the bundle's short-lived Church CDN URLs — so we point the roster at a fresh
+    signed URL from the cache every sync. Cheap: one indexed Storage-metadata read + a sign per missionary
+    that actually has a cached avatar. Best-effort; the caller swallows errors (never fail a data sync
+    over avatars). New missionaries with no cached photo yet keep initials until the next bundle pass
+    populates the cache."""
+    url, key = _sb()
+    with conn.cursor() as cur:
+        cur.execute("select missionaries from stakes where id=%s", (stake_id,))
+        row = cur.fetchone()
+    roster = (row[0] if row else None) or {}
+    if not roster:
+        return {"attached": 0, "cached": 0}
+    uuids = {m["uuid"] for comps in roster.values() for comp in (comps or [])
+             for m in db._iter_missionaries(comp) if m.get("uuid")}
+    if not uuids:
+        return {"attached": 0, "cached": 0}
+    # Which of THIS roster's missionaries already have a cached avatar? Read the object names straight
+    # from storage.objects (same Postgres) — no per-uuid 404-probe storm against the Storage API.
+    with conn.cursor() as cur:
+        cur.execute("select replace(replace(name, 'missionaries/', ''), '.jpg', '') "
+                    "from storage.objects where bucket_id=%s and name like 'missionaries/%%'", (BUCKET,))
+        cached = {r[0] for r in cur.fetchall()}
+    have = uuids & cached
+    fresh: dict[str, str] = {}
+    for u in have:
+        su = _signed_url(url, key, f"missionaries/{u}.jpg")
+        if su:
+            fresh[u] = su
+    if fresh:
+        db.attach_missionary_photos(conn, stake_id, fresh)
+    logger.info("missionary photos: re-attached %d/%d cached avatar(s) for stake %s",
+                len(fresh), len(uuids), stake_id)
+    return {"attached": len(fresh), "cached": len(have), "roster": len(uuids)}
+
+
 def main() -> int:
     from lcr_client import LcrClient, okta_login
     okta_login.login()

@@ -324,6 +324,19 @@ def _sync_one(args) -> dict:
                 except Exception as exc:  # noqa: BLE001 — never fail the data sync over avatars
                     logger.warning("photo pass skipped for stake %s: %s", getattr(args, "stake", "?"), exc)
                     result["photos"] = {"error": str(exc)[:200]}
+            # Re-attach cached missionary avatars on EVERY run (not just --photos): the bundle pass only
+            # attaches signed URLs during its own heavy run, so between passes the 7-day URLs expire and a
+            # roster rebuild drops them (the 2026-06-20 "still not seeing missionary photos" report — 36
+            # avatars cached, 0 attached). This points the roster at a FRESH signed URL for every
+            # missionary already in the cache, decoupled from the 50MB bundle. Cheap + best-effort.
+            try:
+                from backend import photos as photopipe
+                s = result.get("supabase")
+                if s and s.get("stake_id"):
+                    result["missionary_photos"] = photopipe.attach_cached_missionary_photos(conn, s["stake_id"])
+            except Exception as exc:  # noqa: BLE001 — never fail the data sync over avatars
+                logger.warning("missionary photo re-attach skipped for stake %s: %s",
+                               getattr(args, "stake", "?"), exc)
             # persist a diagnostics row: run stats + field parity + request metrics
             try:
                 from lcr_client import metrics

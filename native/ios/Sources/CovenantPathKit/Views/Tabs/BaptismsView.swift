@@ -388,7 +388,7 @@ struct MissionariesSection: View {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(Array(missionaries.enumerated()), id: \.offset) { _, m in
                         HStack(alignment: .top, spacing: 10) {
-                            InitialsAvatar(name: m.name ?? "?", size: 32)
+                            PhotoAvatar(name: m.name ?? "?", photoURL: m.photoURL, size: 32)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(m.name ?? "—")
                                 if let phone = m.phone, !phone.isEmpty {

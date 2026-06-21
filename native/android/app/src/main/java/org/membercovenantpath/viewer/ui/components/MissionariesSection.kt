@@ -76,7 +76,7 @@ private fun MissionaryContactRow(m: Missionary) {
     val phone = m.phone?.takeIf { it.isNotBlank() }
     val email = m.email?.takeIf { it.isNotBlank() }
     Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.Top) {
-        InitialsAvatar(name = m.name ?: "?", size = 32.dp)
+        PhotoAvatar(name = m.name ?: "?", photoUrl = m.photoUrl, size = 32.dp)
         Spacer(Modifier.width(10.dp))
         Column {
             Text(m.name ?: "—")
