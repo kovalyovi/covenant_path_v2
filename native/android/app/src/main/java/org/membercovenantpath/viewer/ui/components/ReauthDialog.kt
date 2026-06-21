@@ -221,7 +221,11 @@ fun ReauthDialog(onDismiss: () -> Unit, onSuccess: (String) -> Unit) {
                             )
                         } else {
                             OutlinedTextField(
-                                mfaCode, { mfaCode = it.filter(Char::isDigit).take(8) },
+                                mfaCode, {
+                                    mfaCode = it.filter(Char::isDigit).take(6)
+                                    // Auto-submit the instant the 6-digit code is complete (PASTED or typed).
+                                    if (mfaCode.length == 6 && !busy) verify()
+                                },
                                 label = { Text("Verification code") },
                                 singleLine = true,
                                 enabled = !busy,

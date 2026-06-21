@@ -107,9 +107,21 @@ class AuthViewModel(
     fun onUsername(v: String) = _login.update { it.copy(username = v, error = null) }
     fun onPassword(v: String) = _login.update { it.copy(password = v, error = null) }
     // Codes are bare digits; people paste "123 456" / "123-456" from a text.
-    fun onMfaCode(v: String) = _login.update { it.copy(mfaCode = v.filter(Char::isDigit).take(8), error = null) }
+    fun onMfaCode(v: String) {
+        val digits = v.filter(Char::isDigit).take(6)
+        _login.update { it.copy(mfaCode = digits, error = null) }
+        // Auto-submit the instant the 6-digit code is complete — whether PASTED (the value jumps to
+        // full length) or typed. Code factor only (a password factor has no fixed length).
+        val s = _login.value
+        if (digits.length == 6 && !s.busy && s.factorSent?.method != "password") verifyMfa()
+    }
     fun onEmail(v: String) = _login.update { it.copy(email = v, error = null) }
-    fun onEmailCode(v: String) = _login.update { it.copy(emailCode = v, error = null) }
+    fun onEmailCode(v: String) {
+        val digits = v.filter(Char::isDigit).take(6)
+        _login.update { it.copy(emailCode = digits, error = null) }
+        // Auto-submit the instant the 6-digit email code is complete (PASTED or typed).
+        if (digits.length == 6 && !_login.value.busy) verifyEmailCode()
+    }
 
     private fun reset(base: LoginUiState): LoginUiState {
         resendJob?.cancel()

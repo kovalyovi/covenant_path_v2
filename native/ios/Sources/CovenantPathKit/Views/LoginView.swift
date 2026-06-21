@@ -154,8 +154,16 @@ struct LoginView: View {
                 .focused($focused, equals: .mfa)
                 .textFieldStyle(.roundedBorder)
                 .onChange(of: mfaCode) { _, value in
-                    let digits = String(value.filter(\.isNumber).prefix(8))
+                    let digits = String(value.filter(\.isNumber).prefix(6))
+                    // Auto-submit the instant the 6-digit code is complete (PASTED or typed). Submit only
+                    // on the already-normalized value so a >6-digit paste re-normalizes first, then fires once.
                     if digits != value { mfaCode = digits }
+                    else if digits.count == 6, !session.isBusy {
+                        Task {
+                            await session.verifyMfa(code: digits)
+                            if session.errorMessage != nil { mfaCode = "" }
+                        }
+                    }
                 }
             primaryButton("Verify & sign in", disabledWhen: mfaCode.count < 6) {
                 await session.verifyMfa(code: mfaCode)
@@ -242,6 +250,15 @@ struct LoginView: View {
                 .textContentType(.oneTimeCode).keyboardType(.numberPad)
                 .focused($focused, equals: .code)
                 .textFieldStyle(.roundedBorder)
+                .onChange(of: emailCode) { _, value in
+                    let digits = String(value.filter(\.isNumber).prefix(6))
+                    // Auto-submit the instant the 6-digit code is complete (PASTED or typed); submit only
+                    // on the already-normalized value so a >6-digit paste re-normalizes first, then fires once.
+                    if digits != value { emailCode = digits }
+                    else if digits.count == 6, !session.isBusy {
+                        Task { await session.verify(email: email, code: digits) }
+                    }
+                }
         }
         primaryButton(session.emailCodeSent ? "Verify & sign in" : "Send code") {
             if session.emailCodeSent { await session.verify(email: email, code: emailCode) }

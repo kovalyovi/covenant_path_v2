@@ -92,8 +92,13 @@ struct ReauthSheet: View {
                     .textContentType(.oneTimeCode).keyboardType(.numberPad)
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: mfaCode) { _, value in
-                        let digits = String(value.filter(\.isNumber).prefix(8))
+                        let digits = String(value.filter(\.isNumber).prefix(6))
+                        // Auto-submit the instant the 6-digit code is complete — whether PASTED (paste
+                        // fires onChange, so the value jumps to full length) or typed. Submit only on the
+                        // already-normalized value so a >6-digit paste re-normalizes first, then submits
+                        // once (onChange re-fires on the programmatic set). Code factor only.
                         if digits != value { mfaCode = digits }
+                        else if digits.count == 6, !busy { run { try await verify() } }
                     }
             }
             primaryButton("Verify & authorize",

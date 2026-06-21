@@ -12,6 +12,7 @@ import { broker, BrokerError, mfaRequired, type BrokerFactor, type BrokerResult 
 import { mfaPrompt } from '../lib/mfaCopy';
 import { passkey } from '../lib/passkey';
 import { kNoAccessMessage } from '../lib/disclaimer';
+import { useOtpAutoSubmit } from '../lib/useOtpAutoSubmit';
 import { Button, Segmented } from '../components/ui';
 import { Icon } from '../components/Icon';
 
@@ -402,6 +403,13 @@ interface ChurchProps {
 }
 
 function ChurchFields(p: ChurchProps) {
+  // Auto-submit the 6-digit code the moment it's complete (pasted OR typed) — only on the code step,
+  // never the password factor (no fixed length) or the earlier username/factor steps.
+  useOtpAutoSubmit(
+    p.mfaCode,
+    p.busy || !p.factorSent || p.factorSent.method === 'password',
+    p.onVerify,
+  );
   // Step 3: enter the MFA code that was sent.
   if (p.factorSent) {
     // Okta verification codes are 6 digits; gating Verify on a complete code blocks the
@@ -424,7 +432,8 @@ function ChurchFields(p: ChurchProps) {
             className="input"
             inputMode="numeric"
             value={p.mfaCode}
-            onChange={(e) => p.setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
+            // Digits only, capped at 6 → reaching length 6 (typed or pasted) auto-submits.
+            onChange={(e) => p.setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
             autoComplete="one-time-code"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && codeReady && !p.busy) p.onVerify();
@@ -535,6 +544,8 @@ interface EmailProps {
 }
 
 function EmailFields(p: EmailProps) {
+  // Auto-submit the 6-digit email code once complete (pasted OR typed); only after a code's been sent.
+  useOtpAutoSubmit(p.emailCode, p.busy || !p.emailCodeSent, p.onVerify);
   return (
     <>
       <p>Sign in with the email your stake has on file.</p>
@@ -570,7 +581,8 @@ function EmailFields(p: EmailProps) {
             inputMode="numeric"
             autoComplete="one-time-code"
             value={p.emailCode}
-            onChange={(e) => p.setEmailCode(e.target.value)}
+            // Digits only, capped at 6 → reaching length 6 (typed or pasted) auto-submits.
+            onChange={(e) => p.setEmailCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
           />
         </label>
       )}

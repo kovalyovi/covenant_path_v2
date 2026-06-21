@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { broker, BrokerError, mfaRequired, type BrokerFactor, type BrokerResult } from '../lib/broker';
 import { mfaPrompt } from '../lib/mfaCopy';
+import { useOtpAutoSubmit } from '../lib/useOtpAutoSubmit';
 import { kNoAccessMessage } from '../lib/disclaimer';
 import { useDashboard } from '../hooks/useDashboard';
 import { useToast } from './Toast';
@@ -171,6 +172,10 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
       }
     });
 
+  // Auto-submit the 6-digit code once complete (pasted OR typed) — only for a code factor, never the
+  // password factor (no fixed length) or before a factor's been sent.
+  useOtpAutoSubmit(mfaCode, busy || !factorSent || factorSent.method === 'password', verify);
+
   return (
     <Modal
       open={open}
@@ -235,7 +240,8 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
                 inputMode="numeric"
                 autoComplete="one-time-code"
                 value={mfaCode}
-                onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
+                // Digits only, capped at 6 → reaching length 6 (typed or pasted) auto-submits.
+                onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
               />
             </label>
           )}
