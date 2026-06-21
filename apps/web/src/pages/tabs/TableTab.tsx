@@ -17,7 +17,7 @@ import { cell } from '../../theme/tokens';
 import { Icon } from '../../components/Icon';
 import { Modal } from '../../components/Modal';
 import { Button } from '../../components/ui';
-import { MemberListSkeleton } from '../../components/Skeletons';
+import { SkeletonBox } from '../../components/Skeletons';
 import { EmptyState } from '../../components/EmptyState';
 
 type Kind = 'text' | 'gender' | 'friends' | 'yesno' | 'recommend';
@@ -153,7 +153,7 @@ export function TableTab() {
   const d = useDashboard();
   // Table renders its header/count even when empty, but if there are truly no members and we're not
   // loading, show the same empty state as other tabs (matches `tab != 3` guard + RLS reality).
-  if (d.loading) return <MemberListSkeleton />;
+  if (d.loading) return <TableSkeleton />;
   if (d.error) {
     return (
       <div className="center-col" style={{ minHeight: '50vh' }}>
@@ -163,6 +163,72 @@ export function TableTab() {
   }
   if (d.members.length === 0) return <EmptyState enrollStatus={d.enrollStatus} />;
   return <TableBody members={d.members} isAdmin={d.isAdmin} />;
+}
+
+/** Loading glimmer for the Table tab. Renders the EXACT same shell as TableBody — the wrapper, the
+ *  count row, and the `data-table` with the REAL column headers (the `<Header>` components, which need
+ *  no data) so every column has its final width. Only the body cells are shimmer, each shaped like its
+ *  column's real cell (name line / text value / rounded status pill). Because the header and column
+ *  geometry are identical, the swap to real rows is seamless — nothing reflows. */
+function TableSkeleton({ rows = 14 }: { rows?: number }) {
+  return (
+    <div className="page__inner page__inner--wide" style={{ paddingTop: 8, paddingBottom: 12 }} aria-hidden="true">
+      <div className="row" style={{ padding: '8px 0 4px' }}>
+        <SkeletonBox width={96} height={14} />
+      </div>
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th scope="col" className="col-num">#</th>
+              {COLS.map((c) => (
+                <th key={c.key} scope="col" className={c.key === 'name' ? 'col-member' : undefined}>
+                  <Header
+                    col={c}
+                    sortState={null}
+                    filterable={FILTERABLE.has(c.key)}
+                    filtered={false}
+                    onSort={() => {}}
+                    onFilter={() => {}}
+                  />
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {Array.from({ length: rows }, (_, r) => (
+              <tr key={r}>
+                <td className="muted col-num">{r + 1}</td>
+                {COLS.map((c) => {
+                  if (c.key === 'name') {
+                    return (
+                      <td key={c.key} className="col-member">
+                        <SkeletonBox width={130} height={13} />
+                      </td>
+                    );
+                  }
+                  // yes/no/recommend/gender render a rounded pill in the real table → pill-shaped shimmer.
+                  if (c.kind === 'yesno' || c.kind === 'recommend' || c.kind === 'gender') {
+                    return (
+                      <td key={c.key}>
+                        <SkeletonBox width={34} height={20} radius={10} />
+                      </td>
+                    );
+                  }
+                  // text / friends → a short value line.
+                  return (
+                    <td key={c.key}>
+                      <SkeletonBox width={Math.min(64, c.header.length * 6)} height={12} />
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
 function TableBody({ members, isAdmin }: { members: Member[]; isAdmin: boolean }) {

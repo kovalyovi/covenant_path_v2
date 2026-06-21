@@ -17,6 +17,7 @@ import { agoOrNever, parseMemberDate, tenure } from '../logic/dates';
 import { sacramentWindow, SACRAMENT_WINDOW_WEEKS, attendanceBucket } from '../logic/kpis';
 import { attendanceColor } from '../theme/tokens';
 import { Avatar, SectionCard } from '../components/ui';
+import { SkeletonBox, SkeletonLine } from '../components/Skeletons';
 import { Icon, type IconName } from '../components/Icon';
 import { GoldenHourChips } from '../components/GoldenHourChips';
 import { MissionariesSection } from '../components/Missionaries';
@@ -36,9 +37,13 @@ export function PersonDetailBody({ id, autoEdit }: { id: string; autoEdit: boole
   const member = d.members.find((m) => String(m['person_uuid'] ?? '') === id);
 
   if (!member) {
+    // While the dashboard data is still loading, glimmer the detail layout (header card + Covenant
+    // Path card + two-column sections) so opening a person never flashes a bare "Loading…" line and
+    // the real content swaps in over the same shapes.
+    if (d.loading) return <PersonDetailSkeleton />;
     return (
       <div className="center-col" style={{ minHeight: 200 }}>
-        <p className="muted">{d.loading ? 'Loading…' : "This member isn't in the current view."}</p>
+        <p className="muted">This member isn't in the current view.</p>
       </div>
     );
   }
@@ -105,6 +110,77 @@ export function PersonDetailBody({ id, autoEdit }: { id: string; autoEdit: boole
       )}
 
       {uuid && <NotesSection member={member} autoEdit={autoEdit} />}
+    </div>
+  );
+}
+
+/** Loading glimmer for the person detail. Reuses the SAME chrome as the real body — the primary-
+ *  container header card (avatar + name + meta lines), the Covenant Path section card (ring + labeled
+ *  chips), and the two-column `detail-cols` of section cards. Every block uses the real `.card` /
+ *  `.section-card__head` / `.detail-cols` classes, so margins, the card grid, and head spacing are
+ *  identical and the real content swaps in without a reflow. */
+function PersonDetailSkeleton() {
+  return (
+    <div style={{ paddingTop: 4, paddingBottom: 16 }} aria-hidden="true">
+      <div
+        className="card"
+        style={{ background: 'var(--primary-container)', border: 'none', borderRadius: 'var(--radius-card)' }}
+      >
+        <div className="card__body row" style={{ alignItems: 'center', gap: 16 }}>
+          <SkeletonBox width={60} height={60} radius={30} />
+          <div style={{ flex: 1 }}>
+            <SkeletonBox width={190} height={22} />
+            <div style={{ height: 8 }} />
+            <SkeletonBox width={120} height={13} />
+            <div style={{ height: 6 }} />
+            <SkeletonBox width={88} height={12} />
+          </div>
+        </div>
+      </div>
+      {/* Covenant Path card: completion ring + the row of labeled milestone chips. */}
+      <div className="card">
+        <div className="card__body">
+          <div className="section-card__head">
+            <SkeletonBox width={30} height={30} radius={15} />
+            <span className="section-card__title"><SkeletonBox width={120} height={16} /></span>
+          </div>
+          <div className="wrap" style={{ gap: 8 }}>
+            {Array.from({ length: 6 }, (_, i) => (
+              <SkeletonBox key={i} width={96} height={30} radius={16} />
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="detail-cols">
+        <div>
+          <SkeletonCard lines={4} />
+          <SkeletonCard lines={3} />
+        </div>
+        <div>
+          <SkeletonCard lines={3} />
+          <SkeletonCard lines={4} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** A section-card-shaped glimmer: the real `.card` chrome + `.section-card__head` (icon + title) and a
+ *  few body lines — the shared shape every detail SectionCard uses. */
+function SkeletonCard({ lines = 3 }: { lines?: number }) {
+  return (
+    <div className="card" aria-hidden="true">
+      <div className="card__body">
+        <div className="section-card__head">
+          <SkeletonBox width={26} height={26} radius={8} />
+          <span className="section-card__title"><SkeletonBox width={130} height={16} /></span>
+        </div>
+        <div className="stack" style={{ gap: 8 }}>
+          {Array.from({ length: lines }, (_, i) => (
+            <SkeletonLine key={i} widthFactor={i % 2 ? 0.6 : 0.9} />
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
