@@ -237,6 +237,107 @@ public struct KpiSkeleton: View {
     }
 }
 
+/// N8: content-shaped skeleton for the Table tab — the count row, the frozen header row (real column
+/// titles, redacted, so columns are pre-sized at the SAME widths as `TableView.width(_:)`), and a few
+/// data rows of per-column cells (a name line, status pills, text values). Mirrors `TableView` so the
+/// real grid swaps in without a horizontal jump. (The widths below mirror `TableView.width(_:)`.)
+public struct TableSkeleton: View {
+    public init() {}
+    // (title, width, isStatusPill) — kept in lockstep with TableView.columns + width(_:).
+    private let cols: [(String, CGFloat, Bool)] = [
+        ("Member", 150, false), ("Sex", 56, true), ("Age", 56, false), ("Unit", 130, false),
+        ("Baptism", 110, false), ("Member for", 110, false), ("Friends", 92, true),
+        ("Aaronic", 92, true), ("Melch.", 92, true), ("Calling", 92, true), ("Has min.", 92, true),
+        ("Gives min.", 92, true), ("Recommend", 92, true), ("Patriarchal", 92, true),
+        ("Endowed", 92, true), ("1st temple visit", 92, true), ("Family name", 92, true),
+    ]
+    private let rowNumWidth: CGFloat = 40
+    public var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                RoundedRectangle(cornerRadius: 4).frame(width: 96, height: 12)
+                Spacer()
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            ScrollView(.horizontal, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 0) {   // header row — real titles, sized like the real columns
+                        Text("#").font(.caption.bold())
+                            .frame(width: rowNumWidth, alignment: .leading).padding(.horizontal, 6)
+                        ForEach(cols, id: \.0) { c in
+                            Text(c.0).font(.caption.bold()).lineLimit(1)
+                                .frame(width: c.1, alignment: .leading).padding(.horizontal, 6)
+                        }
+                    }
+                    .frame(height: 44)
+                    Divider()
+                    ForEach(0..<12, id: \.self) { idx in
+                        HStack(spacing: 0) {
+                            Text("\(idx + 1)").font(.caption)
+                                .frame(width: rowNumWidth, alignment: .leading).padding(.horizontal, 6)
+                            ForEach(cols, id: \.0) { c in
+                                cellShape(c)
+                                    .frame(width: c.1, alignment: .leading).padding(.horizontal, 6)
+                            }
+                        }
+                        .frame(height: 44)
+                        Divider()
+                    }
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .redacted(reason: .placeholder)
+        .shimmer()
+    }
+    @ViewBuilder private func cellShape(_ c: (String, CGFloat, Bool)) -> some View {
+        if c.0 == "Member" {
+            RoundedRectangle(cornerRadius: 4).frame(width: 120, height: 12)
+        } else if c.2 {   // status columns render a rounded pill in the real table
+            RoundedRectangle(cornerRadius: 6).frame(width: 34, height: 20)
+        } else {
+            RoundedRectangle(cornerRadius: 4).frame(width: min(c.1 - 16, 56), height: 11)
+        }
+    }
+}
+
+/// N8: content-shaped skeleton for the Baptisms tab — the section-title row (title + by-date/by-unit
+/// toggle) and a few per-person cards (avatar + name/meta + GH chip strip), matching `BaptismsView`.
+public struct BaptismsSkeleton: View {
+    public init() {}
+    public var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {                                                          // section title row
+                    RoundedRectangle(cornerRadius: 4).frame(width: 180, height: 18)
+                    Spacer()
+                    RoundedRectangle(cornerRadius: 15).frame(width: 120, height: 30)
+                }
+                ForEach(0..<4, id: \.self) { _ in
+                    SkelCard {
+                        HStack(spacing: 12) {
+                            Circle().frame(width: 44, height: 44)
+                            VStack(alignment: .leading, spacing: 8) {
+                                RoundedRectangle(cornerRadius: 4).frame(width: 150, height: 14)
+                                RoundedRectangle(cornerRadius: 4).frame(width: 100, height: 11)
+                            }
+                            Spacer()
+                        }
+                        RoundedRectangle(cornerRadius: 4).frame(width: 200, height: 11)
+                        HStack(spacing: 6) {
+                            ForEach(0..<5, id: \.self) { _ in Circle().frame(width: 22, height: 22) }
+                        }
+                    }
+                }
+            }
+            .padding(16)
+        }
+        .allowsHitTesting(false)
+        .redacted(reason: .placeholder)
+        .shimmer()
+    }
+}
+
 // MARK: - shimmer modifier
 
 extension View {

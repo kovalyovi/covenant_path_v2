@@ -114,11 +114,14 @@ struct DashboardView: View {
     private func pageBody(_ t: DashboardTab) -> some View {
         switch store.state {
         case .idle, .loading:
-            // Per-tab content-shaped skeleton (N8) so Golden Hour / KPIs don't flash member rows.
+            // Per-tab content-shaped skeleton (N8) so each tab glimmers over its OWN shape, not member
+            // rows: Golden Hour / KPIs / Table / Baptisms have matched skeletons; Needs is member rows.
             switch t {
             case .goldenHour:    GoldenHourSkeleton()
             case .kpis:          KpiSkeleton()
-            default:             MemberListSkeleton()
+            case .table:         TableSkeleton()
+            case .baptisms:      BaptismsSkeleton()
+            case .needs:         MemberListSkeleton()
             }
         case .failed(let message):
             ContentUnavailableView {

@@ -7,6 +7,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -288,6 +289,90 @@ fun KpiSkeleton() {
             Spacer(Modifier.height(16.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 repeat(4) { SkelOverviewStat() }
+            }
+        }
+    }
+}
+
+/**
+ * N8: content-shaped skeleton for the Table tab — the count row, a header row of column titles, and a
+ * few data rows of per-column cells (a name line, status pills, text values), in a horizontal scroll.
+ * The column widths mirror TableScreen so the real grid swaps in without a horizontal jump.
+ */
+@Composable
+fun TableSkeleton() {
+    // (title, width-dp, isStatusPill) — kept in lockstep with TableScreen's columns + widths.
+    val cols = listOf(
+        Triple("Member", 150, false), Triple("Sex", 56, true), Triple("Age", 56, false),
+        Triple("Unit", 130, false), Triple("Baptism", 110, false), Triple("Member for", 110, false),
+        Triple("Friends", 92, true), Triple("Aaronic", 92, true), Triple("Melch.", 92, true),
+        Triple("Calling", 92, true), Triple("Has min.", 92, true), Triple("Gives min.", 92, true),
+        Triple("Recommend", 92, true), Triple("Patriarchal", 92, true), Triple("Endowed", 92, true),
+        Triple("1st temple visit", 92, true), Triple("Family name", 92, true),
+    )
+    val rowNum = 40
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            ShimmerBlock(96.dp, 12.dp)
+        }
+        Column(Modifier.horizontalScroll(rememberScrollState())) {
+            Row(Modifier.height(44.dp), verticalAlignment = Alignment.CenterVertically) {  // header
+                Box(Modifier.width(rowNum.dp))
+                cols.forEach { (_, w, _) ->
+                    Box(Modifier.width(w.dp).padding(horizontal = 6.dp)) {
+                        ShimmerBlock((w - 16).coerceAtMost(70).dp, 12.dp)
+                    }
+                }
+            }
+            HorizontalDivider()
+            repeat(12) {
+                Row(Modifier.height(44.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.width(rowNum.dp))
+                    cols.forEach { (title, w, pill) ->
+                        Box(Modifier.width(w.dp).padding(horizontal = 6.dp)) {
+                            when {
+                                title == "Member" -> ShimmerBlock(120.dp, 12.dp)
+                                pill -> ShimmerBlock(34.dp, 20.dp)   // status columns render a pill
+                                else -> ShimmerBlock((w - 16).coerceAtMost(56).dp, 11.dp)
+                            }
+                        }
+                    }
+                }
+                HorizontalDivider()
+            }
+        }
+    }
+}
+
+/**
+ * N8: content-shaped skeleton for the Baptisms tab — the section-title row (title + by-date/by-unit
+ * toggle) and a few per-person cards (avatar + name/meta + GH chip strip). Mirrors BaptismsScreen.
+ */
+@Composable
+fun BaptismsSkeleton() {
+    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(14.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            ShimmerBlock(180.dp, 18.dp)
+            ShimmerBlock(120.dp, 30.dp)
+        }
+        Spacer(Modifier.height(12.dp))
+        repeat(4) {
+            SkelCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(44.dp).clip(CircleShape).background(shimmerBrush()))
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        ShimmerLine(0.5f, 14.dp)
+                        Spacer(Modifier.height(8.dp))
+                        ShimmerLine(0.35f, 11.dp)
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                ShimmerLine(0.7f, 11.dp)
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    repeat(5) { Box(Modifier.size(22.dp).clip(CircleShape).background(shimmerBrush())) }
+                }
             }
         }
     }
