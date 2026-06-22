@@ -24,3 +24,6 @@ venv/
 
 # Local Claude Code worktrees / agent state — never commit (esp. on a public repo)
 .claude/
+
+# One-off local leadership-directory extractor (kept locally, not committed)
+covenant_path/leadership_directory.py
