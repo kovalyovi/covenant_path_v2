@@ -26,18 +26,23 @@ REPORT_JSON = Path(__file__).resolve().parent.parent / "output" / "covenant_path
 
 
 class CredentialScopeMismatch(Exception):
-    """A delegated credential resolved to a DIFFERENT stake than the one it is registered for —
-    specifically, its registered unit is a WARD/BRANCH beneath the stake the session can actually
-    see. Raised by sync_stake to REFUSE the write (a ward-scoped credential must never sync, let
-    alone overwrite, a whole stake). The caller revokes the credential and skips it (not a red-fail).
+    """A delegated credential resolved to a DIFFERENT stake than the one it is registered for.
+    Two shapes, both refused by sync_stake BEFORE any write (the caller revokes/flags the credential
+    and skips it — not a red-fail):
+      • its registered unit is a WARD/BRANCH beneath the stake the token can see (Green Level Ward,
+        2026-06-13), or
+      • the token's real stake is an ENTIRELY DIFFERENT stake than the registered one (an operator's
+        own Springville Utah token enrolled as the Raleigh stake, 2026-06-25).
+    Either way a mis-scoped credential must never sync, let alone overwrite, the registered stake —
+    otherwise one stake's members get stamped with another stake's id.
     """
 
     def __init__(self, expected_unit: int, stake_unit: int):
         self.expected_unit = expected_unit
         self.stake_unit = stake_unit
         super().__init__(
-            f"credential registered for unit {expected_unit} is a sub-unit (ward/branch) of stake "
-            f"{stake_unit}; a ward-scoped credential cannot sync a stake")
+            f"credential registered for stake unit {expected_unit} resolved to a different stake "
+            f"({stake_unit}); a mis-scoped credential cannot sync the registered stake")
 
 
 def _load_members(scrape: bool, with_profile: bool) -> list[dict]:
@@ -97,20 +102,27 @@ def sync_stake(client: LcrClient, members: list[dict], conn,
                        str(exc)[:120])
         ctx = ctx_override
 
-    # DATA-INTEGRITY GUARD — the Green Level Ward incident (2026-06-13). A delegated credential must
-    # only ever sync the stake it was registered for. A WARD/BRANCH-level leader's Member Tools token
-    # returns the PARENT STAKE as its org root (units[0]) while exposing covenant-path data for ONLY
-    # their unit — so the MT-derived context (ctx_override) names the parent stake even though the
-    # credential belongs to a single ward. Left unchecked, the sync upserts that ward's handful of
-    # members onto the WHOLE stake and reconciles every other ward's members away (Raleigh 93 -> 7,
-    # all "Green Level Ward"). A sub-unit credential can never sync a stake: refuse so the caller
-    # revokes it. We key on ctx_override (the authoritative MT org root) so this fires whether the
-    # live LCR session resolved to the ward or had already died.
-    if expected_stake_unit is not None and ctx_override is not None:
-        mt_root = ctx_override.unit_number
-        child_units = {c.unit_number for c in (ctx_override.child_units or []) if c.unit_number}
-        if mt_root is not None and mt_root != expected_stake_unit and expected_stake_unit in child_units:
-            raise CredentialScopeMismatch(expected_stake_unit, mt_root)
+    # DATA-INTEGRITY GUARD — a delegated credential must only ever sync the stake it is REGISTERED
+    # for (expected_stake_unit). It can resolve to the WRONG stake two ways, both refused here BEFORE
+    # any write so one stake's members are never stamped with another stake's id:
+    #   1. Ward-beneath-stake (Green Level Ward, 2026-06-13): a WARD/BRANCH leader's Member Tools
+    #      token returns the PARENT stake as its org root while exposing data for only their unit, so
+    #      ctx_override names the parent stake. Unchecked, the sync upserts that one ward's members
+    #      onto the WHOLE stake and reconciles every other ward away (Raleigh 93 -> 7).
+    #   2. Cross-stake (Springville-as-Raleigh, 2026-06-25): the token's real stake is an ENTIRELY
+    #      DIFFERENT stake than the registered one (an operator's own Springville Utah token enrolled
+    #      as the Raleigh stake). The daily Raleigh job then pulls Springville's members and writes
+    #      them under Raleigh's stake_id. The original guard missed this because the registered stake
+    #      is NOT a child of the token's stake.
+    # The data's true stake is the Member Tools org root (the bulk covenant-path data came from that
+    # 45-day token); fall back to the resolved context when there is no MT override (legacy live-LCR
+    # scrape). If it is not the registered stake, REFUSE. The operator's own self-sync passes no
+    # expected unit, so the guard stays inert there (their MT root IS their stake).
+    if expected_stake_unit is not None:
+        synced_unit = (ctx_override.unit_number if ctx_override is not None
+                       else getattr(ctx, "unit_number", None))
+        if synced_unit is not None and synced_unit != expected_stake_unit:
+            raise CredentialScopeMismatch(expected_stake_unit, synced_unit)
     # Stake identity is keyed by unit_number (stable), so a stake RENAME just updates stakes.name —
     # never a duplicate. Units are upserted by unit_number too: a renamed ward updates its name, a
     # ward that moved stakes updates its stake_id, and a person who changed wards gets their unit_id +

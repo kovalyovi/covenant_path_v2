@@ -298,8 +298,8 @@ def _sync_one(args) -> dict:
                 only_unit=getattr(args, "unit", None), access=access,
                 ctx_override=getattr(args, "_mt_unit_context", None),
                 # The unit number this credential is REGISTERED for (the delegated stake's record, or
-                # the operator's own). sync_stake refuses to write if this turns out to be a ward/branch
-                # beneath the stake the session can see — see CredentialScopeMismatch.
+                # the operator's own). sync_stake refuses to write if the token's real stake isn't this
+                # one — a ward/branch beneath it, OR an entirely different stake — see CredentialScopeMismatch.
                 expected_stake_unit=getattr(args, "_stake_unit", None))
             if args.photos:
                 # Avatars are cosmetic — a 50MB-bundle hiccup must NEVER fail the (critical) data sync,
@@ -646,11 +646,13 @@ def _revoke_if_ineligible(st: dict) -> None:
 
 
 def _revoke_scope_mismatch(unit, exc) -> None:
-    """A credential registered for a WARD/BRANCH that is actually a sub-unit of a real stake: revoke it
-    so the daily sync stops trying to use it (a ward-scoped credential must never sync a stake), record
-    a diagnostics breadcrumb, and emit an event. The ward's leader still sees their unit via their
-    provisioned ward_leader RLS role — no credential needed. Best-effort: never changes the run's exit
-    status. (Auto-heals any legacy ward-as-stake credential; new ones are blocked at enroll.)"""
+    """A credential whose token resolves to a DIFFERENT stake than it is registered for — a WARD/BRANCH
+    sub-unit of a real stake, OR another stake entirely (an operator's own token enrolled as another
+    stake). Revoke it so the daily sync stops trying to use it (it must never sync, let alone stamp
+    this stake with another stake's members), record a diagnostics breadcrumb, and emit an event. A
+    ward leader still sees their unit via their provisioned RLS role — no credential needed. Best-effort:
+    never changes the run's exit status. (Auto-heals legacy mis-scoped credentials; new ones are blocked
+    at enroll.)"""
     if not unit:
         return
     try:
@@ -668,7 +670,8 @@ def _revoke_scope_mismatch(unit, exc) -> None:
         obs.event("sync.stake.scope_mismatch", level="warning", stake=int(unit),
                   status="revoked", message=str(exc)[:200])
         obs.flush()
-        logger.warning("stake %s revoked — ward-scoped credential cannot sync a stake (%s)", unit, exc)
+        logger.warning("stake %s revoked — mis-scoped credential (token belongs to a different stake) "
+                       "cannot sync this stake (%s)", unit, exc)
     except Exception as e:  # noqa: BLE001
         logger.warning("scope-mismatch revoke skipped (non-fatal): %s", e)
 
@@ -793,13 +796,15 @@ def run_one_stake(args, unit: int) -> int:
                 _mint_and_sync(args, st)
             return 0
         except CredentialScopeMismatch as exc:
-            # A WARD/BRANCH-level credential that resolves to its PARENT stake (the Green Level Ward
-            # incident). It must never sync — revoke it so it stops trying, and clear it from the ops
-            # surface. The ward's leader still sees their unit via their provisioned ward_leader role.
+            # A credential whose token resolves to a DIFFERENT stake than it is registered for: a
+            # WARD/BRANCH beneath its parent stake (Green Level Ward), or an entirely different stake
+            # (an operator's own token enrolled as another stake — Springville-as-Raleigh). It must
+            # never sync — revoke it so it stops trying and can't stamp this stake with another
+            # stake's members. A ward leader still sees their unit via their provisioned RLS role.
             logger.error("stake %s: credential scope mismatch — %s", unit, exc)
             _revoke_scope_mismatch(unit, exc)
-            print(f"[i] stake {unit}: ward-scoped credential revoked (cannot sync a stake) — its "
-                  f"leader keeps their ward view via RLS")
+            print(f"[i] stake {unit}: mis-scoped credential revoked (its token belongs to a different "
+                  f"stake) — it cannot sync this stake")
             return 0
         except Exception as exc:  # noqa: BLE001
             logger.error("stake %s delegated sync failed: %s", unit, exc)
@@ -1083,11 +1088,12 @@ def run_delegated(args, skip_unit: int | None = None) -> int:
         try:
             _mint_and_sync(args, st)
         except CredentialScopeMismatch as exc:
-            # Ward-scoped credential masquerading as a stake — revoke + skip (not a failure).
+            # Credential whose token belongs to a DIFFERENT stake (ward beneath it, or another stake
+            # entirely) — revoke + skip (not a failure) so it can't contaminate this stake.
             logger.error("stake %s (%s): credential scope mismatch — %s",
                          st.get("name"), st.get("unit_number"), exc)
             _revoke_scope_mismatch(st.get("unit_number"), exc)
-            print(f"[i] {st.get('name')}: ward-scoped credential revoked (cannot sync a stake)")
+            print(f"[i] {st.get('name')}: mis-scoped credential revoked (token belongs to another stake)")
         except Exception as exc:  # noqa: BLE001
             failures += 1
             logger.error("stake %s (%s) sync failed: %s", st.get("name"), st.get("unit_number"), exc)

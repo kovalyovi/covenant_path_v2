@@ -403,6 +403,29 @@ def test_scope_guard_inert_without_expected_unit(monkeypatch):
                          ctx_override=_raleigh_override(), expected_stake_unit=None)
 
 
+def test_cross_stake_credential_refuses_to_sync(monkeypatch):
+    # ilia (2026-06-25): the "Raleigh" stake_credentials row holds the operator's OWN token, whose
+    # real Member Tools stake is Springville Utah (462373) — an ENTIRELY DIFFERENT stake, NOT a ward
+    # beneath Raleigh (503991). The daily Raleigh job (expected_stake_unit=503991) pulls Springville's
+    # members; the guard must REFUSE so they are never stamped with Raleigh's stake_id. Regresses the
+    # original guard, which only caught wards beneath the MT root and silently re-leaked Springville
+    # into Raleigh (34 Utah members surfaced in a "Raleigh" leader's directory).
+    import backend.db as dbmod
+    from backend import sync as bsync
+    from lcr_client.models import UnitRef, UserContext
+    springville = UserContext(
+        individual_id=None, active_position=None, unit_name="Springville Utah West Stake",
+        unit_number=462373, positions=[], roles=[],
+        child_units=[UnitRef("Springville  9th Ward", 427098, "WARD"),
+                     UnitRef("Grasslands 7th Ward (Spanish)", 2161265, "WARD")], raw={})
+    monkeypatch.setattr(dbmod, "upsert_stake",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not write")))
+    with pytest.raises(bsync.CredentialScopeMismatch) as ei:
+        bsync.sync_stake(_DeadLCRClient(), [{"person_uuid": "p1"}], object(),
+                         ctx_override=springville, expected_stake_unit=503991)
+    assert ei.value.expected_unit == 503991 and ei.value.stake_unit == 462373
+
+
 # --- E8: needs-reauth classification (2026-06-12 "Ken" fix) --------------------------------------
 # A stake that can't sync headlessly because it has NO Member Tools 45-day token AND its LCR session
 # either is dead OR is an OTP/passwordless (IDX) session that can't silently mint one (login_required)
