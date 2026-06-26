@@ -222,7 +222,7 @@ struct TableView: View {
             Text("\(idx + 1)").font(.caption).foregroundStyle(.secondary)
                 .frame(width: rowNumWidth, alignment: .leading).padding(.horizontal, 6)
             HStack(spacing: 4) {
-                cell(memberCol.value(m), memberCol.kind)
+                cell(tableShortName(memberCol.value(m)), memberCol.kind)
                 if let uuid = m.personUUID, store?.notes[uuid] != nil {
                     Image(systemName: "note.text").font(.caption2).foregroundStyle(Color.accentColor)
                 }
@@ -243,6 +243,18 @@ struct TableView: View {
         }
         .frame(height: rowH)
         .contentShape(Rectangle())
+    }
+
+    /// Table-only short name: "First L" — first name + last initial, dropping any middle name
+    /// ("Kovaliov, Ilya James" → "Ilya K"). Names arrive "Last, First [Middle…]". Only the rendered
+    /// cell text is shortened — sort/filter still use the full value (mirrors web abbreviateName).
+    private func tableShortName(_ n: String) -> String {
+        guard let comma = n.firstIndex(of: ",") else { return n }
+        let last = n[..<comma].trimmingCharacters(in: .whitespaces)
+        let rest = n[n.index(after: comma)...].trimmingCharacters(in: .whitespaces)
+        guard let first = rest.split(separator: " ").first.map(String.init),
+              let initial = last.first else { return n }
+        return "\(first) \(initial)"
     }
 
     /// Whether the signed-in user is an admin — an admin may see the raw sentinel string in a

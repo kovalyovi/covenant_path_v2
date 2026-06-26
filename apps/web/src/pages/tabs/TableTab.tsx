@@ -50,14 +50,15 @@ export const COLS: Col[] = [
   { header: 'Family name', key: 'family_name_prepared', kind: 'yesno' },
 ];
 
-/** When the table is scrolled right, the frozen name shrinks to "Lastinitial, First" (e.g.
- *  "Kovaliov, Ilya" → "K, Ilya") so the frozen column reclaims width. Names are stored "Last, First". */
+/** When the table is scrolled right, the frozen name shrinks to "First L" — first name + last
+ *  initial, dropping any middle name (e.g. "Kovaliov, Ilya James" → "Ilya K") — so the frozen
+ *  column reclaims width. Names are stored "Last, First [Middle…]". */
 function abbreviateName(n: string): string {
   const i = n.indexOf(',');
   if (i <= 0) return n;
   const last = n.slice(0, i).trim();
-  const first = n.slice(i + 1).trim();
-  return first ? `${last.charAt(0)}, ${first}` : n;
+  const first = n.slice(i + 1).trim().split(/\s+/)[0]; // first name only — drop any middle name(s)
+  return last && first ? `${first} ${last.charAt(0)}` : n;
 }
 
 // The sentinel-able covenant-path columns: a backend sentinel here ('needs-profile-api' / 'blocked:…')

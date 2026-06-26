@@ -144,6 +144,9 @@ fun TableScreen(members: List<Member>, onOpen: (Member) -> Unit, isAdmin: Boolea
                 ) {
                     Cell("${idx + 1}", NumWidth, color = StatusColors.GreyText)
                     Columns.forEach { c ->
+                        // The Member column shows a short "First L" name; its FULL value still drives
+                        // sort/filter (computed above). Other columns render their value verbatim.
+                        val shown = if (c.header == "Member") shortMemberName(c.value(m)) else c.value(m)
                         // The Member cell carries a note marker when leaders left notes on this person.
                         if (c.header == "Member" &&
                             org.membercovenantpath.viewer.ui.components.LocalMemberNotes
@@ -151,7 +154,7 @@ fun TableScreen(members: List<Member>, onOpen: (Member) -> Unit, isAdmin: Boolea
                         ) {
                             Row(Modifier.width(c.width).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    c.value(m), fontSize = 12.sp, maxLines = 1,
+                                    shown, fontSize = 12.sp, maxLines = 1,
                                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f, fill = false),
                                 )
@@ -164,7 +167,7 @@ fun TableScreen(members: List<Member>, onOpen: (Member) -> Unit, isAdmin: Boolea
                                 )
                             }
                         } else {
-                            ValueCell(c.value(m), c.kind, c.width, isAdmin)
+                            ValueCell(shown, c.kind, c.width, isAdmin)
                         }
                     }
                 }
@@ -326,6 +329,17 @@ private fun ValueCell(value: String, kind: Kind, width: Dp, isAdmin: Boolean) {
             }
         }
     }
+}
+
+/** Table-only short name: "First L" — first name + last initial, dropping any middle name
+ *  ("Kovaliov, Ilya James" -> "Ilya K"). Names arrive "Last, First [Middle…]"; only the rendered
+ *  cell text is shortened — sort/filter keep the full value (mirrors web abbreviateName). */
+private fun shortMemberName(n: String): String {
+    val comma = n.indexOf(',')
+    if (comma <= 0) return n
+    val last = n.substring(0, comma).trim()
+    val first = n.substring(comma + 1).trim().split(Regex("\\s+")).firstOrNull().orEmpty()
+    return if (last.isNotEmpty() && first.isNotEmpty()) "$first ${last[0]}" else n
 }
 
 private fun cellColor(v: String, kind: Kind): Color? = when (kind) {
