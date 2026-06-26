@@ -14,6 +14,7 @@ import { useDashboard } from '../hooks/useDashboard';
 import { passkey } from '../lib/passkey';
 import { Icon, type IconName } from '../components/Icon';
 import { AboutDialog, RulesDialog } from '../components/Disclaimer';
+import { LanguageSwitcher } from '../components/LanguageSwitcher';
 import { ContactDialog, FeedbackDialog, addPasskey } from './DashboardShell';
 import { useToast } from '../components/Toast';
 
@@ -100,6 +101,7 @@ export function SettingsPage() {
     <div style={{ paddingBottom: 24 }}>
       <SectionHead>Appearance</SectionHead>
       <Tile icon="brightness" title="Theme" subtitle={theme.label} onClick={theme.cycle} chevron />
+      <div style={{ padding: '12px 16px' }}><LanguageSwitcher /></div>
       <hr className="divider" style={{ margin: 0 }} />
 
       <SectionHead>Preferences</SectionHead>

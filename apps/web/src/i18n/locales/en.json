@@ -1,0 +1,41 @@
+{
+  "common": {
+    "appName": "Covenant Path",
+    "loading": "Loading…",
+    "cancel": "Cancel",
+    "save": "Save",
+    "close": "Close",
+    "retry": "Retry",
+    "back": "Back",
+    "signOut": "Sign out"
+  },
+  "nav": {
+    "baptisms": "Baptisms",
+    "goldenHour": "Golden Hour",
+    "needs": "Needs",
+    "kpis": "KPIs",
+    "table": "Table",
+    "leadership": "Leaders"
+  },
+  "maintenance": {
+    "title": "We’ll be right back",
+    "body": "Covenant Path is briefly down for maintenance. Please check back in a little while.",
+    "ownerBannerOn": "Maintenance mode is ON — only you can see the app.",
+    "turnOff": "Turn off",
+    "turningOff": "Turning off…",
+    "cardTitle": "Maintenance mode",
+    "cardHelp": "When ON, everyone except you sees a maintenance screen and the database returns no member data to them — flip it the moment anything looks wrong, then turn it back off once it’s fixed.",
+    "turnOn": "Turn ON maintenance",
+    "turnOffFull": "Turn OFF maintenance",
+    "updateMessage": "Update message",
+    "saving": "Saving…",
+    "messagePlaceholder": "Optional message shown to users",
+    "on": "ON",
+    "off": "OFF",
+    "admin": "Admin"
+  },
+  "settings": {
+    "language": "Language",
+    "languageHelp": "Choose the language used across the app."
+  }
+}

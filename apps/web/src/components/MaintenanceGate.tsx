@@ -2,10 +2,12 @@
 // owner sees a lock screen — and the database already returns no member data to them (a RESTRICTIVE
 // RLS gate), so this component is purely the UX layer over that containment. The owner keeps the app
 // and gets a banner + an Admin card to flip it. "Protected to only me": the toggle RPC is owner-gated
-// server-side, and the control only renders for the owner.
+// server-side, and the control only renders for the owner. Strings are localized (i18n) with English
+// fallback.
 
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { supabase } from '../lib/supabase';
 
 export type MaintenanceState = { on: boolean; isOwner: boolean; message: string | null; loading: boolean };
@@ -59,18 +61,18 @@ export function MaintenanceGate({ children }: { children: React.ReactNode }) {
 }
 
 function MaintenanceScreen({ message }: { message: string | null }) {
+  const { t } = useTranslation();
   return (
     <div className="center-col" style={{ minHeight: '100vh', gap: 14, padding: 24, textAlign: 'center' }}>
       <div style={{ fontSize: 44 }} aria-hidden>🛠️</div>
-      <h1 style={{ margin: 0 }}>We’ll be right back</h1>
-      <p className="muted" style={{ maxWidth: 440 }}>
-        {message?.trim() || 'Covenant Path is briefly down for maintenance. Please check back in a little while.'}
-      </p>
+      <h1 style={{ margin: 0 }}>{t('maintenance.title')}</h1>
+      <p className="muted" style={{ maxWidth: 440 }}>{message?.trim() || t('maintenance.body')}</p>
     </div>
   );
 }
 
 function OwnerMaintenanceBanner() {
+  const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const turnOff = useCallback(async () => {
     setBusy(true);
@@ -81,13 +83,13 @@ function OwnerMaintenanceBanner() {
       background: '#8a6d00', color: '#fff', padding: '8px 14px', display: 'flex',
       alignItems: 'center', justifyContent: 'center', gap: 14, fontSize: 14, flexWrap: 'wrap',
     }}>
-      <span>🛠️ Maintenance mode is <b>ON</b> — only you can see the app.</span>
+      <span>🛠️ {t('maintenance.ownerBannerOn')}</span>
       <button onClick={turnOff} disabled={busy}
               style={{ color: 'inherit', background: 'none', border: '1px solid currentColor',
                        borderRadius: 6, padding: '2px 10px', cursor: 'pointer' }}>
-        {busy ? 'Turning off…' : 'Turn off'}
+        {busy ? t('maintenance.turningOff') : t('maintenance.turnOff')}
       </button>
-      <Link to="/admin" style={{ color: 'inherit' }}>Admin</Link>
+      <Link to="/admin" style={{ color: 'inherit' }}>{t('maintenance.admin')}</Link>
     </div>
   );
 }
@@ -95,6 +97,7 @@ function OwnerMaintenanceBanner() {
 /** Owner-only card for the Admin console: enable/disable maintenance + an optional message. Renders
  *  nothing for non-owners (and the RPC is owner-gated regardless). */
 export function MaintenanceModeCard() {
+  const { t } = useTranslation();
   const m = useMaintenance();
   const [on, setOn] = useState(false);
   const [msg, setMsg] = useState('');
@@ -115,20 +118,17 @@ export function MaintenanceModeCard() {
     <div className="card" style={{ marginBottom: 12 }}>
       <div className="card__body" style={{ display: 'grid', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-          <b>Maintenance mode</b>
+          <b>{t('maintenance.cardTitle')}</b>
           <span style={{
             fontSize: 12, fontWeight: 700, padding: '2px 8px', borderRadius: 999,
             background: on ? '#8a6d00' : 'var(--surface-2, #2a2a2a)', color: on ? '#fff' : 'inherit',
-          }}>{on ? 'ON' : 'OFF'}</span>
+          }}>{on ? t('maintenance.on') : t('maintenance.off')}</span>
         </div>
-        <div className="muted" style={{ fontSize: 13 }}>
-          When ON, everyone except you sees a maintenance screen and the database returns no member data
-          to them — flip it the moment anything looks wrong, then turn it back off once it’s fixed.
-        </div>
+        <div className="muted" style={{ fontSize: 13 }}>{t('maintenance.cardHelp')}</div>
         <input
           value={msg}
           onChange={(e) => setMsg(e.target.value)}
-          placeholder="Optional message shown to users"
+          placeholder={t('maintenance.messagePlaceholder')}
           disabled={busy}
           style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border, #444)',
                    background: 'var(--surface, transparent)', color: 'inherit' }}
@@ -136,12 +136,12 @@ export function MaintenanceModeCard() {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {on
             ? <button className="btn btn--filled" disabled={busy} onClick={() => apply(false)}>
-                {busy ? 'Saving…' : 'Turn OFF maintenance'}
+                {busy ? t('maintenance.saving') : t('maintenance.turnOffFull')}
               </button>
             : <button className="btn btn--danger" disabled={busy} onClick={() => apply(true)}>
-                {busy ? 'Saving…' : 'Turn ON maintenance'}
+                {busy ? t('maintenance.saving') : t('maintenance.turnOn')}
               </button>}
-          {on && <button className="btn" disabled={busy} onClick={() => apply(true)}>Update message</button>}
+          {on && <button className="btn" disabled={busy} onClick={() => apply(true)}>{t('maintenance.updateMessage')}</button>}
         </div>
         {err && <div style={{ color: 'var(--error, #e5484d)', fontSize: 13 }}>{err}</div>}
       </div>

@@ -1,0 +1,41 @@
+{
+  "common": {
+    "appName": "Covenant Path",
+    "loading": "Cargando…",
+    "cancel": "Cancelar",
+    "save": "Guardar",
+    "close": "Cerrar",
+    "retry": "Reintentar",
+    "back": "Atrás",
+    "signOut": "Cerrar sesión"
+  },
+  "nav": {
+    "baptisms": "Bautismos",
+    "goldenHour": "Hora dorada",
+    "needs": "Necesidades",
+    "kpis": "Indicadores",
+    "table": "Tabla",
+    "leadership": "Líderes"
+  },
+  "maintenance": {
+    "title": "Volvemos enseguida",
+    "body": "Covenant Path está en mantenimiento por un momento. Por favor, vuelve a comprobarlo dentro de un rato.",
+    "ownerBannerOn": "El modo de mantenimiento está ACTIVADO: solo tú puedes ver la aplicación.",
+    "turnOff": "Desactivar",
+    "turningOff": "Desactivando…",
+    "cardTitle": "Modo de mantenimiento",
+    "cardHelp": "Cuando está activado, todos excepto tú ven una pantalla de mantenimiento y la base de datos no les devuelve datos de miembros: actívalo en cuanto algo parezca incorrecto y desactívalo cuando se haya solucionado.",
+    "turnOn": "Activar mantenimiento",
+    "turnOffFull": "Desactivar mantenimiento",
+    "updateMessage": "Actualizar mensaje",
+    "saving": "Guardando…",
+    "messagePlaceholder": "Mensaje opcional que verán los usuarios",
+    "on": "ACTIVADO",
+    "off": "DESACTIVADO",
+    "admin": "Administración"
+  },
+  "settings": {
+    "language": "Idioma",
+    "languageHelp": "Elige el idioma que se usa en toda la aplicación."
+  }
+}
