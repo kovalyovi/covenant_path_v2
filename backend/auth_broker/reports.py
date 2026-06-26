@@ -28,8 +28,11 @@ def _scope(auth_id: str, email: str | None = None) -> dict | None:
     every email/Google login (auth_id holds the LCR person uuid, never the Supabase uid), which
     made "Generate report" come back empty + errored."""
     def _q(params: dict) -> list:
+        # Deterministic stake selection for a multi-stake leader: order by earliest-provisioned so
+        # rows[0] (the reported stake) is stable rather than arbitrary PostgREST row order.
         r = requests.get(f"{admin.SUPABASE_URL}/rest/v1/user_roles", headers=admin._sb_headers(),
-                         params={"select": "stake_id,unit_id", "limit": "200", **params},
+                         params={"select": "stake_id,unit_id", "order": "created_at.asc",
+                                 "limit": "200", **params},
                          timeout=_TIMEOUT)
         return r.json() if r.status_code == 200 else []
     rows = _q({"auth_id": f"eq.{auth_id}"}) if auth_id else []

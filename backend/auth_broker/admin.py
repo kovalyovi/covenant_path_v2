@@ -388,8 +388,12 @@ def enrollment_status(email: str, auth_id: str) -> dict:
     #    auth_id-only lookup missed every email-login leader (e.g. a stake president), wrongly showing
     #    "sync not enabled / no members" for a fully-synced stake (#9).
     def _roles_by(params: dict) -> list:
+        # Order deterministically: a user can hold roles in more than one stake, so without an
+        # explicit order PostgREST's row order decides which stake enrollment-status reports — pick
+        # the earliest-provisioned (their primary/home calling) so it is stable, not arbitrary.
         r = requests.get(f"{SUPABASE_URL}/rest/v1/user_roles", headers=headers,
-                         params={"select": "stake_id,role", "limit": "10", **params}, timeout=_TIMEOUT)
+                         params={"select": "stake_id,role", "order": "created_at.asc",
+                                 "limit": "10", **params}, timeout=_TIMEOUT)
         return r.json() if r.status_code == 200 else []
     roles = _roles_by({"auth_id": f"eq.{auth_id}"}) if auth_id else []
     if not roles and email:
@@ -562,8 +566,12 @@ def _patch_revoke(stake_id: str, headers: dict) -> dict:
 
 def provider_stake_id(email: str) -> str | None:
     """The stake this user is the sync provider for — i.e. whose Drive they may connect (M7)."""
+    # Active-only + deterministic: a user can be the principal for more than one stake, and a REVOKED
+    # credential is no longer a valid provider (e.g. a mis-scoped one we just revoked), so exclude
+    # revoked and order stably rather than returning whichever row PostgREST happens to surface first.
     cred = _one("stake_credentials",
-                {"select": "stake_id", "principal_email": f"eq.{email.lower()}", "limit": "1"})
+                {"select": "stake_id", "principal_email": f"eq.{email.lower()}",
+                 "revoked": "is.false", "order": "granted_at.asc", "limit": "1"})
     return cred.get("stake_id") if cred else None
 
 
