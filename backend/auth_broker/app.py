@@ -367,6 +367,22 @@ def auth_sync_now(authorization: str = Header(default="")) -> dict:
                                                     "Re-authorize in Sync settings first.")
     if not admin.github_configured():
         raise HTTPException(status_code=503, detail="sync dispatch not configured (GITHUB_TOKEN)")
+    # Cooldown (2026-06-25): a provider clicking "Sync now" repeatedly — or a re-auth/re-enroll burst —
+    # used to fire a fresh full run EACH time (one stake was observed syncing 7-9×/day from on-demand
+    # triggers while schedule-only stakes synced once). If it synced within the cooldown, report it as
+    # already-fresh instead of dispatching another run; the daily schedule still covers it.
+    from datetime import datetime, timezone, timedelta
+    last = status.get("last_synced_at")
+    if last:
+        try:
+            ts = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) - ts < timedelta(minutes=5):
+                return {"status": "skipped", "reason": "synced moments ago — already up to date",
+                        "coverage_complete": bool(cred.get("complete")), "last_synced_at": last}
+        except (ValueError, TypeError):
+            pass
     try:
         # PER-STAKE: scope to the provider's own stake — without the `stake` input this dispatched
         # the WHOLE matrix (same fan-out bug as the on-enroll kickoff, provider-path edition).

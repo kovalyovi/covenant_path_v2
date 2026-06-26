@@ -195,6 +195,11 @@ export function DashboardShell() {
     setSyncOpen(false);
     try {
       const res = await broker.syncNow();
+      if (res['status'] === 'skipped') {
+        // Backend cooldown: a sync just ran, so another wasn't started (prevents on-demand sync storms).
+        toast.show({ message: 'Already up to date — your stake synced moments ago.' });
+        return;
+      }
       const partial = res['coverage_complete'] === false;
       d.markSyncing();
       toast.show({
