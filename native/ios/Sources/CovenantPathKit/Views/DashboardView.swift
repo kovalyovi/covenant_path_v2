@@ -75,6 +75,14 @@ struct DashboardView: View {
                 .environment(theme)
         }
         .overlay(alignment: .bottom) { toastView }
+        // Owner-only maintenance mode (migration 0056): a full-screen lock for everyone EXCEPT the owner
+        // while the switch is on. The DB's RESTRICTIVE RLS already returns no member rows to them; this
+        // is the matching UX so they see a friendly screen, not an empty dashboard (mirrors web MaintenanceGate).
+        .overlay {
+            if store.maintenanceMode && !store.isOwner {
+                MaintenanceScreen(message: store.maintenanceMessage).transition(.opacity)
+            }
+        }
     }
 
     // MARK: - one tab page (banners + content; toolbar/title/nav are shared in `body`)

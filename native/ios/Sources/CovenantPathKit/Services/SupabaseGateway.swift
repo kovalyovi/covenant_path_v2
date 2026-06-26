@@ -6,6 +6,10 @@ import Supabase
 /// data (units, invitations, app_admins, revoke RPCs). RLS gates everything (the golden rule).
 public protocol SupabaseGateway: Sendable {
     func isAdmin() async -> Bool
+    /// Owner-only maintenance mode (migration 0056): is THIS signed-in user the single owner?
+    func isOwner() async -> Bool
+    /// The global maintenance switch + optional message (client-safe view; never the owner email).
+    func maintenanceStatus() async -> (on: Bool, message: String?)
 
     func comments(memberUUID: String) async throws -> [MemberComment]
     func addComment(_ comment: NewComment) async throws
@@ -35,6 +39,28 @@ public struct SupabaseGatewayImpl: SupabaseGateway {
             return v
         } catch {
             return false
+        }
+    }
+
+    public func isOwner() async -> Bool {
+        do {
+            let v: Bool = try await client.rpc("is_owner").execute().value
+            return v
+        } catch {
+            return false
+        }
+    }
+
+    public func maintenanceStatus() async -> (on: Bool, message: String?) {
+        do {
+            let rows: [MaintenanceStatusRow] = try await client
+                .from("maintenance_status")
+                .select("maintenance_mode, maintenance_message")
+                .execute().value
+            guard let row = rows.first else { return (false, nil) }
+            return (row.maintenanceMode ?? false, row.maintenanceMessage)
+        } catch {
+            return (false, nil)
         }
     }
 

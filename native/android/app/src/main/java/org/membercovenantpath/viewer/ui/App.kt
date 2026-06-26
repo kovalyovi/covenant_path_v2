@@ -22,6 +22,7 @@ import org.membercovenantpath.viewer.ui.screens.ConfigErrorScreen
 import org.membercovenantpath.viewer.ui.screens.DashboardScaffold
 import org.membercovenantpath.viewer.ui.screens.InviteScreen
 import org.membercovenantpath.viewer.ui.screens.LoginScreen
+import org.membercovenantpath.viewer.ui.screens.MaintenanceScreen
 import org.membercovenantpath.viewer.ui.screens.PersonDetailScreen
 import org.membercovenantpath.viewer.ui.screens.SettingsScreen
 import org.membercovenantpath.viewer.ui.theme.CovenantPathTheme
@@ -95,16 +96,23 @@ private fun SignedInNav(
 
     NavHost(navController = nav, startDestination = Routes.DASHBOARD) {
         composable(Routes.DASHBOARD) {
-            DashboardScaffold(
-                state = state,
-                dashVm = dashVm,
-                actionsVm = actionsVm,
-                onOpenMember = { m -> m.personUuid?.let { nav.navigate(Routes.detail(it)) } },
-                onSignOut = onSignOut,
-                onOpenSettings = { nav.navigate(Routes.SETTINGS) },
-                onOpenInvite = { nav.navigate(Routes.INVITE) },
-                onOpenAdmin = { nav.navigate(Routes.ADMIN) },
-            )
+            // Owner-only maintenance mode (migration 0056): a full-screen lock for everyone EXCEPT the
+            // owner while the switch is on. The DB's RESTRICTIVE RLS already returns no member rows to
+            // them; this is the matching UX (mirrors web MaintenanceGate / iOS MaintenanceScreen).
+            if (state.maintenanceMode && !state.isOwner) {
+                MaintenanceScreen(message = state.maintenanceMessage)
+            } else {
+                DashboardScaffold(
+                    state = state,
+                    dashVm = dashVm,
+                    actionsVm = actionsVm,
+                    onOpenMember = { m -> m.personUuid?.let { nav.navigate(Routes.detail(it)) } },
+                    onSignOut = onSignOut,
+                    onOpenSettings = { nav.navigate(Routes.SETTINGS) },
+                    onOpenInvite = { nav.navigate(Routes.INVITE) },
+                    onOpenAdmin = { nav.navigate(Routes.ADMIN) },
+                )
+            }
         }
         composable(
             route = Routes.DETAIL,

@@ -4,6 +4,8 @@ import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Columns
 import io.github.jan.supabase.postgrest.query.Order
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -12,6 +14,14 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.membercovenantpath.viewer.model.Member
 import org.membercovenantpath.viewer.model.Missionary
 import org.membercovenantpath.viewer.model.Stake
+
+/** The client-safe `maintenance_status` view (owner-only maintenance mode, migration 0056). Exposes
+ *  ONLY the public flag + message — never the owner email. Mirrors the web `maintenance_status` select. */
+@Serializable
+data class MaintenanceStatus(
+    @SerialName("maintenance_mode") val maintenanceMode: Boolean? = null,
+    @SerialName("maintenance_message") val maintenanceMessage: String? = null,
+)
 
 /**
  * Read-only Supabase access for `members` + `stakes`. The app does NO filtering of its own — RLS
@@ -43,6 +53,18 @@ class MembersRepository(
     /** Whether the signed-in user is an app_admin (server RPC `is_admin`). False on any error. */
     suspend fun isAdmin(): Boolean =
         runCatching { client.postgrest.rpc("is_admin").decodeAs<Boolean>() }.getOrDefault(false)
+
+    /** Owner-only maintenance mode (migration 0056): is the signed-in user the single OWNER? */
+    suspend fun isOwner(): Boolean =
+        runCatching { client.postgrest.rpc("is_owner").decodeAs<Boolean>() }.getOrDefault(false)
+
+    /** The global maintenance switch + optional message (client-safe view; never the owner email). */
+    suspend fun maintenanceStatus(): MaintenanceStatus =
+        runCatching {
+            client.postgrest.from("maintenance_status")
+                .select(Columns.raw("maintenance_mode, maintenance_message"))
+                .decodeList<MaintenanceStatus>().firstOrNull()
+        }.getOrNull() ?: MaintenanceStatus()
 
     /** #5b: a stake leader toggles Google-Sheet generation for their stake (RPC enforces the role). */
     suspend fun setStakeSheetsEnabled(stakeId: String, enabled: Boolean) {

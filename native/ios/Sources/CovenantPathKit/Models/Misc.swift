@@ -37,6 +37,17 @@ public struct Invitation: Codable, Identifiable, Hashable, Sendable {
     public var isRevoked: Bool { status == "revoked" }
 }
 
+/// The client-safe `maintenance_status` view (owner-only maintenance mode, migration 0056). Exposes
+/// ONLY the public flag + message — never the owner email. Mirrors the web `maintenance_status` select.
+public struct MaintenanceStatusRow: Decodable, Sendable {
+    public let maintenanceMode: Bool?
+    public let maintenanceMessage: String?
+    public enum CodingKeys: String, CodingKey {
+        case maintenanceMode = "maintenance_mode"
+        case maintenanceMessage = "maintenance_message"
+    }
+}
+
 /// An `app_admins` row (admin console → Admins panel). Mirrors admin_page `_adminsF`.
 public struct AppAdmin: Codable, Identifiable, Hashable, Sendable {
     public let email: String

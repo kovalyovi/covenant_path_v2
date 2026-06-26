@@ -39,6 +39,11 @@ data class DashboardUiState(
     val missionariesByUnit: Map<String, List<Missionary>> = emptyMap(),
     val refreshing: Boolean = false,
     val isAdmin: Boolean = false,
+    // Owner-only maintenance mode (migration 0056): while `maintenanceMode` is on, everyone except the
+    // owner sees a maintenance screen (the DB's RLS already returns no member rows to non-owners).
+    val isOwner: Boolean = false,
+    val maintenanceMode: Boolean = false,
+    val maintenanceMessage: String? = null,
     val enrollStatus: EnrollmentStatus? = null,
     val syncing: Boolean = false,
     val syncStartedAt: String? = null,
@@ -94,10 +99,24 @@ class DashboardViewModel(
     init {
         bootstrap()
         checkAdmin()
+        checkMaintenance()
     }
 
     private fun checkAdmin() {
         viewModelScope.launch { if (repo.isAdmin()) _state.update { it.copy(isAdmin = true) } }
+    }
+
+    /** Owner-only maintenance mode (migration 0056): read the global switch + whether this user is the
+     *  owner, so the shell can show the maintenance screen to everyone else. Best-effort. */
+    private fun checkMaintenance() {
+        viewModelScope.launch {
+            val status = repo.maintenanceStatus()
+            val owner = repo.isOwner()
+            _state.update {
+                it.copy(maintenanceMode = status.maintenanceMode == true,
+                        maintenanceMessage = status.maintenanceMessage, isOwner = owner)
+            }
+        }
     }
 
     private fun bootstrap() {

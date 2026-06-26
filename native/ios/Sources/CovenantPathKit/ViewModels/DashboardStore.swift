@@ -24,6 +24,11 @@ public final class DashboardStore {
     public private(set) var notes: [String: NoteSummary] = [:]
 
     public private(set) var isAdmin = false
+    /// Owner-only maintenance mode (migration 0056): while `maintenanceMode` is on, everyone except the
+    /// owner sees a maintenance screen (the DB's RLS already returns no member rows to non-owners).
+    public private(set) var isOwner = false
+    public private(set) var maintenanceMode = false
+    public private(set) var maintenanceMessage: String?
     public private(set) var enrollStatus: EnrollmentStatus?
 
     /// Optimistic syncing flag (set right after a Sync-now; reconciled from stakes.sync_state).
@@ -88,6 +93,7 @@ public final class DashboardStore {
     public func load() async {
         state = .loading
         Task { await self.checkAdmin() }
+        Task { await self.checkMaintenance() }
         do {
             try await loadStakes()
             try await reloadMembers()
@@ -190,6 +196,16 @@ public final class DashboardStore {
     private func checkAdmin() async {
         let v = await services.gateway.isAdmin()
         isAdmin = v
+    }
+
+    /// Owner-only maintenance mode (migration 0056): read the global switch + whether this user is the
+    /// owner, so the shell can show the maintenance screen to everyone else. Best-effort.
+    private func checkMaintenance() async {
+        let status = await services.gateway.maintenanceStatus()
+        let owner = await services.gateway.isOwner()
+        maintenanceMode = status.on
+        maintenanceMessage = status.message
+        isOwner = owner
     }
 
     public func loadEnrollStatus() async {
