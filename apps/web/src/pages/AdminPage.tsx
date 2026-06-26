@@ -20,6 +20,7 @@ import { CardSkeleton } from '../components/Skeletons';
 import { Modal } from '../components/Modal';
 import { useToast } from '../components/Toast';
 import { MaskedEmail, ViewAllLink } from './AdminListPage';
+import { MaintenanceModeCard } from '../components/MaintenanceGate';
 
 type Json = Record<string, unknown>;
 
@@ -174,6 +175,8 @@ export function AdminPage({ embedded = false }: { embedded?: boolean } = {}) {
   const panels = (
     <>
         <div className="maxw" style={{ maxWidth: 900, padding: 12 }}>
+          {/* Owner-only kill switch — renders only for the owner (and the RPC is owner-gated). */}
+          <MaintenanceModeCard />
           <Panel key={`sys-${nonce}`} title="System" load={() => admin.summary()}>
             {(s) => (
               <>

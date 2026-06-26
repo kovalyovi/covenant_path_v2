@@ -96,6 +96,17 @@ def run() -> int:
         v_email = _visible(cur, email=email_leader)
         v_anon = _visible(cur)
 
+        # --- Maintenance mode (migration 0056): while ON, ONLY the owner reads member data ----------
+        owner_email = f"owner-{uuid.uuid4().hex[:8]}@example.test"
+        cur.execute("insert into user_roles(auth_id,email,stake_id,unit_id,role) "
+                    "values (NULL,%s,%s,NULL,'stake_leader')", (owner_email, stake1))  # owner needs a base role
+        cur.execute("update app_settings set owner_email=%s, maintenance_mode=true where id", (owner_email,))
+        m_owner = _visible(cur, email=owner_email)     # owner keeps their scope
+        m_leader = _visible(cur, email=email_leader)   # non-owner stake-1 leader: locked out
+        m_sl2 = _visible(cur, auth_id=sl2)             # non-owner stake-2 leader: locked out
+        cur.execute("update app_settings set maintenance_mode=false where id")
+        m_off = _visible(cur, email=email_leader)      # switch OFF → access restored (gate is a no-op)
+
         checks = [
             ("stake_leader(1) sees its own stake", v_sl1, {"rls-a", "rls-b"}),
             ("stake_leader(1) is ISOLATED from stake 2", "rls-c" in v_sl1, False),
@@ -105,6 +116,10 @@ def run() -> int:
             ("email stake_leader(1) sees its own stake", v_email, {"rls-a", "rls-b"}),
             ("email stake_leader(1) is ISOLATED from stake 2", "rls-c" in v_email, False),
             ("anon sees none", v_anon, set()),
+            ("maintenance ON: OWNER still sees their stake", m_owner, {"rls-a", "rls-b"}),
+            ("maintenance ON: non-owner leader sees NOTHING", m_leader, set()),
+            ("maintenance ON: non-owner stake-2 leader sees NOTHING", m_sl2, set()),
+            ("maintenance OFF: access restored", m_off, {"rls-a", "rls-b"}),
         ]
         ok = True
         for name, got, want in checks:

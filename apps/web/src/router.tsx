@@ -20,6 +20,7 @@ import { lazyWithReload } from './lib/lazyReload';
 import { RouteError } from './pages/RouteError';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardShell } from './pages/DashboardShell';
+import { MaintenanceGate } from './components/MaintenanceGate';
 import { BaptismsTab } from './pages/tabs/BaptismsTab';
 import { GoldenHourTab } from './pages/tabs/GoldenHourTab';
 import { NeedsTab } from './pages/tabs/NeedsTab';
@@ -74,7 +75,9 @@ function RequireAuth() {
   if (!session) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   return (
     <DashboardProvider>
-      <Outlet />
+      <MaintenanceGate>
+        <Outlet />
+      </MaintenanceGate>
     </DashboardProvider>
   );
 }
