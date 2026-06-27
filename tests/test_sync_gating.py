@@ -368,6 +368,17 @@ class _DeadLCRClient:
         raise RuntimeError("LCR returned 401. Session expired")
 
 
+class _LiveClient:
+    """A client whose LCR session is ALIVE and resolves to a given stake context — the case the
+    cross-stake DATA guard must police (a live, correctly-registered session paired with a Member
+    Tools token that returned a DIFFERENT stake's members)."""
+    def __init__(self, ctx):
+        self._ctx = ctx
+
+    def user_context(self):
+        return self._ctx
+
+
 def test_ward_credential_refuses_to_sync_a_stake(monkeypatch):
     # Jesse (WML): credential registered for ward 1102966; the MT org root is the parent stake 503991.
     # Must raise CredentialScopeMismatch and NEVER reach a DB write.
@@ -424,6 +435,87 @@ def test_cross_stake_credential_refuses_to_sync(monkeypatch):
         bsync.sync_stake(_DeadLCRClient(), [{"person_uuid": "p1"}], object(),
                          ctx_override=springville, expected_stake_unit=503991)
     assert ei.value.expected_unit == 503991 and ei.value.stake_unit == 462373
+
+
+# --- E15: cross-stake DATA guard — the member ROWS must belong to the stake we write them under -----
+#     (Springville-under-Raleigh recurrence, 2026-06-27). The 2026-06-25 guard above compares only the
+#     resolved IDENTITY (ctx_override's `units` tree, else the live session) vs the registered stake. It
+#     has a hole: when the Member Tools payload carries NO `units` tree, ctx_override is None and the
+#     guard falls back to the LIVE session's stake. For an operator who is a leader in the registered
+#     stake (Raleigh) but whose Member Tools token returns their HOME stake's roster (Springville),
+#     identity == registered, the guard passes, and 34 Springville members get stamped under Raleigh.
+#     The DATA guard keys off the MEMBERS' OWN units, so a missing unit_context can't blind it.
+
+
+def _raleigh_live_ctx():
+    from lcr_client.models import UnitRef, UserContext
+    return UserContext(individual_id=None, active_position=None,
+                       unit_name="Raleigh North Carolina West Stake", unit_number=503991,
+                       positions=[], roles=[],
+                       child_units=[UnitRef("Raleigh 1st Ward", 44911, "WARD"),
+                                    UnitRef("Cary 1st Ward", 127833, "WARD")], raw={})
+
+
+def test_cross_stake_members_refused_when_unit_context_absent(monkeypatch):
+    # The hole that re-leaked Springville into Raleigh on 2026-06-27: a LIVE Raleigh session (the
+    # operator is a Raleigh stake clerk) + a Member Tools token that returned SPRINGVILLE's roster, with
+    # NO `units` tree in the payload (ctx_override=None). The id-guard sees identity(503991)==expected
+    # and passes; the DATA guard must see the members' units are Springville's and REFUSE before any
+    # write. FAILS against the pre-fix code (it reaches upsert_stake and raises AssertionError, not
+    # CredentialScopeMismatch).
+    import backend.db as dbmod
+    from backend import sync as bsync
+    springville_members = [
+        {"person_uuid": "p1", "unit_number": 427098, "unit": "Springville  9th Ward"},
+        {"person_uuid": "p2", "unit_number": 2161265, "unit": "Grasslands 7th Ward (Spanish)"}]
+    monkeypatch.setattr(dbmod, "upsert_stake",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not write")))
+    with pytest.raises(bsync.CredentialScopeMismatch) as ei:
+        bsync.sync_stake(_LiveClient(_raleigh_live_ctx()), springville_members, object(),
+                         ctx_override=None, expected_stake_unit=503991)
+    assert ei.value.expected_unit == 503991  # refusal is labeled with the registered stake
+
+
+def test_cross_stake_members_refused_by_name_when_no_unit_numbers(monkeypatch):
+    # Same hole, but the member rows carry only unit NAMES (no numbers) — the guard falls back to
+    # normalized-name comparison and still refuses wholly-foreign data.
+    import backend.db as dbmod
+    from backend import sync as bsync
+    springville_members = [{"person_uuid": "p1", "unit": "Springville  9th Ward"},
+                           {"person_uuid": "p2", "unit": "Grasslands 7th Ward (Spanish)"}]
+    monkeypatch.setattr(dbmod, "upsert_stake",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not write")))
+    with pytest.raises(bsync.CredentialScopeMismatch):
+        bsync.sync_stake(_LiveClient(_raleigh_live_ctx()), springville_members, object(),
+                         ctx_override=None, expected_stake_unit=503991)
+
+
+def test_orphan_members_do_not_trip_cross_stake_guard(monkeypatch):
+    # False-positive guard: a few moved-ward orphans must NOT look like a foreign roster. As long as
+    # ANY member belongs to one of this stake's own units, the DATA guard stands down (overlap > 0) and
+    # the sync proceeds to the first DB write (intercepted to prove it was let through).
+    import backend.db as dbmod
+    from backend import sync as bsync
+    members = [{"person_uuid": "a", "unit_number": 44911, "unit": "Raleigh 1st Ward"},
+               {"person_uuid": "b", "unit_number": 127833, "unit": "Cary 1st Ward"},
+               {"person_uuid": "c", "unit_number": 999999, "unit": "A Stray Orphan Ward"}]
+    monkeypatch.setattr(dbmod, "upsert_stake", lambda *a, **k: (_ for _ in ()).throw(_StopProbe()))
+    with pytest.raises(_StopProbe):
+        bsync.sync_stake(_LiveClient(_raleigh_live_ctx()), members, object(),
+                         ctx_override=None, expected_stake_unit=503991)
+
+
+def test_matching_members_pass_cross_stake_guard(monkeypatch):
+    # The healthy steady state: the member rows belong to this stake's units -> the guard lets the sync
+    # through. Proves the new guard adds no false refusal to a normal sync.
+    import backend.db as dbmod
+    from backend import sync as bsync
+    members = [{"person_uuid": "a", "unit_number": 44911, "unit": "Raleigh 1st Ward"},
+               {"person_uuid": "b", "unit_number": 127833, "unit": "Cary 1st Ward"}]
+    monkeypatch.setattr(dbmod, "upsert_stake", lambda *a, **k: (_ for _ in ()).throw(_StopProbe()))
+    with pytest.raises(_StopProbe):
+        bsync.sync_stake(_LiveClient(_raleigh_live_ctx()), members, object(),
+                         ctx_override=None, expected_stake_unit=503991)
 
 
 # --- E8: needs-reauth classification (2026-06-12 "Ken" fix) --------------------------------------

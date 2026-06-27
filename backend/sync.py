@@ -27,22 +27,109 @@ REPORT_JSON = Path(__file__).resolve().parent.parent / "output" / "covenant_path
 
 class CredentialScopeMismatch(Exception):
     """A delegated credential resolved to a DIFFERENT stake than the one it is registered for.
-    Two shapes, both refused by sync_stake BEFORE any write (the caller revokes/flags the credential
+    THREE shapes, all refused by sync_stake BEFORE any write (the caller revokes/flags the credential
     and skips it — not a red-fail):
       • its registered unit is a WARD/BRANCH beneath the stake the token can see (Green Level Ward,
         2026-06-13), or
-      • the token's real stake is an ENTIRELY DIFFERENT stake than the registered one (an operator's
-        own Springville Utah token enrolled as the Raleigh stake, 2026-06-25).
+      • the token's real stake is an ENTIRELY DIFFERENT stake than the registered one, detected from
+        the Member Tools payload's `units` tree (an operator's own Springville Utah token enrolled as
+        the Raleigh stake, 2026-06-25), or
+      • the MEMBER ROWS themselves belong to a different stake than the one we are about to write them
+        under — even though the session/identity resolved to the registered stake. This is the leak the
+        first two checks missed: a live "Raleigh" LCR session (stake identity) + a Member Tools token
+        that returned the operator's home "Springville" roster (member data), with NO `units` tree in
+        the payload, wrote 34 Springville members under Raleigh's stake_id (2026-06-27). Keyed off the
+        members' OWN units, so a missing `unit_context` can't blind it.
     Either way a mis-scoped credential must never sync, let alone overwrite, the registered stake —
     otherwise one stake's members get stamped with another stake's id.
     """
 
-    def __init__(self, expected_unit: int, stake_unit: int):
+    def __init__(self, expected_unit, stake_unit, reason: str | None = None):
         self.expected_unit = expected_unit
         self.stake_unit = stake_unit
-        super().__init__(
+        self.reason = reason
+        super().__init__(reason or (
             f"credential registered for stake unit {expected_unit} resolved to a different stake "
-            f"({stake_unit}); a mis-scoped credential cannot sync the registered stake")
+            f"({stake_unit}); a mis-scoped credential cannot sync the registered stake"))
+
+
+def _norm_unit_name(name) -> str | None:
+    """Normalize a unit name for comparison — collapse internal whitespace + casefold — so a Member
+    Tools 'Springville  9th Ward' (double space) and an LCR 'Springville 9th Ward' compare equal."""
+    if not name:
+        return None
+    return " ".join(str(name).split()).casefold()
+
+
+def _resolve_unit_stake(conn, unit_number) -> int | None:
+    """Best-effort: the STAKE unit number that owns a given ward/branch unit number, from the unit
+    registry. Used only to label the refusal ('member data belongs to stake N'); never required —
+    returns None on any error / unknown unit (e.g. a brand-new unit, or the unit-test's fake conn)."""
+    if not unit_number:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("select s.unit_number from units u join stakes s on s.id = u.stake_id "
+                        "where u.unit_number = %s limit 1", (int(unit_number),))
+            row = cur.fetchone()
+        return int(row[0]) if row else None
+    except Exception:  # noqa: BLE001 — labeling is cosmetic; a fake/closed conn must not crash the guard
+        return None
+
+
+def _assert_members_belong_to_stake(ctx, members, expected_stake_unit, conn=None) -> None:
+    """Refuse before any write if the MEMBER ROWS belong to a different stake than `ctx` (the stake we
+    are about to write them under). This closes the hole the unit-number/`expected_stake_unit` guard
+    left: when the Member Tools payload carries no `units` tree, `ctx_override` is None and the old
+    guard fell back to the live session's stake — which, for an operator who is a leader in the
+    registered stake but whose Member Tools token returns their HOME stake's roster, equals the
+    registered stake — so foreign member data slipped straight through (Springville-under-Raleigh,
+    2026-06-25 and 2026-06-27).
+
+    A member is 'foreign' when its unit (by NUMBER — formatting-immune — else normalized name) is not
+    one of this stake's own units. We refuse only when EVERY identifiable member is foreign — i.e. the
+    payload is wholesale another stake's roster. A handful of moved-ward orphans always leave overlap
+    with the stake's units, so this never trips on them."""
+    if not members:
+        return
+    stake_nums = {u.unit_number for u in (getattr(ctx, "child_units", None) or [])
+                  if getattr(u, "unit_number", None)}
+    stake_names = {_norm_unit_name(u.name) for u in (getattr(ctx, "child_units", None) or [])
+                   if getattr(u, "name", None)}
+    if not (stake_nums or stake_names):
+        return  # this stake's own units are unknown this run → can't judge; the id-based guard stands
+    # Prefer unit NUMBERS when both sides have them (immune to name formatting); else normalized names.
+    use_numbers = bool(stake_nums) and any(m.get("unit_number") for m in members)
+    member_keys: set = set()
+    foreign: set = set()
+    foreign_sample_number = None
+    for m in members:
+        if use_numbers:
+            key = m.get("unit_number")
+            if not key:
+                continue
+            member_keys.add(key)
+            if key not in stake_nums:
+                foreign.add(key)
+                foreign_sample_number = foreign_sample_number or key
+        else:
+            key = _norm_unit_name(m.get("unit") or m.get("unit_name"))
+            if not key:
+                continue
+            member_keys.add(key)
+            if key not in stake_names:
+                foreign.add(key)
+    if not member_keys or foreign != member_keys:
+        return  # at least one member belongs to this stake → not a wholesale foreign roster
+    target = getattr(ctx, "unit_number", None)
+    data_stake = _resolve_unit_stake(conn, foreign_sample_number) if use_numbers else None
+    raise CredentialScopeMismatch(
+        expected_stake_unit if expected_stake_unit is not None else target,
+        data_stake if data_stake is not None else (foreign_sample_number or 0),
+        reason=(f"member rows belong to a different stake than {expected_stake_unit or target} — every "
+                f"member's unit is foreign to it"
+                + (f" (their units roll up to stake {data_stake})" if data_stake else "")
+                + "; the Member Tools token returned another stake's roster, refusing before any write"))
 
 
 def _load_members(scrape: bool, with_profile: bool) -> list[dict]:
@@ -123,6 +210,16 @@ def sync_stake(client: LcrClient, members: list[dict], conn,
                        else getattr(ctx, "unit_number", None))
         if synced_unit is not None and synced_unit != expected_stake_unit:
             raise CredentialScopeMismatch(expected_stake_unit, synced_unit)
+    # DATA-vs-IDENTITY guard (2026-06-27): the check above compares the resolved IDENTITY (the LCR
+    # session, or the Member Tools `units` tree when present) against the registered stake — but the
+    # member DATA comes from a SEPARATE source (the Member Tools /api/v5/sync token), and the two can
+    # disagree. When the token returned the operator's HOME stake's roster while the live LCR session
+    # still resolved to the registered stake (and the payload carried no `units` tree, so ctx_override
+    # was None), the check above saw identity == registered and passed, and another stake's members got
+    # stamped with this stake's id (Springville-under-Raleigh, 2026-06-27 — the recurrence of the
+    # 2026-06-25 leak). Validate the MEMBERS' OWN units against the stake we are about to write them
+    # under, so neither a missing `unit_context` nor a wrong-but-registered session can blind it.
+    _assert_members_belong_to_stake(ctx, members, expected_stake_unit, conn)
     # Stake identity is keyed by unit_number (stable), so a stake RENAME just updates stakes.name —
     # never a duplicate. Units are upserted by unit_number too: a renamed ward updates its name, a
     # ward that moved stakes updates its stake_id, and a person who changed wards gets their unit_id +
