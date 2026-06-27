@@ -518,6 +518,46 @@ def test_matching_members_pass_cross_stake_guard(monkeypatch):
                          ctx_override=None, expected_stake_unit=503991)
 
 
+# --- E15b: the ROOT cause — a delegated job must write under the DATA's stake, NEVER a foreign live ---
+#     session. 2026-06-27: the Springville job (expected=462373) pulled Springville's members from
+#     Springville's OWN token (ctx_override=Springville), but its dead LCR session was re-established as
+#     the OPERATOR's Raleigh session (a disabled-MFA operator login now succeeds headlessly), so
+#     user_context()=Raleigh(503991). The old code took the write identity from that live session and
+#     stamped Springville's members with Raleigh's stake_id. The fix: identity = the member data's own
+#     stake (ctx_override); a live session that resolved elsewhere is ignored (for identity AND its
+#     LCR-only extras — roles/KPIs).
+
+
+def test_delegated_sync_writes_under_data_stake_not_foreign_session(monkeypatch):
+    from backend import sync as bsync
+    import backend.db as dbmod
+    from lcr_client.models import UnitRef, UserContext
+    springville = UserContext(
+        individual_id=None, active_position=None, unit_name="Springville Utah West Stake",
+        unit_number=462373, positions=[], roles=[],
+        child_units=[UnitRef("Springville  9th Ward", 427098, "WARD"),
+                     UnitRef("Grasslands 7th Ward (Spanish)", 2161265, "WARD")], raw={})
+    springville_members = [{"person_uuid": "p1", "unit_number": 427098, "unit": "Springville  9th Ward"}]
+    captured = {}
+
+    def _upsert_stake(conn, unit_number, name):
+        captured["stake"] = (unit_number, name)
+        raise _StopProbe()  # stop at the FIRST DB write; the identity is already decided
+
+    monkeypatch.setattr(dbmod, "upsert_stake", _upsert_stake)
+    # live LCR session resolves to the FOREIGN operator stake (Raleigh 503991), NOT Springville
+    foreign_raleigh = UserContext(
+        individual_id=None, active_position=None, unit_name="Raleigh North Carolina West Stake",
+        unit_number=503991, positions=[], roles=[],
+        child_units=[UnitRef("Cary 1st Ward", 127833, "WARD")], raw={})
+    with pytest.raises(_StopProbe):
+        bsync.sync_stake(_LiveClient(foreign_raleigh), springville_members, object(),
+                         ctx_override=springville, expected_stake_unit=462373)
+    # written under SPRINGVILLE (the data's own stake), NOT the foreign Raleigh session — fails pre-fix
+    # (old code wrote under user_context()'s 503991)
+    assert captured.get("stake") == (462373, "Springville Utah West Stake"), captured
+
+
 # --- E8: needs-reauth classification (2026-06-12 "Ken" fix) --------------------------------------
 # A stake that can't sync headlessly because it has NO Member Tools 45-day token AND its LCR session
 # either is dead OR is an OTP/passwordless (IDX) session that can't silently mint one (login_required)

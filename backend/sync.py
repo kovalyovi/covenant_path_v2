@@ -176,49 +176,64 @@ def kpi_subtree(dash: dict) -> dict:
 def sync_stake(client: LcrClient, members: list[dict], conn,
                failed_unit_numbers=None, only_unit=None, access=None, ctx_override=None,
                expected_stake_unit=None) -> dict:
-    # The stake/ward identity. Prefer the live LCR user_context (it also carries positions/roles for
-    # role provisioning); but once the delegated LCR session has aged out, fall back to the structure
-    # the Member Tools /api/v5/sync payload provides (ctx_override) so the data sync still completes —
-    # the covenant-path bulk data came from that same 45-day token regardless of the LCR session.
+    # ---- Resolve the stake IDENTITY (stake_id + units) the members are written under ----------------
+    # The member DATA comes from the Member Tools /api/v5/sync token (keyed by `expected_stake_unit` for
+    # a delegated stake). The live LCR `user_context()` is a SEPARATE signal that can resolve to a
+    # DIFFERENT stake — and did: a delegated stake whose dead LCR session got re-established as the
+    # OPERATOR's session (which a disabled-MFA operator login now does headlessly) makes user_context()
+    # return the OPERATOR's stake. The old code PREFERRED that live ctx for the write identity, so the
+    # Springville job pulled Springville's 34 members (correctly, from Springville's own token) but
+    # stamped them with RALEIGH's stake_id (2026-06-27, root cause of the recurring leak). The identity
+    # must be the MEMBER DATA's OWN stake — NEVER a foreign live session.
+    live_ctx = None
     try:
-        ctx = client.user_context()
+        live_ctx = client.user_context()
     except Exception as exc:  # noqa: BLE001
         if ctx_override is None:
             raise
         logger.warning("user_context via LCR unavailable (%s) — using the Member Tools unit structure",
                        str(exc)[:120])
-        ctx = ctx_override
-
-    # DATA-INTEGRITY GUARD — a delegated credential must only ever sync the stake it is REGISTERED
-    # for (expected_stake_unit). It can resolve to the WRONG stake two ways, both refused here BEFORE
-    # any write so one stake's members are never stamped with another stake's id:
-    #   1. Ward-beneath-stake (Green Level Ward, 2026-06-13): a WARD/BRANCH leader's Member Tools
-    #      token returns the PARENT stake as its org root while exposing data for only their unit, so
-    #      ctx_override names the parent stake. Unchecked, the sync upserts that one ward's members
-    #      onto the WHOLE stake and reconciles every other ward away (Raleigh 93 -> 7).
-    #   2. Cross-stake (Springville-as-Raleigh, 2026-06-25): the token's real stake is an ENTIRELY
-    #      DIFFERENT stake than the registered one (an operator's own Springville Utah token enrolled
-    #      as the Raleigh stake). The daily Raleigh job then pulls Springville's members and writes
-    #      them under Raleigh's stake_id. The original guard missed this because the registered stake
-    #      is NOT a child of the token's stake.
-    # The data's true stake is the Member Tools org root (the bulk covenant-path data came from that
-    # 45-day token); fall back to the resolved context when there is no MT override (legacy live-LCR
-    # scrape). If it is not the registered stake, REFUSE. The operator's own self-sync passes no
-    # expected unit, so the guard stays inert there (their MT root IS their stake).
+    # For a delegated sync the data's stake IS `expected_stake_unit` (the Member Tools token is keyed by
+    # it). Choose the identity whose stake matches it; the Member Tools payload context (`ctx_override`)
+    # is the data's own structure, so prefer it. A live session that resolved to a DIFFERENT stake never
+    # becomes the write identity.
     if expected_stake_unit is not None:
-        synced_unit = (ctx_override.unit_number if ctx_override is not None
-                       else getattr(ctx, "unit_number", None))
-        if synced_unit is not None and synced_unit != expected_stake_unit:
-            raise CredentialScopeMismatch(expected_stake_unit, synced_unit)
-    # DATA-vs-IDENTITY guard (2026-06-27): the check above compares the resolved IDENTITY (the LCR
-    # session, or the Member Tools `units` tree when present) against the registered stake — but the
-    # member DATA comes from a SEPARATE source (the Member Tools /api/v5/sync token), and the two can
-    # disagree. When the token returned the operator's HOME stake's roster while the live LCR session
-    # still resolved to the registered stake (and the payload carried no `units` tree, so ctx_override
-    # was None), the check above saw identity == registered and passed, and another stake's members got
-    # stamped with this stake's id (Springville-under-Raleigh, 2026-06-27 — the recurrence of the
-    # 2026-06-25 leak). Validate the MEMBERS' OWN units against the stake we are about to write them
-    # under, so neither a missing `unit_context` nor a wrong-but-registered session can blind it.
+        ctx = next((c for c in (ctx_override, live_ctx)
+                    if c is not None and getattr(c, "unit_number", None) == expected_stake_unit), None)
+        if ctx is None:
+            # Neither source is the registered stake. Prefer the Member Tools payload's own stake (what we
+            # actually fetched) so the guards below report the TRUE mismatch and revoke the RIGHT
+            # credential; never fall back to a foreign live session as the identity.
+            ctx = ctx_override if ctx_override is not None else live_ctx
+    else:
+        # Operator self-sync (no registered unit): the data's stake is the Member Tools payload's, and the
+        # live session is the operator's own (they agree). Prefer the payload when present.
+        ctx = ctx_override if ctx_override is not None else live_ctx
+    if ctx is None:
+        raise RuntimeError("sync_stake: no stake identity (no live user_context and no Member Tools "
+                           "unit context)")
+    # The live LCR session may be trusted for its LCR-only EXTRAS (role provisioning, KPIs, the live
+    # missionary fallback) ONLY when it is actually THIS stake's session — not a foreign/operator one.
+    live_session_matches = (live_ctx is not None
+                            and getattr(live_ctx, "unit_number", None) == ctx.unit_number)
+    if live_ctx is not None and not live_session_matches:
+        logger.warning("sync_stake: live LCR session is stake %s but the member data is stake %s — "
+                       "IGNORING the foreign session for identity AND LCR extras, writing under the "
+                       "data's own stake (operator-session contamination guard, 2026-06-27)",
+                       getattr(live_ctx, "unit_number", None), ctx.unit_number)
+
+    # REGISTERED-stake guard — the resolved identity must be the credential's registered stake. The
+    # resolution above already picks a matching source when one exists; this REFUSES (before any write;
+    # caller revokes + skips) only when NEITHER the Member Tools payload NOR the live session is the
+    # registered stake — a genuinely mis-scoped credential:
+    #   1. Ward-beneath-stake (Green Level Ward, 2026-06-13): the token's org root is the PARENT stake.
+    #   2. Wholly-different stake (Springville-as-Raleigh, 2026-06-25): the token's stake isn't registered.
+    if expected_stake_unit is not None and ctx.unit_number is not None \
+            and ctx.unit_number != expected_stake_unit:
+        raise CredentialScopeMismatch(expected_stake_unit, ctx.unit_number)
+    # DATA-vs-IDENTITY guard (2026-06-27): validate the MEMBERS' OWN units against the stake we are about
+    # to write them under — defense in depth for any path where data and identity could still diverge
+    # (a missing `unit_context`, a wrong-but-registered session). Keyed off the rows themselves.
     _assert_members_belong_to_stake(ctx, members, expected_stake_unit, conn)
     # Stake identity is keyed by unit_number (stable), so a stake RENAME just updates stakes.name —
     # never a duplicate. Units are upserted by unit_number too: a renamed ward updates its name, a
@@ -286,11 +301,14 @@ def sync_stake(client: LcrClient, members: list[dict], conn,
         removed_people = db.reconcile_members(conn, stake_id, present_uuids, keep_unit_ids, include_orphans)
         logger.info("reconciled %d departed member(s) from stake %s (%s)",
                     removed_people, ctx.unit_name, ctx.unit_number)
-    # stake-level KPIs for the viewer's KPIs tab (never fail the data sync over them)
-    try:
-        db.update_stake_kpis(conn, stake_id, kpi_subtree(client.dashboard_data()))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("KPI dashboard fetch skipped for stake %s: %s", stake_id, exc)
+    # stake-level KPIs for the viewer's KPIs tab (never fail the data sync over them). LCR-session-bound:
+    # skip when the live session is foreign/dead — a foreign (operator) session would fetch the WRONG
+    # stake's KPIs and store them here.
+    if live_session_matches:
+        try:
+            db.update_stake_kpis(conn, stake_id, kpi_subtree(client.dashboard_data()))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("KPI dashboard fetch skipped for stake %s: %s", stake_id, exc)
     # full-time missionaries per ward (#3a) — PREFER the session-independent bulk COMPANIONSHIPS
     # (missionariesAssigned) so the roster refreshes every sync even with a dead LCR session; fall back
     # to the live /mlt action only when the bulk roster is empty (e.g. the legacy one-work path).
@@ -302,7 +320,7 @@ def sync_stake(client: LcrClient, members: list[dict], conn,
             name = num_to_name.get(int(unum)) or num_to_name.get(unum)
             if name:
                 by_unit[name] = comps
-        if not by_unit:
+        if not by_unit and live_session_matches:  # live /mlt fallback only on THIS stake's own session
             from lcr_client.missionaries import fetch_unit_missionaries
             for u in ctx.child_units:
                 if u.unit_number and u.type in ("WARD", "BRANCH"):
@@ -314,13 +332,21 @@ def sync_stake(client: LcrClient, members: list[dict], conn,
                     len(by_unit), "bulk" if bulk else "mlt")
     except Exception as exc:  # noqa: BLE001 — never fail the data sync over the roster
         logger.warning("missionary roster skipped for stake %s: %s", stake_id, exc)
-    # rebuild access roles from current callings (no manual role assignment)
-    try:
-        from backend.roles import provision_roles
-        roles = provision_roles(conn, client, stake_id, unit_id_by_name)
-    except Exception as exc:  # noqa: BLE001 — never fail the data sync over role provisioning
-        logger.warning("role provisioning skipped for stake %s: %s", stake_id, exc)
-        roles = None
+    # rebuild access roles from current callings (no manual role assignment). LCR-session-bound: a
+    # foreign/dead session must NOT provision roles — a foreign (operator) session would clone the WRONG
+    # stake's callings onto this stake_id (the role half of the 2026-06-27 contamination). Skip → the
+    # last-good roles persist; the next sync on this stake's own session refreshes them.
+    roles = None
+    if live_session_matches:
+        try:
+            from backend.roles import provision_roles
+            roles = provision_roles(conn, client, stake_id, unit_id_by_name)
+        except Exception as exc:  # noqa: BLE001 — never fail the data sync over role provisioning
+            logger.warning("role provisioning skipped for stake %s: %s", stake_id, exc)
+            roles = None
+    else:
+        logger.info("role provisioning skipped for stake %s — live LCR session isn't this stake's "
+                    "(foreign/dead); keeping last-good roles", stake_id)
     # Calling → access-level catalog (feedback #1): seed the hardcoded baseline, then refresh from
     # the access matrix the REPORT PHASE already evaluated (passed in — no re-fetch; a late re-fetch
     # at the end of a 45-min run hit a degraded page and threw 'NoneType is not subscriptable').
