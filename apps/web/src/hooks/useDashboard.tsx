@@ -72,6 +72,10 @@ interface DashboardState {
   reauthOpen: boolean;
   openReauth: () => void;
   closeReauth: () => void;
+  /** Fill-data side sheet (⚠ "not available" cells → which fields are missing + the fill action). */
+  fillDataOpen: boolean;
+  openFillData: () => void;
+  closeFillData: () => void;
 }
 
 const Ctx = createContext<DashboardState | null>(null);
@@ -443,6 +447,10 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const openReauth = useCallback(() => setReauthOpen(true), []);
   const closeReauth = useCallback(() => setReauthOpen(false), []);
 
+  const [fillDataOpen, setFillDataOpen] = useState(false);
+  const openFillData = useCallback(() => setFillDataOpen(true), []);
+  const closeFillData = useCallback(() => setFillDataOpen(false), []);
+
   const value = useMemo<DashboardState>(
     () => ({
       loading, refreshing, error, members, notes, threads, reloadNotes, showNotes, setShowNotes,
@@ -451,6 +459,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       syncing, syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,
       reloadStakes, reloadEnrollStatus, setEnrollStatus,
       reauthOpen, openReauth, closeReauth,
+      fillDataOpen, openFillData, closeFillData,
     }),
     [
       loading, refreshing, error, members, notes, threads, reloadNotes, showNotes, setShowNotes,
@@ -458,6 +467,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       stakes, currentStakeId, stakeName, lastSynced,
       syncing, syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,
       reloadStakes, reloadEnrollStatus, reauthOpen, openReauth, closeReauth,
+      fillDataOpen, openFillData, closeFillData,
     ],
   );
 

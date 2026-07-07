@@ -23,6 +23,7 @@ import {
 import { SyncSettingsSheet } from '../components/SyncSettingsSheet';
 import { PowerUserSheet } from '../components/PowerUserSheet';
 import { ReauthDialog } from '../components/ReauthDialog';
+import { FillDataSheet } from '../components/FillDataSheet';
 import { ReportSheet } from '../components/ReportSheet';
 import { useToast } from '../components/Toast';
 import { Modal } from '../components/Modal';
@@ -310,7 +311,10 @@ export function DashboardShell() {
       {showPatriarchalBanner && (
         <PatriarchalBanner
           pending={d.enrollStatus?.patriarchalPending ?? 0}
-          onRefresh={d.openReauth}
+          // The fill-data sheet shows WHAT is missing + fills off the stored session when it can,
+          // and routes to the re-auth dialog only when it must — a better funnel than jumping
+          // straight to re-auth.
+          onRefresh={d.openFillData}
         />
       )}
     </>
@@ -388,6 +392,13 @@ export function DashboardShell() {
         onRevoke={() => setConfirmRevoke(true)}
         onSyncNow={syncNow}
         onReauth={d.openReauth}
+      />
+      <FillDataSheet
+        open={d.fillDataOpen}
+        onClose={d.closeFillData}
+        onReauth={d.openReauth}
+        enrollStatus={d.enrollStatus}
+        onFilled={() => void d.refresh()}
       />
       <ReauthDialog open={d.reauthOpen} onClose={d.closeReauth} />
       <PowerUserSheet open={inviteOpen} onClose={() => setInviteOpen(false)} />

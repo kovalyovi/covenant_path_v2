@@ -403,6 +403,18 @@ export class BrokerClient {
     return this.authed('POST', '/auth/sync-now');
   }
 
+  /** Fill-data sheet: start an on-demand profile fill for the caller's stake. Returns
+   *  {status: 'started'|'running'|'needs_reauth'|'nothing_to_fill', ...} — needs_reauth routes the
+   *  client to the ReauthDialog, whose enroll path runs the same fill off the fresh session. */
+  profileRefreshStart(): Promise<Record<string, unknown>> {
+    return this.authed('POST', '/auth/profile-refresh');
+  }
+
+  /** Fill-data sheet: per-field missing counts + live worker progress for the caller's stake. */
+  profileRefreshStatus(): Promise<Record<string, unknown>> {
+    return this.authed('GET', '/auth/profile-refresh/status');
+  }
+
   getSchedule(): Promise<Record<string, unknown>> {
     return this.authed('GET', '/auth/schedule');
   }

@@ -37,5 +37,37 @@
   "settings": {
     "language": "Idioma",
     "languageHelp": "Elige el idioma que se usa en toda la aplicación."
+  },
+  "fillData": {
+    "title": "Completar datos faltantes",
+    "intro": "Algunos campos del perfil no se pueden obtener con la sincronización diaria automática: el sitio web de la Iglesia solo los comparte durante una breve sesión iniciada. Una rápida reautorización los completa para toda la estaca.",
+    "cellHint": "No disponible — haz clic para ver cómo completarlo",
+    "notAvailable": "No disponible",
+    "missingTitle": "Faltan ahora mismo",
+    "membersWithGaps": "Miembros con al menos un campo faltante: {{count}}",
+    "fillNow": "Completar datos ahora",
+    "checking": "Comprobando…",
+    "starting": "Iniciando…",
+    "progress": "Revisados {{done}} de {{total}} miembros — {{filled}} actualizados",
+    "done": "Listo: {{filled}} de {{total}} miembros actualizados. Actualizando la tabla…",
+    "failed": "La operación no terminó. Inténtalo de nuevo o reautoriza y reintenta.",
+    "needsReauth": "Tu sesión guardada de la Iglesia ha caducado, así que los datos deben completarse durante un inicio de sesión nuevo. Reautoriza para continuar: después, el proceso comienza automáticamente.",
+    "reauthNow": "Reautorizar y completar",
+    "notLeader": "Estos campos requieren un líder de estaca: completarlos toma una rápida reautorización con la cuenta de la Iglesia de un líder de estaca. Pide a tu liderazgo de estaca que abra este panel y toque «Completar datos ahora».",
+    "noAccess": "La cuenta inscrita para la sincronización no tiene acceso a los perfiles de miembros en LCR, por lo que estos campos no se pueden actualizar. Debería inscribirse un líder de estaca cuyo llamamiento otorgue «Perfiles de miembros».",
+    "allFilled": "Todos los campos del perfil están completos: no hay nada que hacer.",
+    "lastRun": "Última actualización: {{when}} — {{filled}}/{{total}} miembros actualizados",
+    "statusError": "No se pudo cargar el estado de los datos: cierra e inténtalo de nuevo.",
+    "fields": {
+      "baptism_date": "Fecha de bautismo",
+      "temple_recommend": "Recomendación para el templo",
+      "patriarchal_blessing": "Bendición patriarcal",
+      "ministering_assignment": "Asignación de ministración",
+      "ministering_brothers_sisters": "Hermanos/hermanas ministrantes",
+      "calling": "Llamamiento",
+      "aaronic_priesthood": "Sacerdocio Aarónico",
+      "melchizedek_priesthood": "Sacerdocio de Melquisedec",
+      "living_ordinance": "Investidura"
+    }
   }
 }

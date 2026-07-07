@@ -37,5 +37,37 @@
   "settings": {
     "language": "Language",
     "languageHelp": "Choose the language used across the app."
+  },
+  "fillData": {
+    "title": "Fill missing data",
+    "intro": "Some profile fields can’t be pulled by the automatic daily sync — the Church website only shares them during a brief signed-in session. A quick re-authorization fills them for the whole stake.",
+    "cellHint": "Not available — click to see how to fill it",
+    "notAvailable": "Not available",
+    "missingTitle": "Missing right now",
+    "membersWithGaps": "Members with at least one missing field: {{count}}",
+    "fillNow": "Fill missing data now",
+    "checking": "Checking…",
+    "starting": "Starting…",
+    "progress": "Checked {{done}} of {{total}} members — {{filled}} updated",
+    "done": "Done — {{filled}} of {{total}} members updated. Refreshing the table…",
+    "failed": "The fill didn’t finish. Try again, or re-authorize and retry.",
+    "needsReauth": "Your stored Church session has expired, so the data must be filled during a fresh sign-in. Re-authorize to continue — the fill starts automatically afterwards.",
+    "reauthNow": "Re-authorize & fill",
+    "notLeader": "These fields need a stake leader: filling them takes a quick re-authorization with a stake leader’s Church account. Ask your stake leadership to open this panel and tap “Fill missing data now”.",
+    "noAccess": "The account enrolled for sync doesn’t have access to member profiles in LCR, so these fields can’t be refreshed. A stake leader whose calling grants “Member Profiles” should enroll for sync.",
+    "allFilled": "Every profile field is filled — nothing to do.",
+    "lastRun": "Last fill: {{when}} — {{filled}}/{{total}} members updated",
+    "statusError": "Couldn’t load the data status — close and try again.",
+    "fields": {
+      "baptism_date": "Baptism date",
+      "temple_recommend": "Temple recommend",
+      "patriarchal_blessing": "Patriarchal blessing",
+      "ministering_assignment": "Ministering assignment",
+      "ministering_brothers_sisters": "Ministering brothers/sisters",
+      "calling": "Calling",
+      "aaronic_priesthood": "Aaronic Priesthood",
+      "melchizedek_priesthood": "Melchizedek Priesthood",
+      "living_ordinance": "Endowment"
+    }
   }
 }
