@@ -10,7 +10,11 @@ import { avgCompletion } from '../logic/milestones';
 import type { Member } from '../lib/member';
 
 function iso(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  // LOCAL date, not toISOString (UTC): in a negative-offset timezone's evening, UTC is already
+  // tomorrow — so `weeksAgo(0)` produced a future-dated string that sacramentWindow's
+  // future-Sunday guard rightly dropped, failing these tests after ~8pm ET (never in UTC CI).
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 describe('baptismsByMonth (#1/#2)', () => {
