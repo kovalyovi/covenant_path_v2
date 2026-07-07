@@ -65,4 +65,25 @@ describe('fieldGapSeries', () => {
     expect(fieldGapSeries([]).days).toEqual([]);
     expect(fieldGapSeries([{ kind: 'probe', run_at: '2026-06-15', payload: {} }]).days).toEqual([]);
   });
+
+  it('scopes to ONE stake when stakeId is passed (field gaps by stake)', () => {
+    const runs: Json[] = [
+      syncRun('2026-06-15T08:00:00Z', 'A', { patriarchal_blessing: { missing: 76 } }),
+      syncRun('2026-06-15T08:05:00Z', 'B', { patriarchal_blessing: { missing: 27 }, calling: { missing: 4 } }),
+      syncRun('2026-06-14T08:00:00Z', 'A', { patriarchal_blessing: { missing: 80 } }),
+    ];
+    const all = fieldGapSeries(runs);
+    expect(all.totals['patriarchal_blessing']).toEqual([80, 103]); // A+B summed
+
+    const onlyA = fieldGapSeries(runs, 10, 'A');
+    expect(onlyA.totals['patriarchal_blessing']).toEqual([80, 76]); // A alone
+    expect(onlyA.fields).not.toContain('calling'); // B-only gap excluded
+
+    const onlyB = fieldGapSeries(runs, 10, 'B');
+    expect(onlyB.days).toEqual(['2026-06-15']); // B has no 06-14 run
+    expect(onlyB.totals['calling']).toEqual([4]);
+
+    // '' / null = unscoped (the "All stakes" option)
+    expect(fieldGapSeries(runs, 10, null).totals['patriarchal_blessing']).toEqual([80, 103]);
+  });
 });

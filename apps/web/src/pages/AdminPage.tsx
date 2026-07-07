@@ -254,11 +254,24 @@ export function AdminPage({ embedded = false }: { embedded?: boolean } = {}) {
               <AdminsCard admins={(s['admins'] as Json[]) ?? []} busy={busy} onInvite={inviteAdmin} onRevoke={revokeAdmin} />
             )}
           </Panel>
-          {/* Per-day aggregation of which fields are still missing (PII-free, all stakes) — sits in the
+          {/* Per-day aggregation of which fields are still missing (PII-free) — sits in the
               middle of the console, above the single-run Diagnostics, so the "track these numbers over
-              time" signal is scannable at a glance. */}
-          <Panel key={`fieldgaps-${nonce}`} title="Field gaps (per day)" load={() => admin.diagnostics()}>
-            {(s) => <FieldGapsCard diag={s} />}
+              time" signal is scannable at a glance. Scopable to one stake (the diagnostics rows carry
+              stake_id; enrolled-stakes supplies the names for the selector). */}
+          <Panel
+            key={`fieldgaps-${nonce}`}
+            title="Field gaps (per day)"
+            load={async () => {
+              const [diag, stakes] = await Promise.all([admin.diagnostics(), admin.enrolledStakes()]);
+              return { diag, stakes } as Json;
+            }}
+          >
+            {(s) => (
+              <FieldGapsCard
+                diag={(s['diag'] as Json) ?? {}}
+                stakes={(((s['stakes'] as Json) ?? {})['stakes'] as Json[]) ?? []}
+              />
+            )}
           </Panel>
           <Panel key={`diag-${nonce}`} title="Diagnostics" load={() => admin.diagnostics()}>
             {(s) => <DiagnosticsCard diag={s} onCopy={(t) => navigator.clipboard.writeText(t)} toast={toast} />}
@@ -682,17 +695,55 @@ function Spark({ values, color }: { values: number[]; color: string }) {
   );
 }
 
-function FieldGapsCard({ diag }: { diag: Json }) {
-  const { days, fields, totals, reasons } = fieldGapSeries((diag['runs'] as Json[]) ?? []);
+function FieldGapsCard({ diag, stakes }: { diag: Json; stakes: Json[] }) {
+  // '' = all stakes; else a stake_id from the enrolled-stakes list (item: field gaps BY stake).
+  const [stakeId, setStakeId] = useState('');
+  const runs = (diag['runs'] as Json[]) ?? [];
+  const { days, fields, totals, reasons } = fieldGapSeries(runs, 10, stakeId || null);
+  // Only offer stakes that actually have sync telemetry — an option that renders an empty card
+  // reads like a bug.
+  const withRuns = new Set(runs.filter((r) => r['kind'] === 'sync').map((r) => String(r['stake_id'] ?? '')));
+  const options = stakes.filter((s) => withRuns.has(String(s['stake_id'] ?? '')));
+  const scopeName = stakeId
+    ? String(options.find((s) => String(s['stake_id']) === stakeId)?.['name'] ?? 'stake')
+    : 'all stakes';
+  const picker = options.length > 1 && (
+    <select
+      aria-label="Scope field gaps to a stake"
+      value={stakeId}
+      onChange={(e) => setStakeId(e.target.value)}
+      style={{ maxWidth: 220 }}
+    >
+      <option value="">All stakes</option>
+      {options.map((s) => (
+        <option key={String(s['stake_id'])} value={String(s['stake_id'])}>
+          {String(s['name'] ?? s['unit_number'] ?? s['stake_id'])}
+        </option>
+      ))}
+    </select>
+  );
   if (days.length === 0) {
-    return <Card title="Field gaps (per day)">No field-gap telemetry yet — it appears after the next sync.</Card>;
+    return (
+      <Card title="Field gaps (per day)" trailing={picker || undefined}>
+        No field-gap telemetry {stakeId ? 'for this stake yet' : 'yet'} — it appears after the next sync.
+      </Card>
+    );
   }
 
   return (
-    <Card title="Field gaps (per day)" trailing={<span className="small muted">last {days.length}d · all stakes</span>}>
+    <Card
+      title="Field gaps (per day)"
+      trailing={
+        <span className="row" style={{ gap: 8, alignItems: 'center' }}>
+          {picker}
+          <span className="small muted">last {days.length}d · {scopeName}</span>
+        </span>
+      }
+    >
       <p className="small muted" style={{ marginTop: 0 }}>
-        Members still missing each field, summed across stakes and grouped by day (latest run per stake).
-        The live per-sync signal is the Axiom <code>sync.field_gaps</code> event.
+        Members still missing each field, {stakeId ? 'for the selected stake' : 'summed across stakes'} and
+        grouped by day (latest run per stake). The live per-sync signal is the Axiom{' '}
+        <code>sync.field_gaps</code> event.
       </p>
       {fields.length === 0 ? (
         <p className="small" style={{ color: statusColors.success }}>No gaps — every tracked field is filled. ✓</p>

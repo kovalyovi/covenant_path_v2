@@ -39,9 +39,13 @@ export interface FieldGapSeries {
 
 /** Aggregate per-day field gaps across recent sync diagnostics rows (PII-free): group by calendar
  *  day, keep only the LATEST run per stake per day (runs arrive newest-first), sum members-missing per
- *  field across stakes, and keep the last ~`maxDays` days. */
-export function fieldGapSeries(runs: Json[], maxDays = 10): FieldGapSeries {
-  const syncRuns = runs.filter((r) => r['kind'] === 'sync');
+ *  field across stakes, and keep the last ~`maxDays` days. Pass `stakeId` to scope the series to ONE
+ *  stake (the ops "field gaps by stake" view) — the rows already carry stake_id, so this is a pure
+ *  client-side filter over the same fetch. */
+export function fieldGapSeries(runs: Json[], maxDays = 10, stakeId?: string | null): FieldGapSeries {
+  const syncRuns = runs.filter(
+    (r) => r['kind'] === 'sync' && (!stakeId || String(r['stake_id'] ?? '') === stakeId),
+  );
   const dayTotals = new Map<string, Map<string, number>>();
   const reasons = new Map<string, string>();
   const seen = new Set<string>(); // `${day}|${stake}` — runs arrive newest-first, so first wins
