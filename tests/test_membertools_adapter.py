@@ -149,6 +149,60 @@ def test_calling_index_present_empty_vs_absent():
     assert "not-in-directory" not in ci              # absent → unknown (adapter keeps the sentinel)
 
 
+def test_calling_index_key_omitted_is_real_no():
+    """The REAL /api/v5/sync OMITS `positions` for a no-calling member — it never sends an empty
+    list (verified live 2026-07-06 against the 503991 payload: 2987 directory members, exactly the
+    896 with a calling carry the key). The old key-presence test treated key-omitted as unknown,
+    leaving every no-calling member's Calling as a permanent ⚠ (59/76 Raleigh members)."""
+    payload = {"households": [
+        {"uuid": "h1", "unitNumber": 100, "members": [
+            {"uuid": "has-calling", "displayName": "Member, A",
+             "positions": [{"uuid": "p1", "name": "Ward Clerk", "unitNumber": 100}]}]},
+        {"uuid": "h2", "unitNumber": 100, "members": [
+            {"uuid": "no-key", "displayName": "Member, B"}]},
+    ]}
+    ci = _calling_index(payload)
+    assert ci.get("has-calling") == ["Ward Clerk"]
+    assert ci.get("no-key") == []  # key omitted → a real 'No', NOT unknown
+
+
+def test_calling_index_no_positions_anywhere_stays_unknown():
+    """A payload where NO member carries `positions` (a token whose scope can't see callings at
+    all) must NOT fabricate 'No' for the whole stake — everyone keeps the sentinel."""
+    payload = {"households": [
+        {"uuid": "h1", "unitNumber": 100, "members": [{"uuid": "a", "displayName": "Member, A"}]},
+        {"uuid": "h2", "unitNumber": 100, "members": [{"uuid": "b", "displayName": "Member, B"}]},
+    ]}
+    assert _calling_index(payload) == {}
+
+
+def test_adapt_sync_calling_no_for_key_omitted_directory_member():
+    """End-to-end: a covenant member whose directory record OMITS `positions` syncs as
+    calling='No' (was: NEEDS_PROFILE sentinel → NULL → ⚠ forever once the LCR session died)."""
+    payload = {
+        "units": [{"unitNumber": 999, "unitType": "STAKE", "name": "Test Stake",
+                   "childUnits": [{"unitNumber": 100, "unitType": "WARD", "name": "Alpha Ward"}]}],
+        "households": [
+            {"uuid": "h1", "unitNumber": 100, "members": [
+                {"uuid": "uuid-called", "displayName": "Member, A", "sex": "MALE",
+                 "birthDate": "1980-01-01",
+                 "positions": [{"uuid": "p1", "name": "Ward Clerk", "unitNumber": 100}]}]},
+            {"uuid": "h2", "unitNumber": 100, "members": [
+                {"uuid": "uuid-nocall", "displayName": "Member, B", "sex": "FEMALE",
+                 "birthDate": "1985-01-01"}]},
+        ],
+        "covenantPathMembers": [
+            {"id": "cov-A", "memberUuid": "uuid-called", "names": {"listed": "Member, A"},
+             "unitNumber": 100, "confirmationDate": "2024-01-01"},
+            {"id": "cov-B", "memberUuid": "uuid-nocall", "names": {"listed": "Member, B"},
+             "unitNumber": 100, "confirmationDate": "2024-02-02"},
+        ],
+    }
+    members = {m.person_uuid: m for m in adapt_sync(payload)}
+    assert members["uuid-called"].calling == "Yes"
+    assert members["uuid-nocall"].calling == "No"
+
+
 def test_sex_index_from_directory():
     si = _sex_index(REFERENCE_PAYLOAD)
     assert si.get("self") == "M"

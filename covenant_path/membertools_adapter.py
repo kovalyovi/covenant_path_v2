@@ -133,14 +133,20 @@ def _household_members(payload: dict) -> list[tuple[str, dict, int | None]]:
 
 
 def _calling_index(payload: dict) -> dict[str, list[str]]:
-    """uuid -> [calling name, ...] from the directory's `positions`. A non-empty list = has a calling
-    (the same signal LCR's per-member profile gives), and the names surface in the detail view. Empty
-    list for a directory member with no positions (a real 'No calling'); absent for someone not in the
-    directory (unknown -> stays NEEDS_PROFILE so the merge/last-good preserves)."""
+    """uuid -> [calling name, ...] for EVERY directory member. Member Tools OMITS the `positions`
+    key entirely for a member with no calling — it never sends an empty list (verified live
+    2026-07-06 against the 503991 payload: 2987 directory members, exactly the 896 with a calling
+    carry the key, all non-empty). So a directory member WITHOUT the key is a real 'No calling',
+    not unknown — the old key-presence test left every no-calling member as the NEEDS_PROFILE
+    sentinel forever (59/76 Raleigh members showed ⚠ for Calling). Someone absent from the
+    directory entirely stays out of the index (genuinely unknown -> sentinel -> merge/last-good).
+    Guard: when NO member in the whole payload carries `positions` (a token whose scope can't see
+    callings at all), return {} so everyone keeps the sentinel rather than a fabricated 'No'."""
     idx: dict[str, list[str]] = {}
+    any_positions = False
     for uuid, m, _unum in _household_members(payload):
-        if "positions" not in m:
-            continue
+        if "positions" in m:
+            any_positions = True
         names = [p.get("name") for p in (m.get("positions") or [])
                  if isinstance(p, dict) and p.get("name")]
         # setdefault-union across multi-household listings (a member can appear in two households).
@@ -148,7 +154,7 @@ def _calling_index(payload: dict) -> dict[str, list[str]]:
         for n in names:
             if n not in cur:
                 cur.append(n)
-    return idx
+    return idx if any_positions else {}
 
 
 # Leadership callings tracked for the staffing view (#12): the ward-mission team, the org presidencies,
