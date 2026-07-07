@@ -319,25 +319,131 @@ def test_profile_refresh_worker_fills_via_live_session() -> None:
     # U1 fills patriarchal+calling; U2 fills only patriarchal; U3 unreadable → {} → skipped.
     fills = {"U1": {"patriarchal_blessing": "Yes", "calling": "No"},
              "U2": {"patriarchal_blessing": "No"}, "U3": {}}
+    diag_rows: list = []
 
-    saved = (enroll.requests.get, enroll.requests.patch, enroll._client_from_cookies,
+    def fake_post(url, headers=None, json=None, timeout=None):
+        if url.endswith("/sync_diagnostics"):
+            diag_rows.append(json or {})
+        return _Resp(None, status=201)
+
+    saved = (enroll.requests.get, enroll.requests.patch, enroll.requests.post,
+             enroll._client_from_cookies,
              report.refresh_profile_fields, enroll.SUPABASE_URL, enroll.SERVICE_KEY)
     try:
         enroll.SUPABASE_URL = enroll.SUPABASE_URL or "https://test.supabase.co"
         enroll.SERVICE_KEY = enroll.SERVICE_KEY or "test-key"
         enroll.requests.get = fake_get
         enroll.requests.patch = fake_patch
+        enroll.requests.post = fake_post
         enroll._client_from_cookies = lambda cookies: _types.SimpleNamespace(session=object())
         report.refresh_profile_fields = lambda client, row: fills[row["person_uuid"]]
+        enroll._REFRESH_PROGRESS.clear()
         enroll._refresh_profile_worker([{"name": "x"}], 503991)
     finally:
-        (enroll.requests.get, enroll.requests.patch, enroll._client_from_cookies,
+        (enroll.requests.get, enroll.requests.patch, enroll.requests.post,
+         enroll._client_from_cookies,
          report.refresh_profile_fields, enroll.SUPABASE_URL, enroll.SERVICE_KEY) = saved
     by_uuid = dict(patched)
-    assert by_uuid.get("U1") == {"patriarchal_blessing": "Yes", "calling": "No"}, patched
-    assert by_uuid.get("U2") == {"patriarchal_blessing": "No"}, patched
+    assert set(by_uuid.get("U1", {})) == {"patriarchal_blessing", "calling", "field_meta"}, patched
+    assert by_uuid["U1"]["patriarchal_blessing"] == "Yes" and by_uuid["U1"]["calling"] == "No"
+    # The fill stamps per-field freshness for exactly the fields it wrote (f = fetched, t = tried).
+    fm = by_uuid["U1"]["field_meta"]
+    assert set(fm) == {"patriarchal_blessing", "calling"} and all(
+        e.get("f") and e.get("t") for e in fm.values()), fm
+    assert by_uuid.get("U2", {}).get("patriarchal_blessing") == "No", patched
     assert "U3" not in by_uuid, f"unreadable member must NOT be patched: {patched}"
-    print("  ok profile refresh worker fills every gap via live session (skips unreadable)")
+    # Progress is published for the status route, and the outcome recorded for the ops console.
+    prog = enroll._REFRESH_PROGRESS.get(503991) or {}
+    assert prog.get("state") == "done" and prog.get("total") == 3 and prog.get("filled") == 2, prog
+    assert diag_rows and diag_rows[0]["kind"] == "profile_refresh" and \
+        diag_rows[0]["payload"] == {"source": "reauth", "total": 3, "filled": 2}, diag_rows
+    enroll._REFRESH_PROGRESS.clear()
+    print("  ok profile refresh worker fills every gap via live session (skips unreadable), "
+          "stamps field_meta, publishes progress + diagnostics")
+
+
+def test_profile_refresh_on_demand_start_and_status() -> None:
+    """POST /auth/profile-refresh semantics (enroll.start_profile_refresh): a dead stored session →
+    needs_reauth (the honest answer that routes the client to the re-auth dialog); a live one →
+    started (worker spawned). GET status (profile_refresh_status) reports per-field missing counts
+    from the members table + the live worker progress."""
+    import types as _types
+    from backend.auth_broker import enroll
+    from backend import credentials as _creds
+
+    members_rows = [
+        {"person_uuid": "U1", "patriarchal_blessing": None, "calling": None,
+         "baptism_date": "2024-01-01"},
+        {"person_uuid": "U2", "patriarchal_blessing": None, "calling": "Yes",
+         "baptism_date": "2024-01-01"},
+    ]
+
+    class _Resp:
+        def __init__(self, payload, status=200):
+            self._p, self.status_code, self.headers = payload, status, {}
+
+        def json(self):
+            return self._p
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if url.endswith("/members"):
+            return _Resp(members_rows)
+        if url.endswith("/stake_credentials"):
+            return _Resp([{"credential_enc": "blob", "revoked": False}])
+        if url.endswith("/sync_diagnostics"):
+            return _Resp([{"run_at": "2026-07-06T00:00:00+00:00",
+                           "payload": {"filled": 5, "total": 6}}])
+        return _Resp([])
+
+    spawned: list = []
+    saved = (enroll.requests.get, enroll._client_from_cookies, enroll._refresh_profile_async,
+             _creds._decrypt_envelope, enroll.SUPABASE_URL, enroll.SERVICE_KEY)
+    try:
+        enroll.SUPABASE_URL = enroll.SUPABASE_URL or "https://test.supabase.co"
+        enroll.SERVICE_KEY = enroll.SERVICE_KEY or "test-key"
+        enroll.requests.get = fake_get
+        enroll._REFRESH_PROGRESS.clear()
+        _creds._decrypt_envelope = lambda blob: b'{"cookies": [{"name": "x"}]}'
+        enroll._refresh_profile_async = (
+            lambda cookies, unit, source="reauth": spawned.append((unit, source)))
+
+        # DEAD stored session (get_text raises) → needs_reauth, nothing spawned.
+        def _dead(cookies):
+            def _raise(url, params=None):
+                raise RuntimeError("redirected to login")
+            return _types.SimpleNamespace(session=_types.SimpleNamespace(get_text=_raise))
+        enroll._client_from_cookies = _dead
+        out = enroll.start_profile_refresh(503991, "stake-1")
+        assert out["status"] == "needs_reauth" and out["reason"] == "session_expired", out
+        assert out["members_with_gaps"] == 2 and not spawned, out
+
+        # LIVE stored session → started + worker spawned as on_demand.
+        def _alive(cookies):
+            return _types.SimpleNamespace(session=_types.SimpleNamespace(
+                get_text=lambda url, params=None: "<html>profile</html>"))
+        enroll._client_from_cookies = _alive
+        out = enroll.start_profile_refresh(503991, "stake-1")
+        assert out["status"] == "started" and spawned == [(503991, "on_demand")], out
+
+        # Already running → reported as running, not restarted.
+        enroll._REFRESH_PROGRESS[503991] = {"state": "running", "total": 2, "done": 1}
+        out = enroll.start_profile_refresh(503991, "stake-1")
+        assert out["status"] == "running" and len(spawned) == 1, out
+
+        # Status: per-field missing counts + the live progress + last recorded refresh.
+        st = enroll.profile_refresh_status(503991, "stake-1")
+        assert st["running"] is True and st["members_with_gaps"] == 2, st
+        assert st["missing"] == {"patriarchal_blessing": 2, "calling": 1,
+                                 "temple_recommend": 2, "ministering_assignment": 2,
+                                 "ministering_brothers_sisters": 2, "aaronic_priesthood": 2,
+                                 "melchizedek_priesthood": 2, "living_ordinance": 2}, st
+        assert st["last_refresh"]["payload"] == {"filled": 5, "total": 6}, st
+    finally:
+        (enroll.requests.get, enroll._client_from_cookies, enroll._refresh_profile_async,
+         _creds._decrypt_envelope, enroll.SUPABASE_URL, enroll.SERVICE_KEY) = saved
+        enroll._REFRESH_PROGRESS.clear()
+    print("  ok on-demand profile refresh: dead session -> needs_reauth; live -> started; "
+          "status reports missing counts + progress")
 
 
 def test_endpoint_health_trend() -> None:
@@ -2007,6 +2113,7 @@ def main() -> int:
     test_endpoint_health_trend()
     test_enrollment_status_patriarchal_signal()
     test_profile_refresh_worker_fills_via_live_session()
+    test_profile_refresh_on_demand_start_and_status()
     test_membertools_persist_verifies_after_patch()
     test_mint_misconfig()
     test_mint_empty_email()

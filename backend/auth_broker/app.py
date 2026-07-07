@@ -396,6 +396,60 @@ def auth_sync_now(authorization: str = Header(default="")) -> dict:
             "last_synced_at": status.get("last_synced_at")}
 
 
+def _profile_refresh_gate(authorization: str) -> dict:
+    """Shared gate for the fill-data routes: signed-in stake leader of a stake with a usable
+    (non-revoked) credential whose calling can read member profiles. Returns enrollment_status."""
+    try:
+        email = admin.verify_user(authorization)
+    except admin.NotAdmin as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    auth_id = admin._jwt_sub((authorization or "").removeprefix("Bearer ").strip())
+    try:
+        status = admin.enrollment_status(email, auth_id)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    if not (status.get("unit_number") and status.get("stake_id")):
+        raise HTTPException(status_code=404, detail="no stake linked to this sign-in")
+    if not status.get("viewer_is_stake_leader"):
+        raise HTTPException(status_code=403, detail="only a stake leader can refresh profile data")
+    return status
+
+
+@app.post("/auth/profile-refresh")
+def auth_profile_refresh(authorization: str = Header(default="")) -> dict:
+    """Fill every missing profile-sourced field (patriarchal blessing, per-member callings, …) for
+    the caller's stake — the fill-data sheet's action. Tries the STORED delegated session first; when
+    it can't reach /mlt any more (the steady state — the Okta sid dies within days), answers
+    `needs_reauth` so the client opens the re-auth dialog, whose enroll path runs this same fill off
+    the freshly-captured live session. Poll GET /auth/profile-refresh/status for progress."""
+    status = _profile_refresh_gate(authorization)
+    cred = status.get("credential", {})
+    if cred.get("state") == "revoked":
+        raise HTTPException(status_code=409, detail="Sync is paused — the credential was revoked. "
+                                                    "Re-authorize in Sync settings first.")
+    if cred.get("can_refresh_patriarchal") is False:
+        raise HTTPException(status_code=409, detail="The enrolled account's calling can't read "
+                                                    "member profiles, so these fields can't be "
+                                                    "refreshed. A leader with member-profile access "
+                                                    "should enroll for sync.")
+    from backend.auth_broker import enroll
+    return enroll.start_profile_refresh(status["unit_number"], status["stake_id"])
+
+
+@app.get("/auth/profile-refresh/status")
+def auth_profile_refresh_status(authorization: str = Header(default="")) -> dict:
+    """Progress + per-field missing counts for the caller's stake — what the fill-data sheet polls
+    (and shows on open, so a leader sees exactly which fields are missing for how many members)."""
+    status = _profile_refresh_gate(authorization)
+    from backend.auth_broker import enroll
+    out = enroll.profile_refresh_status(status["unit_number"], status["stake_id"])
+    out["can_refresh"] = (status.get("credential", {}).get("state") != "revoked"
+                          and status.get("credential", {}).get("can_refresh_patriarchal") is not False)
+    return out
+
+
 def _audit_okta_event(who: str, stage: str, error: str, rid: str,
                       duration_ms: int | None = None, phase: str | None = None) -> None:
     """Make OKTA-STAGE events visible in the admin console: a wrong password / failed MFA never

@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -49,61 +51,213 @@ _PROFILE_REFRESH_COLUMNS = (
     "living_ordinance",
 )
 
+# Live progress of the per-stake profile-refresh worker, keyed by unit number — the
+# GET /auth/profile-refresh/status route reads this so the fill-data sheet can show a progress bar
+# and know when to reload members. In-memory is enough: the worker runs on THIS broker process, and
+# a lost restart just means the sheet re-checks the missing counts (the durable signal). The final
+# outcome is also persisted to sync_diagnostics (kind='profile_refresh') for the ops console.
+_REFRESH_PROGRESS: dict[int, dict] = {}
+_REFRESH_LOCK = threading.Lock()
 
-def _refresh_profile_async(cookies: list[dict], unit_number: int) -> None:
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _sb_h() -> dict:
+    return {"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}",
+            "Content-Type": "application/json"}
+
+
+def _profile_worklist(stake_id: str) -> list[dict]:
+    """Real members (not investigators — they have no /mlt record) with ANY profile-gated field
+    still empty (NULL after the sentinel scrub). Selects everything refresh_profile_fields needs,
+    plus field_meta so a fill stamps per-field freshness."""
+    select = ("person_uuid,name,unit_name,birth_date,sex,friends,field_meta,"
+              + ",".join(_PROFILE_REFRESH_COLUMNS))
+    any_null = "(" + ",".join(f"{c}.is.null" for c in _PROFILE_REFRESH_COLUMNS) + ")"
+    mr = requests.get(f"{SUPABASE_URL}/rest/v1/members", headers=_sb_h(),
+                      params={"stake_id": f"eq.{stake_id}", "kind": "neq.investigator",
+                              "or": any_null, "select": select, "limit": "1000"}, timeout=30)
+    return mr.json() if mr.status_code == 200 else []
+
+
+def _stake_id_for_unit_rest(unit_number: int) -> str | None:
+    sr = requests.get(f"{SUPABASE_URL}/rest/v1/stakes", headers=_sb_h(),
+                      params={"unit_number": f"eq.{unit_number}", "select": "id"}, timeout=30)
+    rows = sr.json() if sr.status_code == 200 else []
+    return rows[0]["id"] if rows else None
+
+
+def _refresh_profile_async(cookies: list[dict], unit_number: int, source: str = "reauth") -> None:
     """Spawn the profile-refresh worker on a daemon thread so it NEVER delays or fails the login
     response. The just-captured session's cookies stay valid for `/mlt` for the worker's lifetime."""
-    import threading
+    with _REFRESH_LOCK:
+        cur = _REFRESH_PROGRESS.get(unit_number)
+        if cur and cur.get("state") == "running":
+            logger.info("profile refresh already running for stake %s — not spawning another",
+                        unit_number)
+            return
+        _REFRESH_PROGRESS[unit_number] = {"state": "running", "source": source, "total": 0,
+                                          "done": 0, "filled": 0, "started_at": _now_iso(),
+                                          "finished_at": None, "error": None}
     threading.Thread(target=_refresh_profile_worker, args=(cookies, unit_number),
+                     kwargs={"source": source},
                      daemon=True, name=f"profilerefresh-{unit_number}").start()
 
 
-def _refresh_profile_worker(cookies: list[dict], unit_number: int) -> None:
+def _refresh_profile_worker(cookies: list[dict], unit_number: int, source: str = "reauth") -> None:
     """Fill EVERY empty profile-sourced field for the stake's members, using the LIVE just-captured
     session (the only one authenticated for `/mlt`) — so one re-authorization catches up everything a
     dead-session daily sync can't (the /mlt 307). Patriarchal is the only genuinely-profile-only field,
     but a member missing from the bulk directory recovers the rest here too. Best-effort: any failure (a
     307 on `/mlt`, a member with no record, a REST hiccup) just leaves that value NULL → the app shows a
     ⚠ and the next re-auth retries. `report.refresh_profile_fields` applies the SAME eligibility gating
-    as the sync; the gated merge preserves the filled value through later sentinel syncs (last-good)."""
+    as the sync; the gated merge preserves the filled value through later sentinel syncs (last-good).
+    Progress is published to _REFRESH_PROGRESS (the status route) and the outcome to sync_diagnostics
+    (kind='profile_refresh') so the fill-data sheet and the ops console can report it."""
+    def _prog(**kw) -> None:
+        with _REFRESH_LOCK:
+            _REFRESH_PROGRESS.setdefault(unit_number, {}).update(kw)
+
     try:
         from covenant_path import report
         if not (SUPABASE_URL and SERVICE_KEY):
+            _prog(state="failed", error="broker not configured", finished_at=_now_iso())
             return
-        h = {"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}", "Content-Type": "application/json"}
-        sr = requests.get(f"{SUPABASE_URL}/rest/v1/stakes", headers=h,
-                          params={"unit_number": f"eq.{unit_number}", "select": "id"}, timeout=30)
-        rows = sr.json() if sr.status_code == 200 else []
-        if not rows:
+        h = _sb_h()
+        stake_id = _stake_id_for_unit_rest(unit_number)
+        if not stake_id:
+            _prog(state="failed", error="stake not found", finished_at=_now_iso())
             return
-        stake_id = rows[0]["id"]
-        # Real members (not investigators — they have no /mlt record) with ANY profile-gated field still
-        # empty (NULL after the sentinel scrub). Select everything refresh_profile_fields needs.
-        select = "person_uuid,name,unit_name,birth_date,sex,friends," + ",".join(_PROFILE_REFRESH_COLUMNS)
-        any_null = "(" + ",".join(f"{c}.is.null" for c in _PROFILE_REFRESH_COLUMNS) + ")"
-        mr = requests.get(f"{SUPABASE_URL}/rest/v1/members", headers=h,
-                          params={"stake_id": f"eq.{stake_id}", "kind": "neq.investigator",
-                                  "or": any_null, "select": select, "limit": "1000"}, timeout=30)
-        members = mr.json() if mr.status_code == 200 else []
+        members = _profile_worklist(stake_id)
         if not members:
             logger.info("profile refresh: nothing to fill for stake %s", unit_number)
+            _prog(state="done", total=0, done=0, filled=0, finished_at=_now_iso())
             return
+        _prog(total=len(members))
         client = _client_from_cookies(cookies)
         filled = 0
-        for row in members:
+        for i, row in enumerate(members):
             patch = report.refresh_profile_fields(client, row)  # {} on 307/no-record
-            if not patch:
-                continue
-            pr = requests.patch(f"{SUPABASE_URL}/rest/v1/members", headers={**h, "Prefer": "return=minimal"},
-                                params={"stake_id": f"eq.{stake_id}", "person_uuid": f"eq.{row['person_uuid']}"},
-                                json=patch, timeout=30)
-            if pr.status_code < 300:
-                filled += 1
+            if patch:
+                # Stamp per-field freshness for what we just fetched, so the ops freshness view and
+                # the app's "last updated" reflect the fill (the daily sync stamps its own fields).
+                now = _now_iso()
+                meta = dict(row.get("field_meta") or {})
+                for col in patch:
+                    entry = dict(meta.get(col) or {})
+                    entry["f"] = entry["t"] = now
+                    meta[col] = entry
+                pr = requests.patch(f"{SUPABASE_URL}/rest/v1/members",
+                                    headers={**h, "Prefer": "return=minimal"},
+                                    params={"stake_id": f"eq.{stake_id}",
+                                            "person_uuid": f"eq.{row['person_uuid']}"},
+                                    json={**patch, "field_meta": meta}, timeout=30)
+                if pr.status_code < 300:
+                    filled += 1
+            _prog(done=i + 1, filled=filled)
         logger.info("profile refresh: filled fields for %d/%d members with gaps in stake %s "
                     "(0 usually means the captured session can't reach /mlt)",
                     filled, len(members), unit_number)
+        _prog(state="done", finished_at=_now_iso())
+        _record_profile_refresh(stake_id, {"source": source, "total": len(members),
+                                           "filled": filled})
     except Exception as exc:  # noqa: BLE001 — strictly best-effort; a login must never be affected
         logger.warning("profile refresh worker failed for stake %s: %s", unit_number, exc)
+        _prog(state="failed", error=str(exc)[:300], finished_at=_now_iso())
+
+
+def _record_profile_refresh(stake_id: str, payload: dict) -> None:
+    """Durable outcome row for the ops console (kind='profile_refresh'). Best-effort — needs the
+    service-role INSERT grant from migration 0057; a 42501 before it's applied is just logged."""
+    try:
+        r = requests.post(f"{SUPABASE_URL}/rest/v1/sync_diagnostics",
+                          headers={**_sb_h(), "Prefer": "return=minimal"},
+                          json={"stake_id": stake_id, "kind": "profile_refresh",
+                                "payload": payload}, timeout=15)
+        if r.status_code >= 300:
+            logger.warning("profile refresh: diagnostics row not recorded (%s %s)",
+                           r.status_code, r.text[:120])
+    except requests.RequestException as exc:
+        logger.warning("profile refresh: diagnostics row not recorded: %s", exc)
+
+
+def profile_refresh_status(unit_number: int, stake_id: str) -> dict:
+    """What the fill-data sheet polls: the live worker progress (if any) + the per-field missing
+    counts straight from the members table (the durable truth the UI shows and re-checks after a
+    fill). `missing` counts REAL members (investigators excluded — they have no /mlt record)."""
+    with _REFRESH_LOCK:
+        progress = dict(_REFRESH_PROGRESS.get(unit_number) or {})
+    members = _profile_worklist(stake_id)
+    missing: dict[str, int] = {c: 0 for c in _PROFILE_REFRESH_COLUMNS}
+    for row in members:
+        for c in _PROFILE_REFRESH_COLUMNS:
+            v = row.get(c)
+            if v is None or (isinstance(v, str) and not v):
+                missing[c] += 1
+    last = None
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/sync_diagnostics", headers=_sb_h(),
+                         params={"stake_id": f"eq.{stake_id}", "kind": "eq.profile_refresh",
+                                 "select": "run_at,payload", "order": "run_at.desc",
+                                 "limit": "1"}, timeout=15)
+        rows = r.json() if r.status_code == 200 else []
+        last = rows[0] if rows else None
+    except requests.RequestException:
+        pass
+    return {"running": progress.get("state") == "running",
+            "progress": progress or None,
+            "members_with_gaps": len(members),
+            "missing": {c: n for c, n in missing.items() if n},
+            "last_refresh": last}
+
+
+def start_profile_refresh(unit_number: int, stake_id: str) -> dict:
+    """On-demand fill: try the STORED delegated credential first — if its LCR session can still
+    reach `/mlt` (rare: the Okta sid usually dies within days), fill everything right now with no
+    user friction. If it can't, answer `needs_reauth` honestly so the client opens the re-auth
+    dialog (whose enroll path spawns this same worker off the freshly-captured live session)."""
+    with _REFRESH_LOCK:
+        cur = _REFRESH_PROGRESS.get(unit_number)
+        if cur and cur.get("state") == "running":
+            return {"status": "running", "progress": dict(cur)}
+    members = _profile_worklist(stake_id)
+    if not members:
+        return {"status": "nothing_to_fill", "members_with_gaps": 0}
+    # Load + decrypt the stored credential (REST — the broker has no psycopg2).
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=_sb_h(),
+                     params={"stake_id": f"eq.{stake_id}", "select": "credential_enc,revoked",
+                             "limit": "1"}, timeout=30)
+    rows = r.json() if r.status_code == 200 else []
+    if not rows or rows[0].get("revoked") or not rows[0].get("credential_enc"):
+        return {"status": "needs_reauth", "reason": "no_credential",
+                "members_with_gaps": len(members)}
+    try:
+        from backend import credentials
+        secret = json.loads(credentials._decrypt_envelope(rows[0]["credential_enc"]).decode("utf-8"))
+        cookies = secret.get("cookies") or []
+    except Exception as exc:  # noqa: BLE001 — an undecryptable blob = effectively no credential
+        logger.warning("profile refresh: stored credential unreadable for stake %s: %s",
+                       unit_number, exc)
+        return {"status": "needs_reauth", "reason": "credential_unreadable",
+                "members_with_gaps": len(members)}
+    # Fast liveness probe: GET the first gap member's /mlt profile PAGE. Live session → 200 HTML;
+    # dead session → redirect to the identity host (AuthExpiredError) or a 404 on the RSC route
+    # (observed in the 2026-07-06 sync logs) — both raise. This is the exact route the worker's
+    # profile actions replay, so a passing probe means the fill will actually work (a generic LCR
+    # page probe can pass while /mlt still bounces). NOT report.refresh_profile_fields: on a dead
+    # session that walks the ~75s action-id auto-discovery before giving up — far too slow for a
+    # synchronous POST.
+    try:
+        client = _client_from_cookies(cookies)
+        client.session.get_text(
+            f"https://lcr.churchofjesuschrist.org/mlt/records/member-profile/{members[0]['person_uuid']}")
+    except Exception:  # noqa: BLE001 — any failure = the stored session can't reach /mlt
+        return {"status": "needs_reauth", "reason": "session_expired",
+                "members_with_gaps": len(members)}
+    _refresh_profile_async(cookies, unit_number, source="on_demand")
+    return {"status": "started", "members_with_gaps": len(members)}
 
 
 def _stored_credential_summary(unit_number: int) -> dict | None:
