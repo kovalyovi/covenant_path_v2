@@ -2,20 +2,30 @@
 Auto-discovery of the member-profile server-action ids (self-healing).
 
 When LCR redeploys the /mlt app, the action-id hashes change and profile fetches
-stop returning data. A pure-requests GET of the profile only yields a loading
-shell (the route's JS chunk isn't referenced), so discovery uses a brief
-Playwright run: log in, open a profile, watch the server-action POSTs, and detect
-which `Next-Action` id returns the record / recommend / ministering shape. The
-winners are persisted to action_config, and storage_state is refreshed (so the
-caller's cookie session is renewed too).
+stop returning data (the POSTs 404). Discovery is now pure HTTP first
+(`discover_http`): GET the profile page with the caller's LIVE session, harvest
+the build's JS chunks, and read the `createServerReference("<id>", …, "<name>")`
+registrations out of them — the 2026-07 Turbopack rebuild names its data actions
+(getMemberData / getRecommendData / getMinisteringData / getCallingsAndClassesData,
+plus getUnitOrgWrapper and getFullTimeMissionaryWrapper on the /mlt/orgs pages).
+The name-mapped ids are then VERIFIED with a real POST against the response-shape
+detectors before being persisted to action_config. No browser, no operator login —
+this runs fine inside the auth broker off a freshly-captured enroll session
+(where the old Playwright path could never run: no playwright on Render, and a
+headless operator login is MFA-blocked anyway).
 
-This is the ONLY place a browser is used for data — and only on breakage. Run
-manually any time with: `python -m lcr_client.action_discovery [person_uuid]`
+The Playwright lane (`discover`) remains as the last-ditch fallback for a future
+build that drops the name strings: log in, open a profile, watch the server-action
+POSTs, and detect which `Next-Action` id returns each shape.
+
+Run manually any time with: `python -m lcr_client.action_discovery [person_uuid]`
 """
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -28,6 +38,124 @@ logger = get_logger()
 BASE = LCR_BASE
 STATE = Path(__file__).resolve().parent.parent / "tools" / "output" / "storage_state.json"
 PROFILE_CACHE = Path(__file__).resolve().parent.parent / "tools" / "output" / "profile_cache.json"
+
+# target -> the action's registered NAME in the current /mlt build (first match wins; earlier
+# builds' names kept as fallbacks). The build registers every client-callable server action as
+# createServerReference("<hex id>", callServer, void 0, findSourceMapURL, "<name>") inside its JS
+# chunks — the name survives minification, so it's the stable key across redeploys.
+ACTION_NAMES = {
+    "record": ("getMemberData", "getMemberProfileData", "getMemberProfile"),
+    "recommend": ("getRecommendData",),
+    "ministering": ("getMinisteringData",),
+    "callings": ("getCallingsAndClassesData", "getIndividualCallings"),
+    "leadership": ("getUnitOrgWrapper",),
+    "missionary": ("getFullTimeMissionaryWrapper",),
+}
+
+# The /mlt pages whose chunk graphs register each target's action. The profile page carries the
+# four member-profile actions; the orgs pages carry leadership + missionary.
+_ORGS_URL = BASE + "/mlt/orgs?unitTypeId=7,8&list=true&leadership=true&lang=eng"
+_MISSIONARY_URL = BASE + "/mlt/orgs/missionary?lang=eng"
+
+_CHUNK_REF_RE = re.compile(r'static/chunks/[^"\'\\\s\)\(]+?\.js')
+_SCRIPT_SRC_RE = re.compile(r'src="/mlt/_next/(static/chunks/[^"]+?\.js)"')
+_SERVER_REF_RE = re.compile(
+    r'createServerReference\)\(\s*["\']([0-9a-f]{40,42})["\'][^)]*?,\s*["\']([A-Za-z0-9_$]+)["\']\s*\)')
+
+
+def _unescape_js(text: str) -> str:
+    """Undo the flight-payload escaping so chunk paths embedded in inline RSC data match too."""
+    return text.replace("\\u002F", "/").replace("\\u002f", "/").replace("\\/", "/")
+
+
+def _chunk_refs(text: str) -> set[str]:
+    """Every static-chunk path referenced by a page's HTML (script tags + inline flight rows) or by
+    another chunk's text."""
+    t = _unescape_js(text)
+    return set(_CHUNK_REF_RE.findall(t)) | set(_SCRIPT_SRC_RE.findall(t))
+
+
+def _server_refs(js_text: str) -> dict[str, str]:
+    """{action name -> action id} registrations found in one chunk's minified JS."""
+    return {m.group(2): m.group(1) for m in _SERVER_REF_RE.finditer(_unescape_js(js_text))}
+
+
+def _targets_from_names(named: dict[str, str]) -> dict[str, str]:
+    """Map harvested {name -> id} registrations onto our config targets."""
+    out: dict[str, str] = {}
+    for target, names in ACTION_NAMES.items():
+        for n in names:
+            if n in named:
+                out[target] = named[n]
+                break
+    return out
+
+
+def _harvest_page(session, url: str, max_chunks: int = 200) -> dict[str, str]:
+    """GET a /mlt page with the live session and walk its chunk graph, returning every
+    {action name -> id} server-action registration reachable from it."""
+    resp = session.session.get(url, timeout=60, allow_redirects=False)
+    if resp.status_code != 200:
+        raise RuntimeError(f"page GET {resp.status_code} (session not live?) for {url}")
+    todo, done, named = _chunk_refs(resp.text), set(), {}
+    while todo and len(done) < max_chunks:
+        chunk = todo.pop()
+        done.add(chunk)
+        try:
+            cr = session.session.get(f"{BASE}/mlt/_next/{chunk}", timeout=30)
+            if cr.status_code != 200:
+                continue
+            named.update(_server_refs(cr.text))
+            todo |= (_chunk_refs(cr.text) - done)
+        except Exception:  # noqa: BLE001 — a missing chunk shouldn't sink the harvest
+            continue
+    return named
+
+
+def discover_http(session, uuid: str) -> dict:
+    """Discover the current action ids over pure HTTP using the caller's LIVE session — no browser,
+    no operator login, broker-safe. Harvests the createServerReference registrations from the
+    profile + orgs chunk graphs, maps them by ACTION NAME, then VERIFIES the canary (`record`) with
+    a real POST against the record-shape detector so a renamed-but-wrong id is never persisted.
+    Returns {} when the harvest finds nothing (caller falls back to the Playwright lane)."""
+    from lcr_client.member_profile import PROFILE_URL, call_action
+
+    named = _harvest_page(session, PROFILE_URL.format(uuid=uuid))
+    for org_url in (_ORGS_URL, _MISSIONARY_URL):
+        try:
+            named.update(_harvest_page(session, org_url))
+        except Exception as exc:  # noqa: BLE001 — orgs pages are best-effort extras
+            logger.debug("orgs harvest skipped (%s): %s", org_url, exc)
+    found = _targets_from_names(named)
+    logger.info("http discovery: %d server actions harvested, mapped %s",
+                len(named), sorted(found))
+
+    if "record" not in found:
+        # Names rotated too — fall back to shape-testing every harvested id against the detectors.
+        for aid in list(named.values())[:60]:
+            if aid in found.values():
+                continue
+            try:
+                objs = call_action(session, uuid, aid, [uuid, "eng"])
+            except Exception:  # noqa: BLE001 — 404/5xx candidates are just wrong ids
+                continue
+            for target, detect in DETECTORS.items():
+                if target not in found and detect(objs):
+                    found[target] = aid
+                    logger.info("http discovery (shape probe): %s -> %s", target, aid[:10])
+        return found
+
+    # Verify the canary before trusting the whole name-mapped set.
+    try:
+        objs = call_action(session, uuid, found["record"], [uuid, "eng"])
+        if not DETECTORS["record"](objs):
+            logger.warning("http discovery: name-mapped record id failed shape verify — discarding")
+            return {}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("http discovery: record verify POST failed (%s) — discarding", exc)
+        return {}
+    return found
+
 
 # target -> predicate over a flight response's parsed rows
 DETECTORS = {
@@ -107,12 +235,21 @@ def discover(uuid: str) -> dict:
 
 
 def heal(session, uuid: str) -> dict:
-    """Discover + persist action ids and refresh the caller's cookie session."""
-    found = discover(uuid)
+    """Discover + persist action ids. HTTP discovery first (works everywhere the caller's session is
+    live — including the broker, where Playwright can't run); the browser lane only as fallback."""
+    method = "http"
+    try:
+        found = discover_http(session, uuid)
+    except Exception as exc:  # noqa: BLE001 — e.g. dead session: page GET != 200
+        logger.warning("http discovery failed: %s", exc)
+        found = {}
+    if not found.get("record"):
+        method = "playwright"
+        found = discover(uuid)
     ids = action_config.load()
     ids.update(found)
     action_config.save(ids, meta={"healed_with": uuid, "resolved": sorted(found),
-                                  "method": "playwright"})
+                                  "method": method})
     # Action ids changed → the profile cache holds values fetched with the OLD ids; drop it so the
     # next run re-fetches with the new ids. Otherwise cached stale data masks the heal — the
     # "temple_recommend stayed 'No' after a re-sync because 67 cache hits served old data" trap.

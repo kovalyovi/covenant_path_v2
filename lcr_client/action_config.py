@@ -16,26 +16,29 @@ from pathlib import Path
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "tools" / "output" / "action_ids.json"
 
 DEFAULTS = {
-    # Refreshed 2026-06-09 via live action-discovery (all three had rotated → temple_recommend was
-    # "No" for everyone and ministering used the old shape). action_discovery now self-heals these
-    # (scrolls the profile so the recommend/ministering panels fire + matches the current shapes),
-    # but DEFAULTS are the CI seed, so keep them current here when LCR redeploys.
-    "record": "60222763f6b2a0789a1082f23e8b873eee7fffce76",
-    "recommend": "605d8832fe1e750fa97f025e0343e9b20c32c10f29",
-    "ministering": "60b620883e890b14734d5eb38c5ad29c9df43d9328",
+    # Refreshed 2026-07-19 via HTTP action-discovery (action_discovery.discover_http) after LCR's
+    # Turbopack rebuild rotated ALL ids and RENAMED the actions (record→getMemberData,
+    # recommend→getRecommendData, ministering→getMinisteringData, callings→getCallingsAndClassesData,
+    # leadership→getUnitOrgWrapper, missionary→getFullTimeMissionaryWrapper). Every profile POST
+    # 404'd from 2026-07-06ish until this refresh — patriarchal/calling gap-fills silently died.
+    # discover_http self-heals these off any LIVE session (pure requests, works on the broker);
+    # DEFAULTS are the CI seed, so keep them current here when LCR redeploys.
+    "record": "60d3d432376be6002cbd1e050593b164c082a0f184",
+    "recommend": "60858689751bc52d895ca386437992b6a4970a484d",
+    "ministering": "608c0018605ee18d7f2a2fc077a73c2bde17fedb6d",
     # /mlt member-profile callings action (args [uuid, "eng"]) — returns individualCallings
     # [{positionName, organization, customCalling, sustainedDate, ...}]. The per-member AUTHORITATIVE
     # calling list: the unit org-aggregate (backend.roles._ward_positions) MISSES sub-org callings like
     # "Relief Society Service Committee Member" → members showed "No calling" (the Terry Stoner bug,
     # 2026-06-09). Build-specific; action_discovery self-heals it (detects the individualCallings shape).
-    "callings": "6064bcb1a1cf344b1eb5f6223bdbf364e638cdb7a9",
+    "callings": "605bf78aabb9282ce1dc2b30f708a5192763c935a4",
     # /mlt/orgs leadership-directory action (args ["eng"]) — names every calling +
     # who holds it; used to enrich the role-name catalog (lcr_client/leadership.py) and as the
     # fallback for stake-leader provisioning. Build-specific; rotates on LCR redeploys.
-    "leadership": "40cd2d72827a201fcf11e15751b6e76283d1019c2c",
+    "leadership": "4080757e68f0abac20c59483c41dccd6037f161044",
     # /mlt/orgs/missionary action (args [unitNumber, "eng"]) — full-time missionaries grouped into
     # assignedToUnit / servingFromUnit / returnedFromUnit for that ward/branch (HAR 2026-05-30).
-    "missionary": "60c73e23e06abb917261d5299c6554b5093707ac2f",
+    "missionary": "6066d3e9b556231692bf3bff2158145a6423eeeb12",
 }
 
 
