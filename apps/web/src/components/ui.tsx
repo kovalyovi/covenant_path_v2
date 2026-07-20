@@ -1,6 +1,7 @@
 // Shared UI primitives — the React equivalents of the Flutter shared widgets (SectionCard, buttons,
 // chips, avatar, segmented control, spinner, count badge). New views compose these.
 
+import { useState } from 'react';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { Icon, type IconName } from './Icon';
 import { hexA } from '../theme/tokens';
@@ -137,19 +138,17 @@ interface AvatarProps {
   size?: number;
 }
 
-/** Member avatar: shows the stored LCR photo when present, else initials (also on load error). */
+/** Member avatar: shows the stored LCR photo when present, else initials (also on load error —
+ *  a signed Storage URL can outlive its 7-day window, and a dead src must degrade to initials,
+ *  not an empty circle). */
 export function Avatar({ name, photoUrl, size = 36 }: AvatarProps) {
   const fontSize = size * 0.36;
+  // Remember which URL failed (not a boolean) so a FRESH signed URL arriving later still renders.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
   return (
     <span className="avatar" style={{ width: size, height: size, fontSize }} aria-hidden="true">
-      {photoUrl ? (
-        <img
-          src={photoUrl}
-          alt=""
-          onError={(e) => {
-            (e.currentTarget as HTMLImageElement).style.display = 'none';
-          }}
-        />
+      {photoUrl && photoUrl !== failedUrl ? (
+        <img src={photoUrl} alt="" onError={() => setFailedUrl(photoUrl)} />
       ) : (
         initialsOf(name)
       )}

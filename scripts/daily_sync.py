@@ -322,7 +322,9 @@ def _sync_one(args) -> dict:
                         result["photos"] = photopipe.sync_photos_for_stake(client, conn, s["stake_id"], s["stake_unit"])
                     logger.info("photos: %s", result["photos"])
                 except Exception as exc:  # noqa: BLE001 — never fail the data sync over avatars
-                    logger.warning("photo pass skipped for stake %s: %s", getattr(args, "stake", "?"), exc)
+                    # ERROR, not warning: --photos was REQUESTED, so a skip means avatars are silently
+                    # rotting (signed URLs expire in 7 days). Still never fails the data sync.
+                    logger.error("photo pass skipped for stake %s: %s", getattr(args, "stake", "?"), exc)
                     result["photos"] = {"error": str(exc)[:200]}
             # Re-attach cached missionary avatars on EVERY run (not just --photos): the bundle pass only
             # attaches signed URLs during its own heavy run, so between passes the 7-day URLs expire and a
@@ -335,8 +337,9 @@ def _sync_one(args) -> dict:
                 if s and s.get("stake_id"):
                     result["missionary_photos"] = photopipe.attach_cached_missionary_photos(conn, s["stake_id"])
             except Exception as exc:  # noqa: BLE001 — never fail the data sync over avatars
-                logger.warning("missionary photo re-attach skipped for stake %s: %s",
-                               getattr(args, "stake", "?"), exc)
+                logger.error("missionary photo re-attach skipped for stake %s: %s",
+                             getattr(args, "stake", "?"), exc)
+                result["missionary_photos"] = {"error": str(exc)[:200]}
             # persist a diagnostics row: run stats + field parity + request metrics
             try:
                 from lcr_client import metrics
@@ -347,6 +350,11 @@ def _sync_one(args) -> dict:
                     "field_staleness": db.field_staleness_summary(conn, result["supabase"]["stake_id"]),
                     "requests": metrics.snapshot(),
                     "members": len(dicts),
+                    # Photo-pass outcomes ride the diagnostics row so a silently-skipped pass is
+                    # ops-visible — the 2026-07-19 lesson: the avatar pass "skipped: SERVICE_ROLE_KEY
+                    # required" at WARNING for a MONTH while every signed URL expired.
+                    "photos": result.get("photos"),
+                    "missionary_photos": result.get("missionary_photos"),
                 })
             except Exception as exc:  # noqa: BLE001
                 logger.warning("diagnostics write skipped: %s", exc)
