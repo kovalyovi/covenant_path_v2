@@ -13,6 +13,7 @@ import { useDashboard } from '../hooks/useDashboard';
 import type { Member } from '../lib/member';
 import { ago } from '../logic/dates';
 import { Icon } from './Icon';
+import { RichText } from './RichText';
 import { Button } from './ui';
 import { useToast } from './Toast';
 
@@ -75,7 +76,7 @@ export function NotesThread({ member }: { member: Member }) {
           <span className="note-bubble__meta">
             {authorLabel(e.author_name, e.author_email)} · {ago(e.created_at)}
           </span>
-          <span className="note-bubble__body">{e.body}</span>
+          <span className="note-bubble__body"><RichText text={e.body} /></span>
         </div>
       ))}
 

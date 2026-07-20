@@ -9,6 +9,7 @@ import type { Member } from '../lib/member';
 import { fmtDateTime } from '../logic/dates';
 import { SectionCard, Button } from './ui';
 import { CardSkeleton } from './Skeletons';
+import { RichText } from './RichText';
 import { useToast } from './Toast';
 
 interface Entry {
@@ -167,7 +168,7 @@ export function NotesSection({ member, autoEdit = false }: { member: Member; aut
                   </div>
                 </div>
               ) : (
-                <p className="note-body" style={{ whiteSpace: 'pre-wrap' }}>{e.body}</p>
+                <p className="note-body" style={{ whiteSpace: 'pre-wrap' }}><RichText text={e.body} /></p>
               )}
             </div>
           ))}

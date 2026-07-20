@@ -18,6 +18,7 @@ import { Avatar, CountBadge, Segmented, SectionCard } from './ui';
 import { OrgBadge, AttendancePill } from './Badges';
 import { GoldenHourChips } from './GoldenHourChips';
 import { Modal } from './Modal';
+import { RichText } from './RichText';
 import type { Tier } from '../hooks/useTier';
 import { colsFor } from '../hooks/useTier';
 import { useDashboard } from '../hooks/useDashboard';
@@ -539,7 +540,7 @@ export function NoteLine({ uuid }: { uuid: string }) {
         <span key={i} className="row" style={{ gap: 4, alignItems: 'flex-start', minWidth: 0 }}>
           <Icon name="note" size={13} color="var(--primary)" />
           <span style={{ minWidth: 0 }}>
-            <span style={{ whiteSpace: 'pre-wrap', fontStyle: 'italic' }}>{e.body}</span>
+            <span style={{ whiteSpace: 'pre-wrap', fontStyle: 'italic' }}><RichText text={e.body} /></span>
             <span className="muted" style={{ marginLeft: 6 }}>· {ago(e.created_at)}</span>
           </span>
         </span>
