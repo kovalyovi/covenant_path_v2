@@ -18,7 +18,7 @@ import os
 import secrets
 import time
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -913,6 +913,67 @@ def contact(body: ContactReq, email: str = Depends(require_user)) -> dict:
     """Support form (#74): a signed-in user emails the owner directly for help."""
     try:
         return admin.send_contact(email, body.subject, body.message)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+class PartnerNoteAddReq(BaseModel):
+    body: str
+    author: str | None = None
+    client_id: str | None = None  # accepted for wire-compat with the partner client; not stored
+
+
+class PartnerNoteDeleteReq(BaseModel):
+    id: str
+
+
+# --- Partner notes lane (Mission-KPIs app reads/writes OUR member_comments thread) -----------
+# Token-gated (X-Partner-Token vs PARTNER_NOTES_TOKEN, constant-time; unset env = lane off) and
+# rate-limited like the other unauthenticated surfaces (BACKEND-01 posture).
+
+def _partner_guard(request: Request) -> None:
+    from backend.auth_broker import partner_notes
+    try:
+        partner_notes.check_token(request.headers.get("x-partner-token"))
+    except partner_notes.PartnerError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+
+
+@app.get("/partner/notes/{person_uuid}", dependencies=[Depends(ratelimit.limiter("partner", 120, 60.0))])
+def partner_notes_list(person_uuid: str, request: Request) -> dict:
+    """The member's full note thread, oldest first — the same conversation the web renders."""
+    from backend.auth_broker import partner_notes
+    _partner_guard(request)
+    try:
+        return partner_notes.list_entries(person_uuid)
+    except partner_notes.PartnerError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    except admin.AdminError as e:  # Supabase misconfig is an ops problem, not a client 500
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.post("/partner/notes/{person_uuid}", dependencies=[Depends(ratelimit.limiter("partner", 60, 60.0))])
+def partner_notes_add(person_uuid: str, body: PartnerNoteAddReq, request: Request) -> dict:
+    """Append one thread entry, attributed to the partner app's signed-in leader."""
+    from backend.auth_broker import partner_notes
+    _partner_guard(request)
+    try:
+        return partner_notes.add_entry(person_uuid, body.body, body.author)
+    except partner_notes.PartnerError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.post("/partner/notes/{person_uuid}/delete", dependencies=[Depends(ratelimit.limiter("partner", 60, 60.0))])
+def partner_notes_delete(person_uuid: str, body: PartnerNoteDeleteReq, request: Request) -> dict:
+    """Delete one thread entry (idempotent; the id is scoped to the person)."""
+    from backend.auth_broker import partner_notes
+    _partner_guard(request)
+    try:
+        return partner_notes.delete_entry(person_uuid, body.id)
+    except partner_notes.PartnerError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
     except admin.AdminError as e:
         raise HTTPException(status_code=503, detail=str(e))
 

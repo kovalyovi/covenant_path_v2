@@ -2012,6 +2012,97 @@ def test_user_routes_require_auth() -> None:
     check("report no auth -> 403 (not served)", client.get("/report").status_code == 403)
 
 
+def test_partner_notes_lane() -> None:
+    """Partner notes API (Mission-KPIs reads OUR member_comments): token gate (unset=503,
+    wrong=401, constant-time), unknown-person 404, thread list mapping, add with attribution +
+    32KB cap, idempotent scoped delete."""
+    from backend.auth_broker import partner_notes
+
+    uuid = "5c3fb668-f0a8-4452-8704-0a1374911aeb"
+    saved_token = os.environ.pop("PARTNER_NOTES_TOKEN", None)
+    saved_one = admin._one
+    saved_headers = admin._sb_headers
+    admin._sb_headers = lambda: {}  # offline: no SUPABASE env; REST calls are stubbed below
+    saved_get = partner_notes.requests.get
+    saved_post = partner_notes.requests.post
+    saved_delete = partner_notes.requests.delete
+    try:
+        # Lane off until a token is issued.
+        check("partner: unset token env -> 503",
+              client.get(f"/partner/notes/{uuid}").status_code == 503)
+        os.environ["PARTNER_NOTES_TOKEN"] = "sekrit"
+        check("partner: wrong token -> 401",
+              client.get(f"/partner/notes/{uuid}",
+                         headers={"X-Partner-Token": "nope"}).status_code == 401)
+
+        # Unknown person: 404, and the comments query is never made.
+        admin._one = lambda *a, **k: None
+        r = client.get(f"/partner/notes/{uuid}", headers={"X-Partner-Token": "sekrit"})
+        check("partner: unknown person -> 404", r.status_code == 404)
+
+        # Known person: entries mapped oldest-first with ONE display author string.
+        admin._one = lambda *a, **k: {"person_uuid": uuid, "stake_id": "s1", "unit_id": "u1"}
+        rows = [{"id": "c1", "body": "**Hi**", "author_name": None,
+                 "author_email": "leader@x.org", "created_at": "2026-07-01", "updated_at": None},
+                {"id": "c2", "body": "More", "author_name": "Sister Lopez",
+                 "author_email": "l@x.org", "created_at": "2026-07-02", "updated_at": None}]
+        partner_notes.requests.get = lambda *a, **k: _FakeResp(rows)
+        r = client.get(f"/partner/notes/{uuid}", headers={"X-Partner-Token": "sekrit"})
+        body = r.json()
+        check("partner: list 200 with mapped entries",
+              r.status_code == 200 and [e["id"] for e in body["entries"]] == ["c1", "c2"])
+        check("partner: author falls back name->email",
+              body["entries"][0]["author"] == "leader@x.org"
+              and body["entries"][1]["author"] == "Sister Lopez")
+
+        # Add: attributed to the partner marker email + the app-provided display name.
+        posted = {}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            posted.update(json or {})
+            return _FakeResp([{**(json or {}), "id": "new1", "created_at": "2026-07-19"}], 201)
+
+        partner_notes.requests.post = fake_post
+        r = client.post(f"/partner/notes/{uuid}", headers={"X-Partner-Token": "sekrit"},
+                        json={"body": "Visited **today**", "author": "Elder Kim"})
+        check("partner: add 200 entry id", r.status_code == 200
+              and r.json()["entry"]["id"] == "new1")
+        check("partner: add attributed to partner email + author name",
+              posted.get("author_email") == partner_notes.PARTNER_EMAIL
+              and posted.get("author_name") == "Elder Kim"
+              and posted.get("stake_id") == "s1")
+        check("partner: empty body -> 400",
+              client.post(f"/partner/notes/{uuid}", headers={"X-Partner-Token": "sekrit"},
+                          json={"body": "   "}).status_code == 400)
+        check("partner: oversized body -> 413",
+              client.post(f"/partner/notes/{uuid}", headers={"X-Partner-Token": "sekrit"},
+                          json={"body": "x" * (32 * 1024 + 1)}).status_code == 413)
+
+        # Delete: scoped to the person's uuid (a leaked id can't reach another person's entries).
+        deleted = {}
+
+        def fake_delete(url, headers=None, params=None, timeout=None):
+            deleted.update(params or {})
+            return _FakeResp([], 204)
+
+        partner_notes.requests.delete = fake_delete
+        r = client.post(f"/partner/notes/{uuid}/delete", headers={"X-Partner-Token": "sekrit"},
+                        json={"id": "c1"})
+        check("partner: delete 200 idempotent", r.status_code == 200 and r.json()["deleted"])
+        check("partner: delete scoped to person uuid",
+              deleted.get("member_person_uuid") == f"eq.{uuid}" and deleted.get("id") == "eq.c1")
+    finally:
+        admin._one = saved_one
+        admin._sb_headers = saved_headers
+        partner_notes.requests.get = saved_get
+        partner_notes.requests.post = saved_post
+        partner_notes.requests.delete = saved_delete
+        if saved_token is None:
+            os.environ.pop("PARTNER_NOTES_TOKEN", None)
+        else:
+            os.environ["PARTNER_NOTES_TOKEN"] = saved_token
+
+
 def test_ratelimit_check_caps_attempts() -> None:
     # BACKEND-01: the sliding-window core raises 429 once `limit` hits land inside `window`.
     from fastapi import HTTPException
@@ -2151,6 +2242,7 @@ def main() -> int:
     test_report_html_escapes_member_data()
     test_safe_cred_id_rejects_filter_metachars()
     test_user_routes_require_auth()
+    test_partner_notes_lane()
     test_ratelimit_check_caps_attempts()
     test_mfa_lockout_after_max_fails()
     print(f"\n{_PASS} passed, {_FAIL} failed")
