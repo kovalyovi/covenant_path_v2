@@ -1692,3 +1692,77 @@ button.card--tappable:active {
   border-radius: 8px;
   padding: 8px 10px;
 }
+
+/* Chat-style notes thread on Baptisms cards (2026-07-19): the notes ARE the conversation about a
+   person — readable speech bubbles (author + relative time), not a small italic line. */
+.note-thread {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.note-bubble {
+  background: color-mix(in srgb, var(--primary) 7%, var(--surface-container-highest));
+  border: 1px solid color-mix(in srgb, var(--primary) 14%, transparent);
+  border-radius: 12px;
+  border-top-left-radius: 4px; /* speech-bubble corner */
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 100%;
+}
+.note-bubble__meta {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--on-surface-variant);
+}
+.note-bubble__body {
+  font-size: 14.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--on-surface);
+}
+.note-thread__more {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--primary);
+  cursor: pointer;
+}
+.note-thread__add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px dashed color-mix(in srgb, var(--primary) 45%, transparent);
+  background: none;
+  color: var(--primary);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+/* Desktop (hover-capable): the add affordance appears on card hover / keyboard focus.
+   Touch: it stays hidden until a tap on the card reveals it (`.is-revealed`, set by the card). */
+@media (hover: hover) {
+  .baptism-card .note-thread__add {
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+  .baptism-card:hover .note-thread__add,
+  .baptism-card:focus-within .note-thread__add {
+    opacity: 1;
+  }
+}
+@media (hover: none) {
+  .baptism-card .note-thread__add {
+    display: none;
+  }
+  .baptism-card.is-revealed .note-thread__add {
+    display: inline-flex;
+  }
+}

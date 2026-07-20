@@ -7,12 +7,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
-// BaptismPersonCard pulls in useDashboard (notes + missionaries) → supabase; stub the edges so the
+// BaptismPersonCard pulls in useDashboard (threads + missionaries) → supabase; stub the edges so the
 // pure card renders without a real Supabase client (same pattern as the other component tests).
 vi.mock('../lib/supabase', () => ({ supabase: {}, currentAccessToken: async () => 'token' }));
-vi.mock('../hooks/useDashboard', () => ({ useDashboard: () => ({ missionaries: {}, notes: {} }) }));
+vi.mock('../hooks/useDashboard', () => ({ useDashboard: () => ({ missionaries: {}, notes: {}, threads: {} }) }));
 
 import { BaptismPersonCard } from '../pages/tabs/BaptismsTab';
+import { ToastProvider } from '../components/Toast';
 import type { Member } from '../lib/member';
 
 const member = { person_uuid: 'u1', name: 'Jane Doe', unit_name: 'Maple Ward' } as unknown as Member;
@@ -21,7 +22,9 @@ const item = { m: member, date: new Date(2030, 0, 1) };
 function renderCard(nested: boolean) {
   return render(
     <MemoryRouter>
-      <BaptismPersonCard item={item} today={new Date(2029, 0, 1)} overdue={false} nested={nested} />
+      <ToastProvider>
+        <BaptismPersonCard item={item} today={new Date(2029, 0, 1)} overdue={false} nested={nested} />
+      </ToastProvider>
     </MemoryRouter>,
   );
 }

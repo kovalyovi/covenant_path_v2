@@ -7,6 +7,7 @@
 // upcoming dates follow. A SECOND section below lists the assigned missionaries per unit/ward (item 3).
 // Investigators only (N7). React rework of the former combined-timeline baptisms_view.
 
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDashboard } from '../../hooks/useDashboard';
 import { usePersistentState } from '../../hooks/usePersistentState';
@@ -21,6 +22,7 @@ import { Avatar, CountBadge, SectionCard } from '../../components/ui';
 import { PageScaffold, SectionTitle, Columns } from '../../components/dashboard';
 import { SectionCardSkeleton } from '../../components/Skeletons';
 import { MissionaryStrip, MissionariesSection, useUnitMissionaries, baptismCardMissionaries } from '../../components/Missionaries';
+import { NotesThread } from '../../components/NotesThread';
 import { TabGate } from '../../components/TabGate';
 
 interface Dated {
@@ -225,15 +227,16 @@ function LessonPills({ m }: { m: Member }) {
 export function BaptismPersonCard({ item, today, overdue, nested = false }:
   { item: Dated; today: Date; overdue: boolean; nested?: boolean }) {
   const navigate = useNavigate();
-  const { notes } = useDashboard();
   const m = item.m;
   const id = m['person_uuid'] != null ? String(m['person_uuid']) : '';
   const name = String(m['name'] ?? '—');
   const unitName = String(m['unit_name'] ?? '').trim();
+  // Touch devices have no hover: the FIRST tap anywhere on the card reveals the "Add note"
+  // affordance (see .baptism-card.is-revealed in components.css); hover/focus covers desktop.
+  const [revealed, setRevealed] = useState(false);
   // Per-person card shows the (one) TEACHING companionship — senior couples are dropped here (they
   // still appear in the "Missionaries by Unit" section below).
   const missionaries = baptismCardMissionaries(useUnitMissionaries(unitName));
-  const note = id ? notes[id] : undefined;
   const steps = nextSteps(m);
 
   const accent = overdue ? 'var(--warning)' : 'var(--primary)';
@@ -257,7 +260,11 @@ export function BaptismPersonCard({ item, today, overdue, nested = false }:
         <div className="tiny" style={{ color: accent, fontWeight: 600, marginTop: 4 }}>{rel}</div>
       </div>
 
-      <div className="card baptism-card" style={{ flex: 1, minWidth: 0, borderLeft: `3px solid ${hexA(accentHex, 0.9)}` }}>
+      <div
+        className={`card baptism-card${revealed ? ' is-revealed' : ''}`}
+        style={{ flex: 1, minWidth: 0, borderLeft: `3px solid ${hexA(accentHex, 0.9)}` }}
+        onClick={() => setRevealed(true)}
+      >
         <div className="card__body">
           <button
             type="button"
@@ -271,17 +278,9 @@ export function BaptismPersonCard({ item, today, overdue, nested = false }:
             </span>
           </button>
 
-          {/* #3b: lead with the leader's NOTES / concerns (what matters for the conversation). */}
-          {note?.text ? (
-            <div className="baptism-card__notes" style={{ marginTop: 10 }}>
-              <div className="row tiny" style={{ gap: 4, alignItems: 'flex-start', color: 'var(--on-surface-variant)' }}>
-                <Icon name="note" size={13} color="var(--primary)" />
-                <span style={{ whiteSpace: 'pre-wrap', fontStyle: 'italic', minWidth: 0 }}>{note.text}</span>
-              </div>
-            </div>
-          ) : (
-            <p className="tiny muted" style={{ marginTop: 10 }}>No notes yet — tap to add a concern or detail.</p>
-          )}
+          {/* #3b: lead with the leader's NOTES — the conversation about this person, as a chat-style
+              thread with an in-card "Add note" (hover on desktop, tap-to-reveal on touch). */}
+          <NotesThread member={m} />
 
           {/* #3b: the PATH toward baptism — the remaining steps (no covenant-path milestone pills). */}
           {steps.length > 0 && (

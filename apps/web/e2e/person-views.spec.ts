@@ -85,8 +85,10 @@ test.describe('person views', () => {
     await expect(page.getByText('Welcomed at sacrament meeting.')).toBeVisible();
 
     // Add a new entry → INSERTED into member_comments (the thread), shown after the read-after-write.
-    await page.getByPlaceholder('Add a note…').fill('Visited this week.');
-    await page.getByRole('button', { name: 'Add note' }).click();
+    // Scoped to the person SHEET: the Baptisms card underneath now has its own "Add note" (D59).
+    const sheet = page.getByRole('dialog', { name: 'Avery Example' });
+    await sheet.getByPlaceholder('Add a note…').fill('Visited this week.');
+    await sheet.getByRole('button', { name: 'Add note' }).click();
     await expect(page.getByText('Visited this week.')).toBeVisible();
     await expect.poll(() =>
       supabase.callsTo('/rest/v1/member_comments').filter((c) => c.method === 'POST').length,
