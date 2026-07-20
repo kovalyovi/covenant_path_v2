@@ -17,6 +17,11 @@ import { readFile } from 'node:fs/promises';
 const APP_URL = (process.env.APP_URL || 'https://app.membercovenantpath.org').replace(/\/$/, '');
 const PROPAGATION_TIMEOUT_MS = 3 * 60 * 1000; // Cloudflare Pages usually propagates in seconds
 const POLL_INTERVAL_MS = 5000;
+// Asset fetches get their own grace window: `/` propagating does NOT mean every edge already has
+// the new /assets/* files (2026-07-19: the shell was new but the entry-bundle GET was answered by
+// a stale edge with the OLD index.html as SPA fallback — HTTP 200, body HTML).
+const ASSET_DEADLINE_MS = 2 * 60 * 1000;
+const assetDeadline = Date.now() + PROPAGATION_TIMEOUT_MS + ASSET_DEADLINE_MS;
 
 const failures = [];
 const ok = (msg) => console.log(`  ✓ ${msg}`);
@@ -29,6 +34,23 @@ async function get(path) {
 }
 
 const assetRefs = (text) => [...new Set([...text.matchAll(/\/?assets\/[\w.-]+\.(?:js|css)/g)].map((m) => `/${m[0].replace(/^\//, '')}`))];
+
+// A missing /assets/* file does NOT 404 on Cloudflare Pages — the SPA fallback serves index.html
+// with a 200. For an asset request that "success" is a MISS (the real bug class this smoke exists
+// to catch: a chunk the deploy didn't ship). Detect it by body shape, and poll while the edge may
+// simply not have propagated yet.
+const looksHtml = (body) => /^\s*<(!doctype|html)/i.test(body);
+
+async function getAsset(path) {
+  for (;;) {
+    const res = await get(path);
+    const miss = res.status !== 200 || looksHtml(res.body);
+    if (!miss) return res;
+    if (Date.now() > assetDeadline) return { ...res, spaFallback: res.status === 200 };
+    console.log(`  … ${path} not served yet (${res.status}${looksHtml(res.body) ? ', SPA-fallback HTML' : ''}) — retrying`);
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+  }
+}
 
 // (2) When run right after a build (CI), wait until production serves the build we just made.
 // CI-only: a local dist/ is built without the CI env (VITE_SUPABASE_URL etc. are baked into the
@@ -71,18 +93,31 @@ index.cacheControl.includes('no-cache')
   ? ok(`/ Cache-Control: ${index.cacheControl}`)
   : fail(`/ Cache-Control is "${index.cacheControl}" — expected no-cache (stale shells cause chunk 404s)`);
 
-// (3) Walk shell → entry bundle → lazy chunks; every referenced asset must serve.
+// (3) Walk shell → entry bundle → lazy chunks; every referenced asset must serve real content.
 const shellAssets = assetRefs(index.body);
 if (shellAssets.length === 0) fail('index.html references no /assets/* files — unexpected shell');
 const toCheck = new Set(shellAssets);
 for (const asset of shellAssets.filter((a) => a.endsWith('.js'))) {
-  const { status, body } = await get(asset);
-  if (status === 200) assetRefs(body).forEach((a) => toCheck.add(a)); // pick up the lazy chunks
+  const res = await getAsset(asset);
+  // Only harvest refs out of a REAL js body — parsing an HTML fallback yields the previous
+  // deploy's asset names and poisons the walk (the 2026-07-19 red herring).
+  if (res.status === 200 && !looksHtml(res.body)) assetRefs(res.body).forEach((a) => toCheck.add(a));
+}
+// (3b) In CI the deployed artifact is the local dist/ — every built asset must serve, by name.
+// Stronger than the reference walk: catches a chunk the upload dropped even if nothing refs it yet.
+if (process.env.GITHUB_ACTIONS) {
+  try {
+    const { readdir } = await import('node:fs/promises');
+    for (const f of await readdir(new URL('../dist/assets', import.meta.url))) toCheck.add(`/assets/${f}`);
+  } catch { /* no dist — reference walk still covers the live shell */ }
 }
 for (const asset of toCheck) {
-  const { status, cacheControl } = await get(asset);
-  status === 200 ? ok(`GET ${asset} → 200`) : fail(`GET ${asset} → ${status} — lazy navigation to this chunk would crash`);
-  if (status === 200 && !cacheControl.includes('immutable')) fail(`${asset} Cache-Control is "${cacheControl}" — expected immutable`);
+  const res = await getAsset(asset);
+  const good = res.status === 200 && !res.spaFallback;
+  good
+    ? ok(`GET ${asset} → 200`)
+    : fail(`GET ${asset} → ${res.spaFallback ? '200 but SPA-fallback HTML (asset missing)' : res.status} — lazy navigation to this chunk would crash`);
+  if (good && !res.cacheControl.includes('immutable')) fail(`${asset} Cache-Control is "${res.cacheControl}" — expected immutable`);
 }
 
 // The original bug was specifically the KPIs tab — assert its chunk is present by name.

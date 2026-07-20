@@ -86,8 +86,8 @@ test.describe('reauth dialog', () => {
       dialog.getByText(new RegExp(`A new code was just sent via ${MFA_FACTORS[0].label}`)),
     ).toBeVisible();
 
+    // The 6th digit auto-submits (useOtpAutoSubmit) — clicking Verify would race the auto-fire.
     await dialog.getByLabel('Verification code').fill('123456');
-    await dialog.getByRole('button', { name: 'Verify & authorize' }).click();
 
     await expect(page.getByText('Daily sync authorized — your stake will refresh within minutes.')).toBeVisible();
     await expect(dialog).not.toBeVisible();
