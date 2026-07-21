@@ -26,6 +26,12 @@ function safeHref(url: string): string | null {
   return /^https?:\/\//i.test(url) ? url : null;
 }
 
+// A backslash before markdown ASCII punctuation is an escape — render the literal char, drop the
+// backslash (CommonMark). Ricky's iOS editor emits these (e.g. "\~30s" for "~30s"). Applied to the
+// already-tokenized text pieces, so it never re-triggers emphasis parsing.
+const ESCAPE = /\\([\\!-/:-@[\]^_`{|}~])/g;
+const unescapeMd = (s: string) => s.replace(ESCAPE, '$1');
+
 /** Parse one note body into inline React nodes. Exported for tests. */
 export function richTextNodes(text: string): ReactNode[] {
   const nodes: ReactNode[] = [];
@@ -33,24 +39,24 @@ export function richTextNodes(text: string): ReactNode[] {
   let key = 0;
   for (const m of text.matchAll(TOKEN)) {
     const at = m.index ?? 0;
-    if (at > last) nodes.push(text.slice(last, at));
+    if (at > last) nodes.push(unescapeMd(text.slice(last, at)));
     const [, boldItal, bold, ital, uBoldItal, uBold, uItal, label, url] = m;
     if (boldItal != null || uBoldItal != null) {
-      nodes.push(<strong key={key++}><em>{boldItal ?? uBoldItal}</em></strong>);
+      nodes.push(<strong key={key++}><em>{unescapeMd(boldItal ?? uBoldItal)}</em></strong>);
     } else if (bold != null || uBold != null) {
-      nodes.push(<strong key={key++}>{bold ?? uBold}</strong>);
+      nodes.push(<strong key={key++}>{unescapeMd(bold ?? uBold)}</strong>);
     } else if (ital != null || uItal != null) {
-      nodes.push(<em key={key++}>{ital ?? uItal}</em>);
+      nodes.push(<em key={key++}>{unescapeMd(ital ?? uItal)}</em>);
     } else if (label != null && url != null) {
       const href = safeHref(url);
       // A non-http(s) target renders as plain text — the label alone, never a live link.
       nodes.push(href
-        ? <a key={key++} href={href} target="_blank" rel="noopener noreferrer">{label}</a>
-        : label);
+        ? <a key={key++} href={href} target="_blank" rel="noopener noreferrer">{unescapeMd(label)}</a>
+        : unescapeMd(label));
     }
     last = at + m[0].length;
   }
-  if (last < text.length) nodes.push(text.slice(last));
+  if (last < text.length) nodes.push(unescapeMd(text.slice(last)));
   return nodes;
 }
 

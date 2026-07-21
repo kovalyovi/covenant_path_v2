@@ -39,4 +39,12 @@ describe('RichText', () => {
     expect(html('3 * 4 * 5')).toBe('<span>3 * 4 * 5</span>');
     expect(html('just text')).toBe('<span>just text</span>');
   });
+
+  it('unescapes markdown backslash-escapes (Ricky\'s editor emits them)', () => {
+    // "\~30s" must render "~30s", not a literal backslash — the imported Gao note.
+    expect(html('\\~30s; from **China**')).toBe('<span>~30s; from <strong>China</strong></span>');
+    // A backslash-escaped asterisk renders a literal * (and never starts emphasis).
+    expect(html('a \\* b')).toBe('<span>a * b</span>');
+    expect(html('100\\% done')).toContain('100% done');
+  });
 });
