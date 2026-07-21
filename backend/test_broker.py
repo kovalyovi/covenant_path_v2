@@ -1835,7 +1835,8 @@ def _full_eval_env(ctx, *, on_access=None, on_rpc=None):
     old = (enroll.SUPABASE_URL, enroll.SERVICE_KEY, enroll._stored_credential_summary,
            enroll._client_from_cookies, enroll._audit_login, enroll._bind_identity_email,
            enroll._kickoff_initial_sync, enroll._notify_enrolled, enroll.requests.post,
-           identity_cache.set_unit, access_mod.covenant_path_access, cred_mod._encrypt_envelope)
+           identity_cache.set_unit, access_mod.covenant_path_access, cred_mod._encrypt_envelope,
+           enroll._is_known_subunit)
     enroll.SUPABASE_URL, enroll.SERVICE_KEY = "https://example.invalid", "key"
     enroll._stored_credential_summary = lambda unit: None  # no usable credential → full path
     enroll._client_from_cookies = lambda cookies: _types.SimpleNamespace(user_context=lambda: ctx)
@@ -1847,13 +1848,16 @@ def _full_eval_env(ctx, *, on_access=None, on_rpc=None):
     identity_cache.set_unit = lambda *a, **k: None
     access_mod.covenant_path_access = fake_access
     cred_mod._encrypt_envelope = lambda raw: "enc-blob"
+    # Default: the unit isn't a known ward (no DB round trip in the fast path). Ward-gate tests
+    # override this to simulate an already-synced stake's sub-unit.
+    enroll._is_known_subunit = lambda unit: False
 
     def _restore():
         (enroll.SUPABASE_URL, enroll.SERVICE_KEY, enroll._stored_credential_summary,
          enroll._client_from_cookies, enroll._audit_login, enroll._bind_identity_email,
          enroll._kickoff_initial_sync, enroll._notify_enrolled, enroll.requests.post,
          identity_cache.set_unit, access_mod.covenant_path_access,
-         cred_mod._encrypt_envelope) = old
+         cred_mod._encrypt_envelope, enroll._is_known_subunit) = old
 
     return _restore
 
@@ -1907,6 +1911,64 @@ def test_full_eval_new_stake_offers_enroll() -> None:
         check("offer: can_enroll", out.get("can_enroll") is True)
         check("offer: nothing stored", out.get("stored") is False)
         check("offer: no RPC without consent", rpc_calls == [])
+    finally:
+        restore()
+
+
+def test_ward_leader_enroll_refused_friendly() -> None:
+    """The Bond Park bishop (2026-07-20): a WARD leader who consents to enroll must get the FRIENDLY
+    ward-scoped refusal, NOT the raw "enroll RPC failed (400)" from the DB sub-unit guard. A bishop
+    is the hard case — his calling grants FULL ward data (can_pull_all=True) AND his user-context
+    lists child ORGANIZATIONS — so the structural checks alone let him through; only the authoritative
+    `units` lookup catches him. The RPC must never be called; store must be False."""
+    import types as _types
+    # Bishop of Bond Park (2140497): can_pull_all True, children are the ward's ORGS (not wards).
+    orgs = [_types.SimpleNamespace(type="ELDERS_QUORUM", unit_number=1, name="EQ"),
+            _types.SimpleNamespace(type="RELIEF_SOCIETY", unit_number=2, name="RS")]
+    ctx = _types.SimpleNamespace(active_position="Bishop",
+                                 positions=[{"name": "Bishop", "id": 4}],
+                                 child_units=orgs, unit_number=2140497, unit_name="Bond Park Ward")
+    rpc_calls: list = []
+    restore = _full_eval_env(ctx, on_rpc=lambda url, body: rpc_calls.append(url))
+    enroll._is_known_subunit = lambda unit: unit == 2140497  # already a synced ward
+    try:
+        out = enroll.evaluate_and_maybe_store(
+            [{"name": "sid", "value": "x", "domain": "d", "path": "/"}],
+            {"email": "bishop@example.org", "name": "Bishop"}, True, request_id="rid-ward")
+        check("ward enroll: NOT stored", out.get("stored") is False)
+        check("ward enroll: enroll_blocked=ward_scoped", out.get("enroll_blocked") == "ward_scoped")
+        check("ward enroll: ward_scoped flag set", out.get("ward_scoped") is True)
+        check("ward enroll: can_enroll is False (never offered)", out.get("can_enroll") is False)
+        check("ward enroll: friendly reason (not a raw RPC error)",
+              "set up" in str(out.get("enroll_block_reason", "")).lower()
+              and "400" not in str(out.get("enroll_block_reason", "")))
+        check("ward enroll: RPC NEVER called (no DB guard 400)", rpc_calls == [])
+    finally:
+        restore()
+
+
+def test_ward_leader_no_children_still_refused() -> None:
+    """The original Green Level Ward shape still works: a ward leader of a NOT-yet-synced stake
+    (not in `units`) with no child units and no full access is caught by the STRUCTURAL test."""
+    import types as _types
+    ctx = _types.SimpleNamespace(active_position="Ward Mission Leader",
+                                 positions=[{"name": "Ward Mission Leader", "id": 9}],
+                                 child_units=[], unit_number=999001, unit_name="New Ward")
+    rpc_calls: list = []
+    restore = _full_eval_env(ctx, on_rpc=lambda url, body: rpc_calls.append(url))
+    enroll._is_known_subunit = lambda unit: False  # brand-new stake: not in units yet
+    # A ward leader with PARTIAL data access (one granted feature → authorized, rank>0) but NOT
+    # can_pull_all — so it passes the auth gate yet is still caught by the structural ward test.
+    from lcr_client import access as access_mod
+    access_mod.covenant_path_access = lambda client: {
+        "can_pull_all": False, "features": [{"feature": "menu.member.list", "allowed": True}],
+        "missing": [], "runner_positions": [{"name": "Ward Mission Leader", "id": 9}]}
+    try:
+        out = enroll.evaluate_and_maybe_store(
+            [{"name": "sid", "value": "x", "domain": "d", "path": "/"}],
+            {"email": "wml@example.org"}, True, request_id="rid-wml")
+        check("wml enroll: refused ward_scoped", out.get("enroll_blocked") == "ward_scoped")
+        check("wml enroll: RPC never called", rpc_calls == [])
     finally:
         restore()
 
@@ -2233,6 +2295,8 @@ def main() -> int:
     test_admin_reauth_email()
     test_full_eval_enroll_reaches_scrape_and_stores()
     test_full_eval_new_stake_offers_enroll()
+    test_ward_leader_enroll_refused_friendly()
+    test_ward_leader_no_children_still_refused()
     test_friendly_okta_errors()
     test_password_endpoint_friendly_bad_creds()
     test_sync_now_blocked_when_revoked()
