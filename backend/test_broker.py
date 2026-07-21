@@ -1942,7 +1942,36 @@ def test_ward_leader_enroll_refused_friendly() -> None:
         check("ward enroll: friendly reason (not a raw RPC error)",
               "set up" in str(out.get("enroll_block_reason", "")).lower()
               and "400" not in str(out.get("enroll_block_reason", "")))
+        check("ward enroll: synced-stake message says 'view here'",
+              "view here" in str(out.get("enroll_block_reason", "")).lower())
         check("ward enroll: RPC NEVER called (no DB guard 400)", rpc_calls == [])
+    finally:
+        restore()
+
+
+def test_ward_leader_new_stake_points_to_stake_leader() -> None:
+    """A bishop of a NOT-yet-synced stake (unknown to `units`) still must not enroll — his org-only
+    child units mark him a ward context even with full ward access (can_pull_all=True), so he'd
+    otherwise create a phantom stake. He's told to ask his stake leader (user directive 2026-07-20)."""
+    import types as _types
+    orgs = [_types.SimpleNamespace(type="ELDERS_QUORUM", unit_number=1, name="EQ"),
+            _types.SimpleNamespace(type="PRIMARY", unit_number=2, name="Primary")]
+    ctx = _types.SimpleNamespace(active_position="Bishop",
+                                 positions=[{"name": "Bishop", "id": 4}],
+                                 child_units=orgs, unit_number=778899, unit_name="New Ward")
+    rpc_calls: list = []
+    restore = _full_eval_env(ctx, on_rpc=lambda url, body: rpc_calls.append(url))
+    enroll._is_known_subunit = lambda unit: False  # stake never synced → not in units
+    try:
+        out = enroll.evaluate_and_maybe_store(
+            [{"name": "sid", "value": "x", "domain": "d", "path": "/"}],
+            {"email": "newbishop@example.org"}, True, request_id="rid-newward")
+        check("new-stake ward: refused ward_scoped", out.get("enroll_blocked") == "ward_scoped")
+        check("new-stake ward: RPC never called (no phantom stake)", rpc_calls == [])
+        check("new-stake ward: message points to the stake leader",
+              "stake" in str(out.get("enroll_block_reason", "")).lower()
+              and "ask" in str(out.get("enroll_block_reason", "")).lower())
+        check("new-stake ward: can_enroll False", out.get("can_enroll") is False)
     finally:
         restore()
 
@@ -2296,6 +2325,7 @@ def main() -> int:
     test_full_eval_enroll_reaches_scrape_and_stores()
     test_full_eval_new_stake_offers_enroll()
     test_ward_leader_enroll_refused_friendly()
+    test_ward_leader_new_stake_points_to_stake_leader()
     test_ward_leader_no_children_still_refused()
     test_friendly_okta_errors()
     test_password_endpoint_friendly_bad_creds()

@@ -598,28 +598,34 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
     authorized = True if has_access else (False if positions else None)
 
     # WARD-LEVEL GATE — the Green Level Ward incident (2026-06-13), reinforced for the Bond Park
-    # bishop (2026-07-20). Enrollment is a STAKE concept: the credential's covenant-path bulk data is
-    # whole-stake, keyed by the stake's unit number. A WARD/BRANCH-level leader's session pulls data
-    # for ONLY their unit, but its Member Tools org root is the PARENT stake — so if they enrolled,
-    # the daily sync would overwrite the whole stake with that one ward and reconcile every other ward
-    # away (Raleigh 93 -> 7). So a ward leader NEVER enrolls: they already see their unit via their
-    # provisioned ward_leader RLS role. Two independent signals mark a sub-unit session:
+    # bishop (2026-07-20). ONLY a STAKE leader enrolls (gives sync access); a ward leader is a pure
+    # CONSUMER — they view their unit via their provisioned ward_leader RLS role and never set up sync
+    # (user directive 2026-07-20). Enrollment is whole-stake: a ward leader's Member Tools org root is
+    # the PARENT stake, so if they enrolled the daily sync would overwrite the whole stake with that
+    # one ward and reconcile every other ward away (Raleigh 93 -> 7). THREE signals mark a sub-unit
+    # session (any one is sufficient):
     #   (1) AUTHORITATIVE — the unit is already known in `units` as a WARD/BRANCH (the same check the
-    #       enroll-RPC guard makes). This catches a BISHOP, whose calling grants FULL ward data
-    #       (can_pull_all=True) AND whose user-context lists child organizations — so neither
-    #       structural clause below distinguished him from a stake president, and he hit the DB guard
-    #       with a raw 400 ("enroll RPC failed"). The old "no child units" test also mis-passed him
-    #       because a ward's children are its ORGS (EQ/RS/Primary/classes), not wards.
-    #   (2) STRUCTURAL (for a stake not yet in `units`) — a STAKE's user-context children are its
-    #       WARDS/BRANCHES; a ward's are its organizations. So "no WARD/BRANCH children" marks a ward
-    #       context, with can_pull_all the safety valve for a stake leader whose context degraded.
+    #       enroll-RPC guard makes). Catches a BISHOP of an already-synced stake: his calling grants
+    #       FULL ward data (can_pull_all=True) AND his user-context lists child organizations, so no
+    #       structural signal alone distinguished him from a stake president and he hit the DB guard
+    #       with a raw 400 ("enroll RPC failed").
+    #   (2) ORG-ONLY CHILDREN — the context HAS children but NONE are wards/branches. A STAKE's
+    #       children ARE its wards; a ward's children are its organizations (EQ/RS/Primary/classes).
+    #       So "has children, none of them wards" is unambiguously a ward context — catching a bishop
+    #       even for a stake we've NEVER synced (no `units` rows yet), who would otherwise create a
+    #       phantom stake. Such a ward leader is told to ask their stake leader to set up sync.
+    #   (3) CHILDLESS + NO FULL ACCESS — a Ward Mission Leader (no children, partial access) of a
+    #       not-yet-synced stake; can_pull_all is the safety valve so a stake leader whose
+    #       user-context momentarily degraded (childless but full access) is never mis-blocked.
     # (FIX A in backend/sync.py + the enroll-RPC sub-unit guard are the deeper backstops.)
-    has_ward_children = any(
-        (getattr(u, "type", None) or "").upper() in ("WARD", "BRANCH")
-        for u in (getattr(ctx, "child_units", None) or []))
+    known_subunit = _is_known_subunit(getattr(ctx, "unit_number", None))
+    child_units = getattr(ctx, "child_units", None) or []
+    has_ward_children = any((getattr(u, "type", None) or "").upper() in ("WARD", "BRANCH")
+                            for u in child_units)
+    is_ward_context = bool(child_units) and not has_ward_children  # org-only children → a ward
     is_sub_unit = bool(getattr(ctx, "unit_number", None)) and (
-        _is_known_subunit(getattr(ctx, "unit_number", None))
-        or (not has_ward_children and not bool(access.get("can_pull_all"))))
+        known_subunit or is_ward_context
+        or (not child_units and not bool(access.get("can_pull_all"))))
 
     # Higher-access transfer offer: when the stake ALREADY has a credential that's insufficient
     # (incomplete or lower access) and THIS session would strictly improve it, tell the client so it
@@ -680,9 +686,15 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
                        "stake concept; this leader sees their unit via their ward_leader role",
                        ctx.unit_name, ctx.unit_number)
         base["enroll_blocked"] = "ward_scoped"
+        # Tailor the message to whether the STAKE is already synced. If the ward is known in `units`
+        # (known_subunit), the stake syncs today → the leader already has ward data to view. If not,
+        # the stake isn't set up yet → point them to a stake leader (user directive 2026-07-20).
         base["enroll_block_reason"] = (
             "Daily sync is set up per stake, by a stake-level leader. Your access covers your own "
-            "unit, which you can already view here — there's nothing to set up.")
+            "unit, which you can already view here — there's nothing to set up."
+            if known_subunit else
+            "Daily sync is set up by a stake-level leader, and your stake isn't set up yet. Please ask "
+            "your stake president or a stake clerk to sign in and enable it for the stake.")
         _audit("blocked", error="ward-scoped session cannot enroll a stake")
         return base
 
