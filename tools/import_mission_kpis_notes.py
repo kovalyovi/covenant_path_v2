@@ -15,12 +15,13 @@ What to request from Ricky (either works, the first is zero-effort for him):
 Import model (dedup-safe, re-runnable):
   - Each member gets AT MOST ONE imported thread entry, keyed by (member_person_uuid,
     author_email = --author-email). His note is one evolving markdown doc, so:
-      * no entry yet and his markdown is non-empty  -> INSERT (created_at = this run)
+      * no entry yet and his markdown is non-empty  -> INSERT (created_at = HIS updated_at, so the
+                                                       note keeps its ORIGINAL date, not today's)
       * entry exists and his markdown CHANGED       -> UPDATE body (updated_at = this run)
       * entry exists and matches                    -> skip (idempotent)
   - Markdown is stored RAW (bold/italics markers preserved) — the web renders it (D59).
-  - Uuids of his that we don't know (his manual people / other-mission members) are skipped
-    and counted, never guessed.
+  - Uuids of his that we don't know (his manual people / null-personUuid people he keyed on the LCR
+    `id` / other-mission members) are skipped and counted, never guessed.
 
 Writes via SUPABASE_DB_URL (service lane, same as the sync). PII posture: prints counts and
 uuid PREFIXES only, never names or note text.
@@ -51,6 +52,14 @@ AUTHOR_EMAIL_DEFAULT = "mission-kpis-import@membercovenantpath.org"
 AUTHOR_NAME_DEFAULT = "Ricky Bloomfield (imported)"
 
 
+def _norm_uuid(s: str | None) -> str:
+    """Normalize a person id for matching: dashes stripped, lowercased. Ricky's app keys some notes
+    by a hyphenated personUuid and others by a bare 32-hex id (personUuid null → LCR `id`), and our
+    members carry both shapes — so match on the normalized form, but always WRITE our member's real
+    person_uuid (what the web/RLS query by)."""
+    return (s or "").replace("-", "").strip().lower()
+
+
 def our_members(conn, stake_unit: str | None) -> list[dict]:
     """Every member we could attach a note to: person_uuid -> (stake_id, unit_id)."""
     q = ("select m.person_uuid, m.stake_id, m.unit_id from members m"
@@ -60,9 +69,10 @@ def our_members(conn, stake_unit: str | None) -> list[dict]:
         return [{"uuid": r[0], "stake_id": r[1], "unit_id": r[2]} for r in cur.fetchall() if r[0]]
 
 
-def fetch_gas_notes(url: str, token: str, uuids: list[str]) -> dict[str, str]:
-    """Sweep his GAS backend per uuid -> {uuid: markdown} for every note he has."""
-    notes: dict[str, str] = {}
+def fetch_gas_notes(url: str, token: str, uuids: list[str]) -> dict[str, dict]:
+    """Sweep his GAS backend per uuid -> {uuid: {body, at}} for every note he has (`at` = his
+    updated_at, preserved as the imported note's original date)."""
+    notes: dict[str, dict] = {}
     sess = requests.Session()
     for i, uuid in enumerate(uuids, 1):
         try:
@@ -75,40 +85,44 @@ def fetch_gas_notes(url: str, token: str, uuids: list[str]) -> dict[str, str]:
         if status == 401:
             raise SystemExit("GAS backend says unauthorized — is the token right?")
         if status == 200 and (body.get("markdown") or "").strip():
-            notes[uuid] = body["markdown"]
+            notes[uuid] = {"body": body["markdown"], "at": (body.get("updated_at") or "").strip() or None}
         if i % 25 == 0:
             print(f"  …swept {i}/{len(uuids)} ({len(notes)} notes so far)")
         time.sleep(0.15)  # be gentle: Apps Script quota is ~20k req/day but latency-throttled
     return notes
 
 
-def read_csv_notes(path: str) -> dict[str, str]:
-    """His sheet's notes tab exported as CSV: uuid, markdown, updated_at, client_id."""
-    notes: dict[str, str] = {}
+def read_csv_notes(path: str) -> dict[str, dict]:
+    """His sheet's notes tab exported as CSV: uuid, markdown, updated_at, client_id.
+    Returns {uuid: {body, at}} — `at` = his updated_at (kept as the note's original date)."""
+    notes: dict[str, dict] = {}
     with open(path, newline="", encoding="utf-8-sig") as fh:
         for row in csv.DictReader(fh):
             uuid = (row.get("uuid") or "").strip()
             markdown = row.get("markdown") or ""
             if uuid and markdown.strip():  # store RAW (markers/whitespace intact), skip empties
-                notes[uuid] = markdown
+                notes[uuid] = {"body": markdown, "at": (row.get("updated_at") or "").strip() or None}
     return notes
 
 
-def import_notes(conn, notes: dict[str, str], members: list[dict],
+def import_notes(conn, notes: dict[str, dict], members: list[dict],
                  author_email: str, author_name: str, dry_run: bool) -> dict:
-    by_uuid = {m["uuid"]: m for m in members}
+    # Match on the NORMALIZED id (dash/case-insensitive) but write our member's REAL person_uuid.
+    by_norm = {_norm_uuid(m["uuid"]): m for m in members}
     stats = {"inserted": 0, "updated": 0, "unchanged": 0, "unmatched": 0}
     unmatched: list[str] = []
     with conn.cursor() as cur:
-        for uuid, markdown in notes.items():
-            m = by_uuid.get(uuid)
+        for uuid, note in notes.items():
+            markdown, at = note["body"], note.get("at")
+            m = by_norm.get(_norm_uuid(uuid))
             if not m:
                 stats["unmatched"] += 1
                 unmatched.append(uuid[:8])
                 continue
+            our_uuid = m["uuid"]  # our canonical person_uuid (what the web + RLS key on)
             cur.execute("select id, body from member_comments"
                         " where member_person_uuid = %s and lower(author_email) = lower(%s)",
-                        (uuid, author_email))
+                        (our_uuid, author_email))
             row = cur.fetchone()
             if row and row[1] == markdown:
                 stats["unchanged"] += 1
@@ -120,14 +134,18 @@ def import_notes(conn, notes: dict[str, str], members: list[dict],
             else:
                 stats["inserted"] += 1
                 if not dry_run:
+                    # created_at = HIS updated_at (preserve the original date) when present + parseable;
+                    # otherwise fall back to the column default (now()).
                     cur.execute(
                         "insert into member_comments (stake_id, unit_id, member_person_uuid,"
-                        " author_email, author_name, body) values (%s, %s, %s, %s, %s, %s)",
-                        (m["stake_id"], m["unit_id"], uuid, author_email, author_name, markdown))
+                        " author_email, author_name, body, created_at)"
+                        " values (%s, %s, %s, %s, %s, %s, coalesce(%s::timestamptz, now()))",
+                        (m["stake_id"], m["unit_id"], our_uuid, author_email, author_name, markdown, at))
     if not dry_run:
         conn.commit()
     if unmatched:
-        print(f"  unmatched uuids (his manual people / not in our DB): {', '.join(unmatched)}…")
+        print(f"  unmatched uuids (not in our DB — his null-personUuid/manual/other-mission people): "
+              f"{', '.join(unmatched)}…")
     return stats
 
 
