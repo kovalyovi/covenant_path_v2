@@ -11,6 +11,7 @@ import { supabase } from '../lib/supabase';
 import { MEMBER_COLUMNS, type Member } from '../lib/member';
 import { buildNotesIndex, type NoteRow, type MemberNoteRow, type NoteSummary, type NoteThreadEntry } from '../logic/notes';
 import { mergedNote, type ManualMember, type MergePlan } from '../logic/manualMembers';
+import { type TransferDate } from '../logic/transfers';
 import { broker, type EnrollmentStatus } from '../lib/broker';
 import { getShowNotes, setShowNotes as persistShowNotes } from '../lib/prefs';
 
@@ -51,6 +52,13 @@ interface DashboardState {
   mergeManualMember: (plan: MergePlan) => Promise<void>;
   /** Remove a manual member (the leader added them by mistake / they're gone). */
   deleteManualMember: (id: string) => Promise<void>;
+  /** The stake's missionary transfer schedule (transfer_dates), oldest-first. */
+  transferDates: TransferDate[];
+  reloadTransferDates: () => Promise<void>;
+  /** Add or adjust a transfer date (stake leaders only; RLS enforces). Keyed on transfer_id. */
+  upsertTransferDate: (input: { transferId: string; date: string }) => Promise<void>;
+  /** Remove a transfer date from the schedule. */
+  deleteTransferDate: (id: string) => Promise<void>;
   stakes: StakeRow[];
   currentStakeId: string | null;
   stakeName: string | null;
@@ -123,6 +131,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const [enrollStatus, setEnrollStatus] = useState<EnrollmentStatus | null>(null);
   const [showNotes, setShowNotesState] = useState<boolean>(() => getShowNotes());
   const [manualMembers, setManualMembers] = useState<ManualMember[]>([]);
+  const [transferDates, setTransferDates] = useState<TransferDate[]>([]);
 
   const setShowNotes = useCallback((on: boolean) => {
     setShowNotesState(on);
@@ -273,6 +282,51 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     [reloadManualMembers],
   );
 
+  const loadTransferDates = useCallback(async (stakeId: string | null): Promise<TransferDate[]> => {
+    // The stake's transfer schedule, oldest-first (RLS-scoped: any leader in the stake can read).
+    try {
+      const base = supabase.from('transfer_dates').select('id, transfer_id, transfer_date');
+      const scoped = stakeId != null ? base.eq('stake_id', stakeId) : base;
+      const { data } = await scoped.order('transfer_date');
+      return (data ?? []) as TransferDate[];
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const reloadTransferDates = useCallback(async () => {
+    setTransferDates(await loadTransferDates(currentIdRef.current));
+  }, [loadTransferDates]);
+
+  const upsertTransferDate = useCallback(
+    async (input: { transferId: string; date: string }) => {
+      const stakeId = currentIdRef.current;
+      const email = (await supabase.auth.getUser()).data.user?.email ?? '';
+      const { error } = await supabase.from('transfer_dates').upsert(
+        {
+          stake_id: stakeId,
+          transfer_id: input.transferId.trim(),
+          transfer_date: input.date,
+          updated_by: email,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'stake_id,transfer_id' },
+      );
+      if (error) throw error;
+      await reloadTransferDates();
+    },
+    [reloadTransferDates],
+  );
+
+  const deleteTransferDate = useCallback(
+    async (id: string) => {
+      const { error } = await supabase.from('transfer_dates').delete().eq('id', id);
+      if (error) throw error;
+      await reloadTransferDates();
+    },
+    [reloadTransferDates],
+  );
+
   const applyCurrentStake = useCallback((list: StakeRow[], id: string | null) => {
     if (list.length === 0) return;
     const s = list.find((e) => e.id === id) ?? list[0];
@@ -373,6 +427,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         setManualMembers(manuals);
         // Not awaited — never delays first paint; caches enrollStatus for the Sync-settings sheet (#11).
         void reloadEnrollStatus();
+        void reloadTransferDates();
       } catch (e) {
         if (active) setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -403,13 +458,14 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       setManualMembers(manuals);
       // also re-pull the stake's freshness/sync state so "Updated X ago" reflects the latest run.
       void reloadStakes();
+      void reloadTransferDates();
       if (rows.length === 0) void reloadEnrollStatus();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setRefreshing(false);
     }
-  }, [loadMembers, loadNotes, loadManualMembers, reloadEnrollStatus, reloadStakes]);
+  }, [loadMembers, loadNotes, loadManualMembers, reloadEnrollStatus, reloadStakes, reloadTransferDates]);
 
   const switchStake = useCallback(
     (id: string) => {
@@ -428,12 +484,13 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
           setNotes(nts.index);
           setThreads(nts.threads);
           setManualMembers(manuals);
+          void loadTransferDates(id).then(setTransferDates);
           if (rows.length === 0) void reloadEnrollStatus();
         })
         .catch((e) => setError(e instanceof Error ? e.message : String(e)))
         .finally(() => setLoading(false));
     },
-    [applyCurrentStake, loadMembers, loadNotes, loadManualMembers, reloadEnrollStatus],
+    [applyCurrentStake, loadMembers, loadNotes, loadManualMembers, loadTransferDates, reloadEnrollStatus],
   );
 
   const markSyncing = useCallback(() => {
@@ -455,6 +512,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     () => ({
       loading, refreshing, error, members, notes, threads, reloadNotes, showNotes, setShowNotes,
       manualMembers, reloadManualMembers, addManualMember, mergeManualMember, deleteManualMember,
+      transferDates, reloadTransferDates, upsertTransferDate, deleteTransferDate,
       stakes, currentStakeId, stakeName, lastSynced,
       syncing, syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,
       reloadStakes, reloadEnrollStatus, setEnrollStatus,
@@ -464,6 +522,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     [
       loading, refreshing, error, members, notes, threads, reloadNotes, showNotes, setShowNotes,
       manualMembers, reloadManualMembers, addManualMember, mergeManualMember, deleteManualMember,
+      transferDates, reloadTransferDates, upsertTransferDate, deleteTransferDate,
       stakes, currentStakeId, stakeName, lastSynced,
       syncing, syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,
       reloadStakes, reloadEnrollStatus, reauthOpen, openReauth, closeReauth,

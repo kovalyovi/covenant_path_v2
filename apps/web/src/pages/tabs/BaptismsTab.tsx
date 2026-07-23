@@ -23,6 +23,7 @@ import { PageScaffold, SectionTitle, Columns } from '../../components/dashboard'
 import { SectionCardSkeleton } from '../../components/Skeletons';
 import { MissionaryStrip, MissionariesSection, useUnitMissionaries, baptismCardMissionaries } from '../../components/Missionaries';
 import { NotesThread } from '../../components/NotesThread';
+import { NextTransferBanner } from '../../components/TransferDates';
 import { TabGate } from '../../components/TabGate';
 
 interface Dated {
@@ -88,6 +89,8 @@ function BaptismsBody() {
         />
       }
     >
+      <NextTransferBanner />
+
       {items.length === 0 ? (
         <p style={{ textAlign: 'center', padding: 32 }}>No baptisms scheduled yet.</p>
       ) : byUnit ? (
