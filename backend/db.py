@@ -331,12 +331,15 @@ def merge_manual_members(conn, stake_id: str) -> int:
         want = _normalize_name(mname)
         if not want:
             continue
-        match = next(((puid, unit_id) for puid, name, unit_id, unit_name in members
-                      if puid and _same_unit(m_unit_id, m_unit_name, unit_id, unit_name)
-                      and _normalize_name(name) == want), None)
-        if not match:
+        matches = [(puid, unit_id) for puid, name, unit_id, unit_name in members
+                   if puid and _same_unit(m_unit_id, m_unit_name, unit_id, unit_name)
+                   and _normalize_name(name) == want]
+        # Only auto-merge an UNAMBIGUOUS match: 0 = no real record yet; >1 = two same-named people in the
+        # unit (e.g. a father & son both "John Smith") — never guess which, leave those to the client's
+        # explicit Merge suggestion. This is stricter than the client rule because this side is automatic.
+        if len(matches) != 1:
             continue
-        puid, unit_id = match
+        puid, unit_id = matches[0]
         with conn.cursor() as cur:
             if (notes or "").strip():
                 cur.execute("select note from member_notes where stake_id=%s and member_person_uuid=%s",

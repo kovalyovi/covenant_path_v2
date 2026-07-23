@@ -2286,6 +2286,14 @@ def test_partner_data_lanes() -> None:
         deleted.update(params or {})
         return _FakeResp([], 204)
 
+    patched: dict = {}
+
+    def fake_patch(url, headers=None, params=None, json=None, timeout=None):
+        patched.clear()
+        patched["params"] = params or {}
+        patched["body"] = json or {}
+        return _FakeResp([{"id": "mm1"}], 200)
+
     try:
         # Token gate is shared with the notes lane (unset ⇒ 503).
         check("partner-data: unset token -> 503",
@@ -2299,6 +2307,7 @@ def test_partner_data_lanes() -> None:
         partner_data.requests.get = fake_get
         partner_data.requests.post = fake_post
         partner_data.requests.delete = fake_delete
+        partner_data.requests.patch = fake_patch
         h = {"X-Partner-Token": "sekrit"}
 
         # Transfer dates: list + upsert (transfer_id derived from date when absent) + bad date 400.
@@ -2339,6 +2348,17 @@ def test_partner_data_lanes() -> None:
               and posted["body"].get("name") == "Maria G" and posted["body"].get("unit_id") == "u10")
         check("partner-data: manual first_name required -> 400",
               client.post("/partner/manual-people", headers=h, json={"first_name": "  "}).status_code == 400)
+
+        # Update (uuid present) WITHOUT notes must NOT wipe custom_notes (his app has no notes concept);
+        # WITH notes it updates them. Preserves a web leader's notes on the shared member.
+        client.post("/partner/manual-people", headers=h,
+                    json={"first_name": "Maria", "uuid": "mm1", "unit_number": 10})
+        check("partner-data: manual update omits custom_notes when notes not sent",
+              "custom_notes" not in patched["body"])
+        client.post("/partner/manual-people", headers=h,
+                    json={"first_name": "Maria", "uuid": "mm1", "notes": "keep me"})
+        check("partner-data: manual update sets custom_notes when notes sent",
+              patched["body"].get("custom_notes") == "keep me")
 
         # Delete is stake-scoped.
         r = client.post("/partner/manual-people/delete", headers=h, json={"uuid": "mm1"})

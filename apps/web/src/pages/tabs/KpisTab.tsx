@@ -327,7 +327,9 @@ function WardGoalsCard() {
   const d = useDashboard();
   const toast = useToast();
   const cycle = currentCycle(d.transferDates, dayOnly(new Date()));
-  const units = unitOptions(d.members);
+  // ward_goals.unit_id is NOT NULL — only offer a goal row for units we have a real unit_id for (an
+  // orphaned member with a null unit_id can't anchor a goal), so saving never hits a NOT NULL error.
+  const units = unitOptions(d.members).filter((u) => u.id != null);
   const baptized = d.members.filter((m) => !isInvestigator(m));
 
   if (!cycle) {

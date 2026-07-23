@@ -215,10 +215,15 @@ def upsert_manual_person(first_name: str, last_initial: str | None, baptism_date
         "first_name": first_name.strip(),
         "last_initial": (last_initial or "").strip() or None,
         "baptism_date": (baptism_date or "").strip() or None,
-        "custom_notes": (notes or "").strip(),
         "created_by": _PARTNER_UPDATER,
         "updated_at": "now()",
     }
+    # Only touch custom_notes when the partner ACTUALLY sent notes. His app has no notes concept, so an
+    # edit from his side (e.g. changing a baptism date) must NOT wipe the notes a web leader wrote on the
+    # shared member — same reason `missionaries` is never included here. On INSERT the column's own
+    # default ('') applies when omitted.
+    if notes is not None:
+        row["custom_notes"] = notes.strip()
     if (uuid or "").strip():
         r = requests.patch(f"{admin.SUPABASE_URL}/rest/v1/manual_members",
                            headers={**admin._sb_headers(), "Prefer": "return=representation"},
