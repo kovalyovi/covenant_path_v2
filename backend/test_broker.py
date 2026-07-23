@@ -2104,9 +2104,10 @@ def test_user_routes_require_auth() -> None:
 
 
 def test_partner_notes_lane() -> None:
-    """Partner notes API (Mission-KPIs reads OUR member_comments): token gate (unset=503,
-    wrong=401, constant-time), unknown-person 404, thread list mapping, add with attribution +
-    32KB cap, idempotent scoped delete."""
+    """Partner notes API (Mission-KPIs reads/writes OUR member_comments): token gate (unset=503,
+    wrong=401, constant-time), thread list mapping, add with attribution + 32KB cap, PENDING add for a
+    not-yet-synced person (NO 404 — the Ricky bug), stake-inherit from a prior comment, edit-in-place,
+    idempotent scoped delete."""
     from backend.auth_broker import partner_notes
 
     uuid = "5c3fb668-f0a8-4452-8704-0a1374911aeb"
@@ -2116,7 +2117,16 @@ def test_partner_notes_lane() -> None:
     admin._sb_headers = lambda: {}  # offline: no SUPABASE env; REST calls are stubbed below
     saved_get = partner_notes.requests.get
     saved_post = partner_notes.requests.post
+    saved_patch = partner_notes.requests.patch
     saved_delete = partner_notes.requests.delete
+
+    # admin._one backs both _member (table 'members') and _scope_for's inherit query (table
+    # 'member_comments'); this dict lets each test simulate a synced / absent / previously-noted person.
+    one_returns = {"members": None, "member_comments": None}
+
+    def fake_one(table, params=None, *a, **k):
+        return one_returns.get(table)
+
     try:
         # Lane off until a token is issued.
         check("partner: unset token env -> 503",
@@ -2126,13 +2136,9 @@ def test_partner_notes_lane() -> None:
               client.get(f"/partner/notes/{uuid}",
                          headers={"X-Partner-Token": "nope"}).status_code == 401)
 
-        # Unknown person: 404, and the comments query is never made.
-        admin._one = lambda *a, **k: None
-        r = client.get(f"/partner/notes/{uuid}", headers={"X-Partner-Token": "sekrit"})
-        check("partner: unknown person -> 404", r.status_code == 404)
+        admin._one = fake_one
 
-        # Known person: entries mapped oldest-first with ONE display author string.
-        admin._one = lambda *a, **k: {"person_uuid": uuid, "stake_id": "s1", "unit_id": "u1"}
+        # List: NO existence gate — a person with no members row can still have (pending) notes to read.
         rows = [{"id": "c1", "body": "**Hi**", "author_name": None,
                  "author_email": "leader@x.org", "created_at": "2026-07-01", "updated_at": None},
                 {"id": "c2", "body": "More", "author_name": "Sister Lopez",
@@ -2146,28 +2152,70 @@ def test_partner_notes_lane() -> None:
               body["entries"][0]["author"] == "leader@x.org"
               and body["entries"][1]["author"] == "Sister Lopez")
 
-        # Add: attributed to the partner marker email + the app-provided display name.
         posted = {}
 
         def fake_post(url, headers=None, json=None, timeout=None):
+            posted.clear()
             posted.update(json or {})
             return _FakeResp([{**(json or {}), "id": "new1", "created_at": "2026-07-19"}], 201)
 
         partner_notes.requests.post = fake_post
+
+        # Add for a SYNCED person: scope taken from the member + attributed to the partner marker email.
+        one_returns["members"] = {"person_uuid": uuid, "stake_id": "s1", "unit_id": "u1"}
         r = client.post(f"/partner/notes/{uuid}", headers={"X-Partner-Token": "sekrit"},
                         json={"body": "Visited **today**", "author": "Elder Kim"})
         check("partner: add 200 entry id", r.status_code == 200
               and r.json()["entry"]["id"] == "new1")
-        check("partner: add attributed to partner email + author name",
+        check("partner: add attributed to partner email + author name + member scope",
               posted.get("author_email") == partner_notes.PARTNER_EMAIL
               and posted.get("author_name") == "Elder Kim"
               and posted.get("stake_id") == "s1")
+
+        # Add for a NOT-YET-SYNCED person: no 404 — stored PENDING (null stake), adopted on next sync.
+        one_returns["members"] = None
+        one_returns["member_comments"] = None
+        r = client.post(f"/partner/notes/{uuid}", headers={"X-Partner-Token": "sekrit"},
+                        json={"body": "Met at English class"})
+        check("partner: add for unsynced person -> 200 (no 404)", r.status_code == 200)
+        check("partner: unsynced add is PENDING (null stake)", posted.get("stake_id") is None)
+
+        # If the person once had a comment, a new note inherits that stake (member row transiently gone).
+        one_returns["member_comments"] = {"stake_id": "s9", "unit_id": "u9"}
+        client.post(f"/partner/notes/{uuid}", headers={"X-Partner-Token": "sekrit"},
+                    json={"body": "Back again"})
+        check("partner: add inherits stake from a prior comment when member absent",
+              posted.get("stake_id") == "s9" and posted.get("unit_id") == "u9")
+
         check("partner: empty body -> 400",
               client.post(f"/partner/notes/{uuid}", headers={"X-Partner-Token": "sekrit"},
                           json={"body": "   "}).status_code == 400)
         check("partner: oversized body -> 413",
               client.post(f"/partner/notes/{uuid}", headers={"X-Partner-Token": "sekrit"},
                           json={"body": "x" * (32 * 1024 + 1)}).status_code == 413)
+
+        # Update (edit in place): scoped to the person's uuid + stamps the partner editor.
+        patched = {"params": {}, "json": {}}
+
+        def fake_patch(url, headers=None, params=None, json=None, timeout=None):
+            patched["params"] = params or {}
+            patched["json"] = json or {}
+            return _FakeResp([{"id": "c1", "body": (json or {}).get("body"),
+                               "author_name": (json or {}).get("author_name"),
+                               "created_at": "2026-07-01", "updated_at": "2026-07-20"}], 200)
+
+        partner_notes.requests.patch = fake_patch
+        r = client.post(f"/partner/notes/{uuid}/update", headers={"X-Partner-Token": "sekrit"},
+                        json={"id": "c1", "body": "Edited body", "author": "Elder Kim"})
+        check("partner: update 200 with edited body",
+              r.status_code == 200 and r.json()["entry"]["body"] == "Edited body")
+        check("partner: update scoped to person uuid + stamps editor",
+              patched["params"].get("member_person_uuid") == f"eq.{uuid}"
+              and patched["params"].get("id") == "eq.c1"
+              and patched["json"].get("updated_by") == partner_notes.PARTNER_EMAIL)
+        check("partner: update empty body -> 400",
+              client.post(f"/partner/notes/{uuid}/update", headers={"X-Partner-Token": "sekrit"},
+                          json={"id": "c1", "body": "  "}).status_code == 400)
 
         # Delete: scoped to the person's uuid (a leaked id can't reach another person's entries).
         deleted = {}
@@ -2187,6 +2235,7 @@ def test_partner_notes_lane() -> None:
         admin._sb_headers = saved_headers
         partner_notes.requests.get = saved_get
         partner_notes.requests.post = saved_post
+        partner_notes.requests.patch = saved_patch
         partner_notes.requests.delete = saved_delete
         if saved_token is None:
             os.environ.pop("PARTNER_NOTES_TOKEN", None)

@@ -248,6 +248,27 @@ def upsert_members(conn, stake_id: str, members: list[dict],
     return len(rows)
 
 
+def adopt_orphan_notes(conn, stake_id: str) -> int:
+    """Attach PENDING partner notes (member_comments with a NULL stake_id) to this stake once their
+    person is synced. The partner-notes lane lets a leader record notes on someone not yet in `members`
+    (e.g. dropped from a sync while the operator's calling changed) — those land stake-less and invisible
+    to RLS. Here, after upsert, any pending comment whose member_person_uuid now matches a member in this
+    stake inherits that member's stake_id/unit_id, becoming visible to the right leaders. Returns rows
+    adopted. (Only member_comments can be pending; member_notes always references a real member.)"""
+    with conn.cursor() as cur:
+        cur.execute(
+            """update member_comments mc
+                  set stake_id = m.stake_id, unit_id = m.unit_id
+                 from members m
+                where m.stake_id = %s
+                  and m.person_uuid = mc.member_person_uuid
+                  and mc.stake_id is null""",
+            (stake_id,))
+        adopted = cur.rowcount
+    conn.commit()
+    return adopted
+
+
 def count_reconcile_candidates(conn, stake_id: str, present_uuids: list[str],
                                keep_unit_ids: list[str], include_orphans: bool) -> int:
     """How many members reconcile_members WOULD delete — same predicate, count only. Lets the sync

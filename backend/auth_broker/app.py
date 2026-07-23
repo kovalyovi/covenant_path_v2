@@ -923,6 +923,12 @@ class PartnerNoteAddReq(BaseModel):
     client_id: str | None = None  # accepted for wire-compat with the partner client; not stored
 
 
+class PartnerNoteUpdateReq(BaseModel):
+    id: str
+    body: str
+    author: str | None = None
+
+
 class PartnerNoteDeleteReq(BaseModel):
     id: str
 
@@ -959,6 +965,19 @@ def partner_notes_add(person_uuid: str, body: PartnerNoteAddReq, request: Reques
     _partner_guard(request)
     try:
         return partner_notes.add_entry(person_uuid, body.body, body.author)
+    except partner_notes.PartnerError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.post("/partner/notes/{person_uuid}/update", dependencies=[Depends(ratelimit.limiter("partner", 60, 60.0))])
+def partner_notes_update(person_uuid: str, body: PartnerNoteUpdateReq, request: Request) -> dict:
+    """Edit one thread entry in place (the id is scoped to the person)."""
+    from backend.auth_broker import partner_notes
+    _partner_guard(request)
+    try:
+        return partner_notes.update_entry(person_uuid, body.id, body.body, body.author)
     except partner_notes.PartnerError as e:
         raise HTTPException(status_code=e.status, detail=e.detail)
     except admin.AdminError as e:

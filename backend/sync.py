@@ -268,6 +268,15 @@ def sync_stake(client: LcrClient, members: list[dict], conn,
             logger.info("pruned %d departed unit(s) from stake %s (%s)",
                         removed, ctx.unit_name, ctx.unit_number)
     written = db.upsert_members(conn, stake_id, members, unit_id_by_number, unit_id_by_name)
+    # Adopt any PENDING partner notes (recorded on a person before/while they were absent from the sync)
+    # now that their member row exists — they inherit this stake's scope and become visible to leaders.
+    try:
+        adopted = db.adopt_orphan_notes(conn, stake_id)
+        if adopted:
+            logger.info("adopted %d pending note(s) into stake %s (%s)",
+                        adopted, ctx.unit_name, ctx.unit_number)
+    except Exception as exc:  # noqa: BLE001 — never fail the data sync over note adoption
+        logger.warning("note adoption skipped for stake %s: %s", stake_id, exc)
     # Reconcile departed people (hard-delete): anyone no longer in LCR for a unit that scraped
     # cleanly this run has left the stake (moved out / record removed / deceased) → remove them.
     # Units that FAILED to scrape are excluded so a transient LCR failure never wipes a roster.

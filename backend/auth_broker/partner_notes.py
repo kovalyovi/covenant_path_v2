@@ -11,10 +11,16 @@ The person uuid is the LCR person UUID both systems already share.
 
 Contract (real HTTP status codes — not the Apps Script 200-always envelope):
   GET    /partner/notes/{uuid}          -> 200 {entries: [{id, body, author, created_at, updated_at}]}
-                                           404 when the person isn't in our DB (not on Covenant Path)
   POST   /partner/notes/{uuid}          {body, author?, client_id?} -> 200 {entry}
-                                           404 unknown person · 413 body over 32 KB
-  POST   /partner/notes/{uuid}/delete   {id} -> 200 {deleted: true}   (idempotent)
+                                           400 empty body · 413 body over 32 KB
+  POST   /partner/notes/{uuid}/update   {id, body, author?} -> 200 {entry}   (edit an entry in place)
+  POST   /partner/notes/{uuid}/delete   {id} -> 200 {deleted: true}          (idempotent)
+
+A note can be added/read for a person who ISN'T synced yet (no `members` row) — we no longer 404. When
+the member is unknown we store a "pending" comment (null stake_id) that the daily sync later ADOPTS into
+the right stake (db.adopt_orphan_notes); if the person once had comments we inherit their stake from
+those so a transient sync gap doesn't hide new notes. Rationale: the operator's LCR calling can change
+for a few days, dropping a person from the sync — a leader must still be able to record notes on them.
 
 Writes go through the Supabase service-role REST (the broker has no psycopg2 — same as reports.py);
 attribution keeps partner writes distinguishable: author_email is a fixed partner marker and the
@@ -55,9 +61,24 @@ def _member(uuid: str) -> dict | None:
                                   "person_uuid": f"eq.{uuid}", "limit": "1"})
 
 
+def _scope_for(uuid: str) -> tuple[str | None, str | None]:
+    """The (stake_id, unit_id) a new comment for this person should carry. The member's own scope if
+    they're synced; else inherit from an existing comment for this uuid (so a person who dropped out of
+    the sync keeps their notes visible to the same leaders); else (None, None) — a PENDING comment the
+    daily sync adopts once the real record appears."""
+    member = _member(uuid)
+    if member:
+        return member["stake_id"], member.get("unit_id")
+    prior = admin._one("member_comments", {"select": "stake_id,unit_id",
+                                           "member_person_uuid": f"eq.{uuid}",
+                                           "stake_id": "not.is.null", "limit": "1"})
+    if prior:
+        return prior.get("stake_id"), prior.get("unit_id")
+    return None, None
+
+
 def list_entries(uuid: str) -> dict:
-    if not _member(uuid):
-        raise PartnerError(404, "person not tracked on Covenant Path")
+    # No existence gate: a person who isn't synced yet may still have (pending) notes to read.
     r = requests.get(f"{admin.SUPABASE_URL}/rest/v1/member_comments",
                      headers=admin._sb_headers(),
                      params={"select": "id,body,author_name,author_email,created_at,updated_at",
@@ -83,12 +104,10 @@ def add_entry(uuid: str, body: str, author: str | None) -> dict:
         raise PartnerError(400, "note body is required")
     if len(text.encode("utf-8")) > MAX_BODY_BYTES:
         raise PartnerError(413, "note is too large (32 KB max)")
-    member = _member(uuid)
-    if not member:
-        raise PartnerError(404, "person not tracked on Covenant Path")
+    stake_id, unit_id = _scope_for(uuid)  # (None, None) => a pending note, adopted on the next sync
     row = {
-        "stake_id": member["stake_id"],
-        "unit_id": member.get("unit_id"),
+        "stake_id": stake_id,
+        "unit_id": unit_id,
         "member_person_uuid": uuid,
         "author_email": PARTNER_EMAIL,
         "author_name": (author or "").strip()[:120] or "Mission KPIs leader",
@@ -104,6 +123,38 @@ def add_entry(uuid: str, body: str, author: str | None) -> dict:
         "id": saved.get("id"),
         "body": saved.get("body", text),
         "author": saved.get("author_name") or row["author_name"],
+        "created_at": saved.get("created_at"),
+        "updated_at": saved.get("updated_at"),
+    }}
+
+
+def update_entry(uuid: str, entry_id: str, body: str, author: str | None) -> dict:
+    """Edit one thread entry in place (his UI needs to edit, not just add/delete). Scoped to the uuid so
+    a leaked id can only ever touch a comment on the person it belongs to; stamps updated_at/updated_by."""
+    if not (entry_id or "").strip():
+        raise PartnerError(400, "entry id is required")
+    text = (body or "").strip()
+    if not text:
+        raise PartnerError(400, "note body is required")
+    if len(text.encode("utf-8")) > MAX_BODY_BYTES:
+        raise PartnerError(413, "note is too large (32 KB max)")
+    patch = {"body": text, "updated_at": "now()", "updated_by": PARTNER_EMAIL}
+    if (author or "").strip():
+        patch["author_name"] = author.strip()[:120]
+    r = requests.patch(f"{admin.SUPABASE_URL}/rest/v1/member_comments",
+                       headers={**admin._sb_headers(), "Prefer": "return=representation"},
+                       params={"id": f"eq.{entry_id}", "member_person_uuid": f"eq.{uuid}"},
+                       json=patch, timeout=_TIMEOUT)
+    if r.status_code not in (200, 204):
+        raise PartnerError(502, f"could not update the note ({r.status_code})")
+    rows = r.json() if r.status_code == 200 else []
+    if not rows:
+        raise PartnerError(404, "note not found")
+    saved = rows[0]
+    return {"entry": {
+        "id": saved.get("id"),
+        "body": saved.get("body", text),
+        "author": saved.get("author_name") or PARTNER_EMAIL,
         "created_at": saved.get("created_at"),
         "updated_at": saved.get("updated_at"),
     }}
