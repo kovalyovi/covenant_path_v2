@@ -11,8 +11,9 @@ import { usePersistentState } from '../../hooks/usePersistentState';
 import { useTier, colsFor } from '../../hooks/useTier';
 import type { Member } from '../../lib/member';
 import { isInvestigator } from '../../lib/member';
-import { parseMemberDate, fmtMonShort, fmtMonYear } from '../../logic/dates';
+import { parseMemberDate, fmtMonShort, fmtMonYear, fmtMonthDayYear, dayOnly } from '../../logic/dates';
 import { avgCompletion } from '../../logic/milestones';
+import { currentCycle, goalRows, unitOptions, type GoalRow } from '../../logic/wardGoals';
 import {
   metricData, attendedDates, firstLessonDate, lessonsWithMember,
   membersWithMemberLessons, unitCompletion, assignUnitColors,
@@ -21,6 +22,7 @@ import {
 import { Icon, type IconName } from '../../components/Icon';
 import { SectionCard, Segmented, RangePill, Progress } from '../../components/ui';
 import { Dropdown, type DropdownOption } from '../../components/Dropdown';
+import { useToast } from '../../components/Toast';
 import { useCountUp } from '../../hooks/useCountUp';
 import { PageScaffold, BigHeader, Columns } from '../../components/dashboard';
 import { SkeletonBox } from '../../components/Skeletons';
@@ -302,6 +304,11 @@ function KpisBody() {
           />
         </div>
 
+        <SectionHeading icon="flag">Ward Goals</SectionHeading>
+        <div style={{ maxWidth: 640 }}>
+          <WardGoalsCard />
+        </div>
+
         <SectionHeading icon="leaderboard">Trends</SectionHeading>
         <Columns cols={Math.min(2, colsFor(tier))}>{trendCards}</Columns>
 
@@ -310,6 +317,101 @@ function KpisBody() {
       </PageScaffold>
       <DrillHost drill={drill} onClose={() => setDrill(null)} />
     </>
+  );
+}
+
+/** Ward baptism goals for the CURRENT transfer cycle: per unit, goal vs actual (baptized in the cycle
+ *  window), with an inline-editable goal number. A ward leader sees only their unit, a stake leader all
+ *  (RLS scopes both the members read and the ward_goals write). Needs the transfer schedule to exist. */
+function WardGoalsCard() {
+  const d = useDashboard();
+  const toast = useToast();
+  const cycle = currentCycle(d.transferDates, dayOnly(new Date()));
+  const units = unitOptions(d.members);
+  const baptized = d.members.filter((m) => !isInvestigator(m));
+
+  if (!cycle) {
+    return (
+      <SectionCard title="Ward goals" icon="flag">
+        <p className="muted" style={{ margin: 0 }}>
+          Set the transfer schedule on the Baptisms page to track ward baptism goals per cycle.
+        </p>
+      </SectionCard>
+    );
+  }
+
+  const rows = goalRows(units, baptized, d.wardGoals, cycle.transferId, cycle.window);
+
+  async function save(row: GoalRow, goal: number) {
+    try {
+      await d.upsertWardGoal({ unitId: row.unitId, unitName: row.unitName, transferId: cycle!.transferId, goal });
+    } catch (e) {
+      toast.show({ message: `Could not save goal: ${e instanceof Error ? e.message : e}` });
+    }
+  }
+
+  return (
+    <SectionCard
+      title="Ward goals"
+      icon="flag"
+      trailing={<span className="tiny muted">Cycle ending {fmtMonthDayYear(cycle.window.end)}</span>}
+    >
+      {rows.length === 0 ? (
+        <p className="muted" style={{ margin: 0 }}>No units to show yet.</p>
+      ) : (
+        <div className="stack" style={{ gap: 10 }}>
+          {rows.map((row) => (
+            <WardGoalRow key={row.unitId ?? row.unitName} row={row} onSave={(g) => void save(row, g)} />
+          ))}
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+function WardGoalRow({ row, onSave }: { row: GoalRow; onSave: (goal: number) => void }) {
+  const [val, setVal] = useState(row.goal == null ? '' : String(row.goal));
+  const goalNum = row.goal ?? 0;
+  const pct = goalNum > 0 ? Math.min(1, row.actual / goalNum) : 0;
+  const met = goalNum > 0 && row.actual >= goalNum;
+
+  function commit() {
+    const trimmed = val.trim();
+    if (trimmed === '') return; // leaving it blank keeps the current goal (or "unset")
+    const n = Math.max(0, Math.floor(Number(trimmed)));
+    if (Number.isNaN(n)) {
+      setVal(row.goal == null ? '' : String(row.goal));
+      return;
+    }
+    if (n !== (row.goal ?? -1)) onSave(n);
+  }
+
+  return (
+    <div className="stack" style={{ gap: 4 }}>
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontWeight: 600 }}>{row.unitName}</span>
+        <span className="row" style={{ gap: 8, alignItems: 'center' }}>
+          <span className="tiny muted">
+            {row.actual} of {row.goal ?? '—'} baptized
+          </span>
+          <input
+            className="input"
+            type="number"
+            min={0}
+            inputMode="numeric"
+            aria-label={`Baptism goal for ${row.unitName}`}
+            value={val}
+            onChange={(e) => setVal(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+            }}
+            style={{ width: 64 }}
+          />
+        </span>
+      </div>
+      {goalNum > 0 && <Progress value={pct} color={met ? 'var(--good, var(--primary))' : undefined} />}
+    </div>
   );
 }
 

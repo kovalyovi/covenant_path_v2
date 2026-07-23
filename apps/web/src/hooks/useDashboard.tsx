@@ -12,6 +12,7 @@ import { MEMBER_COLUMNS, type Member } from '../lib/member';
 import { buildNotesIndex, type NoteRow, type MemberNoteRow, type NoteSummary, type NoteThreadEntry } from '../logic/notes';
 import { mergedNote, type ManualMember, type MergePlan } from '../logic/manualMembers';
 import { type TransferDate } from '../logic/transfers';
+import { type WardGoal } from '../logic/wardGoals';
 import { broker, type EnrollmentStatus } from '../lib/broker';
 import { getShowNotes, setShowNotes as persistShowNotes } from '../lib/prefs';
 
@@ -59,6 +60,11 @@ interface DashboardState {
   upsertTransferDate: (input: { transferId: string; date: string }) => Promise<void>;
   /** Remove a transfer date from the schedule. */
   deleteTransferDate: (id: string) => Promise<void>;
+  /** Per-ward, per-transfer-cycle baptism goals (ward_goals) in the viewer's scope. */
+  wardGoals: WardGoal[];
+  reloadWardGoals: () => Promise<void>;
+  /** Set/adjust a ward's goal for a transfer cycle (RLS: stake leader any unit, ward leader own). */
+  upsertWardGoal: (input: { unitId: string | null; unitNumber?: number | null; unitName: string | null; transferId: string; goal: number }) => Promise<void>;
   stakes: StakeRow[];
   currentStakeId: string | null;
   stakeName: string | null;
@@ -132,6 +138,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const [showNotes, setShowNotesState] = useState<boolean>(() => getShowNotes());
   const [manualMembers, setManualMembers] = useState<ManualMember[]>([]);
   const [transferDates, setTransferDates] = useState<TransferDate[]>([]);
+  const [wardGoals, setWardGoals] = useState<WardGoal[]>([]);
 
   const setShowNotes = useCallback((on: boolean) => {
     setShowNotesState(on);
@@ -327,6 +334,45 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     [reloadTransferDates],
   );
 
+  const loadWardGoals = useCallback(async (stakeId: string | null): Promise<WardGoal[]> => {
+    // Ward goals in the viewer's scope (RLS: stake leader all units, ward leader own unit).
+    try {
+      const base = supabase.from('ward_goals').select('id, unit_id, unit_number, unit_name, transfer_id, goal');
+      const scoped = stakeId != null ? base.eq('stake_id', stakeId) : base;
+      const { data } = await scoped;
+      return (data ?? []) as WardGoal[];
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const reloadWardGoals = useCallback(async () => {
+    setWardGoals(await loadWardGoals(currentIdRef.current));
+  }, [loadWardGoals]);
+
+  const upsertWardGoal = useCallback(
+    async (input: { unitId: string | null; unitNumber?: number | null; unitName: string | null; transferId: string; goal: number }) => {
+      const stakeId = currentIdRef.current;
+      const email = (await supabase.auth.getUser()).data.user?.email ?? '';
+      const { error } = await supabase.from('ward_goals').upsert(
+        {
+          stake_id: stakeId,
+          unit_id: input.unitId,
+          unit_number: input.unitNumber ?? null,
+          unit_name: input.unitName,
+          transfer_id: input.transferId,
+          goal: input.goal,
+          updated_by: email,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'stake_id,unit_id,transfer_id' },
+      );
+      if (error) throw error;
+      await reloadWardGoals();
+    },
+    [reloadWardGoals],
+  );
+
   const applyCurrentStake = useCallback((list: StakeRow[], id: string | null) => {
     if (list.length === 0) return;
     const s = list.find((e) => e.id === id) ?? list[0];
@@ -428,6 +474,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         // Not awaited — never delays first paint; caches enrollStatus for the Sync-settings sheet (#11).
         void reloadEnrollStatus();
         void reloadTransferDates();
+        void reloadWardGoals();
       } catch (e) {
         if (active) setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -459,13 +506,14 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       // also re-pull the stake's freshness/sync state so "Updated X ago" reflects the latest run.
       void reloadStakes();
       void reloadTransferDates();
+      void reloadWardGoals();
       if (rows.length === 0) void reloadEnrollStatus();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setRefreshing(false);
     }
-  }, [loadMembers, loadNotes, loadManualMembers, reloadEnrollStatus, reloadStakes, reloadTransferDates]);
+  }, [loadMembers, loadNotes, loadManualMembers, reloadEnrollStatus, reloadStakes, reloadTransferDates, reloadWardGoals]);
 
   const switchStake = useCallback(
     (id: string) => {
@@ -485,12 +533,13 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
           setThreads(nts.threads);
           setManualMembers(manuals);
           void loadTransferDates(id).then(setTransferDates);
+          void loadWardGoals(id).then(setWardGoals);
           if (rows.length === 0) void reloadEnrollStatus();
         })
         .catch((e) => setError(e instanceof Error ? e.message : String(e)))
         .finally(() => setLoading(false));
     },
-    [applyCurrentStake, loadMembers, loadNotes, loadManualMembers, loadTransferDates, reloadEnrollStatus],
+    [applyCurrentStake, loadMembers, loadNotes, loadManualMembers, loadTransferDates, loadWardGoals, reloadEnrollStatus],
   );
 
   const markSyncing = useCallback(() => {
@@ -513,6 +562,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       loading, refreshing, error, members, notes, threads, reloadNotes, showNotes, setShowNotes,
       manualMembers, reloadManualMembers, addManualMember, mergeManualMember, deleteManualMember,
       transferDates, reloadTransferDates, upsertTransferDate, deleteTransferDate,
+      wardGoals, reloadWardGoals, upsertWardGoal,
       stakes, currentStakeId, stakeName, lastSynced,
       syncing, syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,
       reloadStakes, reloadEnrollStatus, setEnrollStatus,
@@ -523,6 +573,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       loading, refreshing, error, members, notes, threads, reloadNotes, showNotes, setShowNotes,
       manualMembers, reloadManualMembers, addManualMember, mergeManualMember, deleteManualMember,
       transferDates, reloadTransferDates, upsertTransferDate, deleteTransferDate,
+      wardGoals, reloadWardGoals, upsertWardGoal,
       stakes, currentStakeId, stakeName, lastSynced,
       syncing, syncStartedAt, missionaries, isAdmin, enrollStatus, switchStake, refresh, markSyncing,
       reloadStakes, reloadEnrollStatus, reauthOpen, openReauth, closeReauth,
