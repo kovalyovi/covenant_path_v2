@@ -933,6 +933,41 @@ class PartnerNoteDeleteReq(BaseModel):
     id: str
 
 
+class PartnerTransferSetReq(BaseModel):
+    transfer_date: str
+    transfer_id: str | None = None
+
+
+class PartnerTransferDeleteReq(BaseModel):
+    transfer_id: str
+
+
+class PartnerWardGoalSetReq(BaseModel):
+    unit_number: int
+    transfer_id: str
+    goal: int
+    unit_name: str | None = None
+
+
+class PartnerWardGoalDeleteReq(BaseModel):
+    unit_number: int
+    transfer_id: str
+
+
+class PartnerManualSetReq(BaseModel):
+    first_name: str
+    last_initial: str | None = None
+    baptism_date: str | None = None
+    unit_number: int | None = None
+    unit_name: str | None = None
+    notes: str | None = None
+    uuid: str | None = None  # present ⇒ update that row; absent ⇒ create
+
+
+class PartnerManualDeleteReq(BaseModel):
+    uuid: str
+
+
 # --- Partner notes lane (Mission-KPIs app reads/writes OUR member_comments thread) -----------
 # Token-gated (X-Partner-Token vs PARTNER_NOTES_TOKEN, constant-time; unset env = lane off) and
 # rate-limited like the other unauthenticated surfaces (BACKEND-01 posture).
@@ -995,6 +1030,76 @@ def partner_notes_delete(person_uuid: str, body: PartnerNoteDeleteReq, request: 
         raise HTTPException(status_code=e.status, detail=e.detail)
     except admin.AdminError as e:
         raise HTTPException(status_code=503, detail=str(e))
+
+
+# --- Partner DATA lanes (transfer dates / ward goals / manual people) — same token + posture ----
+
+def _partner_call(request: Request, fn, *args):
+    """Run a partner_data function behind the shared token guard + uniform error mapping."""
+    from backend.auth_broker import partner_data
+    _partner_guard(request)
+    try:
+        return fn(*args)
+    except partner_data.PartnerError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/partner/transfer-dates", dependencies=[Depends(ratelimit.limiter("partner", 120, 60.0))])
+def partner_transfers_list(request: Request) -> dict:
+    from backend.auth_broker import partner_data
+    return _partner_call(request, partner_data.list_transfers)
+
+
+@app.post("/partner/transfer-dates", dependencies=[Depends(ratelimit.limiter("partner", 60, 60.0))])
+def partner_transfers_set(body: PartnerTransferSetReq, request: Request) -> dict:
+    from backend.auth_broker import partner_data
+    return _partner_call(request, partner_data.set_transfer, body.transfer_date, body.transfer_id)
+
+
+@app.post("/partner/transfer-dates/delete", dependencies=[Depends(ratelimit.limiter("partner", 60, 60.0))])
+def partner_transfers_delete(body: PartnerTransferDeleteReq, request: Request) -> dict:
+    from backend.auth_broker import partner_data
+    return _partner_call(request, partner_data.delete_transfer, body.transfer_id)
+
+
+@app.get("/partner/ward-goals", dependencies=[Depends(ratelimit.limiter("partner", 120, 60.0))])
+def partner_ward_goals_list(request: Request) -> dict:
+    from backend.auth_broker import partner_data
+    return _partner_call(request, partner_data.list_ward_goals)
+
+
+@app.post("/partner/ward-goals", dependencies=[Depends(ratelimit.limiter("partner", 60, 60.0))])
+def partner_ward_goals_set(body: PartnerWardGoalSetReq, request: Request) -> dict:
+    from backend.auth_broker import partner_data
+    return _partner_call(request, partner_data.set_ward_goal,
+                         body.unit_number, body.transfer_id, body.goal, body.unit_name)
+
+
+@app.post("/partner/ward-goals/delete", dependencies=[Depends(ratelimit.limiter("partner", 60, 60.0))])
+def partner_ward_goals_delete(body: PartnerWardGoalDeleteReq, request: Request) -> dict:
+    from backend.auth_broker import partner_data
+    return _partner_call(request, partner_data.delete_ward_goal, body.unit_number, body.transfer_id)
+
+
+@app.get("/partner/manual-people", dependencies=[Depends(ratelimit.limiter("partner", 120, 60.0))])
+def partner_manual_list(request: Request) -> dict:
+    from backend.auth_broker import partner_data
+    return _partner_call(request, partner_data.list_manual_people)
+
+
+@app.post("/partner/manual-people", dependencies=[Depends(ratelimit.limiter("partner", 60, 60.0))])
+def partner_manual_set(body: PartnerManualSetReq, request: Request) -> dict:
+    from backend.auth_broker import partner_data
+    return _partner_call(request, partner_data.upsert_manual_person, body.first_name, body.last_initial,
+                         body.baptism_date, body.unit_number, body.unit_name, body.notes, body.uuid)
+
+
+@app.post("/partner/manual-people/delete", dependencies=[Depends(ratelimit.limiter("partner", 60, 60.0))])
+def partner_manual_delete(body: PartnerManualDeleteReq, request: Request) -> dict:
+    from backend.auth_broker import partner_data
+    return _partner_call(request, partner_data.delete_manual_person, body.uuid)
 
 
 class ReportEmailReq(BaseModel):

@@ -2243,6 +2243,114 @@ def test_partner_notes_lane() -> None:
             os.environ["PARTNER_NOTES_TOKEN"] = saved_token
 
 
+def test_partner_data_lanes() -> None:
+    """Partner DATA lanes (transfer dates / ward goals / manual people): shared token gate, stake
+    resolved from PARTNER_STAKE_UNIT, his unit_number ↔ our unit_id mapping, upsert + delete."""
+    from backend.auth_broker import partner_data
+
+    saved_token = os.environ.pop("PARTNER_NOTES_TOKEN", None)
+    saved_stake = os.environ.pop("PARTNER_STAKE_UNIT", None)
+    saved_one, saved_headers = admin._one, admin._sb_headers
+    saved_get, saved_post = partner_data.requests.get, partner_data.requests.post
+    saved_patch, saved_delete = partner_data.requests.patch, partner_data.requests.delete
+    admin._sb_headers = lambda: {}
+    # stakes lookup goes through admin._one; everything else through the stubbed requests.* below.
+    admin._one = lambda table, params=None, *a, **k: {"id": "stk1"} if table == "stakes" else None
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if "/units" in url:
+            return _FakeResp([{"id": "u10", "unit_number": 10, "name": "Alpha Ward"}])
+        if "/transfer_dates" in url:
+            return _FakeResp([{"transfer_id": "t-2026-07-23", "transfer_date": "2026-07-23"}])
+        if "/ward_goals" in url:
+            return _FakeResp([{"unit_number": 10, "unit_name": "Alpha Ward",
+                               "transfer_id": "t-2026-07-23", "goal": 3, "updated_at": "t", "updated_by": "u"}])
+        if "/manual_members" in url:
+            return _FakeResp([{"id": "mm1", "name": "John S", "first_name": "John", "last_initial": "S",
+                               "baptism_date": "2026-08-01", "unit_id": "u10", "unit_name": "Alpha Ward",
+                               "custom_notes": "keep", "updated_at": "t"}])
+        return _FakeResp([])
+
+    posted: dict = {}
+
+    def fake_post(url, headers=None, json=None, params=None, timeout=None):
+        posted.clear()
+        posted["url"], posted["body"] = url, json or {}
+        return _FakeResp([{**(json or {}), "id": "new1"}], 201)
+
+    deleted: dict = {}
+
+    def fake_delete(url, headers=None, params=None, timeout=None):
+        deleted.clear()
+        deleted.update(params or {})
+        return _FakeResp([], 204)
+
+    try:
+        # Token gate is shared with the notes lane (unset ⇒ 503).
+        check("partner-data: unset token -> 503",
+              client.get("/partner/transfer-dates").status_code == 503)
+        os.environ["PARTNER_NOTES_TOKEN"] = "sekrit"
+        check("partner-data: wrong token -> 401",
+              client.get("/partner/transfer-dates",
+                         headers={"X-Partner-Token": "no"}).status_code == 401)
+
+        admin._one = lambda table, params=None, *a, **k: {"id": "stk1"} if table == "stakes" else None
+        partner_data.requests.get = fake_get
+        partner_data.requests.post = fake_post
+        partner_data.requests.delete = fake_delete
+        h = {"X-Partner-Token": "sekrit"}
+
+        # Transfer dates: list + upsert (transfer_id derived from date when absent) + bad date 400.
+        r = client.get("/partner/transfer-dates", headers=h)
+        check("partner-data: transfers list", r.status_code == 200
+              and r.json()["transfers"][0]["transfer_id"] == "t-2026-07-23")
+        r = client.post("/partner/transfer-dates", headers=h, json={"transfer_date": "2026-09-03"})
+        check("partner-data: transfer upsert derives id + stake-scoped",
+              r.status_code == 200 and posted["body"].get("transfer_id") == "t-2026-09-03"
+              and posted["body"].get("stake_id") == "stk1")
+        check("partner-data: bad transfer date -> 400",
+              client.post("/partner/transfer-dates", headers=h,
+                          json={"transfer_date": "9/3/26"}).status_code == 400)
+
+        # Ward goals: unit_number → unit_id mapping; unknown unit -> 404.
+        r = client.post("/partner/ward-goals", headers=h,
+                        json={"unit_number": 10, "transfer_id": "t-2026-07-23", "goal": 5})
+        check("partner-data: ward goal maps unit_number->unit_id",
+              r.status_code == 200 and posted["body"].get("unit_id") == "u10"
+              and posted["body"].get("goal") == 5)
+        check("partner-data: ward goal unknown unit -> 404",
+              client.post("/partner/ward-goals", headers=h,
+                          json={"unit_number": 99, "transfer_id": "t-2026-07-23", "goal": 5}).status_code == 404)
+
+        # Manual people: list maps id->uuid + unit_id->unit_number; create returns a uuid.
+        r = client.get("/partner/manual-people", headers=h)
+        person = r.json()["people"][0]
+        check("partner-data: manual list maps id->uuid + unit_number",
+              r.status_code == 200 and person["uuid"] == "mm1" and person["unit_number"] == 10)
+        r = client.post("/partner/manual-people", headers=h,
+                        json={"first_name": "Maria", "last_initial": "G", "unit_number": 10,
+                              "baptism_date": "2026-08-15", "notes": "referral"})
+        check("partner-data: manual create returns uuid + builds name + maps unit",
+              r.status_code == 200 and r.json()["person"]["uuid"] == "new1"
+              and posted["body"].get("name") == "Maria G" and posted["body"].get("unit_id") == "u10")
+        check("partner-data: manual first_name required -> 400",
+              client.post("/partner/manual-people", headers=h, json={"first_name": "  "}).status_code == 400)
+
+        # Delete is stake-scoped.
+        r = client.post("/partner/manual-people/delete", headers=h, json={"uuid": "mm1"})
+        check("partner-data: manual delete stake-scoped",
+              r.status_code == 200 and deleted.get("id") == "eq.mm1" and deleted.get("stake_id") == "eq.stk1")
+    finally:
+        admin._one, admin._sb_headers = saved_one, saved_headers
+        partner_data.requests.get, partner_data.requests.post = saved_get, saved_post
+        partner_data.requests.patch, partner_data.requests.delete = saved_patch, saved_delete
+        for key, val in (("PARTNER_NOTES_TOKEN", saved_token), ("PARTNER_STAKE_UNIT", saved_stake)):
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+
+
 def test_ratelimit_check_caps_attempts() -> None:
     # BACKEND-01: the sliding-window core raises 429 once `limit` hits land inside `window`.
     from fastapi import HTTPException
@@ -2386,6 +2494,7 @@ def main() -> int:
     test_safe_cred_id_rejects_filter_metachars()
     test_user_routes_require_auth()
     test_partner_notes_lane()
+    test_partner_data_lanes()
     test_ratelimit_check_caps_attempts()
     test_mfa_lockout_after_max_fails()
     print(f"\n{_PASS} passed, {_FAIL} failed")
