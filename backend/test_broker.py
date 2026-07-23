@@ -2263,7 +2263,8 @@ def test_partner_data_lanes() -> None:
         if "/transfer_dates" in url:
             return _FakeResp([{"transfer_id": "t-2026-07-23", "transfer_date": "2026-07-23"}])
         if "/ward_goals" in url:
-            return _FakeResp([{"unit_number": 10, "unit_name": "Alpha Ward",
+            # unit_number null (as the WEB writes it) — the lane must resolve it from unit_id.
+            return _FakeResp([{"unit_id": "u10", "unit_number": None, "unit_name": "Alpha Ward",
                                "transfer_id": "t-2026-07-23", "goal": 3, "updated_at": "t", "updated_by": "u"}])
         if "/manual_members" in url:
             return _FakeResp([{"id": "mm1", "name": "John S", "first_name": "John", "last_initial": "S",
@@ -2321,6 +2322,9 @@ def test_partner_data_lanes() -> None:
         check("partner-data: ward goal unknown unit -> 404",
               client.post("/partner/ward-goals", headers=h,
                           json={"unit_number": 99, "transfer_id": "t-2026-07-23", "goal": 5}).status_code == 404)
+        r = client.get("/partner/ward-goals", headers=h)
+        check("partner-data: ward-goals GET resolves null unit_number from unit_id",
+              r.status_code == 200 and r.json()["goals"][0]["unit_number"] == 10)
 
         # Manual people: list maps id->uuid + unit_id->unit_number; create returns a uuid.
         r = client.get("/partner/manual-people", headers=h)

@@ -119,9 +119,23 @@ def delete_transfer(transfer_id: str) -> dict:
 
 def list_ward_goals() -> dict:
     stake_id = _stake_id()
-    rows = _get("ward_goals", {"select": "unit_number,unit_name,transfer_id,goal,updated_at,updated_by",
+    num_by_id = _unit_number_by_id(stake_id)
+    rows = _get("ward_goals", {"select": "unit_id,unit_number,unit_name,transfer_id,goal,updated_at,updated_by",
                                "stake_id": f"eq.{stake_id}"})
-    return {"goals": rows}
+    # unit_number may be null on rows the WEB created (it writes unit_id only) — resolve it from unit_id
+    # so the partner always receives a unit_number (Ricky's app keys ward goals on it).
+    goals = []
+    for r in rows:
+        goals.append({
+            "unit_number": r.get("unit_number") if r.get("unit_number") is not None
+            else num_by_id.get(r.get("unit_id")),
+            "unit_name": r.get("unit_name"),
+            "transfer_id": r.get("transfer_id"),
+            "goal": r.get("goal"),
+            "updated_at": r.get("updated_at"),
+            "updated_by": r.get("updated_by"),
+        })
+    return {"goals": goals}
 
 
 def set_ward_goal(unit_number: int | None, transfer_id: str, goal: int, unit_name: str | None) -> dict:
