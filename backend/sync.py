@@ -277,6 +277,15 @@ def sync_stake(client: LcrClient, members: list[dict], conn,
                         adopted, ctx.unit_name, ctx.unit_number)
     except Exception as exc:  # noqa: BLE001 — never fail the data sync over note adoption
         logger.warning("note adoption skipped for stake %s: %s", stake_id, exc)
+    # Auto-merge manually-added people the sync now has a REAL record for (exact name within the same
+    # unit): preserve their notes onto the real member, soft-mark the manual row merged.
+    try:
+        auto_merged = db.merge_manual_members(conn, stake_id)
+        if auto_merged:
+            logger.info("auto-merged %d manual person(s) into synced records for stake %s (%s)",
+                        auto_merged, ctx.unit_name, ctx.unit_number)
+    except Exception as exc:  # noqa: BLE001 — never fail the data sync over the manual-merge convenience
+        logger.warning("manual-member merge skipped for stake %s: %s", stake_id, exc)
     # Reconcile departed people (hard-delete): anyone no longer in LCR for a unit that scraped
     # cleanly this run has left the stake (moved out / record removed / deceased) → remove them.
     # Units that FAILED to scrape are excluded so a transient LCR failure never wipes a roster.

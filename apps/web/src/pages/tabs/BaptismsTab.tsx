@@ -24,6 +24,7 @@ import { SectionCardSkeleton } from '../../components/Skeletons';
 import { MissionaryStrip, MissionariesSection, useUnitMissionaries, baptismCardMissionaries } from '../../components/Missionaries';
 import { NotesThread } from '../../components/NotesThread';
 import { NextTransferBanner } from '../../components/TransferDates';
+import { ManualMembersSection } from '../../components/ManualMembers';
 import { TabGate } from '../../components/TabGate';
 
 interface Dated {
@@ -98,6 +99,12 @@ function BaptismsBody() {
       ) : (
         <PersonCardSections items={items} today={today} />
       )}
+
+      {/* Leader-added baptism candidates (not yet in LCR): add / edit / remove, with baptism date +
+          optional missionaries. Kept as its own block so it never disrupts the synced-card layout. */}
+      <div style={{ marginTop: 20, maxWidth: 640 }}>
+        <ManualMembersSection />
+      </div>
 
       {/* SECOND section (item 4): assigned missionaries — a full per-unit breakdown, INCLUDING wards
           with none (highlighted with a warning). */}

@@ -12,6 +12,12 @@ export interface ManualMember {
   unit_name?: string | null;
   name: string;
   custom_notes?: string | null;
+  /** Planned baptism date (ISO YYYY-MM-DD) — a manual person is tracked as a baptism candidate. */
+  baptism_date?: string | null;
+  /** Optional assigned missionary companionship (the stake roster shape: {phone,email,missionaries[]}). */
+  missionaries?: Record<string, unknown> | null;
+  first_name?: string | null;
+  last_initial?: string | null;
   created_by?: string | null;
   merged_at?: string | null;
   merged_into_uuid?: string | null;

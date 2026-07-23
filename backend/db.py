@@ -12,6 +12,8 @@ Env:
 from __future__ import annotations
 
 import os
+import re
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -267,6 +269,93 @@ def adopt_orphan_notes(conn, stake_id: str) -> int:
         adopted = cur.rowcount
     conn.commit()
     return adopted
+
+
+def _normalize_name(name: str | None) -> str:
+    """Python twin of the web's logic/manualMembers.ts `normalizeName` (kept in lockstep — tests pin the
+    parity): lowercased, diacritics folded (é→e, ñ→n), commas/periods → spaces, apostrophes/hyphens
+    dropped ("O'Brien"→"obrien", "Mary-Jane"→"maryjane"), any remaining non-alphanumerics stripped, then
+    the tokens SORTED so "Smith, John" == "John Smith" (order-insensitive)."""
+    s = (name or "").lower()
+    s = unicodedata.normalize("NFD", s)
+    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")  # drop combining marks
+    s = re.sub(r"[.,]", " ", s)
+    s = re.sub(r"['’-]", "", s)          # apostrophes (straight + right-single) and hyphens
+    s = re.sub(r"[^a-z0-9\s]", "", s)
+    return " ".join(sorted(t for t in s.split() if t))
+
+
+def _same_unit(a_unit_id, a_unit_name, b_unit_id, b_unit_name) -> bool:
+    """Same unit? Prefer unit_id when both sides have it; else fall back to unit_name (case-insensitive).
+    Mirrors the web's `sameUnit`."""
+    if a_unit_id and b_unit_id:
+        return str(a_unit_id) == str(b_unit_id)
+    an = (a_unit_name or "").strip().lower()
+    bn = (b_unit_name or "").strip().lower()
+    return bool(an) and an == bn
+
+
+def _merged_note(existing: str | None, preserved: str | None) -> str:
+    """Combine a preserved manual note with the member's existing note without ever losing text — mirrors
+    the web's `mergedNote` (append under a blank-line divider; idempotent if already contained)."""
+    a = (existing or "").strip()
+    b = (preserved or "").strip()
+    if not b:
+        return a
+    if not a:
+        return b
+    if b in a:
+        return a
+    return f"{a}\n\n{b}"
+
+
+def merge_manual_members(conn, stake_id: str) -> int:
+    """Server-side dedup: when the daily sync brings a REAL member that matches a leader's manually-added
+    person (by normalized name WITHIN THE SAME UNIT), auto-merge — preserve the manual person's notes onto
+    the real member (member_notes) and soft-mark the manual row merged (merged_at + merged_into_uuid) so it
+    stops showing but the link/notes survive. Exact-name-in-unit only (the same rule the client's Merge
+    suggestion uses); the client still offers a manual Merge for near-but-inexact matches. Returns rows
+    merged. Runs as the postgres role (RLS-bypassing), same as the rest of the sync."""
+    with conn.cursor() as cur:
+        cur.execute("select id, name, unit_id, unit_name, custom_notes from manual_members "
+                    "where stake_id=%s and merged_at is null", (stake_id,))
+        manuals = cur.fetchall()
+        if not manuals:
+            return 0
+        cur.execute("select person_uuid, name, unit_id, unit_name from members where stake_id=%s",
+                    (stake_id,))
+        members = cur.fetchall()
+
+    merged = 0
+    for mid, mname, m_unit_id, m_unit_name, notes in manuals:
+        want = _normalize_name(mname)
+        if not want:
+            continue
+        match = next(((puid, unit_id) for puid, name, unit_id, unit_name in members
+                      if puid and _same_unit(m_unit_id, m_unit_name, unit_id, unit_name)
+                      and _normalize_name(name) == want), None)
+        if not match:
+            continue
+        puid, unit_id = match
+        with conn.cursor() as cur:
+            if (notes or "").strip():
+                cur.execute("select note from member_notes where stake_id=%s and member_person_uuid=%s",
+                            (stake_id, puid))
+                row = cur.fetchone()
+                combined = _merged_note(row[0] if row else "", notes)
+                cur.execute(
+                    """insert into member_notes
+                         (stake_id, unit_id, member_person_uuid, note, updated_by, updated_at)
+                       values (%s, %s, %s, %s, 'manual-merge', now())
+                       on conflict (stake_id, member_person_uuid)
+                       do update set note = excluded.note, updated_by = excluded.updated_by,
+                                     updated_at = now()""",
+                    (stake_id, unit_id, puid, combined))
+            cur.execute("update manual_members set merged_at = now(), merged_into_uuid = %s where id = %s",
+                        (puid, mid))
+        merged += 1
+    conn.commit()
+    return merged
 
 
 def count_reconcile_candidates(conn, stake_id: str, present_uuids: list[str],

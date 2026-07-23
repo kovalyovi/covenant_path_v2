@@ -30,6 +30,17 @@ export interface StakeRow {
 
 type Missionaries = Record<string, Array<Record<string, unknown>>>;
 
+export interface ManualMemberInput {
+  unitId: string | null;
+  unitName: string | null;
+  name: string;
+  notes: string;
+  /** Planned baptism date, ISO YYYY-MM-DD (optional). */
+  baptismDate?: string | null;
+  /** Optional assigned companionship (a stake-roster companionship object), stored as-is. */
+  missionaries?: Record<string, unknown> | null;
+}
+
 interface DashboardState {
   loading: boolean;
   refreshing: boolean;
@@ -47,8 +58,10 @@ interface DashboardState {
   /** Leader-added people being taught (manual_members), not yet merged into a real record (item 11). */
   manualMembers: ManualMember[];
   reloadManualMembers: () => Promise<void>;
-  /** Add a manual person being taught to a unit (name + custom notes). */
-  addManualMember: (input: { unitId: string | null; unitName: string | null; name: string; notes: string }) => Promise<void>;
+  /** Add a manual baptism candidate to a unit (name + notes + optional baptism date & missionaries). */
+  addManualMember: (input: ManualMemberInput) => Promise<void>;
+  /** Edit a manual person's fields (name / notes / baptism date / missionaries / unit). */
+  updateManualMember: (id: string, input: ManualMemberInput) => Promise<void>;
   /** Merge a manual member into the matched real record: remote fully overrides, notes preserved. */
   mergeManualMember: (plan: MergePlan) => Promise<void>;
   /** Remove a manual member (the leader added them by mistake / they're gone). */
@@ -201,7 +214,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       // AVAILABLE but not fetched (written, never read back): stake_id, created_by, merged_into_uuid.
       const base = supabase
         .from('manual_members')
-        .select('id, unit_id, unit_name, name, custom_notes, merged_at')
+        .select('id, unit_id, unit_name, name, custom_notes, baptism_date, missionaries, first_name, last_initial, merged_at')
         .is('merged_at', null);
       const scoped = stakeId != null ? base.eq('stake_id', stakeId) : base;
       const { data } = await scoped;
@@ -216,7 +229,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   }, [loadManualMembers]);
 
   const addManualMember = useCallback(
-    async (input: { unitId: string | null; unitName: string | null; name: string; notes: string }) => {
+    async (input: ManualMemberInput) => {
       const stakeId = currentIdRef.current;
       const email = (await supabase.auth.getUser()).data.user?.email ?? '';
       const { error } = await supabase.from('manual_members').insert({
@@ -225,8 +238,30 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         unit_name: input.unitName,
         name: input.name.trim(),
         custom_notes: input.notes.trim(),
+        baptism_date: input.baptismDate || null,
+        missionaries: input.missionaries ?? null,
         created_by: email,
       });
+      if (error) throw error;
+      await reloadManualMembers();
+    },
+    [reloadManualMembers],
+  );
+
+  const updateManualMember = useCallback(
+    async (id: string, input: ManualMemberInput) => {
+      const { error } = await supabase
+        .from('manual_members')
+        .update({
+          unit_id: input.unitId,
+          unit_name: input.unitName,
+          name: input.name.trim(),
+          custom_notes: input.notes.trim(),
+          baptism_date: input.baptismDate || null,
+          missionaries: input.missionaries ?? null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id);
       if (error) throw error;
       await reloadManualMembers();
     },
@@ -560,7 +595,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const value = useMemo<DashboardState>(
     () => ({
       loading, refreshing, error, members, notes, threads, reloadNotes, showNotes, setShowNotes,
-      manualMembers, reloadManualMembers, addManualMember, mergeManualMember, deleteManualMember,
+      manualMembers, reloadManualMembers, addManualMember, updateManualMember, mergeManualMember, deleteManualMember,
       transferDates, reloadTransferDates, upsertTransferDate, deleteTransferDate,
       wardGoals, reloadWardGoals, upsertWardGoal,
       stakes, currentStakeId, stakeName, lastSynced,
@@ -571,7 +606,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     }),
     [
       loading, refreshing, error, members, notes, threads, reloadNotes, showNotes, setShowNotes,
-      manualMembers, reloadManualMembers, addManualMember, mergeManualMember, deleteManualMember,
+      manualMembers, reloadManualMembers, addManualMember, updateManualMember, mergeManualMember, deleteManualMember,
       transferDates, reloadTransferDates, upsertTransferDate, deleteTransferDate,
       wardGoals, reloadWardGoals, upsertWardGoal,
       stakes, currentStakeId, stakeName, lastSynced,
