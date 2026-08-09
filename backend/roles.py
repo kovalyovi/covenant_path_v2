@@ -42,10 +42,72 @@ _ALWAYS_ALLOWED_CALLINGS = (
     "Stake Assistant Executive Secretary", "High Council",
 )
 
+# UNIT (ward/branch) leadership that must see their own unit's covenant-path data. Used to gate the
+# SECOND ward-position source (units.staffing, below), which carries no LCR position-type id — so
+# unlike the org-callings source we can't consult the access matrix and match on the calling NAME.
+#
+# Why this list exists at all (2026-08-08): `/mlt/api/orgs` — the org-callings source — returns only
+# the ward's OWN organization tree (bishopric, clerks, executive secretaries, ward missionaries,
+# temple & family history). It does NOT return the auxiliary presidencies, so an Elders Quorum /
+# Relief Society / Primary / Young Women / Sunday School president was never provisioned and signed
+# in to a completely EMPTY app (Reed Hunsaker, Seabrook Branch (Spanish) — see docs/TESTING.md N9).
+# LCR's own matrix grants those callings menu.progress.record + member.list + view.member.profiles;
+# they were missing from our roles purely because the directory endpoint never listed them.
+#
+# Both the WARD and the BRANCH spelling of every calling is listed: a branch's presiding council is
+# "Branch President" / "Branch Presidency First Counselor" (never "Bishop"), and its missionary team
+# is "Branch Mission Leader" / "Branch Missionary".
+#
+# Matched as a PREFIX of the calling name, so "Elders Quorum President" also covers "…First
+# Counselor"/"…Second Counselor"/"…Secretary" via the shorter org prefixes below.
+_UNIT_LEADERSHIP_PREFIXES = (
+    # Presiding council of the unit
+    "Bishop",                       # Bishop, Bishopric First/Second Counselor
+    "Branch President",             # Branch President
+    "Branch Presidency",            # Branch Presidency First/Second Counselor
+    # Records stewardship
+    "Ward Clerk", "Ward Assistant Clerk", "Ward Executive Secretary",
+    "Ward Assistant Executive Secretary",
+    "Branch Clerk", "Branch Assistant Clerk", "Branch Executive Secretary",
+    "Branch Assistant Executive Secretary",
+    # Auxiliary presidencies (presidents, counselors, secretaries)
+    "Elders Quorum", "Relief Society", "Young Women", "Young Men", "Primary", "Sunday School",
+    # Missionary work — explicitly in scope (user directive 2026-08-08)
+    "Ward Mission Leader", "Assistant Ward Mission Leader", "Ward Missionary",
+    "Branch Mission Leader", "Assistant Branch Mission Leader", "Branch Missionary",
+    "Ward Temple and Family History", "Branch Temple and Family History",
+)
+
+# NEVER granted by the name-matched lane, even when a prefix above would otherwise hit. These are the
+# YOUTH quorum + class presidencies (12–17-year-olds): LCR itself withholds the progress record from
+# them, and a class president has no stewardship over the ward's new-member data. Checked FIRST so
+# e.g. "Young Women Class Presidency" can't ride in on the "Young Women" org prefix.
+# Also excluded: advisers / specialists / instructors — they support an organization but hold no
+# stewardship over its records (and the staffing source wouldn't list them anyway; belt and braces).
+_UNIT_LEADERSHIP_EXCLUDED = (
+    "Deacons Quorum", "Teachers Quorum", "Priests Quorum",
+    "Builders of Faith Class", "Gatherers of Light Class", "Messengers of Hope Class",
+    "Class President", "Class First Counselor", "Class Second Counselor", "Class Presidency",
+    "Adviser", "Advisor", "Specialist", "Instructor", "Teacher", "Music", "Activity",
+)
+
 
 def _calling_always_allowed(calling: str | None) -> bool:
     c = calling or ""
     return any(k in c for k in _ALWAYS_ALLOWED_CALLINGS)
+
+
+def calling_is_unit_leadership(calling: str | None) -> bool:
+    """Does this WARD/BRANCH calling name grant its holder their unit's covenant-path data?
+
+    Name-based on purpose: the staffing source (Member Tools bulk directory) has no position-type id
+    to look up in the access matrix. Youth quorum/class presidencies are excluded first."""
+    c = (calling or "").strip()
+    if not c:
+        return False
+    if any(k in c for k in _UNIT_LEADERSHIP_EXCLUDED):
+        return False
+    return any(c.startswith(p) for p in _UNIT_LEADERSHIP_PREFIXES)
 
 
 def _positions(objs) -> list[dict]:
@@ -158,8 +220,32 @@ def _audit_access(conn, stake_id, stake_unit, granted, revoked) -> None:
         logger.warning("access audit skipped (non-fatal): %s", exc)
 
 
-def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]) -> dict:
-    """Rebuild user_roles for one stake from its leadership directory. Returns counts."""
+def _staffing_positions(rows) -> list[dict]:
+    """units.staffing rows -> the same position shape the org-callings source produces.
+
+    Shape in: [{position, person, person_uuid, set_apart}] (covenant_path.membertools_adapter
+    .staffing_by_unit). There is no LCR position-type id here, so `role_id` is None and the caller
+    gates on the calling NAME (calling_is_unit_leadership)."""
+    out: list[dict] = []
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        uuid_, calling = r.get("person_uuid"), r.get("position")
+        if uuid_ and calling:
+            out.append({"person_uuid": uuid_, "name": r.get("person"), "unit_name": None,
+                        "role_id": None, "calling": calling})
+    return out
+
+
+def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str],
+                    staffing_by_unit: dict | None = None,
+                    unit_id_by_number: dict[int, str] | None = None) -> dict:
+    """Rebuild user_roles for one stake from its leadership directory. Returns counts.
+
+    `staffing_by_unit` (unit_number -> units.staffing rows, from the Member Tools bulk directory) is
+    the SECOND ward-position source. `/mlt/api/orgs` alone omits the auxiliary presidencies, so an EQ
+    / RS / Primary / YW / Sunday School president got no role at all and saw an empty app. The two
+    sources are UNIONed per unit and deduped on (role, unit_id, person_uuid)."""
     matrix = fetch_access_matrix(client.session)
     allowed = set()  # role ids granted ANY core covenant-path data feature
     for _feature in _ACCESS_FEATURES:
@@ -220,21 +306,36 @@ def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]
     # ward/branch's filled callings from /mlt/api/orgs (clean JSON, pure HTTP). A calling that
     # grants member-data access -> ward_leader scoped to that unit. One bad unit is skipped.
     ward_n_found = 0
+    staffing_by_unit = staffing_by_unit or {}
+    unit_id_by_number = unit_id_by_number or {}
     for u in client.user_context().child_units:
         if not u.unit_number or u.type not in ("WARD", "BRANCH"):
             continue
-        unit_id = unit_id_by_name.get(u.name)
+        unit_id = unit_id_by_name.get(u.name) or unit_id_by_number.get(u.unit_number)
         if unit_id is None:
             continue
+        # SOURCE 1 — /mlt/api/orgs, role-id gated by the LCR access matrix. Covers the ward's own org
+        # (bishopric, clerks, executive secretaries, ward missionaries, temple & family history).
         try:
             positions = _ward_positions(client.org_callings(u.unit_number))
         except Exception as exc:  # noqa: BLE001 — never fail provisioning over one unit
             logger.warning("ward callings unavailable for %s (%s): %s", u.name, u.unit_number, exc)
-            continue
-        for p in positions:
-            if not _can_see(p):
+            positions = []
+        # SOURCE 2 — units.staffing (Member Tools bulk directory), gated by calling NAME. This is what
+        # supplies the AUXILIARY presidencies that source 1 never returns; it also covers branches,
+        # whose presiding/mission callings are named differently ("Branch President", "Branch
+        # Mission Leader", "Branch Missionary").
+        staffed = _staffing_positions(staffing_by_unit.get(u.unit_number)
+                                      or staffing_by_unit.get(str(u.unit_number)))
+        for p in positions + staffed:
+            # A role-id position goes through the access matrix; a staffing row (role_id None) goes
+            # through the unit-leadership name list. Either is sufficient.
+            if not (_can_see(p) if p.get("role_id") is not None
+                    else calling_is_unit_leadership(p.get("calling"))):
                 continue
             key = ("ward_leader", unit_id, p["person_uuid"])
+            if key in fresh:  # same person from both sources — keep the first (org-callings) calling
+                continue
             fresh[key] = (stake_id, unit_id, "ward_leader", p["person_uuid"], p["name"],
                           p["calling"], email_by_uuid.get(p["person_uuid"]))
             ward_n_found += 1

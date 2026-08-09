@@ -695,7 +695,11 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
             if known_subunit else
             "Daily sync is set up by a stake-level leader, and your stake isn't set up yet. Please ask "
             "your stake president or a stake clerk to sign in and enable it for the stake.")
-        _audit("blocked", error="ward-scoped session cannot enroll a stake")
+        # 'enroll_blocked', NOT 'blocked': this leader SIGNED IN FINE (authorized above) and sees their
+        # unit via their ward_leader role — only the sync SETUP was refused. Auditing it as 'blocked'
+        # made the admin console report a healthy ward-leader login as a denied one (Reed Hunsaker,
+        # Elders Quorum President, Seabrook Branch (Spanish), 2026-08-05).
+        _audit("enroll_blocked", error="ward-scoped session cannot enroll a stake")
         return base
 
     # Explicit consent → store the credential. The RPC keeps "most-elevated-wins-if-incomplete".
@@ -744,7 +748,9 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
             "account was left as-is to avoid reducing coverage. Ask them to re-authorize if the sync "
             "needs refreshing.")
         base["existing_provider"] = (post or {}).get("provider_name")
-        _audit("blocked", error="downgrade refused — stronger credential already on file")
+        # 'enroll_blocked' for the same reason as the ward-scoped refusal above: the login succeeded,
+        # only the credential take-over was declined.
+        _audit("enroll_blocked", error="downgrade refused — stronger credential already on file")
         return base
     logger.info("enrolled stake %s (%s): coverage_complete=%s rank=%s",
                 ctx.unit_name, ctx.unit_number, coverage["complete"], rank)

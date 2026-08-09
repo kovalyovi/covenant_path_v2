@@ -59,7 +59,15 @@ def main() -> int:
     units_ok = sum(1 for r in per_unit.values() if all(r.values()))
     conn = db.connect()
     try:
-        stake_id = db.upsert_stake(conn, ctx.unit_number, ctx.unit_name)
+        try:
+            stake_id = db.upsert_stake(conn, ctx.unit_number, ctx.unit_name)
+        except db.SubUnitAsStakeError as exc:
+            # The operator login resolved to a WARD/BRANCH context (it has happened: 2026-07-22..26).
+            # Recording that as a "stake" is what produced the phantom Green Level Ward row, so skip
+            # the diagnostics write entirely rather than mint one.
+            logger.warning("probe diagnostics skipped — session is ward/branch-scoped: %s", exc)
+            print(f"[skip] probe: {exc}")
+            return 0
         db.insert_diagnostics(conn, stake_id, "probe", {
             "requests": snap,
             "units_ok": units_ok,

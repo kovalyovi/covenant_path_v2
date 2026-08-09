@@ -291,7 +291,12 @@ def main() -> int:
     ctx = client.user_context()
     conn = db.connect()
     try:
-        stake_id = db.upsert_stake(conn, ctx.unit_number, ctx.unit_name)
+        try:
+            stake_id = db.upsert_stake(conn, ctx.unit_number, ctx.unit_name)
+        except db.SubUnitAsStakeError as exc:  # ward/branch session — never mint a phantom stake
+            logger.warning("photo sync skipped — session is ward/branch-scoped: %s", exc)
+            print(f"[skip] photos: {exc}")
+            return 0
         stats = sync_photos_for_stake(client, conn, stake_id, ctx.unit_number)
     finally:
         conn.close()

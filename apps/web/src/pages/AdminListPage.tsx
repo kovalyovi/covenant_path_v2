@@ -203,9 +203,23 @@ export function MaskedEmail({ email }: { email: unknown }) {
   );
 }
 
+/** Colour for a login_audit outcome. 'enroll_blocked' is deliberately MUTED, not a warning: that
+ *  login SUCCEEDED — only the sync set-up was refused (a ward/branch leader can't enrol a stake, or a
+ *  stronger credential is already on file). Rendering it like a denied login made a healthy ward
+ *  leader read as "blocked · Sees: none" in the console. */
+export function loginOutcomeColor(outcome: string): string {
+  if (outcome === 'allowed' || outcome === 'enrolled') return statusColors.successFg;
+  if (outcome === 'enroll_blocked') return 'var(--on-surface-variant)';
+  return statusColors.warning;
+}
+
+/** Human label — the raw enum reads as a denial to an admin skimming the list. */
+export function loginOutcomeLabel(outcome: string): string {
+  return outcome === 'enroll_blocked' ? 'signed in · sync setup declined' : outcome;
+}
+
 function LoginTile({ r }: { r: Json }) {
   const outcome = String(r['outcome'] ?? r['authorized'] ?? '');
-  const good = outcome === 'allowed' || outcome === 'enrolled';
   const callings = (Array.isArray(r['callings']) ? (r['callings'] as unknown[]) : []).join(', ');
   const scope = String(r['role_scope'] ?? '');
   const at = String(r['at'] ?? '');
@@ -213,7 +227,7 @@ function LoginTile({ r }: { r: Json }) {
     <div style={{ padding: '6px 0', borderBottom: '1px solid var(--outline-variant)' }}>
       <div className="row">
         <MaskedEmail email={r['email']} />
-        <span style={{ color: good ? statusColors.successFg : statusColors.warning, fontWeight: 600 }}>{outcome || '—'}</span>
+        <span style={{ color: loginOutcomeColor(outcome), fontWeight: 600 }}>{loginOutcomeLabel(outcome) || '—'}</span>
       </div>
       {r['stake_name'] ? <div className="small muted">{String(r['stake_name'])}</div> : null}
       {callings ? <div className="small muted">Callings: {callings}</div> : null}

@@ -358,7 +358,12 @@ def sync_stake(client: LcrClient, members: list[dict], conn,
     if live_session_matches:
         try:
             from backend.roles import provision_roles
-            roles = provision_roles(conn, client, stake_id, unit_id_by_name)
+            # `staffing` (Member Tools bulk directory, written to units.staffing above) is the second
+            # ward-position source: /mlt/api/orgs omits the auxiliary presidencies, so without it an
+            # EQ/RS/Primary/YW/Sunday School president gets no role and sees an empty app.
+            roles = provision_roles(conn, client, stake_id, unit_id_by_name,
+                                    staffing_by_unit=staffing,
+                                    unit_id_by_number=unit_id_by_number)
         except Exception as exc:  # noqa: BLE001 — never fail the data sync over role provisioning
             logger.warning("role provisioning skipped for stake %s: %s", stake_id, exc)
             roles = None

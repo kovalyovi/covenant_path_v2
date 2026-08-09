@@ -140,8 +140,31 @@ def apply_migrations(conn, migrations_dir: Path = MIGRATIONS_DIR) -> list[str]:
     return applied
 
 
+class SubUnitAsStakeError(RuntimeError):
+    """A ward/branch was about to be written as a `stakes` row (see upsert_stake)."""
+
+
 def upsert_stake(conn, unit_number: int, name: str) -> str:
+    """Upsert the stake identified by `unit_number`, refusing sub-units.
+
+    GUARD (2026-08-08): a WARD/BRANCH we already know as a child of a real stake must never get its
+    own `stakes` row. The enroll RPC has enforced this since migration 0052, but upsert_stake did
+    not — so any code path that starts from a LIVE user_context could mint a phantom "stake". That
+    is exactly how "Green Level Ward" reappeared in the enrolled-stakes list: between 2026-07-22 and
+    07-26 the probe's operator login resolved to a WARD context, and backend/probe.py upserted it as
+    a stake (27 orphan diagnostics rows, 0 members, no credential). Migration 0062 adds the same
+    check as a trigger, so every present and future writer is covered."""
     with conn.cursor() as cur:
+        cur.execute(
+            """select s.name from units u join stakes s on s.id = u.stake_id
+                where u.unit_number = %s
+                  and upper(coalesce(u.unit_type, '')) in ('WARD', 'BRANCH')
+                limit 1""", (unit_number,))
+        parent = cur.fetchone()
+        if parent:
+            raise SubUnitAsStakeError(
+                f"unit {unit_number} ({name!r}) is a ward/branch of stake {parent[0]!r} — refusing to "
+                f"create a stake row for it")
         cur.execute(
             """insert into stakes (unit_number, name) values (%s, %s)
                on conflict (unit_number) do update set name = excluded.name

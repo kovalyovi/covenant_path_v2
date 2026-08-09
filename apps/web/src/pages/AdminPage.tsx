@@ -19,7 +19,7 @@ import { IconButton, Button } from '../components/ui';
 import { CardSkeleton } from '../components/Skeletons';
 import { Modal } from '../components/Modal';
 import { useToast } from '../components/Toast';
-import { MaskedEmail, ViewAllLink } from './AdminListPage';
+import { MaskedEmail, ViewAllLink, loginOutcomeColor, loginOutcomeLabel } from './AdminListPage';
 import { MaintenanceModeCard } from '../components/MaintenanceGate';
 
 type Json = Record<string, unknown>;
@@ -457,7 +457,6 @@ function LoginAuditCard({ logins: all }: { logins: Json[] }) {
       </Card>
     );
   const logins = all.slice(0, 8); // full, paginated history at /admin/logins (#7)
-  const color = (o: string) => (o === 'allowed' || o === 'enrolled' ? statusColors.successFg : statusColors.warning);
   return (
     <Card title="Recent logins" trailing={all.length > 8 ? <ViewAllLink to="/admin/logins" n={all.length} /> : undefined}>
       {logins.map((r, i) => {
@@ -469,7 +468,7 @@ function LoginAuditCard({ logins: all }: { logins: Json[] }) {
           <div key={i} style={{ padding: '6px 0', borderBottom: '1px solid rgba(128,128,128,0.2)' }}>
             <div className="row">
               <MaskedEmail email={r['email']} />
-              <span style={{ color: color(outcome), fontWeight: 600 }}>{outcome || '—'}</span>
+              <span style={{ color: loginOutcomeColor(outcome), fontWeight: 600 }}>{loginOutcomeLabel(outcome) || '—'}</span>
             </div>
             {r['stake_name'] ? <div className="small muted">{String(r['stake_name'])}</div> : null}
             {callings ? <div className="small muted">Callings: {callings}</div> : null}
