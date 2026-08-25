@@ -165,7 +165,11 @@ def _ward_positions(orgs_data: dict) -> list[dict]:
 
 
 def _email_by_uuid(client) -> dict[str, str]:
-    """personUuid -> email across the stake's units (for matching app logins to roles)."""
+    """personUuid -> email across the stake's units (for matching app logins to roles).
+
+    NOTE: the LCR member-list endpoint this reads is DEAD (404 since ~2026-06; see
+    docs/LCR endpoint health), so in practice this returns {} and `_identity_emails` below is the
+    real source. Kept because it costs nothing and self-heals if LCR ever restores the endpoint."""
     out: dict[str, str] = {}
     try:
         for u in client.user_context().child_units:
@@ -179,6 +183,31 @@ def _email_by_uuid(client) -> dict[str, str]:
     except Exception as exc:  # noqa: BLE001
         logger.warning("email enrichment skipped: %s", exc)
     return out
+
+
+def _identity_emails(conn) -> dict[str, str]:
+    """personUuid -> the VERIFIED email of the Church login that owns it (church_identities).
+
+    THE fix for "a provisioned leader signs in and sees an empty app" (2026-08-25). RLS matches a
+    role row by `auth_id = auth.uid()` (a Supabase uid — never the LCR person uuid we key on) OR by
+    `lower(email)`. So for an email-OTP / Google sign-in, `user_roles.email` is the ONLY usable key —
+    and it was NULL on 202 of 218 Raleigh ward-leader rows because the only enrichment source
+    (`_email_by_uuid`, the LCR member list) has been dead for months.
+
+    `auth_broker/enroll._bind_identity_email` already stamps the email at Church-login time, but it
+    is ORDER-DEPENDENT: it can only patch role rows that already exist. Every auxiliary presidency
+    (EQ/RS/Primary/YW/Sunday School president) signed in BEFORE commit 019bc7d created their rows, so
+    the bind was a no-op and they were left invisible to RLS with no way to know they had to sign in
+    a second time. Reading the binding back out of `church_identities` here closes the loop from the
+    other side: the next sync heals them, whichever order login and provisioning happened in."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("select cmis_uuid, lower(email) from church_identities "
+                        "where cmis_uuid is not null and nullif(email,'') is not null")
+            return {u: e for u, e in cur.fetchall()}
+    except Exception as exc:  # noqa: BLE001 — never fail provisioning over the enrichment
+        logger.warning("identity email enrichment skipped: %s", exc)
+        return {}
 
 
 def _load_overrides(conn) -> list:
@@ -250,7 +279,11 @@ def provision_roles(conn, client, stake_id: str, unit_id_by_name: dict[str, str]
     allowed = set()  # role ids granted ANY core covenant-path data feature
     for _feature in _ACCESS_FEATURES:
         allowed |= set(matrix.feature_roles(_feature))
+    # personUuid -> email for the RLS match. The verified email of an actual Church login
+    # (church_identities) WINS over anything the LCR directory says: it is the address they really
+    # sign in with, which is the only one RLS can match.
     email_by_uuid = _email_by_uuid(client)
+    email_by_uuid.update(_identity_emails(conn))
     overrides = _load_overrides(conn)  # admin-added calling→access mappings (#3c)
 
     def _can_see(p: dict) -> bool:

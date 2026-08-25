@@ -123,7 +123,7 @@ test.describe('manual members (item 11)', () => {
 
     // Switch to the Being Taught section, open the add dialog, fill, save.
     await page.getByRole('button', { name: /Being Taught/ }).first().click();
-    await page.getByRole('button', { name: 'Add a person being taught' }).click();
+    await page.getByRole('button', { name: 'Add a baptism candidate' }).click();
     await page.getByPlaceholder('Given Surname').fill('Pat Newcomer');
     await page.getByPlaceholder(/want to remember/).fill('Met at a service project.');
     await page.getByRole('button', { name: 'Add', exact: true }).click();

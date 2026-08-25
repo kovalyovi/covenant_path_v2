@@ -158,8 +158,10 @@ def patched(monkeypatch):
 class _Cur:
     """Captures the rows provision_roles upserts."""
 
-    def __init__(self, sink):
+    def __init__(self, sink, identities=None):
         self.sink = sink
+        self.identities = identities or {}   # cmis_uuid -> verified login email
+        self._last = ""
 
     def __enter__(self):
         return self
@@ -173,6 +175,9 @@ class _Cur:
         self._last = sql
 
     def fetchall(self):
+        # `_identity_emails` reads church_identities for the personUuid -> verified-email map.
+        if "church_identities" in self._last:
+            return list(self.identities.items())
         return []
 
     @property
@@ -181,11 +186,12 @@ class _Cur:
 
 
 class _Conn:
-    def __init__(self):
+    def __init__(self, identities=None):
         self.rows = []
+        self.identities = identities or {}
 
     def cursor(self):
-        return _Cur(self.rows)
+        return _Cur(self.rows, self.identities)
 
     def commit(self):
         pass
@@ -254,3 +260,66 @@ def test_unit_id_falls_back_to_unit_number_when_the_name_does_not_match(patched)
     patched.provision_roles(conn, _Client(units, {}), "s", {}, staffing_by_unit=staffing,
                             unit_id_by_number={44911: "unit-44911"})
     assert [(r[1], r[3]) for r in conn.rows] == [("unit-44911", "rs")]
+
+
+# --------------------------------------------------------------------------------------------------
+# The RLS match key: user_roles.email. Regression for "provisioned leaders still see an empty app"
+# (2026-08-25). RLS matches a role row by `auth_id = auth.uid()` (a Supabase uid -- never the LCR
+# person uuid we key on) OR by `lower(email)`, so for an email-OTP / Google sign-in the email is the
+# ONLY usable key. It was NULL on 202 of 218 Raleigh ward_leader rows because the sole enrichment
+# source (`_email_by_uuid`, the LCR member list) has been dead (404) for months. These tests FAIL
+# against the pre-fix code: `_identity_emails` did not exist and provision_roles never read
+# church_identities, so `email` came out None.
+
+def test_role_rows_get_the_verified_login_email_from_church_identities(patched):
+    """A leader who has Church-logged-in gets that verified email stamped on their role row, so RLS
+    can match a later plain email/Google sign-in."""
+    units = [_Unit(458821, "Seabrook Branch (Spanish)", "BRANCH")]
+    staffing = {458821: [
+        {"person": "Hunsaker, Reed", "position": "Elders Quorum President", "person_uuid": "reed"},
+        {"person": "Nobody, Has Not Logged In", "position": "Primary President", "person_uuid": "np"},
+    ]}
+    conn = _Conn(identities={"reed": "reed.hunsaker@gmail.com"})
+    patched.provision_roles(conn, _Client(units, {}), "s", {"Seabrook Branch (Spanish)": "u"},
+                            staffing_by_unit=staffing)
+
+    email_by_uuid = {r[3]: r[6] for r in conn.rows}
+    assert email_by_uuid["reed"] == "reed.hunsaker@gmail.com"  # the bug: was None -> empty app
+    assert email_by_uuid["np"] is None                          # never signed in: nothing to bind
+
+
+def test_identity_email_wins_over_a_stale_lcr_directory_address(patched, monkeypatch):
+    """The address they actually SIGN IN with is the only one RLS can match, so it must beat whatever
+    the LCR directory says."""
+    monkeypatch.setattr(patched, "_email_by_uuid",
+                        lambda client: {"reed": "old.church.address@example.org"})
+    units = [_Unit(458821, "Seabrook Branch (Spanish)", "BRANCH")]
+    staffing = {458821: [{"person": "Hunsaker, Reed", "position": "Elders Quorum President",
+                          "person_uuid": "reed"}]}
+    conn = _Conn(identities={"reed": "reed.hunsaker@gmail.com"})
+    patched.provision_roles(conn, _Client(units, {}), "s", {"Seabrook Branch (Spanish)": "u"},
+                            staffing_by_unit=staffing)
+    assert [r[6] for r in conn.rows] == ["reed.hunsaker@gmail.com"]
+
+
+def test_identity_lookup_failure_never_breaks_provisioning(patched):
+    """A missing/erroring church_identities table must not cost anyone their role."""
+    class _AngryConn(_Conn):
+        def cursor(self):
+            cur = _Cur(self.rows, self.identities)
+            real = cur.execute
+
+            def execute(sql, params=None):
+                if "church_identities" in sql:
+                    raise RuntimeError("relation does not exist")
+                return real(sql, params)
+            cur.execute = execute
+            return cur
+
+    units = [_Unit(44911, "Raleigh 1st Ward", "WARD")]
+    staffing = {44911: [{"person": "A, B", "position": "Relief Society President",
+                         "person_uuid": "rs"}]}
+    conn = _AngryConn()
+    patched.provision_roles(conn, _Client(units, {}), "s", {"Raleigh 1st Ward": "u"},
+                            staffing_by_unit=staffing)
+    assert [r[3] for r in conn.rows] == ["rs"]

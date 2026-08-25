@@ -131,7 +131,7 @@ test('enroll → revoke → re-enroll, end to end in the browser against real Po
   await expect(page).not.toHaveURL(/\/login/);
 });
 
-test('note round-trip lands in the real member_notes table', async ({ page }) => {
+test('note round-trip lands in the real member_comments thread', async ({ page }) => {
   answerDialogs(page, false);
   await page.goto('/login');
   await submitChurchLogin(page, 'president.complete', 'pw-president');
@@ -140,22 +140,21 @@ test('note round-trip lands in the real member_notes table', async ({ page }) =>
   await page.goto('/table');
   await page.getByText('Avery Example').first().click();
 
-  // ONE editable note (item 8): tap the note surface ("Add a note" when empty, "Edit note" when a
-  // legacy thread folded in) → textarea → Save. Writes the single member_notes field, not a thread.
-  await page.getByRole('button', { name: /^(Add a note|Edit note)$/ }).click();
-  const noteBox = page.getByPlaceholder('Write a note about this member…');
+  // Notes are a THREAD (migration 0054): the add box is always present — type into it and press
+  // "Add note". Each entry is a member_comments row, not the single member_notes field.
+  const noteBox = page.getByPlaceholder('Add a note…');
   await expect(noteBox).toBeVisible({ timeout: 20_000 });
   await noteBox.fill(NOTE_MARKER);
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.getByRole('button', { name: 'Add note', exact: true }).click();
 
-  // Read-after-write: the saved note renders in full and the surface flips to "Edit note".
+  // Read-after-write: the entry renders in the thread and the add box clears for the next one.
   await expect(page.getByText(NOTE_MARKER)).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByRole('button', { name: 'Edit note' })).toBeVisible();
+  await expect(noteBox).toHaveValue('');
 
-  // It was upserted to the REAL member_notes table, attributed to the signed-in leader.
-  const rows = await svcRows<{ note: string; updated_by: string }>(
-    `member_notes?select=note,updated_by&note=like.${encodeURIComponent('fullstack-e2e:%')}`,
+  // It landed in the REAL member_comments thread, attributed to the signed-in leader.
+  const rows = await svcRows<{ body: string; author_email: string }>(
+    `member_comments?select=body,author_email&body=like.${encodeURIComponent('fullstack-e2e:%')}`,
   );
   expect(rows.length).toBe(1);
-  expect(rows[0].updated_by).toBe('rls.president@example.org');
+  expect(rows[0].author_email).toBe('rls.president@example.org');
 });
