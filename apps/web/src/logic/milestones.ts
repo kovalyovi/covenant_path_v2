@@ -169,7 +169,8 @@ export const milestones: Milestone[] = [
     field: 'melchizedek_priesthood',
     description: 'A worthy adult man (18+, a member about a year) has received the Melchizedek Priesthood (ordained an elder) — a step toward the temple.',
     complete: (m) => m['melchizedek_priesthood'] === 'Yes',
-    eligible: (m) => male(m) && ageNowAtLeast(m, 18) && memberOneYearPlus(m),
+    // arrow (not a bare reference): `melchizedekEligible` is declared below this array.
+    eligible: (m) => melchizedekEligible(m),
   },
   // Temple Ordinances and Experiences (#first-temple-visit): genealogy + proxy baptisms, both from
   // the year someone turns 12 (limited-use recommend age — same by-year rule as calling/Aaronic).
@@ -218,8 +219,15 @@ export function endowmentEligible(m: Member): boolean {
 export const callingEligible = (m: Member): boolean => turnsAtLeast(m, 12);
 export const ministeringAssignmentEligible = (m: Member): boolean => turnsAtLeast(m, 14);
 export const aaronicEligible = (m: Member): boolean => male(m) && turnsAtLeast(m, 12);
+/** Melchizedek Priesthood applies to an adult man (18+) who's been a member ~a year — OR to any man
+ *  the records show is ALREADY ordained. The one-year mark is guidance, not a rule: a convert can be
+ *  and often is ordained an elder sooner (e.g. before a mission or a temple sealing). Gating purely
+ *  on duration made a genuinely-ordained brother read "N/A" instead of "Yes" — hiding a real
+ *  ordination. So: ordained -> Yes always; not ordained and under a year -> N/A (not yet expected);
+ *  not ordained and over a year -> No (a real gap worth surfacing). */
 export const melchizedekEligible = (m: Member): boolean =>
-  male(m) && ageNowAtLeast(m, 18) && memberOneYearPlus(m);
+  male(m) && (m['melchizedek_priesthood'] === 'Yes'
+    || (ageNowAtLeast(m, 18) && memberOneYearPlus(m)));
 /** Priesthood section applies to males old enough for the Aaronic priesthood (12+). */
 export const priesthoodEligible = (m: Member): boolean => male(m) && turnsAtLeast(m, 12);
 /** Temple recommend (incl. limited-use) and a patriarchal blessing both start around age 12. */

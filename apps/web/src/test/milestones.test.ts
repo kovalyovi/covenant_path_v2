@@ -4,7 +4,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   milestones, milestonesFor, needsCategories, responsibleOrg, completionOf, priesthoodEligible,
-  callingEligible, aaronicEligible, endowmentEligible, templeExperienceValue, templeExperienceDisplay,
+  callingEligible, aaronicEligible, melchizedekEligible, endowmentEligible,
+  templeExperienceValue, templeExperienceDisplay,
   isNA, expected, isMissing, patriarchalEligible, templeRecommendEligible,
   goldenHourRows, nextSteps, unitGoldenHour,
   type OrgBucket,
@@ -122,6 +123,44 @@ describe('milestonesFor (eligibility filtering)', () => {
     // turns 18 this year but not 18 yet (born late this-year-minus-18) -> not eligible
     const turning18 = member({ sex: 'M', baptism_date: '1 Jan 2000', birth_date: `31 Dec ${thisYear - 18}` });
     expect(abbrs(turning18).has('MP')).toBe(false);
+  });
+
+  // The one-year mark is guidance, not a rule — a convert can be ordained an elder sooner (before a
+  // mission, before a temple sealing). Gating purely on duration made a genuinely-ordained brother
+  // read "N/A" instead of "Yes", hiding a real ordination. These FAIL pre-fix.
+  it('an ALREADY-ORDAINED brother reads Yes even under a year of membership', () => {
+    const earlyElder = member({
+      sex: 'M', baptism_date: `1 Jan ${thisYear}`, melchizedek_priesthood: 'Yes',
+    });
+    expect(melchizedekEligible(earlyElder)).toBe(true);
+    expect(abbrs(earlyElder).has('MP')).toBe(true);
+    // ...and it counts as DONE, never as a gap.
+    const mp = milestonesFor(earlyElder).find((x) => x.abbr === 'MP')!;
+    expect(mp.complete(earlyElder)).toBe(true);
+    expect(isMissing(mp, earlyElder)).toBe(false);
+  });
+
+  it('a NOT-ordained brother under a year stays N/A (not a gap)', () => {
+    const newConvert = member({
+      sex: 'M', baptism_date: `1 Jan ${thisYear}`, melchizedek_priesthood: 'No',
+      birth_date: `1 Jan ${thisYear - 30}`,
+    });
+    expect(melchizedekEligible(newConvert)).toBe(false);
+    expect(abbrs(newConvert).has('MP')).toBe(false);
+  });
+
+  it('a NOT-ordained brother over a year IS a gap', () => {
+    const overdue = member({
+      sex: 'M', baptism_date: '1 Jan 2000', melchizedek_priesthood: 'No',
+      birth_date: `1 Jan ${thisYear - 30}`,
+    });
+    expect(melchizedekEligible(overdue)).toBe(true);
+    const mp = milestonesFor(overdue).find((x) => x.abbr === 'MP')!;
+    expect(isMissing(mp, overdue)).toBe(true);
+  });
+
+  it('an ordination is never shown for a woman', () => {
+    expect(melchizedekEligible(member({ sex: 'F', melchizedek_priesthood: 'Yes' }))).toBe(false);
   });
 });
 

@@ -103,9 +103,7 @@ object Milestones {
             label = "Melchizedek Priesthood", abbr = "MP",
             icon = Icons.Outlined.WorkspacePremium, color = MilestoneColors.MelchizedekPriesthood, // green
             complete = { it.melchizedekPriesthood == "Yes" },
-            eligible = { m, today ->
-                male(m) && ageNowAtLeast(m, 18, today) && memberOneYearPlus(m, today)
-            },
+            eligible = { m, today -> melchizedekEligible(m, today) },
             field = "melchizedek_priesthood",
         ),
         // Temple Ordinances and Experiences: genealogy + proxy baptisms, both from the year someone
@@ -229,8 +227,14 @@ object Milestones {
     fun callingEligible(m: Member, today: LocalDate = LocalDate.now()) = turnsAtLeast(m, 12, today)
     fun ministeringAssignmentEligible(m: Member, today: LocalDate = LocalDate.now()) = turnsAtLeast(m, 14, today)
     fun aaronicEligible(m: Member, today: LocalDate = LocalDate.now()) = male(m) && turnsAtLeast(m, 12, today)
+    /** Melchizedek Priesthood applies to an adult man (18+) a member ~a year — OR to any man the
+     *  records show is ALREADY ordained. The one-year mark is guidance, not a rule: a convert can be
+     *  (and often is) ordained an elder sooner, e.g. before a mission or a temple sealing. Gating
+     *  purely on duration made a genuinely-ordained brother read "N/A" instead of "Yes". So:
+     *  ordained -> Yes always; not ordained and under a year -> N/A; over a year -> No (a real gap). */
     fun melchizedekEligible(m: Member, today: LocalDate = LocalDate.now()) =
-        male(m) && ageNowAtLeast(m, 18, today) && memberOneYearPlus(m, today)
+        male(m) && (m.melchizedekPriesthood == "Yes" ||
+            (ageNowAtLeast(m, 18, today) && memberOneYearPlus(m, today)))
 
     /** Priesthood section applies to males old enough for the Aaronic priesthood (12+). */
     fun priesthoodEligible(m: Member, today: LocalDate = LocalDate.now()) = male(m) && turnsAtLeast(m, 12, today)

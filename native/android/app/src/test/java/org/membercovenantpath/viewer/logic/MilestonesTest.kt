@@ -59,6 +59,27 @@ class MilestonesTest {
         assertFalse(mp.eligible(Member(sex = "M", birthDate = "2009-12-31", baptismDate = "2024-01-01"), today))
     }
 
+    /** The one-year mark is guidance, not a rule: a convert can be ordained an elder sooner (before a
+     *  mission, before a temple sealing). Gating purely on tenure made a genuinely-ordained brother
+     *  read "N/A" instead of "Yes". FAILS pre-fix. */
+    @Test fun alreadyOrdainedReadsYesEvenUnderAYear() {
+        val mp = ms("Melchizedek Priesthood")
+        // Ordained, but baptized only months ago → still Yes (never N/A), and counted DONE.
+        val earlyElder = Member(sex = "M", birthDate = "1996-01-01", baptismDate = "2026-02-01",
+                                melchizedekPriesthood = "Yes")
+        assertTrue(Milestones.melchizedekEligible(earlyElder, today))
+        assertTrue(mp.eligible(earlyElder, today))
+        assertTrue(mp.complete(earlyElder))
+        // Not ordained and under a year → stays N/A (not a gap).
+        val newConvert = Member(sex = "M", birthDate = "1996-01-01", baptismDate = "2026-02-01",
+                                melchizedekPriesthood = "No")
+        assertFalse(Milestones.melchizedekEligible(newConvert, today))
+        // A woman is never eligible, ordination field notwithstanding.
+        val female = Member(sex = "F", birthDate = "1996-01-01", baptismDate = "2026-02-01",
+                            melchizedekPriesthood = "Yes")
+        assertFalse(Milestones.melchizedekEligible(female, today))
+    }
+
     @Test fun forMemberFiltersToEligibleOnly() {
         // A 10-year-old girl: only Friends + Has ministers (the everyone milestones) apply.
         val child = Member(sex = "F", birthDate = "2016")

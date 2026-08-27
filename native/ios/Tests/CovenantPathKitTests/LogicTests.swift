@@ -95,6 +95,28 @@ final class LogicTests: XCTestCase {
         XCTAssertFalse(mp.eligible(young))
     }
 
+    /// The one-year mark is guidance, not a rule: a convert can be ordained an elder sooner (before a
+    /// mission, before a temple sealing). Gating purely on tenure made a genuinely-ordained brother
+    /// read "N/A" instead of "Yes". FAILS pre-fix.
+    func testAlreadyOrdainedReadsYesEvenUnderAYear() {
+        let year = Calendar.current.component(.year, from: Date())
+        let mp = Milestones.all.first { $0.label == "Melchizedek Priesthood" }!
+        // Ordained, but only 8 months a member → still Yes (never N/A).
+        let earlyElder = Member(birthDate: "\(year - 25)-01-01", membershipDuration: "Member for 8 months",
+                                sex: "M", melchizedekPriesthood: "Yes")
+        XCTAssertTrue(Milestones.melchizedekEligible(earlyElder))
+        XCTAssertTrue(mp.eligible(earlyElder))
+        XCTAssertTrue(mp.complete(earlyElder))
+        // Not ordained and under a year → stays N/A (not a gap).
+        let newConvert = Member(birthDate: "\(year - 25)-01-01", membershipDuration: "Member for 8 months",
+                                sex: "M", melchizedekPriesthood: "No")
+        XCTAssertFalse(Milestones.melchizedekEligible(newConvert))
+        // A woman is never eligible, ordination field notwithstanding.
+        let female = Member(birthDate: "\(year - 25)-01-01", membershipDuration: "Member for 8 months",
+                            sex: "F", melchizedekPriesthood: "Yes")
+        XCTAssertFalse(Milestones.melchizedekEligible(female))
+    }
+
     func testApplicableExcludesIneligible() {
         // A young girl: Friends + Has ministers apply to everyone; age/sex-gated ones don't.
         let year = Calendar.current.component(.year, from: Date())

@@ -74,7 +74,7 @@ public enum Milestones {
         Milestone("Melchizedek Priesthood", "MP",
                   style: .init(hex: 0x2E7D32, symbol: "rosette"),                  // green
                   field: "melchizedek_priesthood",
-                  eligible: { $0.isMale && ageNowAtLeast($0, 18) && memberOneYearPlus($0) },
+                  eligible: { melchizedekEligible($0) },
                   complete: { $0.melchizedekPriesthood == "Yes" }),
         // Temple Ordinances and Experiences: genealogy + proxy baptisms, both from the year someone
         // turns 12 (limited-use recommend age — same by-year rule as calling/Aaronic).
@@ -219,8 +219,14 @@ public enum Milestones {
     public static func callingEligible(_ m: Member) -> Bool { turnsAtLeast(m, 12) }
     public static func ministeringAssignmentEligible(_ m: Member) -> Bool { turnsAtLeast(m, 14) }
     public static func aaronicEligible(_ m: Member) -> Bool { m.isMale && turnsAtLeast(m, 12) }
+    /// Melchizedek Priesthood applies to an adult man (18+) a member ~a year — OR to any man the
+    /// records show is ALREADY ordained. The one-year mark is guidance, not a rule: a convert can be
+    /// (and often is) ordained an elder sooner, e.g. before a mission or a temple sealing. Gating
+    /// purely on duration made a genuinely-ordained brother read "N/A" instead of "Yes". So:
+    /// ordained -> Yes always; not ordained and under a year -> N/A; over a year -> No (a real gap).
     public static func melchizedekEligible(_ m: Member) -> Bool {
-        m.isMale && ageNowAtLeast(m, 18) && memberOneYearPlus(m)
+        m.isMale && (m.melchizedekPriesthood == "Yes"
+                     || (ageNowAtLeast(m, 18) && memberOneYearPlus(m)))
     }
     /// Priesthood section applies to males old enough for the Aaronic priesthood (12+).
     public static func priesthoodEligible(_ m: Member) -> Bool { m.isMale && turnsAtLeast(m, 12) }

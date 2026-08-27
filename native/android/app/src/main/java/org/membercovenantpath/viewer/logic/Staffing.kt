@@ -43,10 +43,10 @@ object Staffing {
      * the single definition the gap check + the UI read — extend here as leaders ask for more.
      */
     private val REQUIRED_ROLES = listOf(
-        RequiredRole("wml", "Ward mission leader", 1) {
+        RequiredRole("wml", "Mission leader", 1) {
             matches(it, "(ward|branch) mission leader") && !matches(it, "assistant|asst")
         },
-        RequiredRole("ward_missionaries", "Ward missionaries", 2) {
+        RequiredRole("ward_missionaries", "Ward/branch missionaries", 2) {
             matches(it, "(ward|branch) missionary")
         },
         RequiredRole("eq_pres", "Elders Quorum president", 1) {

@@ -35,6 +35,21 @@ def main() -> int:
               "Elders Quorum Instructor", "Sunday School President", "", None]:
         ok &= _check(f"NOT ward-sheet: {c!r}", not is_ward_sheet_calling(c))
 
+    # A BRANCH is the exact peer of a ward (user directive 2026-08-25: "WML vs Branch mission leader
+    # -- they are equal"). Its presiding council and mission leader are just spelled differently: a
+    # branch has no "Bishop" and no "Ward Mission Leader", so matching only the ward spellings
+    # silently denied a branch presidency + branch mission leader their own unit's sheet.
+    # FAILS pre-fix.
+    for c in ["Branch President", "Branch Presidency First Counselor",
+              "Branch Presidency Second Counselor", "Branch Mission Leader"]:
+        ok &= _check(f"branch-sheet (ward peer): {c!r}", is_ward_sheet_calling(c))
+    # ...without letting branch record-keepers in (ward clerks aren't auto-shared either).
+    for c in ["Branch Clerk", "Branch Executive Secretary"]:
+        ok &= _check(f"NOT branch-sheet: {c!r}", not is_ward_sheet_calling(c))
+    # ...and a branch calling must never be mistaken for a STAKE-wide one.
+    for c in ["Branch President", "Branch Mission Leader"]:
+        ok &= _check(f"NOT stake-sheet: {c!r}", not is_stake_sheet_calling(c))
+
     # --- compute_recipients ---
     roles = [
         {"email": "PrezStake@x.org", "calling_name": "Stake President", "unit_id": "s1", "unit_name": "Stake"},

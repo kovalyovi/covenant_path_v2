@@ -30,11 +30,11 @@ interface RequiredRole {
  *  as leaders ask for more — this is the single definition the gap check + the UI read. */
 export const REQUIRED_ROLES: RequiredRole[] = [
   {
-    key: 'wml', label: 'Ward mission leader', min: 1,
+    key: 'wml', label: 'Mission leader', min: 1,
     match: (p) => /(ward|branch) mission leader/i.test(p) && !/assistant|asst/i.test(p),
   },
   {
-    key: 'ward_missionaries', label: 'Ward missionaries', min: 2,
+    key: 'ward_missionaries', label: 'Ward/branch missionaries', min: 2,
     match: (p) => /(ward|branch) missionary/i.test(p),
   },
   {

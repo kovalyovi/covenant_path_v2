@@ -48,10 +48,10 @@ public enum Staffing {
     /// The roster every unit is expected to have for new-member success to be trackable (#12). This is
     /// the single definition the gap check + the UI read — extend here as leaders ask for more.
     static let requiredRoles: [RequiredRole] = [
-        RequiredRole(key: "wml", label: "Ward mission leader", min: 1) {
+        RequiredRole(key: "wml", label: "Mission leader", min: 1) {
             staffingMatches($0, #"(ward|branch) mission leader"#) && !staffingMatches($0, #"assistant|asst"#)
         },
-        RequiredRole(key: "ward_missionaries", label: "Ward missionaries", min: 2) {
+        RequiredRole(key: "ward_missionaries", label: "Ward/branch missionaries", min: 2) {
             staffingMatches($0, #"(ward|branch) missionary"#)
         },
         RequiredRole(key: "eq_pres", label: "Elders Quorum president", min: 1) {

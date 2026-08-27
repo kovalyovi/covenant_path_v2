@@ -42,13 +42,23 @@ def is_stake_sheet_calling(calling: str | None) -> bool:
 
 
 def is_ward_sheet_calling(calling: str | None) -> bool:
-    """A ward-level calling that receives that ward's sheet: bishopric (Bishop / Counselor in the
-    Bishopric), Elders Quorum & Relief Society presidencies (president + counselors), and the Ward
-    Mission Leader. (Ward clerks/secretaries are NOT auto-shared — not in the access list.)"""
+    """A unit-level calling that receives that unit's sheet: the presiding council (Bishop /
+    Counselor in the Bishopric — or, in a BRANCH, Branch President / Branch Presidency counselor),
+    Elders Quorum & Relief Society presidencies (president + counselors), and the Ward/Branch
+    Mission Leader. (Ward clerks/secretaries are NOT auto-shared — not in the access list.)
+
+    A BRANCH is the exact peer of a ward here (user directive 2026-08-25: "WML vs Branch mission
+    leader — they are equal"). Its callings are simply spelled differently — a branch has no
+    "Bishop" and no "Ward Mission Leader" — so matching only the ward spellings silently denied a
+    branch presidency and branch mission leader their own unit's sheet."""
     c = calling or ""
-    if re.search(r"bishop", c, re.I):  # Bishop, Counselor in the Bishopric
+    # presiding council: ward (Bishop / Bishopric counselor) and branch (Branch President /
+    # Branch Presidency counselor) spellings are peers.
+    if re.search(r"bishop", c, re.I):
         return True
-    if re.search(r"ward mission leader", c, re.I):
+    if re.search(r"branch presiden", c, re.I):  # Branch President, Branch Presidency ... Counselor
+        return True
+    if re.search(r"(ward|branch) mission leader", c, re.I):
         return True
     # EQ / RS presidency = president or a counselor in that presidency
     if re.search(r"elders\s+quorum", c, re.I) and _PRES_CLERK_SEC.search(c):
