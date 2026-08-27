@@ -57,6 +57,7 @@
     "noAccess": "La cuenta inscrita para la sincronización no tiene acceso a los perfiles de miembros en LCR, por lo que estos campos no se pueden actualizar. Debería inscribirse un líder de estaca cuyo llamamiento otorgue «Perfiles de miembros».",
     "allFilled": "Todos los campos del perfil están completos: no hay nada que hacer.",
     "lastRun": "Última actualización: {{when}} — {{filled}}/{{total}} miembros actualizados",
+    "lastRunNone": "Último llenado: {{when}} — no se pudo actualizar nada porque la sesión de la Iglesia guardada había expirado. Vuelve a autorizar e inténtalo de nuevo.",
     "statusError": "No se pudo cargar el estado de los datos: cierra e inténtalo de nuevo.",
     "fields": {
       "baptism_date": "Fecha de bautismo",

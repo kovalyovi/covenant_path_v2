@@ -57,6 +57,7 @@
     "noAccess": "The account enrolled for sync doesn’t have access to member profiles in LCR, so these fields can’t be refreshed. A stake leader whose calling grants “Member Profiles” should enroll for sync.",
     "allFilled": "Every profile field is filled — nothing to do.",
     "lastRun": "Last fill: {{when}} — {{filled}}/{{total}} members updated",
+    "lastRunNone": "Last fill: {{when}} — nothing could be updated, because the stored Church session had expired. Re-authorize and run it again.",
     "statusError": "Couldn’t load the data status — close and try again.",
     "fields": {
       "baptism_date": "Baptism date",

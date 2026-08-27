@@ -111,6 +111,33 @@ def _is_known_subunit(unit_number: int | None) -> bool:
         return False
 
 
+# Markers of the real /mlt member-profile page vs. what a DEAD session serves at 200. LCR renders
+# the profile through a React/RSC shell, so we can't require specific member data — but a sign-in
+# page, a consent interstitial, or an error shell are all clearly distinguishable, and a genuine
+# profile response is substantial. Deliberately permissive about what counts as a profile and strict
+# only about what is definitely NOT one: a false "dead" here costs a needless re-auth prompt, while a
+# false "alive" is the bug we are fixing (a silent 0-of-N fill).
+_NOT_PROFILE_MARKERS = (
+    "sign in", "signin", "log in to continue", "password", "okta",
+    "session has expired", "session expired", "access denied", "not authorized",
+)
+
+
+def _looks_like_member_profile(page: str | None) -> bool:
+    """Does this page body look like LCR's member-profile page (i.e. is the session really live)?
+
+    `get_text` raises only on 4xx/5xx or a redirect to the identity host, so a dead session that
+    answers 200 from the LCR host slips through — which is exactly how the on-demand fill ran against
+    a dead session and reported "0/8 members updated" as a success (2026-08-26)."""
+    body = (page or "").strip()
+    if len(body) < 512:                       # an app shell / stub, never a real profile response
+        return False
+    low = body.lower()
+    if any(m in low for m in _NOT_PROFILE_MARKERS):
+        return False
+    return "member-profile" in low or "mlt" in low or "<!doctype html" in low
+
+
 def _refresh_profile_async(cookies: list[dict], unit_number: int, source: str = "reauth") -> None:
     """Spawn the profile-refresh worker on a daemon thread so it NEVER delays or fails the login
     response. The just-captured session's cookies stay valid for `/mlt` for the worker's lifetime."""
@@ -179,12 +206,21 @@ def _refresh_profile_worker(cookies: list[dict], unit_number: int, source: str =
                 if pr.status_code < 300:
                     filled += 1
             _prog(done=i + 1, filled=filled)
-        logger.info("profile refresh: filled fields for %d/%d members with gaps in stake %s "
-                    "(0 usually means the captured session can't reach /mlt)",
-                    filled, len(members), unit_number)
-        _prog(state="done", finished_at=_now_iso())
+        # A run that touched members but filled NOTHING did not succeed — it means the session
+        # couldn't fetch a single /mlt profile (`refresh_profile_fields` returns {} only when the
+        # fetch RAISED; a live session on a member with a real gap always yields at least one
+        # field). Reporting that as `done` is what produced "Last fill: … — 0/8 members updated"
+        # with no prompt to sign in (2026-08-26; the identical 0/5-then-5/5 pair on 2026-08-16 is
+        # the proof — the same five members filled completely once a fresh session existed).
+        # Terminate as `needs_reauth` so the sheet asks for the one thing that actually fixes it.
+        dead_session = bool(members) and filled == 0
+        state = "needs_reauth" if dead_session else "done"
+        logger.info("profile refresh: filled fields for %d/%d members with gaps in stake %s -> %s",
+                    filled, len(members), unit_number, state)
+        _prog(state=state, finished_at=_now_iso(),
+              error="session could not reach /mlt" if dead_session else None)
         _record_profile_refresh(stake_id, {"source": source, "total": len(members),
-                                           "filled": filled})
+                                           "filled": filled, "outcome": state})
     except Exception as exc:  # noqa: BLE001 — strictly best-effort; a login must never be affected
         logger.warning("profile refresh worker failed for stake %s: %s", unit_number, exc)
         _prog(state="failed", error=str(exc)[:300], finished_at=_now_iso())
@@ -230,6 +266,9 @@ def profile_refresh_status(unit_number: int, stake_id: str) -> dict:
         pass
     return {"running": progress.get("state") == "running",
             "progress": progress or None,
+            # The last run ended without filling anything -> the client should offer re-auth rather
+            # than present a completed-looking "0 of N updated".
+            "needs_reauth": progress.get("state") == "needs_reauth",
             "members_with_gaps": len(members),
             "missing": {c: n for c, n in missing.items() if n},
             "last_refresh": last}
@@ -273,9 +312,18 @@ def start_profile_refresh(unit_number: int, stake_id: str) -> dict:
     # synchronous POST.
     try:
         client = _client_from_cookies(cookies)
-        client.session.get_text(
+        page = client.session.get_text(
             f"https://lcr.churchofjesuschrist.org/mlt/records/member-profile/{members[0]['person_uuid']}")
     except Exception:  # noqa: BLE001 — any failure = the stored session can't reach /mlt
+        return {"status": "needs_reauth", "reason": "session_expired",
+                "members_with_gaps": len(members)}
+    # `get_text` only raises on 4xx/5xx or a redirect to the IDENTITY host. A dead LCR session can
+    # still answer 200 from lcr.churchofjesuschrist.org with a sign-in / empty app shell, which is
+    # how this probe passed on a dead session and let the worker grind through every member and fill
+    # nothing (2026-08-26). So check the page actually looks like a member profile.
+    if not _looks_like_member_profile(page):
+        logger.info("profile refresh: /mlt probe returned a non-profile page for stake %s "
+                    "(dead session answering 200)", unit_number)
         return {"status": "needs_reauth", "reason": "session_expired",
                 "members_with_gaps": len(members)}
     _refresh_profile_async(cookies, unit_number, source="on_demand")

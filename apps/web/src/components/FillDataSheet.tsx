@@ -16,6 +16,8 @@ import type { EnrollmentStatus } from '../lib/broker';
 export interface FillStatus {
   running: boolean;
   progress: { state?: string; total?: number; done?: number; filled?: number } | null;
+  /** The last run ended having filled NOTHING — a dead Church session, not a success. */
+  needsReauth: boolean;
   membersWithGaps: number;
   missing: Record<string, number>;
   canRefresh: boolean;
@@ -26,6 +28,7 @@ function statusFromJson(j: Record<string, unknown>): FillStatus {
   return {
     running: j['running'] === true,
     progress: (j['progress'] as FillStatus['progress']) ?? null,
+    needsReauth: j['needs_reauth'] === true,
     membersWithGaps: Number(j['members_with_gaps'] ?? 0) || 0,
     missing: (j['missing'] as Record<string, number>) ?? {},
     canRefresh: j['can_refresh'] !== false,
@@ -65,6 +68,7 @@ export function FillDataSheet({
       const s = statusFromJson(await broker.profileRefreshStatus());
       setStatus(s);
       setError(null);
+      if (s.needsReauth) setNeedsReauth(true);
       // Fire the reload exactly once, on the running→finished edge.
       if (wasRunning.current && !s.running) {
         wasRunning.current = false;
@@ -72,6 +76,10 @@ export function FillDataSheet({
         if (p?.state === 'done') {
           setFinished({ filled: p.filled ?? 0, total: p.total ?? 0 });
           onFilledRef.current();
+        } else if (p?.state === 'needs_reauth') {
+          // The run finished but filled nothing — the stored session is dead. Ask for the one thing
+          // that fixes it instead of showing a completed-looking "0 of N updated".
+          setNeedsReauth(true);
         }
       } else if (s.running) {
         wasRunning.current = true;
@@ -129,11 +137,12 @@ export function FillDataSheet({
   let lastRun: string | null = null;
   if (status?.lastRefresh?.run_at) {
     const p = status.lastRefresh.payload ?? {};
-    lastRun = t('fillData.lastRun', {
-      when: new Date(status.lastRefresh.run_at).toLocaleString(),
-      filled: p.filled ?? 0,
-      total: p.total ?? 0,
-    });
+    const when = new Date(status.lastRefresh.run_at).toLocaleString();
+    // "0 of 8 updated" reads like a completed run that simply found nothing. It never means that —
+    // it means the Church session was dead. Say so.
+    lastRun = (p.total ?? 0) > 0 && (p.filled ?? 0) === 0
+      ? t('fillData.lastRunNone', { when })
+      : t('fillData.lastRun', { when, filled: p.filled ?? 0, total: p.total ?? 0 });
   }
 
   return (

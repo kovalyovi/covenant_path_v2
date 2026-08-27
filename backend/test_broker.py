@@ -356,7 +356,8 @@ def test_profile_refresh_worker_fills_via_live_session() -> None:
     prog = enroll._REFRESH_PROGRESS.get(503991) or {}
     assert prog.get("state") == "done" and prog.get("total") == 3 and prog.get("filled") == 2, prog
     assert diag_rows and diag_rows[0]["kind"] == "profile_refresh" and \
-        diag_rows[0]["payload"] == {"source": "reauth", "total": 3, "filled": 2}, diag_rows
+        diag_rows[0]["payload"] == {"source": "reauth", "total": 3, "filled": 2,
+                                    "outcome": "done"}, diag_rows
     enroll._REFRESH_PROGRESS.clear()
     print("  ok profile refresh worker fills every gap via live session (skips unreadable), "
           "stamps field_meta, publishes progress + diagnostics")
@@ -417,10 +418,24 @@ def test_profile_refresh_on_demand_start_and_status() -> None:
         assert out["status"] == "needs_reauth" and out["reason"] == "session_expired", out
         assert out["members_with_gaps"] == 2 and not spawned, out
 
+        # DEAD session that still answers 200 from the LCR host with a SIGN-IN page. `get_text` only
+        # raises on 4xx/5xx or an identity-host redirect, so this slipped through the probe and let
+        # the worker grind through every member and fill nothing — the 2026-08-26 "0/8 members
+        # updated with no login prompt" bug. FAILS pre-fix (this returned "started").
+        def _dead_but_200(cookies):
+            page = "<html><body>Please sign in to continue" + "x" * 800 + "</body></html>"
+            return _types.SimpleNamespace(session=_types.SimpleNamespace(
+                get_text=lambda url, params=None: page))
+        enroll._client_from_cookies = _dead_but_200
+        out = enroll.start_profile_refresh(503991, "stake-1")
+        assert out["status"] == "needs_reauth" and out["reason"] == "session_expired", out
+        assert not spawned, out
+
         # LIVE stored session → started + worker spawned as on_demand.
         def _alive(cookies):
+            page = "<!doctype html><html><body id='member-profile'>" + "x" * 800 + "</body></html>"
             return _types.SimpleNamespace(session=_types.SimpleNamespace(
-                get_text=lambda url, params=None: "<html>profile</html>"))
+                get_text=lambda url, params=None: page))
         enroll._client_from_cookies = _alive
         out = enroll.start_profile_refresh(503991, "stake-1")
         assert out["status"] == "started" and spawned == [(503991, "on_demand")], out

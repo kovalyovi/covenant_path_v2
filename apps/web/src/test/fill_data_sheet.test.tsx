@@ -122,6 +122,64 @@ describe('FillDataSheet', () => {
     expect(onFilled).toHaveBeenCalledTimes(1);
   });
 
+  // 2026-08-26: a fill ran against a DEAD stored session, filled nothing, and reported itself as a
+  // completed run — "Last fill: … — 0/8 members updated", with no prompt to sign in. A run that
+  // touched members and filled none is a dead session, never a success. FAIL pre-fix.
+  it('a run that finishes having filled NOTHING asks for re-auth, not a 0-of-N success', async () => {
+    vi.useFakeTimers();
+    profileRefreshStatus
+      .mockResolvedValueOnce({
+        ...idleStatus, running: true,
+        progress: { state: 'running', total: 8, done: 3, filled: 0 },
+      })
+      .mockResolvedValue({
+        running: false,
+        needs_reauth: true,
+        progress: { state: 'needs_reauth', total: 8, done: 8, filled: 0 },
+        members_with_gaps: 8, missing: { patriarchal_blessing: 8 }, can_refresh: true,
+        last_refresh: null,
+      });
+    const onFilled = vi.fn();
+    render(
+      <FillDataSheet open onClose={() => {}} onReauth={() => {}} enrollStatus={enrollStatus()} onFilled={onFilled} />,
+    );
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { vi.advanceTimersByTime(2600); await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+
+    // The re-auth explanation + button, and NOT a completed-looking "0 of 8 updated".
+    expect(screen.getByText(/stored Church session has expired/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /re-authorize/i })).toBeInTheDocument();
+    expect(screen.queryByText(/0 of 8 members updated/i)).not.toBeInTheDocument();
+    // Nothing was filled, so there is nothing to reload.
+    expect(onFilled).not.toHaveBeenCalled();
+  });
+
+  it('a previous zero-fill run is reported honestly in the last-fill line', async () => {
+    profileRefreshStatus.mockResolvedValue({
+      ...idleStatus,
+      last_refresh: { run_at: '2026-08-27T02:48:06Z', payload: { total: 8, filled: 0 } },
+    });
+    render(
+      <FillDataSheet open onClose={() => {}} onReauth={() => {}} enrollStatus={enrollStatus()} onFilled={() => {}} />,
+    );
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText(/nothing could be updated/i)).toBeInTheDocument();
+    expect(screen.queryByText(/0\/8 members updated/i)).not.toBeInTheDocument();
+  });
+
+  it('a genuine partial fill still reports its counts', async () => {
+    profileRefreshStatus.mockResolvedValue({
+      ...idleStatus,
+      last_refresh: { run_at: '2026-08-16T11:49:33Z', payload: { total: 5, filled: 5 } },
+    });
+    render(
+      <FillDataSheet open onClose={() => {}} onReauth={() => {}} enrollStatus={enrollStatus()} onFilled={() => {}} />,
+    );
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText(/5\/5 members updated/i)).toBeInTheDocument();
+  });
+
   it('the enrolled account lacking profile access shows the no-access explanation, not the button', async () => {
     profileRefreshStatus.mockResolvedValue({ ...idleStatus, can_refresh: false });
     render(
