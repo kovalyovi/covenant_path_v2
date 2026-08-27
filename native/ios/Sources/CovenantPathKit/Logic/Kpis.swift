@@ -349,6 +349,87 @@ public enum Kpis {
         attendanceBucket(sacramentWindow(m.details?.sacrament))
     }
 
+    // MARK: - attendance CADENCE (how often they come, and which way it's moving)
+    //
+    // The bucket answers "how many of the last 8?". Leaders also ask what a raw count can't answer:
+    // how OFTEN is this person coming, and is it getting better or worse? A 4/8 who came the last four
+    // Sundays in a row is a very different conversation from a 4/8 who came the first four and stopped.
+    // Mirrors web `attendanceCadence` / `attendanceNeedsAttention`.
+
+    public enum AttendanceTrend: String, Sendable { case improving, declining, steady, unknown }
+
+    public struct AttendanceCadence: Sendable {
+        public let level: AttendanceLevel
+        /// "Weekly" | "Most weeks" | "Occasional" | "Not attending" | "No record".
+        public let label: String
+        /// Honest long form, e.g. "7 of the last 8 Sundays".
+        public let detail: String
+        public let trend: AttendanceTrend
+        /// Newest-first attendance flags for the window — drives the dot strip.
+        public let recent: [Bool]
+        public let attended: Int
+        public let total: Int
+    }
+
+    /// The most recent `weeks` sacrament records, NEWEST FIRST, as attended-or-not flags. Mirrors the
+    /// web `recentSacrament` — the shared ordering both the counts and the cadence read.
+    public static func recentSacrament(
+        _ list: [MemberDetails.SacramentEntry]?,
+        weeks: Int = Kpis.sacramentWindowWeeks
+    ) -> [Bool]? {
+        guard let list, !list.isEmpty else { return nil }
+        let withDates = list.map { (s: $0, dt: MemberDate.parse($0.date)) }
+        let anyDates = withDates.contains { $0.dt != nil }
+        let ordered = anyDates
+            ? withDates.sorted { ($0.dt ?? .distantPast) > ($1.dt ?? .distantPast) }
+            : withDates
+        return ordered.prefix(max(1, weeks)).map { $0.s.attended == true }
+    }
+
+    /// Cadence needs at least this many records before a trend means anything (2 halves of 3).
+    private static let trendMinRecords = 6
+
+    /// How often this member comes, and which way it's moving. Ratio-based (not raw counts) so a SHORT
+    /// window reads honestly: present 2 of 2 Sundays is "Weekly", not "Occasional".
+    public static func attendanceCadence(_ m: Member) -> AttendanceCadence {
+        let recent = recentSacrament(m.details?.sacrament) ?? []
+        let total = recent.count
+        let attended = recent.filter { $0 }.count
+        if total == 0 {
+            return AttendanceCadence(level: .unknown, label: "No record",
+                                     detail: "No attendance recorded", trend: .unknown,
+                                     recent: recent, attended: 0, total: 0)
+        }
+        let ratio = Double(attended) / Double(total)
+        let label = ratio >= 0.875 ? "Weekly"
+            : ratio >= 0.5 ? "Most weeks"
+            : ratio > 0 ? "Occasional" : "Not attending"
+
+        // Trend: newer half vs older half of the same window (recent is NEWEST-first, so the first
+        // half is the newer one). Compared as RATES because an odd window splits unevenly.
+        var trend: AttendanceTrend = .unknown
+        if total >= trendMinRecords {
+            let half = total / 2
+            let nRate = Double(recent.prefix(half).filter { $0 }.count) / Double(half)
+            let oRate = Double(recent.suffix(half).filter { $0 }.count) / Double(half)
+            trend = nRate > oRate ? .improving : nRate < oRate ? .declining : .steady
+        }
+        return AttendanceCadence(
+            level: attendanceBucket((attended, total)).level,
+            label: label,
+            detail: "\(attended) of the last \(total) Sunday\(total == 1 ? "" : "s")",
+            trend: trend, recent: recent, attended: attended, total: total)
+    }
+
+    /// Is this member's attendance a NEED a leader should act on? Poor (1–3 of 8) or none (0) — and a
+    /// DECLINING trend counts even while the raw count still reads "fair", which is exactly the person
+    /// who slips away unnoticed. `unknown` (no data) is never a need: absence of data is not a problem.
+    public static func attendanceNeedsAttention(_ m: Member) -> Bool {
+        let c = attendanceCadence(m)
+        if c.level == .unknown { return false }
+        return c.level == .poor || c.level == .none || c.trend == .declining
+    }
+
     /// Count of lessons (across all people) where a member was present for ≥1 principle.
     /// Port of `_lessonsWithMember`.
     public static func lessonsWithMember(_ rows: [Member]) -> Int {

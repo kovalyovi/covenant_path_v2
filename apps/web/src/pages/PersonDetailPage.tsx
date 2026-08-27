@@ -20,6 +20,7 @@ import { Avatar, SectionCard } from '../components/ui';
 import { SkeletonBox, SkeletonLine } from '../components/Skeletons';
 import { Icon, type IconName } from '../components/Icon';
 import { GoldenHourChips } from '../components/GoldenHourChips';
+import { AttendanceCadenceBadge } from '../components/Badges';
 import { MissionariesSection } from '../components/Missionaries';
 import { NotesSection } from '../components/NotesSection';
 
@@ -227,7 +228,7 @@ function RichBody({ member, d, isAdmin }: { member: Member; d: Record<string, un
   const maLines = strings(d['ministeringAssignments']);
   const left = (
     <>
-      <SacramentSection d={d} />
+      <SacramentSection d={d} member={member} />
       <FriendsSection d={d} recordedYes={member['friends'] === 'Yes'} count={asNum(member['friends_count'])} />
       {(priesthoodEligible(member) || priesthoodLines.length > 0) && (
         <ListTextSection title="Priesthood Ordination" icon="premium" lines={priesthoodLines} emptyText="No priesthood ordination on record." />
@@ -277,7 +278,7 @@ function RichBody({ member, d, isAdmin }: { member: Member; d: Record<string, un
   );
 }
 
-function SacramentSection({ d }: { d: Record<string, unknown> }) {
+function SacramentSection({ d, member }: { d: Record<string, unknown>; member: Member }) {
   const all = (d['sacrament'] as Array<Record<string, unknown>>) ?? [];
   // Attendance over the LAST 8 weeks of data (not the whole history — we no longer say "52 missed
   // of 54"). The window is the most recent up-to-8 weekly records; fewer when there's less data.
@@ -303,9 +304,14 @@ function SacramentSection({ d }: { d: Record<string, unknown> }) {
       title="Sacrament Attendance"
       icon="event_available"
       trailing={
-        <span className="row" style={{ gap: 4, color: summaryColor, fontWeight: bucket.bold ? 800 : 700 }}>
-          {bucket.level === 'none' && <Icon name="info" size={14} color={summaryColor} />}
-          {bucket.label}
+        <span className="row" style={{ gap: 8, alignItems: 'center' }}>
+          {/* Cadence (rhythm + trend) alongside the raw count: "Weekly ↓" says something the
+              count alone can't — see AttendanceCadenceBadge. */}
+          <AttendanceCadenceBadge member={member} />
+          <span className="row" style={{ gap: 4, color: summaryColor, fontWeight: bucket.bold ? 800 : 700 }}>
+            {bucket.level === 'none' && <Icon name="info" size={14} color={summaryColor} />}
+            {bucket.label}
+          </span>
         </span>
       }
     >

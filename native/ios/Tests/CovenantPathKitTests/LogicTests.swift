@@ -319,6 +319,28 @@ final class LogicTests: XCTestCase {
         XCTAssertFalse(Kpis.attendanceBucket((attended: 7, total: 8)).bold)
     }
 
+    /// `recentSacrament` is the shared ordering the counts AND the cadence read, so the two can never
+    /// disagree about which meetings are "recent". Mirrors web `kpis.test.ts`. FAILS pre-fix.
+    func testRecentSacramentIsNewestFirstAndCapped() {
+        let cal = Calendar.current
+        // 10 weekly entries out of order; i == 0 is the NEWEST. Attended on even weeks.
+        var entries: [MemberDetails.SacramentEntry] = []
+        for i in 0..<10 {
+            // Same local-date formatting the sibling test uses (DateFormatter would drag in
+            // locale/timezone); a UTC-shifted string would trip the future-Sunday guard.
+            let d = cal.date(byAdding: .day, value: -7 * i, to: Date())!
+            let c = cal.dateComponents([.year, .month, .day], from: d)
+            let iso = String(format: "%04d-%02d-%02d", c.year!, c.month!, c.day!)
+            entries.append(.init(label: "w\(i)", attended: i % 2 == 0, date: iso))
+        }
+        entries.shuffle()
+        let recent = Kpis.recentSacrament(entries)!
+        XCTAssertEqual(recent.count, 8)                                  // capped at the window
+        XCTAssertEqual(recent, [true, false, true, false, true, false, true, false])
+        XCTAssertNil(Kpis.recentSacrament(nil))
+        XCTAssertNil(Kpis.recentSacrament([]))
+    }
+
     func testSacramentWindowTakesEightNewest() {
         // 10 weekly entries, the 8 newest all attended, the 2 oldest missed; shuffled order.
         let cal = Calendar.current

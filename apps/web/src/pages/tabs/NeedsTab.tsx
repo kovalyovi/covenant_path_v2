@@ -43,7 +43,9 @@ interface NeedCat {
   rank?: (m: Member) => number;
 }
 
-const ATTENDANCE_KEY = '__attendance__';
+// The Church Attendance need is `needsCategories`' entry with this abbr — the tab keys its
+// attendance-specific ordering and row rendering off it.
+const ATTENDANCE_KEY = 'CA';
 
 function NeedsBody() {
   const d = useDashboard();
@@ -91,21 +93,20 @@ function NeedsBody() {
   const orgScoped = allOrgs ? all : all.filter((m) => orgs.has(responsibleOrg(m) as OrgBucket));
   const baptized = ward == null ? orgScoped : orgScoped.filter((m) => String(m['unit_name'] ?? '') === ward);
 
-  // Unified category list: every milestone (eligible-but-incomplete) + the Sacrament-attendance health
-  // category (members at poor/none recent attendance, worst-first).
-  const cats: NeedCat[] = [
-    ...needsCategories.map((ms) => ({
-      key: ms.abbr, label: ms.label, icon: ms.icon as IconName, color: ms.color,
-      match: (m: Member) => isMissing(ms, m),
-    })),
-    {
-      key: ATTENDANCE_KEY, label: 'Sacrament attendance', icon: 'event_available' as IconName,
-      color: status.warning,
-      match: (m: Member) => { const lv = memberAttendance(m).level; return lv === 'poor' || lv === 'none'; },
-      // none (0) first, then by fewest attended.
-      rank: (m: Member) => { const b = memberAttendance(m); return b.level === 'none' ? -1 : b.attended; },
-    },
-  ];
+  // Unified category list, driven ENTIRELY by `needsCategories` — Church Attendance is one of them
+  // now (it used to be bolted on here with its own rule, which meant two definitions of "attendance
+  // is a problem" that could drift). The shared rule also catches a DECLINING trend, not just a low
+  // count. Only the worst-first ORDERING stays local, since it's presentation, not policy.
+  const cats: NeedCat[] = needsCategories.map((ms) => ({
+    key: ms.abbr, label: ms.label,
+    icon: (ms.abbr === ATTENDANCE_KEY ? 'event_available' : ms.icon) as IconName,
+    color: ms.abbr === ATTENDANCE_KEY ? status.warning : ms.color,
+    match: (m: Member) => isMissing(ms, m),
+    // Attendance sorts worst-first: not-attending (0) ahead of merely-poor, then fewest attended.
+    ...(ms.abbr === ATTENDANCE_KEY
+      ? { rank: (m: Member) => { const b = memberAttendance(m); return b.level === 'none' ? -1 : b.attended; } }
+      : {}),
+  }));
 
   function listFor(c: NeedCat): Member[] {
     const l = baptized.filter(c.match);

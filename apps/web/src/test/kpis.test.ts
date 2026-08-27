@@ -4,9 +4,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   baptismsByMonth, metricData, attendedDates, lessonsWithMember, membersWithMemberLessons,
-  sacramentWindow, attendanceBucket,
+  sacramentWindow, attendanceBucket, attendanceCadence, attendanceNeedsAttention,
 } from '../logic/kpis';
-import { avgCompletion } from '../logic/milestones';
+import { avgCompletion, needsCategories, isMissing } from '../logic/milestones';
 import type { Member } from '../lib/member';
 
 function iso(d: Date): string {
@@ -200,5 +200,105 @@ describe('attendanceBucket (#1e — sacrament-attendance health)', () => {
 
   it('carries the raw attended/total label for short windows', () => {
     expect(attendanceBucket({ attended: 2, total: 3 }).label).toBe('2/3');
+  });
+});
+
+// ---- Attendance CADENCE (#church-attendance) -----------------------------------------------------
+// The bare count can't distinguish a 4/8 who came the LAST four Sundays from a 4/8 who came the first
+// four and then stopped — identical counts, opposite pastoral situations. These FAIL pre-fix
+// (attendanceCadence / attendanceNeedsAttention did not exist).
+
+describe('attendanceCadence (rhythm + trend)', () => {
+  function weeksAgo(n: number): string {
+    const d = new Date();
+    d.setDate(d.getDate() - n * 7);
+    return iso(d);
+  }
+  /** `flags` is NEWEST-first: flags[0] is last Sunday. */
+  const withSacrament = (flags: boolean[]): Member => ({
+    person_uuid: 'x',
+    details: { sacrament: flags.map((attended, i) => ({ date: weeksAgo(i), attended })) },
+  } as unknown as Member);
+
+  it('reads no record as unknown, and never as a need', () => {
+    const blank = { person_uuid: 'x' } as Member;
+    const c = attendanceCadence(blank);
+    expect(c.level).toBe('unknown');
+    expect(c.label).toBe('No record');
+    expect(attendanceNeedsAttention(blank)).toBe(false);
+  });
+
+  it('labels the rhythm by RATE, so a short window reads honestly', () => {
+    // present 2 of 2 is "Weekly", not "Occasional" — a new member shouldn't look like a problem.
+    expect(attendanceCadence(withSacrament([true, true])).label).toBe('Weekly');
+    expect(attendanceCadence(withSacrament(Array(8).fill(true))).label).toBe('Weekly');
+    expect(attendanceCadence(withSacrament([true, true, true, true, false, false, false, false])).label)
+      .toBe('Most weeks');
+    expect(attendanceCadence(withSacrament([true, false, false, false, false, false, false, false])).label)
+      .toBe('Occasional');
+    expect(attendanceCadence(withSacrament(Array(8).fill(false))).label).toBe('Not attending');
+  });
+
+  it('detects a DECLINING trend the raw count hides', () => {
+    // 4 of 8 either way — but one is coming back and one is slipping away.
+    const slipping = withSacrament([false, false, false, false, true, true, true, true]);
+    const returning = withSacrament([true, true, true, true, false, false, false, false]);
+    expect(slipping.details).toBeTruthy();
+    expect(attendanceCadence(slipping).attended).toBe(4);
+    expect(attendanceCadence(returning).attended).toBe(4);
+    expect(attendanceCadence(slipping).trend).toBe('declining');
+    expect(attendanceCadence(returning).trend).toBe('improving');
+    // ...and only the slipping one is a need, even though both count 4/8 ("fair").
+    expect(attendanceNeedsAttention(slipping)).toBe(true);
+    expect(attendanceNeedsAttention(returning)).toBe(false);
+  });
+
+  it('calls an even split steady, and withholds a trend on too little data', () => {
+    // same rate in each half (1 of 3 newer, 1 of 3 older) -> steady
+    expect(attendanceCadence(withSacrament([true, false, false, true, false, false])).trend).toBe('steady');
+    expect(attendanceCadence(withSacrament([true, false, true])).trend).toBe('unknown');
+  });
+
+  it('flags poor and none as needs regardless of trend', () => {
+    expect(attendanceNeedsAttention(withSacrament(Array(8).fill(false)))).toBe(true);
+    expect(attendanceNeedsAttention(withSacrament(
+      [true, false, false, false, false, false, false, false]))).toBe(true);
+    expect(attendanceNeedsAttention(withSacrament(Array(8).fill(true)))).toBe(false);
+  });
+
+  it('exposes the window newest-first so the dot strip can render a timeline', () => {
+    const c = attendanceCadence(withSacrament([true, false, false, true]));
+    expect(c.recent).toEqual([true, false, false, true]);
+    expect(c.detail).toBe('2 of the last 4 Sundays');
+  });
+});
+
+describe('Church Attendance as a Needs category', () => {
+  function weeksAgo(n: number): string {
+    const d = new Date();
+    d.setDate(d.getDate() - n * 7);
+    return iso(d);
+  }
+  const withSacrament = (flags: boolean[]): Member => ({
+    person_uuid: 'x', sex: 'F', baptism_date: '2000-01-01',
+    details: { sacrament: flags.map((attended, i) => ({ date: weeksAgo(i), attended })) },
+  } as unknown as Member);
+
+  const ca = needsCategories.find((c) => c.abbr === 'CA')!;
+
+  it('is one of the shared needs categories', () => {
+    expect(ca).toBeTruthy();
+    expect(ca.label).toBe('Church Attendance');
+  });
+
+  it('surfaces the not-attending and hides the faithful', () => {
+    expect(isMissing(ca, withSacrament(Array(8).fill(false)))).toBe(true);
+    expect(isMissing(ca, withSacrament(Array(8).fill(true)))).toBe(false);
+  });
+
+  it('never flags a member with no attendance record (absence of data is not a need)', () => {
+    const blank = { person_uuid: 'x', sex: 'F', baptism_date: '2000-01-01' } as Member;
+    expect(ca.eligible(blank)).toBe(false);
+    expect(isMissing(ca, blank)).toBe(false);
   });
 });

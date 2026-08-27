@@ -15,7 +15,7 @@ import { assignUnitColors } from '../logic/kpis';
 import { hexA } from '../theme/tokens';
 import { Icon, type IconName } from './Icon';
 import { Avatar, CountBadge, Segmented, SectionCard } from './ui';
-import { OrgBadge, AttendancePill } from './Badges';
+import { OrgBadge, AttendancePill, AttendanceCadenceBadge, AttendanceDots } from './Badges';
 import { GoldenHourChips } from './GoldenHourChips';
 import { Modal } from './Modal';
 import { RichText } from './RichText';
@@ -506,7 +506,14 @@ export function MemberRow({ m, chips = false, showUnit = false, showResp = false
             ))}
           </span>
         )}
-        {showAttendance && <AttendancePill member={m} />}
+        {showAttendance && (
+          <span className="row" style={{ gap: 8, alignItems: 'center' }}>
+            <AttendancePill member={m} />
+            {/* cadence + the recent-Sundays shape: which way they're moving, not just how many */}
+            <AttendanceCadenceBadge member={m} />
+            <AttendanceDots member={m} />
+          </span>
+        )}
         <NoteLine uuid={id} />
         {chips && <GoldenHourChips member={m} size={22} highlightNext />}
         {showUnit && unit && (

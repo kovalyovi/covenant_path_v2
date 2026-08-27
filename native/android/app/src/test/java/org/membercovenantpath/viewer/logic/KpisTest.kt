@@ -173,4 +173,24 @@ class KpisTest {
         assertNull(Kpis.sacramentWindow(null))
         assertNull(Kpis.sacramentWindow(emptyList()))
     }
+
+    // ---- attendance CADENCE (mirrors web kpis.test.ts) ----
+    // `recentSacrament` is the shared ordering the counts AND the cadence read, so the two can never
+    // disagree about which meetings are "recent". FAILS pre-fix (the function did not exist).
+
+    @Test fun recentSacramentIsNewestFirstAndCapped() {
+        // 10 weekly entries out of order; i == 0 is the NEWEST. Attended on even weeks.
+        val entries = (0 until 10).map { i ->
+            SacramentEntry(label = "w$i", attended = i % 2 == 0,
+                date = today.minusWeeks(i.toLong()).toString())
+        }.shuffled()
+        val recent = Kpis.recentSacrament(entries)!!
+        assertEquals(8, recent.size)                       // capped at the window
+        assertEquals(listOf(true, false, true, false, true, false, true, false), recent)
+    }
+
+    @Test fun recentSacramentNullWhenNoList() {
+        assertNull(Kpis.recentSacrament(null))
+        assertNull(Kpis.recentSacrament(emptyList()))
+    }
 }

@@ -283,6 +283,102 @@ object Kpis {
     fun memberAttendance(m: Member): AttendanceBucket =
         attendanceBucket(sacramentWindow(m.parsedDetails()?.sacrament))
 
+    // ---- attendance CADENCE (how often they come, and which way it's moving) --------------------
+    //
+    // The bucket answers "how many of the last 8?". Leaders also ask what a raw count can't answer:
+    // how OFTEN is this person coming, and is it getting better or worse? A 4/8 who came the last four
+    // Sundays in a row is a very different conversation from a 4/8 who came the first four and stopped.
+    // Mirrors web `attendanceCadence` / `attendanceNeedsAttention`.
+
+    enum class AttendanceTrend { IMPROVING, DECLINING, STEADY, UNKNOWN }
+
+    data class AttendanceCadence(
+        val level: AttendanceLevel,
+        /** "Weekly" | "Most weeks" | "Occasional" | "Not attending" | "No record". */
+        val label: String,
+        /** Honest long form, e.g. "7 of the last 8 Sundays". */
+        val detail: String,
+        val trend: AttendanceTrend,
+        /** Newest-first attendance flags for the window — drives the dot strip. */
+        val recent: List<Boolean>,
+        val attended: Int,
+        val total: Int,
+    )
+
+    /**
+     * The most recent [weeks] sacrament records, NEWEST FIRST, as attended-or-not flags. Mirrors the
+     * web `recentSacrament` — the shared ordering both the counts and the cadence read.
+     */
+    fun recentSacrament(
+        list: List<org.membercovenantpath.viewer.model.SacramentEntry>?,
+        weeks: Int = SACRAMENT_WINDOW_WEEKS,
+    ): List<Boolean>? {
+        if (list.isNullOrEmpty()) return null
+        val withDates = list.map { it to DateParse.parseMemberDate(it.date) }
+        val anyDates = withDates.any { it.second != null }
+        val ordered = if (anyDates) {
+            withDates.sortedByDescending { it.second ?: LocalDate.MIN }
+        } else {
+            withDates
+        }
+        return ordered.take(maxOf(1, weeks)).map { it.first.attended }
+    }
+
+    /** Cadence needs at least this many records before a trend means anything (2 halves of 3). */
+    private const val TREND_MIN_RECORDS = 6
+
+    /**
+     * How often this member comes, and which way it's moving. Ratio-based (not raw counts) so a SHORT
+     * window reads honestly: present 2 of 2 Sundays is "Weekly", not "Occasional".
+     */
+    fun attendanceCadence(m: Member): AttendanceCadence {
+        val recent = recentSacrament(m.parsedDetails()?.sacrament) ?: emptyList()
+        val total = recent.size
+        val attended = recent.count { it }
+        if (total == 0) {
+            return AttendanceCadence(AttendanceLevel.UNKNOWN, "No record", "No attendance recorded",
+                AttendanceTrend.UNKNOWN, recent, 0, 0)
+        }
+        val ratio = attended.toDouble() / total
+        val label = when {
+            ratio >= 0.875 -> "Weekly"
+            ratio >= 0.5 -> "Most weeks"
+            ratio > 0 -> "Occasional"
+            else -> "Not attending"
+        }
+        // Trend: newer half vs older half of the same window (recent is NEWEST-first, so the first
+        // half is the newer one). Compared as RATES because an odd window splits unevenly.
+        var trend = AttendanceTrend.UNKNOWN
+        if (total >= TREND_MIN_RECORDS) {
+            val half = total / 2
+            val nRate = recent.take(half).count { it }.toDouble() / half
+            val oRate = recent.takeLast(half).count { it }.toDouble() / half
+            trend = when {
+                nRate > oRate -> AttendanceTrend.IMPROVING
+                nRate < oRate -> AttendanceTrend.DECLINING
+                else -> AttendanceTrend.STEADY
+            }
+        }
+        return AttendanceCadence(
+            level = attendanceBucket(attended to total).level,
+            label = label,
+            detail = "$attended of the last $total Sunday" + if (total == 1) "" else "s",
+            trend = trend, recent = recent, attended = attended, total = total,
+        )
+    }
+
+    /**
+     * Is this member's attendance a NEED a leader should act on? Poor (1–3 of 8) or none (0) — and a
+     * DECLINING trend counts even while the raw count still reads "fair", which is exactly the person
+     * who slips away unnoticed. UNKNOWN (no data) is never a need: absence of data is not a problem.
+     */
+    fun attendanceNeedsAttention(m: Member): Boolean {
+        val c = attendanceCadence(m)
+        if (c.level == AttendanceLevel.UNKNOWN) return false
+        return c.level == AttendanceLevel.POOR || c.level == AttendanceLevel.NONE ||
+            c.trend == AttendanceTrend.DECLINING
+    }
+
     /** Count of lessons (across [rows]) where a member was present for ≥1 principle. Mirrors `_lessonsWithMember`. */
     fun lessonsWithMember(rows: List<Member>): Int {
         var c = 0

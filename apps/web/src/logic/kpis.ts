@@ -268,10 +268,13 @@ export function metricData(
  *  missed (the same rule the dots use). Returns null when there's no attendance list at all. */
 export const SACRAMENT_WINDOW_WEEKS = 8;
 
-export function sacramentWindow(
+/** The most recent `weeks` sacrament records, NEWEST FIRST, as plain attended-or-not flags. The shared
+ *  ordering both `sacramentWindow` (counts) and `attendanceCadence` (cadence + trend) read, so the two
+ *  can never disagree about which meetings are "recent". */
+export function recentSacrament(
   list: Array<Record<string, unknown>> | undefined | null,
   weeks: number = SACRAMENT_WINDOW_WEEKS,
-): { attended: number; total: number } | null {
+): boolean[] | null {
   if (!Array.isArray(list) || list.length === 0) return null;
   // Drop FUTURE-dated Sundays (a synced calendar can include upcoming weeks) — only meetings up to
   // today count toward the "most recent 8" window; undated rows are kept (order-trusted).
@@ -285,9 +288,16 @@ export function sacramentWindow(
     // newest first; undated rows sink to the end so dated recents win the window
     ? [...withDates].sort((a, b) => (b.dt?.getTime() ?? -Infinity) - (a.dt?.getTime() ?? -Infinity))
     : withDates;
-  const win = ordered.slice(0, Math.max(1, weeks));
-  const attended = win.filter((x) => x.s?.['attended'] === true).length;
-  return { attended, total: win.length };
+  return ordered.slice(0, Math.max(1, weeks)).map((x) => x.s?.['attended'] === true);
+}
+
+export function sacramentWindow(
+  list: Array<Record<string, unknown>> | undefined | null,
+  weeks: number = SACRAMENT_WINDOW_WEEKS,
+): { attended: number; total: number } | null {
+  const win = recentSacrament(list, weeks);
+  if (win == null) return null;
+  return { attended: win.filter(Boolean).length, total: win.length };
 }
 
 /** Sacrament-attendance health bucket over the recent window (#1e). The user's rule (counts out of the
@@ -318,8 +328,81 @@ export function attendanceBucket(win: { attended: number; total: number } | null
 
 /** Convenience: a member's attendance bucket straight from their details (`details.sacrament`). */
 export function memberAttendance(m: Member): AttendanceBucket {
+  return attendanceBucket(sacramentWindow(memberSacramentList(m)));
+}
+
+function memberSacramentList(m: Member): Array<Record<string, unknown>> | null {
   const sac = detailsOf(m)?.['sacrament'];
-  return attendanceBucket(sacramentWindow(Array.isArray(sac) ? (sac as Array<Record<string, unknown>>) : null));
+  return Array.isArray(sac) ? (sac as Array<Record<string, unknown>>) : null;
+}
+
+// ---- Attendance CADENCE (how often they come, and which way it's moving) ------------------------
+//
+// The bucket above answers "how many of the last 8?". Leaders also ask the two questions a raw count
+// doesn't answer: *how often* is this person coming (their rhythm), and is it getting better or
+// worse? A 4/8 who came the last four Sundays in a row is a very different conversation from a 4/8
+// who came the first four and then stopped -- the count is identical, the pastoral need is not.
+
+export type AttendanceTrend = 'improving' | 'declining' | 'steady' | 'unknown';
+
+export interface AttendanceCadence {
+  level: AttendanceLevel;
+  /** Short rhythm label: "Weekly" | "Most weeks" | "Occasional" | "Not attending" | "No record". */
+  label: string;
+  /** Honest long form, e.g. "7 of the last 8 Sundays". */
+  detail: string;
+  trend: AttendanceTrend;
+  /** Newest-first attendance flags for the window — drives the dot strip. */
+  recent: boolean[];
+  attended: number;
+  total: number;
+}
+
+/** Cadence needs at least this many records before a trend means anything (2 halves of 3). */
+const TREND_MIN_RECORDS = 6;
+
+/** How often this member comes, and which way it's moving. Ratio-based (not raw counts) so a SHORT
+ *  window reads honestly: a new member present 2 of 2 Sundays is "Weekly", not "Occasional". */
+export function attendanceCadence(m: Member): AttendanceCadence {
+  const recent = recentSacrament(memberSacramentList(m)) ?? [];
+  const total = recent.length;
+  const attended = recent.filter(Boolean).length;
+  if (total === 0) {
+    return { level: 'unknown', label: 'No record', detail: 'No attendance recorded',
+             trend: 'unknown', recent, attended, total };
+  }
+  const ratio = attended / total;
+  const label = ratio >= 0.875 ? 'Weekly'
+    : ratio >= 0.5 ? 'Most weeks'
+      : ratio > 0 ? 'Occasional'
+        : 'Not attending';
+
+  // Trend: the newer half vs the older half of the same window (recent is NEWEST-first, so the
+  // first half is the newer one). Compared as RATES because an odd window splits unevenly.
+  let trend: AttendanceTrend = 'unknown';
+  if (total >= TREND_MIN_RECORDS) {
+    const half = Math.floor(total / 2);
+    const newer = recent.slice(0, half);
+    const older = recent.slice(total - half);
+    const nRate = newer.filter(Boolean).length / half;
+    const oRate = older.filter(Boolean).length / half;
+    trend = nRate > oRate ? 'improving' : nRate < oRate ? 'declining' : 'steady';
+  }
+  return {
+    level: attendanceBucket({ attended, total }).level,
+    label,
+    detail: `${attended} of the last ${total} Sunday${total === 1 ? '' : 's'}`,
+    trend, recent, attended, total,
+  };
+}
+
+/** Is this member's attendance a NEED a leader should act on? Poor (1-3 of 8) or none (0) -- and a
+ *  DECLINING trend counts even while the raw count still reads "fair", which is exactly the person
+ *  who slips away unnoticed. `unknown` (no data) is never a need: absence of data is not a problem. */
+export function attendanceNeedsAttention(m: Member): boolean {
+  const c = attendanceCadence(m);
+  if (c.level === 'unknown') return false;
+  return c.level === 'poor' || c.level === 'none' || c.trend === 'declining';
 }
 
 /** Sundays this person was marked present at sacrament. Mirrors `_attendedDates`. */

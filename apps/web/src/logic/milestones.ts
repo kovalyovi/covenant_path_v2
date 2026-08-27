@@ -6,6 +6,7 @@
 import type { Member } from '../lib/member';
 import { detailsOf } from '../lib/member';
 import { parseMemberDate, yearOf } from './dates';
+import { attendanceNeedsAttention, memberAttendance } from './kpis';
 
 export interface Milestone {
   /** Full name (detail + accessibility). */
@@ -263,6 +264,19 @@ export const needsCategories: Milestone[] = [
       + 'Note: this is the one field not available from the daily sync — it refreshes when a leader re-authorizes (about every 45 days).',
     complete: (m) => m['patriarchal_blessing'] === 'Yes',
     eligible: patriarchalEligible,
+  },
+  // Church attendance. Unlike every other category this is not a Yes/No field — it's the recent
+  // sacrament-attendance cadence (`details.sacrament`). "Complete" = they're coming (great/fair and
+  // not sliding); "missing" = poor/none, OR a DECLINING trend while the raw count still reads fair —
+  // the person who quietly slips away is exactly who a leader wants surfaced before the count drops.
+  // `eligible` is false when there's no attendance record at all: absence of data is not a need.
+  // No `field` — the value lives in the details subtree, so `expected()` falls back to eligibility.
+  {
+    label: 'Church Attendance', abbr: 'CA', icon: 'menu_book', color: '#0277BD',
+    description: 'The member is attending sacrament meeting regularly. Flags anyone who has missed most of '
+      + 'the recent Sundays, or whose attendance is trending down even if the count still looks acceptable.',
+    complete: (m) => !attendanceNeedsAttention(m),
+    eligible: (m) => memberAttendance(m).level !== 'unknown',
   },
 ];
 
