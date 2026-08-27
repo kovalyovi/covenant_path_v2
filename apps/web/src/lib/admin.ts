@@ -70,6 +70,12 @@ export class AdminClient {
   rerun = (runId: number) => this.postReq(`/admin/actions/${runId}/rerun`);
   invite = (email: string) => this.postReq('/admin/invite', { email });
   feedback = (title: string, body: string) => this.postReq('/feedback', { title, body });
+  // Feedback inbox (0064): every report in one place, plus the addressed/reopen flip. Marking
+  // something addressed emails the reporter a thank-you (once) server-side.
+  feedbackList = (status?: string) =>
+    this.get(`/admin/feedback${status ? `?status=${encodeURIComponent(status)}` : ''}`);
+  feedbackStatus = (id: number, status: 'addressed' | 'open', note = '') =>
+    this.postReq(`/admin/feedback/${id}/status`, { status, note });
 }
 
 export const admin = new AdminClient();

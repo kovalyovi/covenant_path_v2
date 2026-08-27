@@ -146,6 +146,19 @@ export function AdminPage({ embedded = false }: { embedded?: boolean } = {}) {
     });
   }
 
+  function setFeedbackStatus(id: number, next: 'addressed' | 'open', note: string) {
+    void guard(async () => {
+      const res = await admin.feedbackStatus(id, next, note);
+      // Be honest about the thank-you: it is best-effort server-side, so don't claim it was sent.
+      const thanks = next !== 'addressed' ? ''
+        : res['thanked'] ? ' Reporter thanked.'
+          : res['already_thanked'] ? ' (Reporter was already thanked.)'
+            : ' No thank-you sent (no reporter email, or the send failed).';
+      toast.show({ message: `${next === 'addressed' ? 'Marked addressed.' : 'Reopened.'}${thanks}` });
+      refresh();
+    });
+  }
+
   function revokeAdmin(emailVal: string) {
     void guard(async () => {
       await supabase.rpc('revoke_admin', { p_email: emailVal });
@@ -241,6 +254,22 @@ export function AdminPage({ embedded = false }: { embedded?: boolean } = {}) {
             errorHint="login_audit is admin-only (RLS) — rows appear once the broker records logins after its next deploy."
           >
             {(s) => <VisibilityWorklistCard rows={(s['rows'] as Json[]) ?? []} />}
+          </Panel>
+          {/* Every in-app report in one place (0064), with the addressed/reopen flip. Marking one
+              addressed emails the reporter a thank-you server-side (once). */}
+          <Panel
+            key={`feedback-${nonce}`}
+            title="Feedback"
+            load={() => admin.feedbackList()}
+            errorHint="Needs the broker deployed with /admin/feedback (migration 0064 applied)."
+          >
+            {(s) => (
+              <FeedbackInboxCard
+                rows={(s['feedback'] as Json[]) ?? []}
+                busy={busy}
+                onSetStatus={setFeedbackStatus}
+              />
+            )}
           </Panel>
           <Panel
             key={`admins-${nonce}`}
@@ -1276,6 +1305,95 @@ function VisibilityWorklistCard({ rows: all }: { rows: Json[] }) {
             {r['stake_name'] ? <div className="small muted">{String(r['stake_name'])}</div> : null}
             {callings ? <div className="small muted">Callings: {callings}</div> : null}
             <div className="tiny muted">{fmtDateTime(String(r['at'] ?? ''))}</div>
+          </div>
+        );
+      })}
+    </Card>
+  );
+}
+
+/** The in-app feedback inbox: newest first, open ones first, each with what was reported, who
+ *  reported it, the GitHub issue, and a Mark addressed / Reopen control. Marking addressed sends the
+ *  reporter a thank-you (server-side, once) — the optional note is quoted in that email, so the
+ *  placeholder says so plainly. */
+function FeedbackInboxCard({
+  rows, busy, onSetStatus,
+}: {
+  rows: Json[];
+  busy: boolean;
+  onSetStatus: (id: number, status: 'addressed' | 'open', note: string) => void;
+}) {
+  const [notes, setNotes] = useState<Record<number, string>>({});
+  if (rows.length === 0)
+    return (
+      <Card title="Feedback">
+        <p className="small muted">No feedback yet.</p>
+      </Card>
+    );
+  // Open first, then newest — the inbox should lead with what still needs doing.
+  const sorted = [...rows].sort((a, b) => {
+    const ao = a['status'] === 'open' ? 0 : 1;
+    const bo = b['status'] === 'open' ? 0 : 1;
+    return ao - bo || String(b['at'] ?? '').localeCompare(String(a['at'] ?? ''));
+  });
+  const open = rows.filter((r) => r['status'] === 'open').length;
+  return (
+    <Card title={`Feedback (${open} open of ${rows.length})`}>
+      {sorted.map((r) => {
+        const id = Number(r['id']);
+        const isOpen = r['status'] === 'open';
+        return (
+          <div key={id} style={{ padding: '10px 0', borderBottom: '1px solid rgba(128,128,128,0.2)' }}>
+            <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
+              <span
+                className="chip"
+                style={{
+                  padding: '1px 8px', fontSize: 11, fontWeight: 700,
+                  color: isOpen ? statusColors.warning : statusColors.successFg,
+                  borderColor: isOpen ? statusColors.warning : statusColors.successFg,
+                }}
+              >
+                {isOpen ? 'Open' : 'Addressed'}
+              </span>
+              <b>{String(r['title'] ?? '')}</b>
+            </div>
+            {r['body'] ? (
+              <p className="small" style={{ whiteSpace: 'pre-wrap', margin: '6px 0' }}>{String(r['body'])}</p>
+            ) : null}
+            <div className="small muted row wrap" style={{ gap: 8 }}>
+              <MaskedEmail email={r['reporter_email']} />
+              <span>{fmtDateTime(String(r['at'] ?? ''))}</span>
+              {r['issue_url'] ? (
+                <a href={String(r['issue_url'])} target="_blank" rel="noreferrer">
+                  issue #{String(r['issue_number'] ?? '')}
+                </a>
+              ) : null}
+            </div>
+            {!isOpen && (
+              <div className="tiny muted" style={{ marginTop: 4 }}>
+                Addressed by {String(r['addressed_by'] ?? 'an admin')} ·{' '}
+                {r['thanked_at'] ? 'reporter thanked' : 'no thank-you sent (no reporter email, or send failed)'}
+                {r['addressed_note'] ? ` — ${String(r['addressed_note'])}` : ''}
+              </div>
+            )}
+            <div className="row wrap" style={{ gap: 8, marginTop: 6, alignItems: 'center' }}>
+              {isOpen && (
+                <input
+                  className="input"
+                  style={{ flex: '1 1 220px', minWidth: 0 }}
+                  placeholder="What changed? (quoted in the reporter's thank-you email)"
+                  value={notes[id] ?? ''}
+                  onChange={(e) => setNotes((n) => ({ ...n, [id]: e.target.value }))}
+                />
+              )}
+              <Button
+                variant={isOpen ? 'filled' : 'text'}
+                disabled={busy}
+                onClick={() => onSetStatus(id, isOpen ? 'addressed' : 'open', notes[id] ?? '')}
+              >
+                {isOpen ? 'Mark addressed' : 'Reopen'}
+              </Button>
+            </div>
           </div>
         );
       })}

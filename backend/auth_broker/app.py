@@ -896,11 +896,47 @@ class FeedbackReq(BaseModel):
 
 @app.post("/feedback")
 def feedback(body: FeedbackReq, email: str = Depends(require_user)) -> dict:
-    """Any signed-in user files in-app feedback as a GitHub issue (+ best-effort Copilot)."""
+    """Any signed-in user files in-app feedback: a GitHub issue (+ best-effort Copilot), a row in the
+    admin inbox (0064), and an email to the owner.
+
+    Only the GitHub issue can fail the request. The inbox copy and the owner email are best-effort by
+    design — losing the REPORT because Supabase or Resend hiccuped would be far worse than losing the
+    notification about it."""
     try:
-        return admin.create_feedback_issue(body.title, body.body, reporter=email)
+        issue = admin.create_feedback_issue(body.title, body.body, reporter=email)
     except admin.AdminError as e:
         raise HTTPException(status_code=503, detail=str(e))
+    row = admin.record_feedback(body.title, body.body, reporter=email, issue=issue)
+    notified = admin.notify_owner_of_feedback(body.title, body.body, reporter=email, issue=issue)
+    return {**issue, "feedback_id": (row or {}).get("id"), "owner_notified": notified}
+
+
+class FeedbackStatusReq(BaseModel):
+    status: str = "addressed"          # 'addressed' | 'open'
+    note: str = ""                     # what was done — included in the reporter's thank-you
+
+
+@app.get("/admin/feedback")
+def admin_feedback(status: str | None = None, limit: int = 100,
+                   email: str = Depends(require_admin)) -> dict:
+    """The in-app feedback inbox — every report in one place (0064), newest first."""
+    try:
+        rows = admin.list_feedback(status=status, limit=limit)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return {"feedback": rows,
+            "open": sum(1 for r in rows if r.get("status") == "open"),
+            "addressed": sum(1 for r in rows if r.get("status") == "addressed")}
+
+
+@app.post("/admin/feedback/{feedback_id}/status")
+def admin_feedback_status(feedback_id: int, body: FeedbackStatusReq,
+                          email: str = Depends(require_admin)) -> dict:
+    """Mark one report addressed (emails the reporter a thank-you, once) or reopen it."""
+    try:
+        return admin.set_feedback_status(feedback_id, body.status, admin_email=email, note=body.note)
+    except admin.AdminError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 class ContactReq(BaseModel):

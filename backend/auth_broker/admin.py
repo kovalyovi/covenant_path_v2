@@ -22,6 +22,10 @@ import re
 
 import requests
 
+from lcr_client.logging_setup import get_logger
+
+logger = get_logger()
+
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
@@ -1114,3 +1118,135 @@ def recent_commits(limit: int = 10) -> list[dict]:
                         "html_url": c.get("html_url")})
         return out
     return _cached(f"commits:{limit}", 60, _fetch)
+
+
+# --- in-app feedback inbox (migration 0064) ---------------------------------------------------
+#
+# create_feedback_issue (above) files the GitHub issue; these keep the copy an admin can actually
+# see and act on inside the app, and close the loop with the person who reported it.
+
+_FEEDBACK_STATUSES = ("open", "addressed")
+
+
+def _feedback_rows(params: dict) -> list[dict]:
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/app_feedback", headers=_sb_headers(),
+                     params=params, timeout=_TIMEOUT)
+    if r.status_code >= 300:
+        raise AdminError(f"feedback read failed ({r.status_code}): {r.text[:160]}")
+    return r.json() or []
+
+
+def record_feedback(title: str, body: str, reporter: str, issue: dict | None) -> dict | None:
+    """Mirror one report into app_feedback. Best-effort: feedback must still be ACCEPTED when the
+    table or Supabase is unavailable — losing the inbox copy is far better than losing the report
+    (the GitHub issue is already filed by the time we get here)."""
+    try:
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/app_feedback",
+            headers={**_sb_headers(), "Content-Type": "application/json",
+                     "Prefer": "return=representation"},
+            json={"reporter_email": (reporter or "").strip().lower() or None,
+                  "title": (title or "").strip()[:200] or "App feedback",
+                  "body": (body or "").strip()[:8000] or None,
+                  "issue_number": (issue or {}).get("number"),
+                  "issue_url": (issue or {}).get("url")},
+            timeout=_TIMEOUT)
+        if r.status_code >= 300:
+            logger.warning("feedback record failed (%s): %s", r.status_code, r.text[:160])
+            return None
+        rows = r.json() or []
+        return rows[0] if rows else None
+    except (requests.RequestException, AdminError) as exc:
+        logger.warning("feedback record skipped: %s", exc)
+        return None
+
+
+def notify_owner_of_feedback(title: str, body: str, reporter: str, issue: dict | None) -> bool:
+    """Email the owner that new feedback landed. Best-effort for the same reason as above — a mail
+    outage must never turn into a failed submission for the person reporting a bug."""
+    if not OWNER_EMAIL:
+        return False
+    from html import escape
+    url = (issue or {}).get("url")
+    link = (f"<p><a href=\"{escape(str(url))}\">GitHub issue #{escape(str((issue or {}).get('number')))}</a></p>"
+            if url else "<p><i>No GitHub issue (GitHub not configured).</i></p>")
+    html = (f"<h2>New in-app feedback</h2>"
+            f"<p><b>From:</b> {escape(reporter or 'unknown')}</p>"
+            f"<p><b>Title:</b> {escape(title or '')}</p>"
+            f"<hr><p style='white-space:pre-wrap'>{escape(body or '')}</p>{link}"
+            f"<p style='color:#666'>Mark it addressed in the app's Admin panel to thank the reporter.</p>")
+    try:
+        _send_email(OWNER_EMAIL, f"[Covenant Path feedback] {' '.join((title or '').split())[:120]}", html)
+        return True
+    except (AdminError, requests.RequestException) as exc:
+        logger.warning("feedback owner notification skipped: %s", exc)
+        return False
+
+
+def list_feedback(status: str | None = None, limit: int = 100) -> list[dict]:
+    """The feedback inbox, newest first. `status` filters to 'open' / 'addressed'."""
+    params = {"select": "id,at,reporter_email,title,body,issue_number,issue_url,status,"
+                        "addressed_at,addressed_by,addressed_note,thanked_at",
+              "order": "at.desc", "limit": str(max(1, min(limit, 500)))}
+    if status in _FEEDBACK_STATUSES:
+        params["status"] = f"eq.{status}"
+    return _feedback_rows(params)
+
+
+def _thank_you_html(title: str, note: str | None) -> str:
+    from html import escape
+    did = (f"<p><b>What changed:</b></p><p style='white-space:pre-wrap'>{escape(note)}</p>"
+           if (note or "").strip() else "")
+    return (f"<h2>Thank you — your feedback has been addressed</h2>"
+            f"<p>You reported: <b>{escape(title or '')}</b></p>{did}"
+            f"<p>Thank you for taking the time to tell us. It genuinely makes the app better for "
+            f"every leader using it.</p>"
+            f"<p style='color:#666'>— Covenant Path</p>")
+
+
+def set_feedback_status(feedback_id: int, status: str, admin_email: str,
+                        note: str | None = None) -> dict:
+    """Flip one report between open and addressed. Marking it ADDRESSED emails the reporter a
+    thank-you (once — `thanked_at` guards a re-mark from spamming them).
+
+    The status change is what matters, so it is committed FIRST and the email is best-effort: a mail
+    failure leaves `thanked_at` null and is reported back, never lost as a silent success."""
+    if status not in _FEEDBACK_STATUSES:
+        raise AdminError(f"status must be one of {', '.join(_FEEDBACK_STATUSES)}")
+    row = _one("app_feedback", {"select": "id,title,reporter_email,status,thanked_at",
+                                "id": f"eq.{int(feedback_id)}"})
+    if not row:
+        raise AdminError("feedback not found")
+
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    patch: dict = {"status": status}
+    if status == "addressed":
+        patch |= {"addressed_at": now, "addressed_by": admin_email,
+                  "addressed_note": (note or "").strip()[:2000] or None}
+    else:  # reopening clears the addressed trail, but never the thanked_at record
+        patch |= {"addressed_at": None, "addressed_by": None, "addressed_note": None}
+
+    r = requests.patch(f"{SUPABASE_URL}/rest/v1/app_feedback",
+                       headers={**_sb_headers(), "Content-Type": "application/json",
+                                "Prefer": "return=minimal"},
+                       params={"id": f"eq.{int(feedback_id)}"}, json=patch, timeout=_TIMEOUT)
+    if r.status_code >= 300:
+        raise AdminError(f"feedback update failed ({r.status_code}): {r.text[:160]}")
+
+    thanked = False
+    reporter = (row.get("reporter_email") or "").strip()
+    if status == "addressed" and reporter and not row.get("thanked_at"):
+        try:
+            _send_email(reporter, "Thank you — your Covenant Path feedback has been addressed",
+                        _thank_you_html(row.get("title") or "", note))
+            requests.patch(f"{SUPABASE_URL}/rest/v1/app_feedback",
+                           headers={**_sb_headers(), "Content-Type": "application/json",
+                                    "Prefer": "return=minimal"},
+                           params={"id": f"eq.{int(feedback_id)}"},
+                           json={"thanked_at": now}, timeout=_TIMEOUT)
+            thanked = True
+        except (AdminError, requests.RequestException) as exc:
+            logger.warning("thank-you email failed for feedback %s: %s", feedback_id, exc)
+    return {"id": int(feedback_id), "status": status, "thanked": thanked,
+            "already_thanked": bool(row.get("thanked_at"))}

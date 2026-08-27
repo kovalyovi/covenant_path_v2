@@ -2448,6 +2448,107 @@ def test_membertools_persist_verifies_after_patch() -> None:
          _cred._encrypt_envelope) = saved
 
 
+
+def test_feedback_inbox_and_thank_you() -> None:
+    # Item 2 (2026-08-25): feedback used to exist ONLY as a GitHub issue -- no admin inbox, no
+    # addressed state, no word back to the reporter, no ping to the owner. Now /feedback also records
+    # a row + emails the owner, and an admin can flip it to addressed, which thanks the reporter once.
+    # FAILS pre-fix: none of these routes/functions existed.
+    from backend.auth_broker.app import require_user
+    app.dependency_overrides[require_user] = lambda: "reporter@test"
+    app.dependency_overrides[require_admin] = lambda: "admin@test"
+    saved = (admin.create_feedback_issue, admin.record_feedback, admin.list_feedback,
+             admin._one, admin._send_email, admin.OWNER_EMAIL, admin._sb_headers)
+    # _sb_headers raises without SUPABASE_URL/SERVICE_ROLE_KEY, which the offline suite has no reason
+    # to set; the REST calls themselves are stubbed below.
+    admin._sb_headers = lambda: {}
+    sent: list = []
+    patched: list = []
+    admin.OWNER_EMAIL = "owner@test"
+    admin.create_feedback_issue = lambda t, b, reporter: {"number": 7, "url": "https://gh/7",
+                                                          "copilot": False}
+    admin.record_feedback = lambda t, b, reporter, issue: {"id": 42}
+    admin._send_email = lambda to, subject, html: sent.append((to, subject, html))
+    try:
+        r = client.post("/feedback", json={"title": "Bug <b>x</b>", "body": "it broke @everyone"})
+        body = r.json()
+        check("feedback -> 200", r.status_code == 200)
+        check("feedback still returns the GitHub issue", body.get("number") == 7)
+        check("feedback returns the inbox row id", body.get("feedback_id") == 42)
+        check("feedback notified the owner", body.get("owner_notified") is True)
+        check("owner email went to OWNER_EMAIL", sent and sent[0][0] == "owner@test")
+        check("owner email escapes reporter-supplied HTML (BACKEND-02)",
+              "<b>x</b>" not in sent[0][2] and "&lt;b&gt;" in sent[0][2])
+
+        # A Supabase/Resend outage must NEVER cost us the report: the issue is already filed.
+        sent.clear()
+        admin.record_feedback = lambda t, b, reporter, issue: None
+        admin.OWNER_EMAIL = ""
+        r = client.post("/feedback", json={"title": "Second", "body": ""})
+        check("feedback survives a failed inbox write", r.status_code == 200)
+        check("feedback_id is null when the row didn't land", r.json().get("feedback_id") is None)
+        check("owner_notified false without OWNER_EMAIL", r.json().get("owner_notified") is False)
+        admin.OWNER_EMAIL = "owner@test"
+
+        # The inbox lists + counts.
+        admin.list_feedback = lambda status=None, limit=100: [
+            {"id": 42, "status": "open", "title": "Bug"},
+            {"id": 41, "status": "addressed", "title": "Old"},
+        ]
+        r = client.get("/admin/feedback")
+        check("admin/feedback -> 200", r.status_code == 200)
+        check("admin/feedback counts open", r.json().get("open") == 1)
+        check("admin/feedback counts addressed", r.json().get("addressed") == 1)
+
+        # Marking addressed patches the row and thanks the reporter exactly once.
+        sent.clear()
+        admin._one = lambda table, params: {"id": 42, "title": "Bug", "status": "open",
+                                            "reporter_email": "reporter@test", "thanked_at": None}
+        import backend.auth_broker.admin as _a
+
+        class _Resp:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return []
+
+        saved_patch = _a.requests.patch          # restored in `finally` -- this is the SHARED
+        _a.requests.patch = lambda *a, **k: (      # requests module, so leaking it breaks later tests
+            patched.append(k.get("json")), _Resp())[1]
+        r = client.post("/admin/feedback/42/status", json={"status": "addressed", "note": "Fixed it."})
+        out = r.json()
+        check("mark addressed -> 200", r.status_code == 200)
+        check("mark addressed reports thanked", out.get("thanked") is True)
+        check("thank-you went to the reporter", sent and sent[0][0] == "reporter@test")
+        check("thank-you quotes the admin's note", "Fixed it." in sent[0][2])
+        check("addressed_by is the acting admin",
+              any((p or {}).get("addressed_by") == "admin@test" for p in patched))
+        check("thanked_at stamped after a successful send",
+              any("thanked_at" in (p or {}) for p in patched))
+
+        # Re-marking an already-thanked report must not email them again.
+        sent.clear()
+        patched.clear()
+        admin._one = lambda table, params: {"id": 42, "title": "Bug", "status": "addressed",
+                                            "reporter_email": "reporter@test",
+                                            "thanked_at": "2026-08-25T00:00:00Z"}
+        r = client.post("/admin/feedback/42/status", json={"status": "addressed", "note": ""})
+        check("re-mark does not re-thank", r.json().get("thanked") is False and not sent)
+        check("re-mark reports already_thanked", r.json().get("already_thanked") is True)
+
+        # A bad status is rejected, not silently coerced.
+        r = client.post("/admin/feedback/42/status", json={"status": "wontfix"})
+        check("invalid status -> 400", r.status_code == 400)
+    finally:
+        import backend.auth_broker.admin as _a2
+        if "saved_patch" in dir():
+            _a2.requests.patch = saved_patch
+        (admin.create_feedback_issue, admin.record_feedback, admin.list_feedback,
+         admin._one, admin._send_email, admin.OWNER_EMAIL, admin._sb_headers) = saved
+        app.dependency_overrides.pop(require_user, None)
+        app.dependency_overrides.pop(require_admin, None)
+
 def main() -> int:
     print("broker tests")
     test_fast_lane_eval_zero_lcr()
@@ -2503,6 +2604,7 @@ def main() -> int:
     test_mfa_pending_and_select_failures_audited()
     test_provider_wipe_data()
     test_admin_reauth_email()
+    test_feedback_inbox_and_thank_you()
     test_full_eval_enroll_reaches_scrape_and_stores()
     test_full_eval_new_stake_offers_enroll()
     test_ward_leader_enroll_refused_friendly()
