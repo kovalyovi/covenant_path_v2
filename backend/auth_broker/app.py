@@ -25,7 +25,7 @@ from pydantic import BaseModel
 
 from lcr_client.logging_setup import get_logger
 from backend.auth_broker import (
-    admin, email_relay, google_oauth, okta_flow, ratelimit, session_mint)
+    admin, claim, email_relay, google_oauth, okta_flow, ratelimit, session_mint)
 
 logger = get_logger()
 app = FastAPI(title="Covenant Path — Church login broker")
@@ -936,6 +936,36 @@ def admin_feedback_status(feedback_id: int, body: FeedbackStatusReq,
     try:
         return admin.set_feedback_status(feedback_id, body.status, admin_email=email, note=body.note)
     except admin.AdminError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class ClaimStartReq(BaseModel):
+    first_name: str
+    last_name: str
+
+
+class ClaimVerifyReq(BaseModel):
+    token: str
+
+
+@app.post("/claim/start")
+def claim_start(body: ClaimStartReq, email: str = Depends(require_user)) -> dict:
+    """"I'm a leader but signed in with a different email" (0065), step 1: match the name and mail a
+    single-use link to the address ON RECORD. The reply carries only a masked hint — the secret goes
+    to the inbox we already trust, never to the address that asked."""
+    try:
+        return claim.start_claim(email, body.first_name, body.last_name)
+    except claim.ClaimError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/claim/verify")
+def claim_verify(body: ClaimVerifyReq, email: str = Depends(require_user)) -> dict:
+    """Step 2: consume the link and clone the matched leader's EXISTING roles onto this sign-in.
+    Requires the same signed-in address that started the claim."""
+    try:
+        return claim.complete_claim(body.token, email)
+    except claim.ClaimError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 

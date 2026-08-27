@@ -95,6 +95,59 @@ test.describe('empty states', () => {
     await expect(page.getByRole('dialog', { name: 'Re-authorize daily sync' })).toBeVisible();
   });
 
+  test('a scope-less leader can claim access; the link goes to the address ON RECORD', async ({ page }) => {
+    // Item 1b (0065). A leader signed in with a different address gets a self-service route in. The
+    // copy must be explicit that the confirmation goes to the address already on record — that is the
+    // security property, and hiding it would make the flow feel like a dead end.
+    await openDashboard(page, {
+      supabase: { stakes: [], members: [], comments: [] },
+      broker: {
+        'GET /auth/enrollment-status': {
+          json: enrollmentStatus(
+            { status: 'no_role', stake_name: null, unit_number: null, member_count: 0, has_data: false },
+            { state: 'none', complete: false, principal_name: null },
+          ),
+        },
+        'POST /claim/start': { json: { status: 'sent', hint: 're•••••@g•••.com' } },
+      },
+    });
+
+    await page.getByRole('button', { name: /did I sign in with a different email/i }).click();
+    const send = page.getByRole('button', { name: 'Send confirmation link' });
+    await expect(send).toBeDisabled();                       // gated until both names are real
+    await page.getByPlaceholder('First name').fill('Reed');
+    await page.getByPlaceholder('Last name').fill('Hunsaker');
+    await expect(send).toBeEnabled();
+    await send.click();
+
+    await expect(page.getByText(/address on record/i)).toBeVisible();
+    await expect(page.getByText('re•••••@g•••.com')).toBeVisible();
+  });
+
+  test('an unmatched claim never confirms whether that leader exists', async ({ page }) => {
+    await openDashboard(page, {
+      supabase: { stakes: [], members: [], comments: [] },
+      broker: {
+        'GET /auth/enrollment-status': {
+          json: enrollmentStatus(
+            { status: 'no_role', stake_name: null, unit_number: null, member_count: 0, has_data: false },
+            { state: 'none', complete: false, principal_name: null },
+          ),
+        },
+        'POST /claim/start': { json: { status: 'no_match' } },
+      },
+    });
+
+    await page.getByRole('button', { name: /did I sign in with a different email/i }).click();
+    await page.getByPlaceholder('First name').fill('Nosuch');
+    await page.getByPlaceholder('Last name').fill('Person');
+    await page.getByRole('button', { name: 'Send confirmation link' }).click();
+
+    await expect(page.getByText(/couldn.t match that name/i)).toBeVisible();
+    // Nothing about whether the name exists, and no masked address to probe with.
+    await expect(page.getByText(/•••/)).not.toBeVisible();
+  });
+
   test('an active credential with no data yet shows the first-sync-running state', async ({ page }) => {
     await openDashboard(page, {
       supabase: { stakes: [], members: [], comments: [] },

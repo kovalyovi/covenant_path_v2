@@ -1,11 +1,12 @@
 // The "no members visible" empty state — React port of `_EmptyState` (dashboard_shell.dart). The
 // message + action depend on the broker enrollment status (no role / revoked / first sync running).
 
+import { useState } from 'react';
 import { broker, type EnrollmentStatus } from '../lib/broker';
 import { useDashboard } from '../hooks/useDashboard';
 import { fmtEtHourLocal } from '../logic/dates';
 import { Icon } from './Icon';
-import { Button } from './ui';
+import { Button, Spinner } from './ui';
 
 export function EmptyState({ enrollStatus }: { enrollStatus: EnrollmentStatus | null }) {
   const d = useDashboard();
@@ -90,6 +91,10 @@ export function EmptyState({ enrollStatus }: { enrollStatus: EnrollmentStatus | 
       'you, or sign in once with your Church account to link your calling automatically.';
   }
 
+  // The claim form belongs on exactly the states where someone has a calling but the app can't see
+  // it: signed in with no scope. It is pointless once a credential is mid-setup.
+  const offerClaim = hasNoRole || enrollStatus == null;
+
   return (
     <div className="center-col" style={{ minHeight: '60vh' }}>
       <Icon name="group_outline" size={56} color="var(--primary)" style={{ opacity: 0.4 }} />
@@ -98,6 +103,104 @@ export function EmptyState({ enrollStatus }: { enrollStatus: EnrollmentStatus | 
         {body}
       </p>
       {action}
+      {offerClaim && <ClaimAccessForm />}
+    </div>
+  );
+}
+
+/** "Signed in with a different email?" — the self-service claim (0065).
+ *
+ *  The copy has to be honest about a flow whose whole point is that the secret goes somewhere the
+ *  person in front of us may not control: we say plainly that the link goes to the address already on
+ *  record, and we show only a masked hint of it. A name that matches nothing and a name that matches
+ *  two people give the SAME answer, so this can't be used to test whether a leader exists. */
+function ClaimAccessForm() {
+  const [open, setOpen] = useState(false);
+  const [first, setFirst] = useState('');
+  const [last, setLast] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ kind: 'sent' | 'info' | 'error'; text: string } | null>(null);
+
+  async function submit() {
+    setBusy(true);
+    setResult(null);
+    try {
+      const res = await broker.claimStart(first.trim(), last.trim());
+      const status = String(res['status'] ?? '');
+      if (status === 'sent') {
+        setResult({
+          kind: 'sent',
+          text: `We've emailed a confirmation link to the address on record (${String(res['hint'] ?? '')}). `
+            + 'Open it from that inbox within 30 minutes to link this sign-in. If that inbox '
+            + "isn't yours, ask your stake leader to invite you instead.",
+        });
+      } else if (status === 'already_on_record') {
+        setResult({ kind: 'info', text: 'This is already the address on record for you — try signing out and back in. If it still looks empty, contact your stake leadership.' });
+      } else if (status === 'no_email_on_record') {
+        setResult({ kind: 'info', text: "We found your calling, but we don't have an email on record to confirm it against. Ask your stake leader to invite this address directly." });
+      } else {
+        // no_match — deliberately the same answer for "no such leader" and "more than one".
+        setResult({ kind: 'info', text: "We couldn't match that name to a calling we can confirm. Check the spelling as it appears in Church records, or ask your stake leader to invite this address." });
+      }
+    } catch (e: unknown) {
+      setResult({ kind: 'error', text: e instanceof Error ? e.message : 'Something went wrong. Try again later.' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button type="button" className="btn btn--text" style={{ marginTop: 8 }} onClick={() => setOpen(true)}>
+        I have a calling — did I sign in with a different email?
+      </button>
+    );
+  }
+
+  return (
+    <div className="stack" style={{ gap: 8, maxWidth: 420, marginTop: 12, textAlign: 'left' }}>
+      <p className="small muted" style={{ margin: 0 }}>
+        Enter your name as it appears in Church records. If it matches a calling, we&rsquo;ll email a
+        confirmation link <b>to the address already on record</b> — not to this one — so only you can
+        finish.
+      </p>
+      <div className="row wrap" style={{ gap: 8 }}>
+        <input
+          className="input"
+          style={{ flex: '1 1 140px', minWidth: 0 }}
+          placeholder="First name"
+          autoComplete="given-name"
+          value={first}
+          onChange={(e) => setFirst(e.target.value)}
+        />
+        <input
+          className="input"
+          style={{ flex: '1 1 140px', minWidth: 0 }}
+          placeholder="Last name"
+          autoComplete="family-name"
+          value={last}
+          onChange={(e) => setLast(e.target.value)}
+        />
+      </div>
+      <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+        <Button
+          variant="filled"
+          disabled={busy || first.trim().length < 2 || last.trim().length < 2}
+          onClick={() => void submit()}
+        >
+          {busy ? 'Checking…' : 'Send confirmation link'}
+        </Button>
+        {busy && <Spinner />}
+      </div>
+      {result && (
+        <p
+          className="small"
+          role={result.kind === 'error' ? 'alert' : 'status'}
+          style={{ color: result.kind === 'error' ? 'var(--error)' : undefined, margin: 0 }}
+        >
+          {result.text}
+        </p>
+      )}
     </div>
   );
 }

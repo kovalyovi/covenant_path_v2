@@ -451,6 +451,17 @@ export class BrokerClient {
     return this.authed('GET', `/admin/endpoint-health?days=${days}`);
   }
 
+  /** Claim flow (0065) step 1: "I'm a leader but signed in with a different email". Matches the name
+   *  and mails a single-use link to the address ON RECORD — the reply carries only a masked hint. */
+  claimStart(firstName: string, lastName: string): Promise<Record<string, unknown>> {
+    return this.authed('POST', '/claim/start', { first_name: firstName, last_name: lastName });
+  }
+
+  /** Step 2: consume the emailed link. Must be the same sign-in that started the claim. */
+  claimVerify(token: string): Promise<Record<string, unknown>> {
+    return this.authed('POST', '/claim/verify', { token });
+  }
+
   emailReport(toEmail?: string): Promise<Record<string, unknown>> {
     return this.authed('POST', '/report/email', toEmail ? { to_email: toEmail } : {});
   }

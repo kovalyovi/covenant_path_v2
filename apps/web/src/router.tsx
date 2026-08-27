@@ -27,6 +27,7 @@ import { NeedsTab } from './pages/tabs/NeedsTab';
 import { TableTab } from './pages/tabs/TableTab';
 import { ReauthPage } from './pages/ReauthPage';
 import { InvitePage } from './pages/InvitePage';
+import { ClaimPage } from './pages/ClaimPage';
 
 // Code-split the chart-heavy KPIs tab (Recharts) out of the initial bundle, so first paint of the
 // dashboard stays lean. lazyWithReload reloads the page once when a chunk 404s because a deploy
@@ -125,6 +126,9 @@ export const router = createBrowserRouter([
       // Deep link from the day-40 "re-authorize your sync" email — opens the one-MFA dialog (Piece 3).
       { path: 'reauth', element: <ReauthPage /> },
       { path: 'invite', element: <InvitePage /> },
+      // Landing for the "confirm your access" email (0065): redeems the single-use token
+      // against the CURRENT sign-in, which is what links the two addresses.
+      { path: 'claim', element: <ClaimPage /> },
     ],
   },
   { path: '*', element: <Navigate to="/" replace /> },
