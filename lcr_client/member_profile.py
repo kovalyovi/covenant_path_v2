@@ -39,6 +39,12 @@ _ROW_RE = re.compile(r"^[0-9a-f]+:(.*)$")
 _HEAL_ATTEMPTED = False
 
 
+class ProfileNotFound(RuntimeError):
+    """LCR answered 404 for this person's member-profile page — they have no /mlt record. Permanent
+    and person-specific: re-authorizing changes nothing, so callers must not report it as a session
+    problem (that told a leader to sign in again, forever, for members who can never be filled)."""
+
+
 def _heal_once(session, uuid: str) -> None:
     """Run action-id auto-discovery at most once per process."""
     global _HEAL_ATTEMPTED
@@ -148,8 +154,13 @@ def extract_fields(record: dict) -> dict:
     return out
 
 
-def call_action(session, person_uuid: str, action_id: str, args: list) -> list:
+def call_action(session, person_uuid: str, action_id: str, args: list,
+                *, errors: list | None = None) -> list:
     """POST a member-profile server action and return the parsed flight rows.
+
+    `errors`, when given, collects the PERMANENT exception we gave up on — the caller needs it to
+    tell "LCR has no profile page for this person" (404) apart from "our action id is stale" or
+    "the session died", which otherwise all look like an empty row list.
 
     The profile server actions are the SOURCE of the four parity fields (baptism_date,
     temple_recommend, patriarchal_blessing, ministering_assignment). LCR's /mlt app is in the same
@@ -192,21 +203,47 @@ def call_action(session, person_uuid: str, action_id: str, args: list) -> list:
     rows = http_util.retry_call(
         _post, attempts=3, base_delay=1.0, max_total=45.0,
         label=f"profile_action {action_id[:8]}",
+        on_permanent=(errors.append if errors is not None else None),
     )
     return rows or []
 
 
+def _is_not_found(errors: list) -> bool:
+    """True when we gave up because LCR answered 404 for THIS member's profile page — the person has
+    no /mlt record (moved out, record transferred, never had one). Permanent and person-specific:
+    neither re-authorizing nor rediscovering action ids can fix it."""
+    for exc in errors:
+        resp = getattr(exc, "response", None)
+        if getattr(resp, "status_code", None) == 404:
+            return True
+    return False
+
+
 def fetch_member_profile(session, person_uuid: str) -> dict:
-    """Replay the profile record action and return the raw member record dict."""
+    """Replay the profile record action and return the raw member record dict.
+
+    Raises ProfileNotFound when LCR 404s this person's profile page (no record to read) and plain
+    RuntimeError when the action id looks stale / the session is gone. Callers act on the difference:
+    a 404 is a dead end, the rest is worth a re-auth."""
+    errors: list = []
+
     def call():
         return _find(call_action(session, person_uuid, action_config.load()["record"],
-                                 [person_uuid, "eng"]), "uuid", "ordinances")
+                                 [person_uuid, "eng"], errors=errors), "uuid", "ordinances")
 
     record = call()
     if record is None:
+        # A 404 on one member is NOT evidence that our action ids rotated — healing on it burns ~15s
+        # of HTTP discovery and drops the whole profile cache for everyone else in the run (observed
+        # 2026-08-30: one 404 member triggered a full rediscovery mid-fill). Only heal on the
+        # ambiguous "no data, no 404" case, which IS the stale-id signature.
+        if _is_not_found(errors):
+            raise ProfileNotFound(f"LCR has no member-profile record for {person_uuid}")
         _heal_once(session, person_uuid)
         record = call()
     if record is None:
+        if _is_not_found(errors):
+            raise ProfileNotFound(f"LCR has no member-profile record for {person_uuid}")
         dump_debug("profile_record_miss", uuid=person_uuid, action=action_config.load()["record"])
         raise RuntimeError(
             "No member record in profile response. Action id stale and auto-discovery "

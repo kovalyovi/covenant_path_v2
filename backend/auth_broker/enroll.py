@@ -72,12 +72,18 @@ def _sb_h() -> dict:
 def _profile_worklist(stake_id: str) -> list[dict]:
     """Real members (not investigators — they have no /mlt record) with ANY profile-gated field
     still empty (NULL after the sentinel scrub). Selects everything refresh_profile_fields needs,
-    plus field_meta so a fill stamps per-field freshness."""
+    plus field_meta so a fill stamps per-field freshness.
+
+    `person_uuid` must be present: the profile fetch is keyed by it, so a row without one can never
+    be filled by any session. Counting those as "members with gaps" made every fill finish below its
+    own total and — since the dead-session check keys off filled==0 — could report a perfectly good
+    re-authorization as "sign in again" (2026-08-30, Raleigh: 8 of 9 worklist rows had no uuid)."""
     select = ("person_uuid,name,unit_name,birth_date,sex,friends,field_meta,"
               + ",".join(_PROFILE_REFRESH_COLUMNS))
     any_null = "(" + ",".join(f"{c}.is.null" for c in _PROFILE_REFRESH_COLUMNS) + ")"
     mr = requests.get(f"{SUPABASE_URL}/rest/v1/members", headers=_sb_h(),
                       params={"stake_id": f"eq.{stake_id}", "kind": "neq.investigator",
+                              "person_uuid": "not.is.null",
                               "or": any_null, "select": select, "limit": "1000"}, timeout=30)
     return mr.json() if mr.status_code == 200 else []
 
@@ -187,8 +193,13 @@ def _refresh_profile_worker(cookies: list[dict], unit_number: int, source: str =
         _prog(total=len(members))
         client = _client_from_cookies(cookies)
         filled = 0
+        # Why each member ended up unfilled — the difference between "nothing left to read" and "the
+        # session is dead" is the difference between a truthful summary and telling a leader who just
+        # re-authorized to re-authorize again.
+        reasons: dict[str, int] = {}
         for i, row in enumerate(members):
-            patch = report.refresh_profile_fields(client, row)  # {} on 307/no-record
+            patch, reason = report.refresh_profile_fields_ex(client, row)
+            reasons[reason] = reasons.get(reason, 0) + 1
             if patch:
                 # Stamp per-field freshness for what we just fetched, so the ops freshness view and
                 # the app's "last updated" reflect the fill (the daily sync stamps its own fields).
@@ -206,21 +217,24 @@ def _refresh_profile_worker(cookies: list[dict], unit_number: int, source: str =
                 if pr.status_code < 300:
                     filled += 1
             _prog(done=i + 1, filled=filled)
-        # A run that touched members but filled NOTHING did not succeed — it means the session
-        # couldn't fetch a single /mlt profile (`refresh_profile_fields` returns {} only when the
-        # fetch RAISED; a live session on a member with a real gap always yields at least one
-        # field). Reporting that as `done` is what produced "Last fill: … — 0/8 members updated"
-        # with no prompt to sign in (2026-08-26; the identical 0/5-then-5/5 pair on 2026-08-16 is
-        # the proof — the same five members filled completely once a fresh session existed).
-        # Terminate as `needs_reauth` so the sheet asks for the one thing that actually fixes it.
-        dead_session = bool(members) and filled == 0
+        # Ask for a re-auth only on EVIDENCE that the session is the problem. `fetch_failed` (a 307
+        # to the login host, a stale action id, a timeout) is that evidence; `not_found` (LCR 404s
+        # the person's profile page) and `no_uuid` are permanent facts about the member that no
+        # sign-in can change. Keying purely off filled==0 conflated them, so a fill whose whole
+        # worklist was unfillable answered "sign in again" to a leader who just had (2026-08-30) —
+        # while the original bug it replaced, a genuinely dead session reporting a cheerful
+        # "0/8 members updated", stays fixed because fetch_failed still trips this.
+        dead_session = reasons.get("fetch_failed", 0) > 0 and filled == 0
+        unfillable = bool(members) and filled == 0 and not dead_session
         state = "needs_reauth" if dead_session else "done"
-        logger.info("profile refresh: filled fields for %d/%d members with gaps in stake %s -> %s",
-                    filled, len(members), unit_number, state)
-        _prog(state=state, finished_at=_now_iso(),
+        logger.info("profile refresh: filled fields for %d/%d members with gaps in stake %s -> %s "
+                    "(%s)", filled, len(members), unit_number, state,
+                    ", ".join(f"{k}={v}" for k, v in sorted(reasons.items())) or "no members")
+        _prog(state=state, finished_at=_now_iso(), reasons=reasons, unfillable=unfillable,
               error="session could not reach /mlt" if dead_session else None)
         _record_profile_refresh(stake_id, {"source": source, "total": len(members),
-                                           "filled": filled, "outcome": state})
+                                           "filled": filled, "outcome": state,
+                                           "reasons": reasons})
     except Exception as exc:  # noqa: BLE001 — strictly best-effort; a login must never be affected
         logger.warning("profile refresh worker failed for stake %s: %s", unit_number, exc)
         _prog(state="failed", error=str(exc)[:300], finished_at=_now_iso())
@@ -266,9 +280,14 @@ def profile_refresh_status(unit_number: int, stake_id: str) -> dict:
         pass
     return {"running": progress.get("state") == "running",
             "progress": progress or None,
-            # The last run ended without filling anything -> the client should offer re-auth rather
-            # than present a completed-looking "0 of N updated".
+            # The last run couldn't reach /mlt -> the client should offer re-auth rather than
+            # present a completed-looking "0 of N updated".
             "needs_reauth": progress.get("state") == "needs_reauth",
+            # ...but a run that filled nothing because every remaining member has NO readable LCR
+            # record is finished, not broken. The sheet says so instead of offering a re-auth that
+            # would change nothing.
+            "unfillable": progress.get("unfillable") is True,
+            "reasons": progress.get("reasons") or {},
             "members_with_gaps": len(members),
             "missing": {c: n for c, n in missing.items() if n},
             "last_refresh": last}

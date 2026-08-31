@@ -25,7 +25,7 @@ from typing import Any
 from lcr_client import LcrClient
 from lcr_client.access import covenant_path_access
 from lcr_client.logging_setup import dump_debug, get_logger
-from lcr_client.member_profile import profile_fields
+from lcr_client.member_profile import ProfileNotFound, profile_fields
 # Shared, pure eligibility helpers (same rules the app + mailer use) — to gate priesthood display
 # to eligible people (N/A for ineligible), matching the reference sheet.
 from backend.milestones import is_at_least_now, member_one_year, turns_at_least
@@ -444,22 +444,39 @@ def _apply_profile(member: CovenantPathMember, prof: dict) -> None:
 
 
 def refresh_profile_fields(client, row: dict) -> dict:
+    """Back-compat wrapper over `refresh_profile_fields_ex` — the patch only, no reason."""
+    return refresh_profile_fields_ex(client, row)[0]
+
+
+def refresh_profile_fields_ex(client, row: dict) -> tuple[dict, str]:
     """Live-session refresh of the profile-sourced fields for ONE member — the broker's re-auth "fill
     everything" path. Fetches the per-member /mlt profile and returns {field: value} for the gated
     fields that are currently EMPTY (None in the stored `row`) but the profile now supplies, applying
     the SAME eligibility gating the daily sync uses (`_apply_profile`). So ONE re-authorization fills
     every gap a dead-session daily sync can't reach (patriarchal is the only genuinely-profile-only
-    field today, but a member missing from the bulk directory recovers the rest here too). Returns {}
-    on no uuid / fetch failure (307/no-record) / nothing new — so a failure never clobbers a value.
+    field today, but a member missing from the bulk directory recovers the rest here too). A failure
+    never clobbers a value — the patch is simply empty.
+
+    Also returns WHY, which the caller needs to report an honest outcome (a blank patch used to be
+    indistinguishable from a dead session, so a fill over members who can never be filled told the
+    leader to re-authorize forever — 2026-08-30):
+      'filled'       — the patch has values
+      'empty'        — profile fetched fine, nothing new to write
+      'no_uuid'      — no person_uuid on the row: unfetchable, and re-auth can't change that
+      'not_found'    — LCR 404s this person's profile page: no record to read, permanently
+      'fetch_failed' — 307/timeout/stale action id: the ONLY reason a re-auth is worth offering
+
     NB: family_name_prepared / first_temple_visit have NO /mlt source (only the bulk feed carries the
     commitments), so they can't be recovered here."""
     uuid = row.get("person_uuid")
     if not uuid:
-        return {}
+        return {}, "no_uuid"
     try:
         prof = profile_fields(client.session, uuid)
-    except Exception:  # noqa: BLE001 — 307 / no record / transient: leave every value untouched
-        return {}
+    except ProfileNotFound:
+        return {}, "not_found"
+    except Exception:  # noqa: BLE001 — 307 / stale id / transient: leave every value untouched
+        return {}, "fetch_failed"
 
     def _seed(f: str) -> str:
         v = row.get(f)
@@ -485,7 +502,7 @@ def refresh_profile_fields(client, row: dict) -> dict:
         new = getattr(member, f, None)
         if row.get(f) is None and isinstance(new, str) and new and new not in (NEEDS_PROFILE, BLOCKED):
             out[f] = new
-    return out
+    return out, ("filled" if out else "empty")
 
 
 # Fields that come from the member profile and must be marked access-blocked (not blanked) when

@@ -15,13 +15,16 @@ import type { EnrollmentStatus } from '../lib/broker';
 
 export interface FillStatus {
   running: boolean;
-  progress: { state?: string; total?: number; done?: number; filled?: number } | null;
+  progress: { state?: string; total?: number; done?: number; filled?: number; unfillable?: boolean } | null;
   /** The last run ended having filled NOTHING — a dead Church session, not a success. */
   needsReauth: boolean;
+  /** The last run filled nothing because the remaining members have no readable LCR record. A
+   *  finished state, not a broken one — offering a re-auth here would be a lie. */
+  unfillable: boolean;
   membersWithGaps: number;
   missing: Record<string, number>;
   canRefresh: boolean;
-  lastRefresh: { run_at?: string; payload?: { filled?: number; total?: number } } | null;
+  lastRefresh: { run_at?: string; payload?: { filled?: number; total?: number; outcome?: string } } | null;
 }
 
 function statusFromJson(j: Record<string, unknown>): FillStatus {
@@ -29,6 +32,7 @@ function statusFromJson(j: Record<string, unknown>): FillStatus {
     running: j['running'] === true,
     progress: (j['progress'] as FillStatus['progress']) ?? null,
     needsReauth: j['needs_reauth'] === true,
+    unfillable: j['unfillable'] === true,
     membersWithGaps: Number(j['members_with_gaps'] ?? 0) || 0,
     missing: (j['missing'] as Record<string, number>) ?? {},
     canRefresh: j['can_refresh'] !== false,
@@ -55,6 +59,7 @@ export function FillDataSheet({
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [needsReauth, setNeedsReauth] = useState(false);
+  const [unfillable, setUnfillable] = useState(false);
   const [finished, setFinished] = useState<{ filled: number; total: number } | null>(null);
   const wasRunning = useRef(false);
   const onFilledRef = useRef(onFilled);
@@ -69,11 +74,17 @@ export function FillDataSheet({
       setStatus(s);
       setError(null);
       if (s.needsReauth) setNeedsReauth(true);
+      if (s.unfillable) setUnfillable(true);
       // Fire the reload exactly once, on the running→finished edge.
       if (wasRunning.current && !s.running) {
         wasRunning.current = false;
         const p = s.progress;
-        if (p?.state === 'done') {
+        if (p?.unfillable === true) {
+          // A completed run that filled nothing because there was nothing readable left. Checked
+          // BEFORE 'done' — it is a done run, but "0 of 9 members updated" is the wrong summary.
+          setUnfillable(true);
+          onFilledRef.current();
+        } else if (p?.state === 'done') {
           setFinished({ filled: p.filled ?? 0, total: p.total ?? 0 });
           onFilledRef.current();
         } else if (p?.state === 'needs_reauth') {
@@ -98,6 +109,7 @@ export function FillDataSheet({
     if (!open || !isLeader) return;
     setFinished(null);
     setNeedsReauth(false);
+    setUnfillable(false);
     void load();
     const id = setInterval(() => {
       // Quiet polls: refresh counts/progress without flashing the sheet's spinner.
@@ -138,11 +150,15 @@ export function FillDataSheet({
   if (status?.lastRefresh?.run_at) {
     const p = status.lastRefresh.payload ?? {};
     const when = new Date(status.lastRefresh.run_at).toLocaleString();
-    // "0 of 8 updated" reads like a completed run that simply found nothing. It never means that —
-    // it means the Church session was dead. Say so.
-    lastRun = (p.total ?? 0) > 0 && (p.filled ?? 0) === 0
+    // "0 of 8 updated" reads like a completed run that simply found nothing. Trust the outcome the
+    // worker recorded rather than re-deriving it from the counts: a dead session and a worklist of
+    // members with no readable record both fill zero, and they need opposite advice.
+    const zero = (p.total ?? 0) > 0 && (p.filled ?? 0) === 0;
+    lastRun = zero && p.outcome === 'needs_reauth'
       ? t('fillData.lastRunNone', { when })
-      : t('fillData.lastRun', { when, filled: p.filled ?? 0, total: p.total ?? 0 });
+      : zero
+        ? t('fillData.lastRunUnfillable', { when })
+        : t('fillData.lastRun', { when, filled: p.filled ?? 0, total: p.total ?? 0 });
   }
 
   return (
@@ -218,7 +234,11 @@ export function FillDataSheet({
           <div className="banner banner--info" role="status">{t('fillData.needsReauth')}</div>
         )}
 
-        {isLeader && !noAccess && (
+        {isLeader && unfillable && !needsReauth && (
+          <div className="banner banner--info" role="status">{t('fillData.unfillable')}</div>
+        )}
+
+        {isLeader && !noAccess && !(unfillable && !needsReauth) && (
           needsReauth ? (
             <Button onClick={onReauth}>{t('fillData.reauthNow')}</Button>
           ) : (

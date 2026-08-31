@@ -155,10 +155,13 @@ describe('FillDataSheet', () => {
     expect(onFilled).not.toHaveBeenCalled();
   });
 
-  it('a previous zero-fill run is reported honestly in the last-fill line', async () => {
+  it('a previous zero-fill run against a DEAD session is reported honestly in the last-fill line', async () => {
     profileRefreshStatus.mockResolvedValue({
       ...idleStatus,
-      last_refresh: { run_at: '2026-08-27T02:48:06Z', payload: { total: 8, filled: 0 } },
+      last_refresh: {
+        run_at: '2026-08-27T02:48:06Z',
+        payload: { total: 8, filled: 0, outcome: 'needs_reauth' },
+      },
     });
     render(
       <FillDataSheet open onClose={() => {}} onReauth={() => {}} enrollStatus={enrollStatus()} onFilled={() => {}} />,
@@ -166,6 +169,30 @@ describe('FillDataSheet', () => {
     await act(async () => { await Promise.resolve(); });
     expect(screen.getByText(/nothing could be updated/i)).toBeInTheDocument();
     expect(screen.queryByText(/0\/8 members updated/i)).not.toBeInTheDocument();
+  });
+
+  // 2026-08-30: a leader re-authorized and the fill still reported 0/9 + "re-authorize", because a
+  // zero fill was assumed to mean a dead session. It can equally mean there is nothing readable
+  // left, and then a re-auth prompt is just wrong. The server now says which; the sheet must follow.
+  it('a zero-fill run with nothing readable left does NOT ask for a re-auth', async () => {
+    profileRefreshStatus.mockResolvedValue({
+      ...idleStatus,
+      unfillable: true,
+      needs_reauth: false,
+      last_refresh: {
+        run_at: '2026-08-30T12:12:50Z',
+        payload: { total: 9, filled: 0, outcome: 'done', reasons: { not_found: 9 } },
+      },
+    });
+    render(
+      <FillDataSheet open onClose={() => {}} onReauth={() => {}} enrollStatus={enrollStatus()} onFilled={() => {}} />,
+    );
+    await act(async () => { await Promise.resolve(); });
+
+    expect(screen.getByText(/no Church profile record to read/i)).toBeInTheDocument();
+    expect(screen.queryByText(/stored Church session has expired/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /re-authorize/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/0\/9 members updated/i)).not.toBeInTheDocument();
   });
 
   it('a genuine partial fill still reports its counts', async () => {

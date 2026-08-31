@@ -481,9 +481,11 @@ def enrollment_status(email: str, auth_id: str) -> dict:
     # the write boundary), so "missing patriarchal" = NULL, not the old literal string. Real members
     # have a real baptism_date (investigators don't), so that excludes investigators → the count can
     # reach zero once patriarchal is refreshed at re-auth.
+    # `person_uuid` must exist too: the profile fetch is keyed by it, so a row without one can never
+    # be filled and would keep the "refresh patriarchal" banner up forever with no way to clear it.
     patriarchal_pending = _count_where("members", {
         "stake_id": f"eq.{stake_id}", "patriarchal_blessing": "is.null",
-        "baptism_date": "not.is.null"}) or 0
+        "person_uuid": "not.is.null", "baptism_date": "not.is.null"}) or 0
 
     # 4. Get credential state
     cred_r = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=headers,

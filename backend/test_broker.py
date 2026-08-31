@@ -289,8 +289,8 @@ def test_enrollment_status_patriarchal_signal() -> None:
 
 def test_profile_refresh_worker_fills_via_live_session() -> None:
     """The re-auth background worker fills EVERY empty profile field for members with gaps, using the
-    just-captured live session, via report.refresh_profile_fields — PATCHing the returned patch back; a
-    member the profile can't read (empty patch from a 307/no-record) is skipped, never clobbered."""
+    just-captured live session, via report.refresh_profile_fields_ex — PATCHing the returned patch
+    back; a member the profile can't read (empty patch) is skipped, never clobbered."""
     import types as _types
     from backend.auth_broker import enroll
     from covenant_path import report
@@ -316,9 +316,10 @@ def test_profile_refresh_worker_fills_via_live_session() -> None:
         patched.append((uuid, json or {}))
         return _Resp(None, status=204)
 
-    # U1 fills patriarchal+calling; U2 fills only patriarchal; U3 unreadable → {} → skipped.
-    fills = {"U1": {"patriarchal_blessing": "Yes", "calling": "No"},
-             "U2": {"patriarchal_blessing": "No"}, "U3": {}}
+    # U1 fills patriarchal+calling; U2 fills only patriarchal; U3 unreadable → skipped. The reason
+    # rides along so the worker can tell "no record to read" from "the session is dead".
+    fills = {"U1": ({"patriarchal_blessing": "Yes", "calling": "No"}, "filled"),
+             "U2": ({"patriarchal_blessing": "No"}, "filled"), "U3": ({}, "not_found")}
     diag_rows: list = []
 
     def fake_post(url, headers=None, json=None, timeout=None):
@@ -328,7 +329,7 @@ def test_profile_refresh_worker_fills_via_live_session() -> None:
 
     saved = (enroll.requests.get, enroll.requests.patch, enroll.requests.post,
              enroll._client_from_cookies,
-             report.refresh_profile_fields, enroll.SUPABASE_URL, enroll.SERVICE_KEY)
+             report.refresh_profile_fields_ex, enroll.SUPABASE_URL, enroll.SERVICE_KEY)
     try:
         enroll.SUPABASE_URL = enroll.SUPABASE_URL or "https://test.supabase.co"
         enroll.SERVICE_KEY = enroll.SERVICE_KEY or "test-key"
@@ -336,13 +337,13 @@ def test_profile_refresh_worker_fills_via_live_session() -> None:
         enroll.requests.patch = fake_patch
         enroll.requests.post = fake_post
         enroll._client_from_cookies = lambda cookies: _types.SimpleNamespace(session=object())
-        report.refresh_profile_fields = lambda client, row: fills[row["person_uuid"]]
+        report.refresh_profile_fields_ex = lambda client, row: fills[row["person_uuid"]]
         enroll._REFRESH_PROGRESS.clear()
         enroll._refresh_profile_worker([{"name": "x"}], 503991)
     finally:
         (enroll.requests.get, enroll.requests.patch, enroll.requests.post,
          enroll._client_from_cookies,
-         report.refresh_profile_fields, enroll.SUPABASE_URL, enroll.SERVICE_KEY) = saved
+         report.refresh_profile_fields_ex, enroll.SUPABASE_URL, enroll.SERVICE_KEY) = saved
     by_uuid = dict(patched)
     assert set(by_uuid.get("U1", {})) == {"patriarchal_blessing", "calling", "field_meta"}, patched
     assert by_uuid["U1"]["patriarchal_blessing"] == "Yes" and by_uuid["U1"]["calling"] == "No"
@@ -357,7 +358,10 @@ def test_profile_refresh_worker_fills_via_live_session() -> None:
     assert prog.get("state") == "done" and prog.get("total") == 3 and prog.get("filled") == 2, prog
     assert diag_rows and diag_rows[0]["kind"] == "profile_refresh" and \
         diag_rows[0]["payload"] == {"source": "reauth", "total": 3, "filled": 2,
-                                    "outcome": "done"}, diag_rows
+                                    "outcome": "done",
+                                    # WHY each member ended unfilled, so a run that fills nothing
+                                    # can be told apart from a dead session.
+                                    "reasons": {"filled": 2, "not_found": 1}}, diag_rows
     enroll._REFRESH_PROGRESS.clear()
     print("  ok profile refresh worker fills every gap via live session (skips unreadable), "
           "stamps field_meta, publishes progress + diagnostics")

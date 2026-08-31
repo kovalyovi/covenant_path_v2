@@ -111,12 +111,17 @@ def retry_call(
     label: str = "",
     breaker_key: str | None = None,
     on_auth_expired=None,
+    on_permanent=None,
 ) -> Any:
     """Call `fn` with transient-only retry (exp backoff + jitter). Returns fn()'s value, or None
     once retries are exhausted / the breaker is open / a PERMANENT failure occurs.
 
     - `breaker_key`: when set, a PERMANENT failure OPENs the breaker for that key and an already-open
       breaker short-circuits to None without calling `fn` (so a dead endpoint is hit at most once).
+    - `on_permanent`: called with the exception on a PERMANENT failure. Returning None to the caller
+      throws away WHY we gave up, and the reason matters: a 404 on one member's profile page ("this
+      person has no record") and a 307 to the login host ("the session died") both surface as None,
+      but only the second is fixable by re-authorizing. Callers that must tell them apart pass this.
     - `on_auth_expired`: a callable taking the AuthExpiredError; if it re-raises, auth expiry
       propagates (the session layer handles a one-time relogin). Default re-raises.
     - `max_total`: wall-clock budget across all attempts+sleeps, so one member can't stall the run.
@@ -143,6 +148,8 @@ def retry_call(
                 if breaker_key:
                     breaker.open(breaker_key)
                 logger.warning("giving up on %s (permanent failure, not retried): %s", label, exc)
+                if on_permanent is not None:
+                    on_permanent(exc)
                 return None
             if last:
                 logger.warning("giving up on %s after %d attempt(s): %s", label, attempts, exc)

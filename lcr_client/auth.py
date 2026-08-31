@@ -64,14 +64,20 @@ class LcrSession:
         login(storage_state_path=self.storage_state_path)
         self.reload()
 
-    def _load_cookies(self) -> None:
+    def _read_state_cookies(self) -> list[dict]:
         if not self.storage_state_path.exists():
             raise FileNotFoundError(
                 f"No session file at {self.storage_state_path}. "
                 "Run `python -m lcr_client.okta_login` (or tools/lcr_crawler.py) to create one."
             )
         state = json.loads(self.storage_state_path.read_text(encoding="utf-8"))
-        for c in state.get("cookies", []):
+        return state.get("cookies", []) or []
+
+    def _load_cookies(self) -> None:
+        self._set_cookies(self._read_state_cookies())
+
+    def _set_cookies(self, cookies: list[dict]) -> None:
+        for c in cookies:
             self.session.cookies.set(
                 c["name"],
                 c["value"],
@@ -80,9 +86,24 @@ class LcrSession:
             )
 
     def reload(self) -> None:
-        """Re-read cookies from storage_state (after a fresh browser login refreshed it)."""
+        """Re-read cookies from storage_state (after a fresh browser login refreshed it).
+
+        NON-DESTRUCTIVE, and that is the whole point: this used to clear the jar and *then* read the
+        file, so a session with no file on disk was left holding NO cookies at all — silently
+        unauthenticated, with every later call failing fast and logging nothing. The broker's
+        delegated session is exactly that: `_client_from_cookies` injects the captured cookies and
+        deletes its temp state file. On 2026-08-30 one member's 404 triggered an action-id heal
+        whose trailing reload() wiped the freshly-captured session, and the remaining 8 members of
+        the fill failed instantly ("0/9 -> needs_reauth") — telling a leader who had just
+        re-authorized to re-authorize again. Read first, swap only on success; no file is a no-op."""
+        try:
+            fresh = self._read_state_cookies()
+        except FileNotFoundError:
+            return  # injected-cookie session (no file to reload from) — keep what we have
+        if not fresh:
+            return  # an empty state file is not a reason to throw away a working session
         self.session.cookies.clear()
-        self._load_cookies()
+        self._set_cookies(fresh)
 
     def get_json(self, url: str, params: dict[str, Any] | None = None) -> Any:
         """GET a URL expecting JSON; inject lang; raise AuthExpiredError on login redirect."""
