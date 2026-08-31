@@ -94,6 +94,9 @@ public final class DashboardStore {
         state = .loading
         Task { await self.checkAdmin() }
         Task { await self.checkMaintenance() }
+        // Ops telemetry (0066): one name-free "opened the app" row per person per day, so the
+        // console can report how often units and callings actually use this. Never awaited.
+        Task { await self.services.gateway.recordAppOpen() }
         do {
             try await loadStakes()
             try await reloadMembers()

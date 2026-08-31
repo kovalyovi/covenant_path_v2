@@ -100,6 +100,13 @@ class DashboardViewModel(
         bootstrap()
         checkAdmin()
         checkMaintenance()
+        recordUsage()
+    }
+
+    /** Ops telemetry (0066): one name-free "opened the app" row per person per day, so the console
+     *  can report how often units and callings actually use this. Best-effort, never blocking. */
+    private fun recordUsage() {
+        viewModelScope.launch { repo.recordAppOpen() }
     }
 
     private fun checkAdmin() {

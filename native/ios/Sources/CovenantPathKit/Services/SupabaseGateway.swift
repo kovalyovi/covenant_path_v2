@@ -10,6 +10,10 @@ public protocol SupabaseGateway: Sendable {
     func isOwner() async -> Bool
     /// The global maintenance switch + optional message (client-safe view; never the owner email).
     func maintenanceStatus() async -> (on: Bool, message: String?)
+    /// Ops telemetry (migration 0066): record that the app was opened. The server derives unit,
+    /// stake and calling from the caller's own roles and stores no name or email, so there is
+    /// nothing to pass and nothing to leak. Best-effort — never surfaces an error.
+    func recordAppOpen() async
 
     func comments(memberUUID: String) async throws -> [MemberComment]
     func addComment(_ comment: NewComment) async throws
@@ -49,6 +53,11 @@ public struct SupabaseGatewayImpl: SupabaseGateway {
         } catch {
             return false
         }
+    }
+
+    public func recordAppOpen() async {
+        // Idempotent server-side for the day, so calling it on every launch costs one no-op request.
+        _ = try? await client.rpc("record_app_open", params: SurfaceParam(p_surface: "ios")).execute()
     }
 
     public func maintenanceStatus() async -> (on: Bool, message: String?) {
@@ -155,5 +164,6 @@ private struct SheetsToggleParam: Encodable { let p_stake_id: String; let p_enab
 // MARK: - RPC param payloads (Encodable so supabase-swift can serialize them)
 
 private struct EmailParam: Encodable { let p_email: String }
+private struct SurfaceParam: Encodable { let p_surface: String }
 private struct InviteEmailParam: Encodable { let p_email: String }
 private struct InviteParams: Encodable { let p_email: String; let p_unit: String }

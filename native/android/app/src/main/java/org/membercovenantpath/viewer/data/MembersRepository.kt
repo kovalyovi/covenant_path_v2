@@ -54,6 +54,17 @@ class MembersRepository(
     suspend fun isAdmin(): Boolean =
         runCatching { client.postgrest.rpc("is_admin").decodeAs<Boolean>() }.getOrDefault(false)
 
+    /** Ops telemetry (migration 0066): record that the app was opened. The server derives unit,
+     *  stake and calling from the caller's own roles and stores no name or email, and the row is
+     *  idempotent for the day — so this is safe to call on every launch. Best-effort. */
+    suspend fun recordAppOpen() {
+        runCatching {
+            client.postgrest.rpc("record_app_open", kotlinx.serialization.json.buildJsonObject {
+                put("p_surface", kotlinx.serialization.json.JsonPrimitive("android"))
+            })
+        }
+    }
+
     /** Owner-only maintenance mode (migration 0056): is the signed-in user the single OWNER? */
     suspend fun isOwner(): Boolean =
         runCatching { client.postgrest.rpc("is_owner").decodeAs<Boolean>() }.getOrDefault(false)

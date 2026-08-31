@@ -12,6 +12,7 @@ import { broker } from '../lib/broker';
 import { admin } from '../lib/admin';
 import { currentAccessToken } from '../lib/supabase';
 import { lazyWithReload } from '../lib/lazyReload';
+import { recordAppOpen } from '../lib/usage';
 import { passkey } from '../lib/passkey';
 import { TABS } from '../theme/tokens';
 import { Icon, type IconName } from '../components/Icon';
@@ -119,6 +120,10 @@ export function DashboardShell() {
   // #34: filter/view state lives in the URL query string so Back restores previous states. On a FRESH
   // page load we start clean — strip any params present at load (so a refresh resets to defaults rather
   // than resurrecting the last session's filters). Runs once; in-session changes still push params.
+  // Ops telemetry: one name-free "the app was opened" row per person per day (migration 0066), so
+  // the console can answer how often units and callings actually use this. Fire-and-forget.
+  useEffect(() => { recordAppOpen(); }, []);
+
   const strippedRef = useRef(false);
   useEffect(() => {
     if (strippedRef.current) return;
