@@ -120,3 +120,19 @@ Tests added: `LogicTests.swift` (+ `StaffingTest` cases) and `KpisTest.kt` / `Da
 - **E-logic shared mirrors** (this session, 2026-06-14): `tenure`, `baptismElapsed`,
   `sacramentWindow`/`attendanceBucket`/`memberAttendance`, `unitGoldenHour`, and the new
   `Staffing` module — all with mirrored unit tests (see section E above).
+
+## F. Ops-console redesign + usage panel (web, 2026-08-31)
+
+The usage SIGNAL is already at parity — `record_app_open` fires from the iOS `DashboardStore.load`
+and the Android `DashboardViewModel` init, so native launches are counted alongside web ones and the
+`surface` breakdown ("By device") is real from day one. What is web-only is the console that READS
+it, plus the design pass around it.
+
+| # | Item | iOS | Android | Notes |
+|---|---|---|---|---|
+| 1 | ⬜ Usage panel (By unit / By calling / By device — person-days + distinct people) | `Views/AdminView.swift` | `ui/screens/AdminScreen.kt` | Reads `usage_summary(p_days)` + `usage_daily(p_days)` (migration 0066), aggregates only. Mirror `apps/web/src/logic/usage.ts` into `Logic/Usage.swift` + `logic/Usage.kt` with the mirrored tests — the one trap is that `people` must be counted ONCE (max across dimensions), never summed. |
+| 2 | ⬜ Maintenance card as a single labelled switch (state + explanation in one row) | `Views/AdminView.swift` | `ui/screens/AdminScreen.kt` | Web replaced the status pill + two conditional buttons with one `.switch`; the native cards still show the older shape. |
+| 3 | ⬜ Ops-console layout/typography pass | `Views/AdminView.swift` | `ui/screens/AdminScreen.kt` | Native admin is already a much smaller subset (565 / 615 lines vs the web console) and does not have the 900px-column problem, so this is polish, not a fix. |
+
+> The D76 profile-fill honesty work has **no** native surface (there is no native fill-data sheet),
+> so it is deliberately not listed here.

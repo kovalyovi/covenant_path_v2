@@ -1,7 +1,7 @@
 // Mirrors apps/viewer/test/dashboard_dates_test.dart — date parsing across LCR's formats is the
 // part most likely to silently misbehave, so the same cases are pinned here.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import {
   parseMemberDate, fmtLong, monthsDaysAgo, baptismElapsed, tenure, etHourToday, fmtEtHourLocal,
 } from '../logic/dates';
@@ -93,6 +93,13 @@ describe('baptismElapsed', () => {
 });
 
 describe('tenure (#9e — "Member for")', () => {
+  // "Exactly 2 months before today" does not exist on the 31st — June 31 rolls over to July 1, so
+  // ago(0, 2) produced "1 month 30 days" and this suite failed on every 31st of the month. The
+  // assertions are about tenure()'s formatting, not about calendar edges, so pin the clock to a
+  // mid-month day and let the arithmetic be exact on every day of the year.
+  beforeAll(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-05-15T12:00:00')); });
+  afterAll(() => { vi.useRealTimers(); });
+
   function ago(years: number, months: number, days = 0): Date {
     const d = new Date();
     d.setFullYear(d.getFullYear() - years, d.getMonth() - months, d.getDate() - days);

@@ -13,6 +13,10 @@ import { admin } from '../lib/admin';
 import { status as statusColors } from '../theme/tokens';
 import { agoOrNever, dur, fmtDateTime } from '../logic/dates';
 import { fieldGapSeries, humanizeField } from '../logic/fieldGaps';
+import {
+  parseUsageRows, usageBars, usageTotals, usageSeries,
+  type UsageDimension, type UsageDailyRow,
+} from '../logic/usage';
 import { formatMissingFeatures } from '../logic/coverage';
 import { Icon } from '../components/Icon';
 import { IconButton, Button } from '../components/ui';
@@ -187,10 +191,12 @@ export function AdminPage({ embedded = false }: { embedded?: boolean } = {}) {
 
   const panels = (
     <>
-        <div className="maxw" style={{ maxWidth: 900, padding: 12 }}>
+        <div className="ops">
+          <OpsNav />
+          <div className="ops__grid">
           {/* Owner-only kill switch — renders only for the owner (and the RPC is owner-gated). */}
-          <MaintenanceModeCard />
-          <Panel key={`sys-${nonce}`} title="System" load={() => admin.summary()}>
+          <section className="ops__cell"><MaintenanceModeCard /></section>
+          <Panel key={`sys-${nonce}`} id="ops-system" title="System" load={() => admin.summary()}>
             {(s) => (
               <>
                 <SystemHealthCard summary={s} />
@@ -199,10 +205,28 @@ export function AdminPage({ embedded = false }: { embedded?: boolean } = {}) {
               </>
             )}
           </Panel>
+          {/* Adoption: how often the tool is actually used, by unit and by calling — aggregate rows
+              only (migration 0066 stores no email or name at all). */}
+          <Panel
+            key={`usage-${nonce}`}
+            id="ops-usage"
+            wide
+            title="Usage"
+            load={async () => {
+              const [sum, daily] = await Promise.all([
+                supabase.rpc('usage_summary', { p_days: 90 }),
+                supabase.rpc('usage_daily', { p_days: 30 }),
+              ]);
+              return { rows: sum.data ?? [], daily: daily.data ?? [] } as Json;
+            }}
+            errorHint="Needs migration 0066 applied (usage_events + usage_summary)."
+          >
+            {(s) => <UsageCard rows={s['rows']} daily={s['daily']} />}
+          </Panel>
           {/* Day-to-day ops surfaces lead: enrolled stakes (+ re-auth/visibility worklists) and recent
               logins sit ABOVE the deeper Diagnostics so the "did sync run? who can't see anything?"
               signals are the first thing an admin sees (A4). */}
-          <Panel key={`stakes-${nonce}`} title="Enrolled stakes" load={() => admin.enrolledStakes()}>
+          <Panel key={`stakes-${nonce}`} id="ops-stakes" wide title="Enrolled stakes" load={() => admin.enrolledStakes()}>
             {(s) => {
               const stakes = (s['stakes'] as Json[]) ?? [];
               return (
@@ -224,6 +248,7 @@ export function AdminPage({ embedded = false }: { embedded?: boolean } = {}) {
           </Panel>
           <Panel
             key={`logins-${nonce}`}
+            id="ops-logins"
             title="Recent logins"
             load={async () => {
               const { data } = await supabase
@@ -240,6 +265,7 @@ export function AdminPage({ embedded = false }: { embedded?: boolean } = {}) {
           {/* B4: leaders who signed in but resolve to NO scope (empty app) — the exact people to bind. */}
           <Panel
             key={`visibility-${nonce}`}
+            id="ops-visibility"
             title="Signed in but sees nothing"
             load={async () => {
               const { data } = await supabase
@@ -259,6 +285,8 @@ export function AdminPage({ embedded = false }: { embedded?: boolean } = {}) {
               addressed emails the reporter a thank-you server-side (once). */}
           <Panel
             key={`feedback-${nonce}`}
+            id="ops-feedback"
+            wide
             title="Feedback"
             load={() => admin.feedbackList()}
             errorHint="Needs the broker deployed with /admin/feedback (migration 0064 applied)."
@@ -273,6 +301,7 @@ export function AdminPage({ embedded = false }: { embedded?: boolean } = {}) {
           </Panel>
           <Panel
             key={`admins-${nonce}`}
+            id="ops-admins"
             title="Admins"
             load={async () => {
               const { data } = await supabase.from('app_admins').select('email, invited_by_email');
@@ -289,6 +318,8 @@ export function AdminPage({ embedded = false }: { embedded?: boolean } = {}) {
               stake_id; enrolled-stakes supplies the names for the selector). */}
           <Panel
             key={`fieldgaps-${nonce}`}
+            id="ops-fieldgaps"
+            wide
             title="Field gaps (per day)"
             load={async () => {
               const [diag, stakes] = await Promise.all([admin.diagnostics(), admin.enrolledStakes()]);
@@ -302,14 +333,15 @@ export function AdminPage({ embedded = false }: { embedded?: boolean } = {}) {
               />
             )}
           </Panel>
-          <Panel key={`diag-${nonce}`} title="Diagnostics" load={() => admin.diagnostics()}>
+          <Panel key={`diag-${nonce}`} id="ops-diagnostics" wide title="Diagnostics" load={() => admin.diagnostics()}>
             {(s) => <DiagnosticsCard diag={s} onCopy={(t) => navigator.clipboard.writeText(t)} toast={toast} />}
           </Panel>
-          <Panel key={`ephealth-${nonce}`} title="Endpoint health (trend)" load={() => admin.endpointHealth(14)}>
+          <Panel key={`ephealth-${nonce}`} id="ops-endpoints" wide title="Endpoint health (trend)" load={() => admin.endpointHealth(14)}>
             {(s) => <EndpointHealthCard data={s} />}
           </Panel>
           <Panel
             key={`actions-${nonce}`}
+            id="ops-actions"
             title="GitHub Actions"
             load={() => admin.actions()}
             errorHint="Set GITHUB_TOKEN on the broker (Actions: read & write, Contents: read) to enable runs + the changelog. The rest of the console still works."
@@ -323,6 +355,7 @@ export function AdminPage({ embedded = false }: { embedded?: boolean } = {}) {
           </Panel>
           <Panel
             key={`overrides-${nonce}`}
+            id="ops-overrides"
             title="Calling access overrides"
             load={async () => {
               // The card renders calling_match + grants_access + note + id (remove). created_by is
@@ -343,6 +376,7 @@ export function AdminPage({ embedded = false }: { embedded?: boolean } = {}) {
               />
             )}
           </Panel>
+          </div>
         </div>
         {busy && (
           /* A busy-action overlay scoped to the console (absolute within its relative container) — not
@@ -405,17 +439,153 @@ export function AdminPage({ embedded = false }: { embedded?: boolean } = {}) {
   );
 }
 
+// Quick-jump chips. The console is a dozen panels tall; before this, reaching "Feedback" or
+// "Calling access overrides" meant scrolling past everything above them on every visit.
+const OPS_SECTIONS: Array<{ id: string; label: string }> = [
+  { id: 'ops-system', label: 'System' },
+  { id: 'ops-usage', label: 'Usage' },
+  { id: 'ops-stakes', label: 'Stakes' },
+  { id: 'ops-logins', label: 'Logins' },
+  { id: 'ops-feedback', label: 'Feedback' },
+  { id: 'ops-fieldgaps', label: 'Field gaps' },
+  { id: 'ops-diagnostics', label: 'Diagnostics' },
+  { id: 'ops-endpoints', label: 'Endpoints' },
+  { id: 'ops-actions', label: 'Actions' },
+  { id: 'ops-admins', label: 'Admins' },
+  { id: 'ops-overrides', label: 'Access' },
+];
+
+function OpsNav() {
+  return (
+    <nav className="ops__nav" aria-label="Jump to a section">
+      {OPS_SECTIONS.map((sec) => (
+        <button
+          key={sec.id}
+          type="button"
+          className="ops__nav-chip"
+          onClick={() => document.getElementById(sec.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+        >
+          {sec.label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+// --- Usage: how often the tool is used, by unit and by calling (no names) -------------------------
+// The numbers come from usage_summary()/usage_daily() (migration 0066), which aggregate a table that
+// holds no email, no name and no person id — identity survives only as a salted hash so "9 days of
+// use" can be told apart from "9 different people". A PERSON-DAY is the unit: one row per person per
+// surface per day the app was opened, which is why a left-open tab can't inflate anything.
+function UsageCard({ rows: rawRows, daily: rawDaily }: { rows: unknown; daily: unknown }) {
+  const [dim, setDim] = useState<UsageDimension>('unit');
+  const rows = parseUsageRows(rawRows);
+  const daily = (Array.isArray(rawDaily) ? rawDaily : []) as UsageDailyRow[];
+  const totals = usageTotals(rows);
+
+  if (rows.length === 0) {
+    return (
+      <Card title="Usage">
+        <p className="small muted" style={{ margin: 0 }}>
+          No usage recorded yet — rows appear as people open the app (one per person per day, with no
+          name attached). Older sign-ins aren&apos;t backfilled: they were never recorded this way.
+        </p>
+      </Card>
+    );
+  }
+
+  const bars = usageBars(rows, dim);
+  // A sparkline needs at least two days with something in them; one data point renders as a flat
+  // dashed rule that reads like a broken divider rather than a trend.
+  const series = usageSeries(daily, 30);
+  const trend = series.filter((v) => v > 0).length >= 2 ? series : null;
+  return (
+    <Card
+      title="Usage"
+      trailing={
+        <>
+          {trend && <Spark values={trend} color={statusColors.info} />}
+          <span className="small muted">last 90d</span>
+        </>
+      }
+    >
+      <div className="ops-stats" style={{ marginBottom: 12 }}>
+        <div className="ops-stat">
+          <div className="ops-stat__v">{totals.people}</div>
+          <div className="ops-stat__k">people</div>
+        </div>
+        <div className="ops-stat">
+          <div className="ops-stat__v">{totals.events}</div>
+          <div className="ops-stat__k">days used</div>
+        </div>
+        <div className="ops-stat">
+          <div className="ops-stat__v">{totals.units}</div>
+          <div className="ops-stat__k">units</div>
+        </div>
+        <div className="ops-stat">
+          <div className="ops-stat__v">{totals.callings}</div>
+          <div className="ops-stat__k">callings</div>
+        </div>
+      </div>
+
+      <div className="segmented ops-usage__tabs" aria-label="Break usage down by">
+        {(['unit', 'calling', 'surface'] as UsageDimension[]).map((d) => (
+          <button
+            key={d}
+            type="button"
+            className="segmented__btn"
+            aria-pressed={dim === d}
+            onClick={() => setDim(d)}
+          >
+            {d === 'unit' ? 'By unit' : d === 'calling' ? 'By calling' : 'By device'}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 10 }}>
+        {bars.map((b) => (
+          <div key={b.label} className="ops-usage__row">
+            <span className="ops-usage__label" title={b.label}>{b.label}</span>
+            <span className="ops-usage__counts">
+              {b.events} day{b.events === 1 ? '' : 's'} · {b.people} {b.people === 1 ? 'person' : 'people'}
+              {b.lastUsed ? ` · ${agoOrNever(b.lastUsed)}` : ''}
+            </span>
+            <span className="ops-bar ops-usage__bar" aria-hidden>
+              <span
+                className="ops-bar__seg"
+                style={{ flex: Math.max(b.share, 0.02), background: statusColors.info }}
+              />
+              <span className="ops-bar__seg" style={{ flex: Math.max(1 - b.share, 0) }} />
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <p className="tiny muted" style={{ margin: '10px 0 0' }}>
+        One entry per person per day, counted server-side from the signed-in user&apos;s own unit and
+        calling. No names, emails or member IDs are stored.
+      </p>
+    </Card>
+  );
+}
+
 /** A panel that renders immediately as a titled card: skeleton while loading, error (with hint) on
  * failure, else the built content. Mirrors `_section`. */
 function Panel<T extends Json>({
   title,
   load,
   errorHint,
+  id,
+  wide = false,
   children,
 }: {
   title: string;
   load: () => Promise<T>;
   errorHint?: string;
+  /** Anchor for the quick-jump chips. */
+  id?: string;
+  /** Content that genuinely needs the room (tables, endpoint lists) takes the whole grid row. */
+  wide?: boolean;
   children: (data: T) => ReactNode;
 }) {
   const [state, setState] = useState<{ data: T | null; error: string | null; loading: boolean }>({
@@ -435,18 +605,24 @@ function Panel<T extends Json>({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Every state renders the SAME wrapper element, so the grid cell keeps its place (and its span)
+  // whether the panel is loading, broken, or loaded.
+  const cell = (inner: ReactNode) => (
+    <section id={id} className={`ops__cell${wide ? ' ops-span' : ''}`}>{inner}</section>
+  );
+
   if (state.loading) {
     // #29: reserve a min-height close to the typical loaded panel so content doesn't jump on arrival.
-    return (
+    return cell(
       <Card title={`${title}…`}>
         <div style={{ minHeight: 96 }}>
           <CardSkeleton lines={4} />
         </div>
-      </Card>
+      </Card>,
     );
   }
   if (state.error) {
-    return (
+    return cell(
       <Card title={title}>
         <p className="small">
           Couldn't load: {state.error}
@@ -454,20 +630,20 @@ function Panel<T extends Json>({
               own block so it actually reads as a separate line. */}
           {errorHint ? <span style={{ display: 'block', marginTop: 6 }}>{errorHint}</span> : null}
         </p>
-      </Card>
+      </Card>,
     );
   }
   // Crossfade the real content in when it resolves (instead of a hard pop after the skeleton).
-  return <div className="reveal">{children(state.data as T)}</div>;
+  return cell(<div className="reveal">{children(state.data as T)}</div>);
 }
 
 function Card({ title, trailing, children }: { title: string; trailing?: ReactNode; children: ReactNode }) {
   return (
     <div className="card">
       <div className="card__body">
-        <div className="row" style={{ marginBottom: 8 }}>
-          <strong style={{ flex: 1, fontSize: '1rem' }}>{title}</strong>
-          {trailing}
+        <div className="ops-card__head">
+          <span className="ops-card__title">{title}</span>
+          {trailing ? <span className="ops-card__trailing">{trailing}</span> : null}
         </div>
         {children}
       </div>
@@ -494,7 +670,7 @@ function LoginAuditCard({ logins: all }: { logins: Json[] }) {
         const scope = String(r['role_scope'] ?? '');
         const at = String(r['at'] ?? '');
         return (
-          <div key={i} style={{ padding: '6px 0', borderBottom: '1px solid rgba(128,128,128,0.2)' }}>
+          <div key={i} className="ops-row">
             <div className="row">
               <MaskedEmail email={r['email']} />
               <span style={{ color: loginOutcomeColor(outcome), fontWeight: 600 }}>{loginOutcomeLabel(outcome) || '—'}</span>
@@ -552,16 +728,16 @@ function SystemHealthCard({ summary }: { summary: Json }) {
     <Card title="System health">
       <div className="stack" style={{ gap: 2 }}>
         {shown.map((s) => (
-          <div key={s.name} className="row" style={{ justifyContent: 'space-between', gap: 8, padding: '6px 0' }}>
-            <span className="row" style={{ gap: 8, alignItems: 'center', minWidth: 0 }}>
+          <div key={s.name} className="ops-row__top" style={{ padding: '6px 0' }}>
+            <span className="row" style={{ gap: 8, alignItems: 'center', minWidth: 0, flex: 1 }}>
               {s.ok !== undefined && (
                 <span
+                  className={`ops-dot${s.ok ? ' ops-dot--ok' : ''}`}
                   aria-label={s.ok ? 'healthy' : (s.offText ?? 'down')}
                   title={s.ok ? 'healthy' : (s.offText ?? 'down')}
-                  style={{ width: 9, height: 9, borderRadius: '50%', background: s.ok ? '#2e7d32' : '#bdbdbd', flexShrink: 0 }}
                 />
               )}
-              <strong style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.name}</strong>
+              <strong className="ops-row__title">{s.name}</strong>
               {(s.stat || (s.ok === false && s.offText)) && (
                 <span className="small muted">{s.stat ?? s.offText}</span>
               )}
@@ -589,7 +765,7 @@ function FreshnessCard({ summary }: { summary: Json }) {
       <BigKv k="Last stake sync" v={agoOrNever(sb['last_stake_sync'])} />
       <hr className="divider" />
       <p className="small muted" style={{ margin: '0 0 8px', fontWeight: 600 }}>Counts</p>
-      <div className="wrap" style={{ gap: 18 }}>
+      <div className="ops-stats">
         <Stat label="Members" v={sb['members']} />
         <Stat label="Units" v={sb['units']} />
         <Stat label="Stakes" v={sb['stakes']} />
@@ -603,18 +779,18 @@ function FreshnessCard({ summary }: { summary: Json }) {
 // urgent ops question (did the sync run?).
 function BigKv({ k, v }: { k: string; v: string }) {
   return (
-    <div className="row" style={{ padding: '5px 0', justifyContent: 'space-between' }}>
-      <span>{k}</span>
-      <strong style={{ fontSize: '1.05rem' }}>{v}</strong>
+    <div className="ops-kv ops-kv--big">
+      <span className="ops-kv__k">{k}</span>
+      <strong className="ops-kv__v">{v}</strong>
     </div>
   );
 }
 
 function Stat({ label, v }: { label: string; v: unknown }) {
   return (
-    <div style={{ textAlign: 'center' }}>
-      <div style={{ fontSize: 20, fontWeight: 700 }}>{v == null ? '—' : String(v)}</div>
-      <div>{label}</div>
+    <div className="ops-stat">
+      <div className="ops-stat__v">{v == null ? '—' : String(v)}</div>
+      <div className="ops-stat__k">{label}</div>
     </div>
   );
 }
@@ -789,7 +965,7 @@ function FieldGapsCard({ diag, stakes }: { diag: Json; stakes: Json[] }) {
                 ? { glyph: '▼', color: statusColors.success, label: `down ${-delta}` }
                 : { glyph: '–', color: 'var(--on-surface-variant)', label: 'no change' };
           return (
-            <div key={f} className="row" style={{ padding: '8px 0', alignItems: 'center', gap: 12, borderTop: '1px solid var(--outline-variant)' }}>
+            <div key={f} className="row ops-row" style={{ alignItems: 'center', gap: 12 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div className="row" style={{ gap: 8, alignItems: 'baseline' }}>
                   <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{humanizeField(f)}</strong>
@@ -900,7 +1076,7 @@ function DiagnosticsCard({ diag, onCopy, toast }: { diag: Json; onCopy: (t: stri
           </div>
           {shownEndpoints.map((ep, i) => (
             <div key={i} className="row" style={{ padding: '2px 0' }}>
-              <code style={{ flex: 1, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis' }}>{ep.endpoint}</code>
+              <code className="ops-code">{ep.endpoint}</code>
               <span className="small" style={{ color: ep.errors !== 0 ? statusColors.danger : undefined }}>
                 {ep.calls} calls · {ep.avg_ms}ms avg{ep.errors !== 0 ? ` · ${ep.errors} err` : ''}
               </span>
@@ -958,9 +1134,7 @@ function EndpointHealthCard({ data }: { data: Json }) {
         const verdict = String(ep['verdict'] ?? 'healthy');
         return (
           <div key={i} className="row" style={{ padding: '3px 0', alignItems: 'center' }}>
-            <code style={{ flex: 1, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {String(ep['endpoint'])}
-            </code>
+            <code className="ops-code">{String(ep['endpoint'])}</code>
             <span className="small" style={{ marginLeft: 8, color: errPct > 0 ? statusColors.danger : undefined }}>
               {String(ep['calls'])} calls · {String(ep['avg_ms'])}ms avg{errPct > 0 ? ` · ${errPct}% err` : ''}
             </span>
@@ -1007,14 +1181,14 @@ function ParityRow({ field, c }: { field: string; c: Json }) {
   const pending = Number(c['pending'] ?? 0);
   const total = Math.max(1, filled + blocked + pending);
   return (
-    <div className="row" style={{ padding: '3px 0' }}>
-      <span style={{ width: 150, overflow: 'hidden', textOverflow: 'ellipsis' }}>{field}</span>
-      <span style={{ flex: 1, display: 'flex', borderRadius: 4, overflow: 'hidden', height: 10 }}>
-        {filled > 0 && <span style={{ flex: filled, background: '#66bb6a' }} />}
-        {blocked > 0 && <span style={{ flex: blocked, background: '#ef5350' }} />}
-        {pending > 0 && <span style={{ flex: pending, background: '#bdbdbd' }} />}
+    <div className="row" style={{ padding: '3px 0', gap: 8 }}>
+      <span className="small" style={{ width: 150, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{field}</span>
+      <span className="ops-bar" style={{ flex: 1 }}>
+        {filled > 0 && <span className="ops-bar__seg" style={{ flex: filled, background: 'var(--success)' }} />}
+        {blocked > 0 && <span className="ops-bar__seg" style={{ flex: blocked, background: 'var(--danger)' }} />}
+        {pending > 0 && <span className="ops-bar__seg" style={{ flex: pending, background: 'var(--outline)' }} />}
       </span>
-      <span className="small" style={{ marginLeft: 8 }}>
+      <span className="small" style={{ fontVariantNumeric: 'tabular-nums' }}>
         {filled}/{total}
       </span>
     </div>
@@ -1101,9 +1275,9 @@ function ReauthWorklistCard({
         const stakeId = String(s['stake_id']);
         const provider = cred?.['principal_email'] != null ? String(cred['principal_email']) : '';
         return (
-          <div key={i} style={{ padding: '6px 0', borderBottom: '1px solid rgba(128,128,128,0.2)' }}>
-            <div className="row" style={{ justifyContent: 'space-between', gap: 8 }}>
-              <strong>{name}</strong>
+          <div key={i} className="ops-row">
+            <div className="ops-row__top">
+              <strong className="ops-row__title">{name}</strong>
               {provider && (
                 <Button
                   variant="outlined"
@@ -1188,10 +1362,10 @@ function EnrolledStakesCard({
         const exp = tokenExpiry(cred);
         const canReauth = !!cred && (credState === 'active' || credState === 'stale');
         return (
-          <div key={i} style={{ padding: '6px 0' }}>
+          <div key={i} className="ops-row">
             {/* A2: name + ID on their own line so they never get clipped on a phone. */}
-            <div className="row" style={{ gap: 8 }}>
-              <strong>{name}</strong>
+            <div className="ops-row__top">
+              <strong className="ops-row__title">{name}</strong>
               {/* Stable LCR stake ID — stakes get renamed, so the ID is how you identify them (#9). */}
               {unitNumber && unitNumber !== 'null' && (
                 <span className="small muted" style={{ fontFamily: 'monospace' }}>ID {unitNumber}</span>
@@ -1200,7 +1374,7 @@ function EnrolledStakesCard({
             </div>
             {/* A2: actions in a wrapping container so they flow to a second line on narrow screens.
                 A3: the destructive Wipe/Remove are separated and use the danger token (dark-mode-safe). */}
-            <div className="wrap" style={{ gap: 4, marginTop: 2 }}>
+            <div className="ops-row__actions">
               {!running && credState !== 'revoked' && credState !== 'none' && (
                 <IconButton icon="sync" label="Sync this stake now" size={18} disabled={busy} onClick={() => onSync(unitNumber, name)} />
               )}
@@ -1211,7 +1385,7 @@ function EnrolledStakesCard({
                 <IconButton icon="mail" label="Send re-authorization email" size={18} disabled={busy} onClick={() => onReauth(stakeId, name)} />
               )}
               {/* A small spacer divider before the destructive actions so they read as a distinct group. */}
-              <span aria-hidden="true" style={{ width: 1, alignSelf: 'stretch', margin: '0 4px', background: 'var(--outline-variant)' }} />
+              <span aria-hidden="true" className="ops-row__sep" />
               <button type="button" className="btn btn--text btn--danger" disabled={busy} onClick={() => onWipe(stakeId, name)}
                 title="Wipe member data (keeps the stake + roles + credential)"
                 style={{ fontSize: 12, padding: '2px 8px', fontWeight: 600 }}>
@@ -1223,7 +1397,7 @@ function EnrolledStakesCard({
                 Remove
               </button>
             </div>
-            <div className="wrap" style={{ gap: 8, alignItems: 'center', marginTop: 4 }}>
+            <div className="ops-row__meta">
               <span className="chip" style={{ borderColor: credColor, color: credColor, background: `${credColor}1f`, fontSize: 12 }}>
                 {credLabel}
               </span>
@@ -1264,7 +1438,6 @@ function EnrolledStakesCard({
                 Missing: {formatMissingFeatures(missing)}
               </p>
             )}
-            <hr className="divider" style={{ margin: '8px 0 0' }} />
           </div>
         );
       })}
@@ -1300,7 +1473,7 @@ function VisibilityWorklistCard({ rows: all }: { rows: Json[] }) {
       {shown.map((r, i) => {
         const callings = (Array.isArray(r['callings']) ? (r['callings'] as unknown[]) : []).join(', ');
         return (
-          <div key={i} style={{ padding: '6px 0', borderBottom: '1px solid rgba(128,128,128,0.2)' }}>
+          <div key={i} className="ops-row">
             <MaskedEmail email={r['email']} />
             {r['stake_name'] ? <div className="small muted">{String(r['stake_name'])}</div> : null}
             {callings ? <div className="small muted">Callings: {callings}</div> : null}
@@ -1343,7 +1516,7 @@ function FeedbackInboxCard({
         const id = Number(r['id']);
         const isOpen = r['status'] === 'open';
         return (
-          <div key={id} style={{ padding: '10px 0', borderBottom: '1px solid rgba(128,128,128,0.2)' }}>
+          <div key={id} className="ops-row">
             <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
               <span
                 className="chip"

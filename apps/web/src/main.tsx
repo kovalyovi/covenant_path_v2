@@ -7,6 +7,7 @@ import { onCLS, onINP, onLCP } from 'web-vitals';
 
 import './theme/theme.css';
 import './theme/components.css';
+import './theme/admin.css';
 import './i18n'; // initialize localization (EN/ES/RU) before first render
 import { router } from './router';
 import { ThemeProvider } from './hooks/useTheme';

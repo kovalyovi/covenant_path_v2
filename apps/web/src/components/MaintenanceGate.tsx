@@ -63,10 +63,10 @@ export function MaintenanceGate({ children }: { children: React.ReactNode }) {
 function MaintenanceScreen({ message }: { message: string | null }) {
   const { t } = useTranslation();
   return (
-    <div className="center-col" style={{ minHeight: '100vh', gap: 14, padding: 24, textAlign: 'center' }}>
-      <div style={{ fontSize: 44 }} aria-hidden>🛠️</div>
-      <h1 style={{ margin: 0 }}>{t('maintenance.title')}</h1>
-      <p className="muted" style={{ maxWidth: 440 }}>{message?.trim() || t('maintenance.body')}</p>
+    <div className="maint-screen">
+      <div className="maint-screen__icon" aria-hidden>🛠️</div>
+      <h1>{t('maintenance.title')}</h1>
+      <p>{message?.trim() || t('maintenance.body')}</p>
     </div>
   );
 }
@@ -79,17 +79,14 @@ function OwnerMaintenanceBanner() {
     try { await setMaintenance(false); window.location.reload(); } catch { setBusy(false); }
   }, []);
   return (
-    <div role="status" style={{
-      background: '#8a6d00', color: '#fff', padding: '8px 14px', display: 'flex',
-      alignItems: 'center', justifyContent: 'center', gap: 14, fontSize: 14, flexWrap: 'wrap',
-    }}>
+    <div role="status" className="maint-banner">
       <span>🛠️ {t('maintenance.ownerBannerOn')}</span>
-      <button onClick={turnOff} disabled={busy}
-              style={{ color: 'inherit', background: 'none', border: '1px solid currentColor',
-                       borderRadius: 6, padding: '2px 10px', cursor: 'pointer' }}>
-        {busy ? t('maintenance.turningOff') : t('maintenance.turnOff')}
-      </button>
-      <Link to="/admin" style={{ color: 'inherit' }}>{t('maintenance.admin')}</Link>
+      <span className="maint-banner__actions">
+        <button type="button" className="btn btn--outlined" onClick={turnOff} disabled={busy}>
+          {busy ? t('maintenance.turningOff') : t('maintenance.turnOff')}
+        </button>
+        <Link to="/admin">{t('maintenance.admin')}</Link>
+      </span>
     </div>
   );
 }
@@ -115,35 +112,52 @@ export function MaintenanceModeCard() {
   };
 
   return (
-    <div className="card" style={{ marginBottom: 12 }}>
-      <div className="card__body" style={{ display: 'grid', gap: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-          <b>{t('maintenance.cardTitle')}</b>
-          <span style={{
-            fontSize: 12, fontWeight: 700, padding: '2px 8px', borderRadius: 999,
-            background: on ? '#8a6d00' : 'var(--surface-2, #2a2a2a)', color: on ? '#fff' : 'inherit',
-          }}>{on ? t('maintenance.on') : t('maintenance.off')}</span>
+    <div className="card">
+      <div className="card__body ops-maint">
+        <div className="ops-card__head">
+          <span className="ops-card__title">{t('maintenance.cardTitle')}</span>
         </div>
-        <div className="muted" style={{ fontSize: 13 }}>{t('maintenance.cardHelp')}</div>
-        <input
-          value={msg}
-          onChange={(e) => setMsg(e.target.value)}
-          placeholder={t('maintenance.messagePlaceholder')}
-          disabled={busy}
-          style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border, #444)',
-                   background: 'var(--surface, transparent)', color: 'inherit' }}
-        />
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {on
-            ? <button className="btn btn--filled" disabled={busy} onClick={() => apply(false)}>
-                {busy ? t('maintenance.saving') : t('maintenance.turnOffFull')}
-              </button>
-            : <button className="btn btn--danger" disabled={busy} onClick={() => apply(true)}>
-                {busy ? t('maintenance.saving') : t('maintenance.turnOn')}
-              </button>}
-          {on && <button className="btn" disabled={busy} onClick={() => apply(true)}>{t('maintenance.updateMessage')}</button>}
-        </div>
-        {err && <div style={{ color: 'var(--error, #e5484d)', fontSize: 13 }}>{err}</div>}
+
+        {/* The switch IS the state: label, explanation and control in one row, so there is no
+            guessing which button applies to which state (the old card showed a pill and up to two
+            buttons whose meanings depended on it). */}
+        <label className={`ops-maint__state${on ? ' ops-maint__state--on' : ''}`}>
+          <span className="ops-maint__label">
+            <b>{on ? t('maintenance.on') : t('maintenance.off')}</b>
+            <span>{on ? t('maintenance.stateOn') : t('maintenance.stateOff')}</span>
+          </span>
+          <input
+            type="checkbox"
+            className="switch"
+            checked={on}
+            disabled={busy}
+            aria-label={on ? t('maintenance.turnOffFull') : t('maintenance.turnOn')}
+            onChange={(e) => void apply(e.target.checked)}
+          />
+        </label>
+
+        <p className="ops-card__intro" style={{ margin: 0 }}>{t('maintenance.cardHelp')}</p>
+
+        <label className="field">
+          <span>{t('maintenance.messageLabel')}</span>
+          <input
+            className="input"
+            value={msg}
+            onChange={(e) => setMsg(e.target.value)}
+            placeholder={t('maintenance.messagePlaceholder')}
+            disabled={busy}
+          />
+        </label>
+
+        {on && (
+          <div className="ops-maint__actions">
+            <button type="button" className="btn btn--outlined" disabled={busy} onClick={() => void apply(true)}>
+              {busy ? t('maintenance.saving') : t('maintenance.updateMessage')}
+            </button>
+          </div>
+        )}
+
+        {err && <div className="small" style={{ color: 'var(--error)' }}>{err}</div>}
       </div>
     </div>
   );

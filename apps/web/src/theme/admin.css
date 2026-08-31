@@ -1,0 +1,374 @@
+/* Ops console — the layout + row vocabulary for the Admin page and the owner's maintenance switch.
+   Everything here was inline styles on AdminPage.tsx: hard-coded hex, ad-hoc font sizes, and a
+   single 900px column that wasted half a desktop and overflowed a phone. Two rules for anything
+   added below: colours come from theme tokens (so light/dark both work), and a row that can hold a
+   long value truncates or wraps rather than pushing the page sideways. */
+
+/* ---- Page shell ------------------------------------------------------------------------------ */
+.ops {
+  width: 100%;
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: var(--md) var(--md) var(--xl);
+}
+@media (max-width: 600px) {
+  .ops {
+    padding: var(--sm) var(--sm) var(--lg);
+  }
+}
+
+/* Panels sit in a masonry-ish grid on a wide screen and a single column on a phone. `align-items:
+   start` keeps each panel its natural height instead of stretching the short ones. */
+.ops__grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: start;
+  gap: var(--md);
+}
+@media (min-width: 1000px) {
+  .ops__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  /* Panels whose content is genuinely wide (tables, long lists, endpoint rows) take the full row. */
+  .ops__grid > .ops-span {
+    grid-column: 1 / -1;
+  }
+}
+
+/* An owner-only panel renders nothing for everyone else — without this its empty cell still claims
+   a grid slot and punches a hole in the layout. */
+.ops__cell:empty {
+  display: none;
+}
+
+/* A grid item wraps ONE panel; its card loses the stray vertical margin so the grid gap is the only
+   spacing that matters. */
+.ops__cell > .card {
+  margin: 0;
+  height: 100%;
+}
+.ops__cell > .card + .card {
+  margin-top: var(--md);
+}
+
+/* Quick-jump chips: on a long console, finding "Feedback" meant scrolling past nine panels. */
+.ops__nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: var(--md);
+}
+.ops__nav-chip {
+  border: 1px solid var(--outline-variant);
+  background: var(--surface-container);
+  color: var(--on-surface-variant);
+  border-radius: var(--radius-pill);
+  padding: 4px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ops__nav-chip:hover {
+  background: var(--surface-container-high);
+  color: var(--on-surface);
+  border-color: var(--outline);
+}
+
+/* ---- Card head ------------------------------------------------------------------------------- */
+/* Title left, controls right — and on a phone the controls drop to their own line instead of
+   squeezing the title to three characters. */
+.ops-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sm);
+  margin-bottom: var(--md);
+}
+.ops-card__title {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: -0.1px;
+}
+.ops-card__trailing {
+  display: flex;
+  align-items: center;
+  gap: var(--sm);
+  flex-shrink: 0;
+}
+@media (max-width: 600px) {
+  .ops-card__head {
+    flex-wrap: wrap;
+  }
+  .ops-card__title {
+    flex: 1 0 100%;
+  }
+  .ops-card__trailing {
+    flex-wrap: wrap;
+  }
+}
+.ops-card__intro {
+  margin: calc(-1 * var(--sm)) 0 var(--md);
+  font-size: 0.8rem;
+  color: var(--on-surface-variant);
+}
+
+/* ---- List rows ------------------------------------------------------------------------------- */
+/* One separator style for every list in the console (it was three different rgba greys). */
+.ops-row {
+  padding: 10px 0;
+  border-top: 1px solid var(--outline-variant);
+  min-width: 0;
+}
+.ops-row:first-of-type {
+  border-top: none;
+  padding-top: 2px;
+}
+.ops-row__top {
+  display: flex;
+  align-items: center;
+  gap: var(--sm);
+  min-width: 0;
+}
+.ops-row__title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ops-row__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 3px;
+  font-size: 0.78rem;
+  color: var(--on-surface-variant);
+}
+.ops-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+.ops-row__sep {
+  width: 1px;
+  align-self: stretch;
+  min-height: 18px;
+  margin: 0 4px;
+  background: var(--outline-variant);
+}
+
+/* Key/value line: label left, value right, value never wraps mid-number. */
+.ops-kv {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--md);
+  padding: 5px 0;
+}
+.ops-kv__k {
+  color: var(--on-surface-variant);
+  min-width: 0;
+}
+.ops-kv__v {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.ops-kv--big .ops-kv__v {
+  font-size: 1.05rem;
+}
+
+/* Stat tiles (counts under Data freshness). Auto-fit so 4 tiles sit in a row on desktop and 2x2 on
+   a phone, rather than overflowing. */
+.ops-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  gap: var(--sm);
+}
+/* On a phone, auto-fit squeezed four tiles into 3 + 1 orphan. A fixed 2x2 reads better. */
+@media (max-width: 600px) {
+  .ops-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.ops-stat {
+  text-align: center;
+  padding: var(--sm) 4px;
+  border-radius: var(--radius-md);
+  background: var(--surface-container);
+}
+.ops-stat__v {
+  font-size: 1.25rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.ops-stat__k {
+  font-size: 0.72rem;
+  color: var(--on-surface-variant);
+  margin-top: 2px;
+}
+
+/* A monospace route/identifier that must never widen the card. */
+.ops-code {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Status dot for the system-health rows. */
+.ops-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--outline);
+}
+.ops-dot--ok {
+  background: var(--success);
+}
+
+/* Proportion bar — shared by field parity and the usage breakdown. */
+.ops-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--surface-container-highest);
+  min-width: 0;
+}
+.ops-bar__seg {
+  min-width: 0;
+}
+
+/* ---- Maintenance switch (owner-only) --------------------------------------------------------- */
+/* Was a hand-rolled amber strip with #8a6d00 baked in, a bare <input>, and inline font sizes. */
+.ops-maint {
+  display: grid;
+  gap: var(--md);
+}
+.ops-maint__state {
+  display: flex;
+  align-items: center;
+  gap: var(--md);
+  padding: var(--md);
+  border-radius: var(--radius-lg);
+  background: var(--surface-container);
+  border: 1px solid var(--outline-variant);
+}
+.ops-maint__state--on {
+  background: color-mix(in srgb, var(--warning) 14%, var(--surface));
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--outline-variant));
+}
+.ops-maint__label {
+  flex: 1;
+  min-width: 0;
+}
+.ops-maint__label b {
+  display: block;
+  font-size: 0.95rem;
+}
+.ops-maint__label span {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--on-surface-variant);
+  margin-top: 2px;
+}
+.ops-maint__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sm);
+}
+
+/* The banner the owner sees on every screen while the app is locked. */
+.maint-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--md);
+  padding: var(--sm) var(--lg);
+  font-size: 0.85rem;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--warning) 22%, var(--surface));
+  color: var(--on-surface);
+  border-bottom: 1px solid color-mix(in srgb, var(--warning) 45%, var(--outline-variant));
+}
+.maint-banner__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--md);
+}
+
+/* The lock screen everyone else sees. */
+.maint-screen {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--md);
+  padding: var(--xl) var(--lg);
+  text-align: center;
+}
+.maint-screen__icon {
+  width: 76px;
+  height: 76px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 34px;
+  background: color-mix(in srgb, var(--warning) 18%, var(--surface));
+}
+.maint-screen h1 {
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+.maint-screen p {
+  max-width: 44ch;
+  color: var(--on-surface-variant);
+  line-height: 1.5;
+}
+
+/* ---- Usage panel ----------------------------------------------------------------------------- */
+.ops-usage__tabs {
+  display: flex;
+  gap: 4px;
+}
+.ops-usage__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sm) var(--md);
+  padding: 7px 0;
+  border-top: 1px solid var(--outline-variant);
+}
+.ops-usage__row:first-of-type {
+  border-top: none;
+}
+.ops-usage__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+.ops-usage__counts {
+  font-size: 0.78rem;
+  color: var(--on-surface-variant);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ops-usage__bar {
+  grid-column: 1 / -1;
+}

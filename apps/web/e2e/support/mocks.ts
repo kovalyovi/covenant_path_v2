@@ -111,6 +111,14 @@ export interface SupabaseFixtures {
   userRoles?: Row[];
   /** rpc/is_admin result (default false). */
   isAdmin?: boolean;
+  /** rpc/is_owner result (default false) — gates the maintenance-mode switch. */
+  isOwner?: boolean;
+  /** The `maintenance_status` view row (default: maintenance off). */
+  maintenance?: Row;
+  /** rpc/usage_summary rows (ops console Usage panel). Aggregates only — never names. */
+  usageSummary?: Row[];
+  /** rpc/usage_daily rows (the Usage sparkline). */
+  usageDaily?: Row[];
 }
 
 /** Apply PostgREST-style `<col>=eq.<value>` / `<col>=is.null` query filters to fixture rows. */
@@ -137,6 +145,15 @@ export async function mockSupabase(page: Page, fixtures: SupabaseFixtures = {}):
   const manualMembers = [...(fixtures.manualMembers ?? [])]; // mutable: insert/merge/delete (item 11)
   const userRoles = fixtures.userRoles ?? [];
   const isAdmin = fixtures.isAdmin === true;
+  const isOwner = fixtures.isOwner === true;
+  const maintenance = fixtures.maintenance
+    ?? { maintenance_mode: false, maintenance_message: null };
+  const usageSummary = fixtures.usageSummary ?? [
+    { dimension: 'unit', label: 'Bond Park Ward', events: 12, people: 3, last_used: '2026-08-31' },
+    { dimension: 'calling', label: 'Bishop', events: 12, people: 3, last_used: '2026-08-31' },
+    { dimension: 'surface', label: 'web', events: 12, people: 3, last_used: '2026-08-31' },
+  ];
+  const usageDaily = fixtures.usageDaily ?? [{ day: '2026-08-31', events: 12, people: 3 }];
   const recorder = makeRecorder();
 
   await page.route(`${SUPABASE_URL}/**`, async (route) => {
@@ -167,6 +184,24 @@ export async function mockSupabase(page: Page, fixtures: SupabaseFixtures = {}):
     // -- PostgREST --
     if (path === '/rest/v1/rpc/is_admin') {
       return fulfillJson(route, 200, isAdmin);
+    }
+    // Owner-only maintenance mode (migration 0056): the switch + who may flip it.
+    if (path === '/rest/v1/rpc/is_owner') {
+      return fulfillJson(route, 200, isOwner);
+    }
+    if (path === '/rest/v1/maintenance_status') {
+      return fulfillJson(route, 200, maintenance);
+    }
+    // Usage telemetry (migration 0066). The app fires record_app_open on mount, fire-and-forget;
+    // the ops console reads the two aggregate functions. All name-free by construction.
+    if (path === '/rest/v1/rpc/record_app_open') {
+      return fulfillJson(route, 204);
+    }
+    if (path === '/rest/v1/rpc/usage_summary') {
+      return fulfillJson(route, 200, usageSummary);
+    }
+    if (path === '/rest/v1/rpc/usage_daily') {
+      return fulfillJson(route, 200, usageDaily);
     }
     if (path === '/rest/v1/stakes' && method === 'GET') {
       return fulfillJson(route, 200, applyEqFilters(stakes, url));

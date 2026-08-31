@@ -92,4 +92,50 @@ test.describe('settings + admin side sheets', () => {
     await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
     await expect(page).toHaveURL(/\/admin$/);
   });
+
+  test('the ops console reports usage by unit and by calling, and names nobody', async ({ page }) => {
+    await openDashboard(page, {
+      path: '/admin',
+      supabase: {
+        isAdmin: true,
+        usageSummary: [
+          { dimension: 'unit', label: 'Bond Park Ward', events: 12, people: 3, last_used: '2026-08-31' },
+          { dimension: 'unit', label: 'Green Level Ward', events: 4, people: 2, last_used: '2026-08-29' },
+          { dimension: 'calling', label: 'Bishop', events: 9, people: 2, last_used: '2026-08-31' },
+          { dimension: 'calling', label: 'Relief Society President', events: 7, people: 3, last_used: '2026-08-30' },
+          { dimension: 'surface', label: 'web', events: 16, people: 5, last_used: '2026-08-31' },
+        ],
+      },
+    });
+
+    const sheet = page.getByRole('dialog', { name: 'Admin · Ops console' });
+    const usage = sheet.locator('#ops-usage');
+    await expect(usage.getByText('Usage', { exact: true })).toBeVisible();
+
+    // Units by default; the counts are person-days + distinct people, never a roster.
+    await expect(usage.getByText('Bond Park Ward')).toBeVisible();
+    await expect(usage.getByText(/12 days · 3 people/)).toBeVisible();
+
+    // Switching to callings answers "which callings actually use this?".
+    await usage.getByRole('button', { name: 'By calling' }).click();
+    await expect(usage.getByText('Relief Society President')).toBeVisible();
+    await expect(usage.getByText('Bond Park Ward')).toHaveCount(0);
+
+    // The whole point of the panel: aggregates only. Nothing that identifies a person appears.
+    await expect(usage).not.toContainText('@');
+  });
+
+  test('the app records one name-free usage row on open', async ({ page }) => {
+    const { supabase } = await openDashboard(page, { supabase: { isAdmin: false } });
+    await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
+
+    // Fire-and-forget, so poll rather than assume it has landed by first paint.
+    await expect
+      .poll(() => supabase.callsTo('/rest/v1/rpc/record_app_open').length)
+      .toBe(1);
+    const calls = supabase.callsTo('/rest/v1/rpc/record_app_open');
+    // The client sends the SURFACE and nothing else — unit, calling and identity are derived
+    // server-side, so a client can neither misattribute usage nor leak who was using it.
+    expect(calls[0].body).toEqual({ p_surface: 'web' });
+  });
 });
