@@ -163,6 +163,39 @@ The platform serves **many stakes at once**, each isolated end-to-end:
 
 ## Local development
 
+### Stake data repository (quick lookup, no app needed)
+
+One pull stores the whole stake — members, units, leadership — in a single local
+file, `tools/output/stake_data.json`. Query it any time without signing in:
+
+```powershell
+# Pull (needs Church credentials once per run; reuses the saved session after)
+LCR_LOGIN='you@example.com' LCR_PASSWORD='...' python scripts/pull_stake_data.py
+
+# Query
+python scripts/stake.py find "nathan reading"   # person -> unit + callings
+python scripts/stake.py ward "cary 1st"          # ward headcount + leadership
+python scripts/stake.py leadership              # all leadership, by unit
+python scripts/stake.py leadership "cary 1st"   # one unit's leadership
+python scripts/stake.py units                   # unit list with headcounts
+python scripts/stake.py --refresh find "nathan reading"  # re-pull, then query
+```
+
+### Refreshing via GitHub Actions (no local credentials needed)
+
+The pull needs Church credentials, which live as `LCR_LOGIN` / `LCR_PASSWORD`
+GitHub secrets — never on your machine. `scripts/fetch_stake_data.py` triggers
+the `pull-stake-data.yml` workflow when the local roster is stale, waits for it,
+and downloads the artifact into `tools/output/stake_data.json`:
+
+```powershell
+python scripts/fetch_stake_data.py                 # refresh if older than 7 days
+python scripts/fetch_stake_data.py --refresh       # force a fresh pull
+python scripts/fetch_stake_data.py --max-age-days 3
+```
+
+Requires `gh` authenticated (`gh auth login`) — one time.
+
 ```powershell
 # 1. Backend deps
 pip install -r requirements.txt

@@ -1,0 +1,46 @@
+name: Pull stake data (LCR roster)
+
+# On-demand stake roster pull for local tooling (e.g. the HC -> Callings List
+# daily sync's name-matching safety net). Triggered manually or via
+# `python scripts/fetch_stake_data.py`, which waits for the run and downloads
+# the artifact into tools/output/stake_data.json.
+#
+# Auth: LCR_LOGIN / LCR_PASSWORD repo secrets (the script mints a Member Tools
+# token off a headless Okta login; no MFA prompt for accounts without 2SV).
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pull-stake-data
+  cancel-in-progress: false
+
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LCR_LOGIN: ${{ secrets.LCR_LOGIN }}
+      LCR_PASSWORD: ${{ secrets.LCR_PASSWORD }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install pull dependencies
+        run: pip install requests python-dotenv
+
+      - name: Pull whole-stake roster
+        run: python scripts/pull_stake_data.py
+
+      - name: Upload roster artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: stake-data
+          path: tools/output/stake_data.json
+          if-no-files-found: error
+          retention-days: 30
