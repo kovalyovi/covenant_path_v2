@@ -106,6 +106,9 @@ def _readable_name(member: dict) -> str | None:
 # sync schema is undocumented, so match broadly and record the key inventory
 # (top-level `contact_key_inventory`) to confirm real field names per pull.
 CONTACT_NEEDLES = ("phone", "email", "contact", "mobile", "tel", "fax")
+# Known plural container keys — keep their raw values verbatim (list-of-dict
+# shape), since the scalar filter below would drop them.
+KEEP_RAW_KEYS = ("emails", "phones")
 
 
 def _contact_fields(d: dict) -> dict:
@@ -113,7 +116,11 @@ def _contact_fields(d: dict) -> dict:
     if not isinstance(d, dict):
         return out
     for k, v in d.items():
-        if any(n in str(k).lower() for n in CONTACT_NEEDLES):
+        kl = str(k).lower()
+        if kl in KEEP_RAW_KEYS:
+            out[k] = v
+            continue
+        if any(n in kl for n in CONTACT_NEEDLES):
             if isinstance(v, (str, int)):
                 out[k] = v
             elif isinstance(v, list) and v and all(isinstance(x, (str, int)) for x in v):
