@@ -102,6 +102,25 @@ def _readable_name(member: dict) -> str | None:
     return None
 
 
+# Substrings that mark a raw payload key as contact info. The Member Tools
+# sync schema is undocumented, so match broadly and record the key inventory
+# (top-level `contact_key_inventory`) to confirm real field names per pull.
+CONTACT_NEEDLES = ("phone", "email", "contact", "mobile", "tel", "fax")
+
+
+def _contact_fields(d: dict) -> dict:
+    out = {}
+    if not isinstance(d, dict):
+        return out
+    for k, v in d.items():
+        if any(n in str(k).lower() for n in CONTACT_NEEDLES):
+            if isinstance(v, (str, int)):
+                out[k] = v
+            elif isinstance(v, list) and v and all(isinstance(x, (str, int)) for x in v):
+                out[k] = v
+    return out
+
+
 def pull() -> dict:
     t0 = datetime.now(timezone.utc)
 
@@ -121,15 +140,25 @@ def pull() -> dict:
     unit_names = {u["unit_number"]: u["name"] for u in units}
 
     members = []
+    key_inventory: set[str] = set()
     for hh in payload.get("households") or []:
         unum = hh.get("unitNumber")
+        if isinstance(hh, dict):
+            key_inventory.update(str(k) for k in hh.keys())
+            hh_contact = _contact_fields(hh)
+        else:
+            hh_contact = {}
         for m in hh.get("members") or []:
             if not isinstance(m, dict):
                 continue
             uuid = m.get("uuid") or m.get("memberUuid") or m.get("id")
             if not uuid:
                 continue
+            key_inventory.update(str(k) for k in m.keys())
             full = _readable_name(m)
+            contact = _contact_fields(m)
+            if hh_contact:
+                contact = {f"household_{k}": v for k, v in hh_contact.items()} | contact
             members.append({
                 "uuid": uuid,
                 "full_name": full,
@@ -138,6 +167,7 @@ def pull() -> dict:
                 "unit_name": unit_names.get(int(unum)) if unum is not None else None,
                 "sex": m.get("sex"),
                 "birth_date": m.get("birthDate") or m.get("birth_date"),
+                "contact": contact,
             })
 
     leadership = {str(k): v for k, v in staffing_by_unit(payload).items()}
@@ -150,6 +180,7 @@ def pull() -> dict:
             "members": len(members),
             "units": len(units),
         },
+        "contact_key_inventory": sorted(key_inventory),
         "units": units,
         "members": members,
         "leadership": leadership,
