@@ -181,6 +181,14 @@ python scripts/stake.py units                   # unit list with headcounts
 python scripts/stake.py --refresh find "nathan reading"  # re-pull, then query
 ```
 
+`scripts/find_person.py` answers "who is Sis. X and what is their calling" in one
+shot — it searches the LCR roster *and* the Callings List spreadsheet together:
+
+```powershell
+python scripts/find_person.py "Guthrie"       # roster hits + calling rows
+python scripts/find_person.py "Tara Guthrie"  # narrows to one person
+```
+
 ### Refreshing via GitHub Actions (no local credentials needed)
 
 The pull needs Church credentials, which live as `LCR_LOGIN` / `LCR_PASSWORD`
