@@ -15,7 +15,9 @@ What it does:
         {"meta": {"stake": ..., "pulled_at": ..., "members": N, "units": M},
          "units": [{"unit_number": ..., "name": ..., "type": ...}],
          "members": [{"uuid": ..., "full_name": ..., "preferred_name": ...,
-                      "unit_number": ..., "unit_name": ..., "sex": ..., "birth_date": ...}],
+                      "unit_number": ..., "unit_name": ..., "sex": ..., "birth_date": ...,
+                      "recommends": [{"status": ..., "type": ..., "expiration": ...}],
+                      "recommend_in_process": bool}],
          "leadership": {"<unit_number>": [{"position": ..., "person": ...,
                                            "person_uuid": ..., "set_apart": ...}]}}
 
@@ -146,6 +148,30 @@ def pull() -> dict:
     stake_name, units = _units(payload)
     unit_names = {u["unit_number"]: u["name"] for u in units}
 
+    # Temple-recommend roster: payload["templeRecommendStatus"][].recommends[]
+    # is a unit-wide list keyed by memberUuid with raw statuses
+    # (ACTIVE/EXPIRED/ISSUED/CANCELED). An ISSUED recommend is one the
+    # bishopric has entered that still awaits stake activation -- i.e. the
+    # member appears on LCR's "Recommend Activations" list, which means the
+    # bishop interview already happened. We keep the raw records (plus a
+    # convenience flag) because the label mapping elsewhere collapses
+    # ISSUED into "No", which would lose exactly this signal.
+    recommends_by_uuid: dict[str, list[dict]] = {}
+    for unit in payload.get("templeRecommendStatus") or []:
+        if not isinstance(unit, dict):
+            continue
+        for r in unit.get("recommends") or []:
+            if not isinstance(r, dict):
+                continue
+            ruuid = r.get("memberUuid") or r.get("uuid")
+            if not ruuid:
+                continue
+            recommends_by_uuid.setdefault(str(ruuid), []).append({
+                "status": r.get("status"),
+                "type": r.get("type"),
+                "expiration": r.get("expiration") or r.get("expirationDate"),
+            })
+
     members = []
     key_inventory: set[str] = set()
     for hh in payload.get("households") or []:
@@ -166,6 +192,7 @@ def pull() -> dict:
             contact = _contact_fields(m)
             if hh_contact:
                 contact = {f"household_{k}": v for k, v in hh_contact.items()} | contact
+            recs = recommends_by_uuid.get(str(uuid), [])
             members.append({
                 "uuid": uuid,
                 "full_name": full,
@@ -175,6 +202,9 @@ def pull() -> dict:
                 "sex": m.get("sex"),
                 "birth_date": m.get("birthDate") or m.get("birth_date"),
                 "contact": contact,
+                "recommends": recs,
+                "recommend_in_process": any(
+                    (r.get("status") or "").upper() == "ISSUED" for r in recs),
             })
 
     leadership = {str(k): v for k, v in staffing_by_unit(payload).items()}
