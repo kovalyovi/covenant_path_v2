@@ -16,6 +16,8 @@ What it does:
          "units": [{"unit_number": ..., "name": ..., "type": ...}],
          "members": [{"uuid": ..., "full_name": ..., "preferred_name": ...,
                       "unit_number": ..., "unit_name": ..., "sex": ..., "birth_date": ...,
+                      "positions": [{"name": ..., "unit_number": ..., "unit_name": ...,
+                                     "set_apart": bool}],
                       "recommends": [{"status": ..., "type": ..., "expiration": ...}],
                       "recommend_in_process": bool}],
          "leadership": {"<unit_number>": [{"position": ..., "person": ...,
@@ -130,6 +132,28 @@ def _contact_fields(d: dict) -> dict:
     return out
 
 
+def _positions(member: dict, unit_names: dict[int, str]) -> list[dict]:
+    out = []
+    for pos in member.get("positions") or []:
+        if not isinstance(pos, dict):
+            continue
+        name = pos.get("name")
+        punit = pos.get("unitNumber")
+        if not name or punit is None:
+            continue
+        try:
+            punit_int = int(punit)
+        except (TypeError, ValueError):
+            continue
+        out.append({
+            "name": str(name),
+            "unit_number": punit_int,
+            "unit_name": unit_names.get(punit_int),
+            "set_apart": bool(pos.get("setApart")),
+        })
+    return out
+
+
 def pull() -> dict:
     t0 = datetime.now(timezone.utc)
 
@@ -202,6 +226,7 @@ def pull() -> dict:
                 "sex": m.get("sex"),
                 "birth_date": m.get("birthDate") or m.get("birth_date"),
                 "contact": contact,
+                "positions": _positions(m, unit_names),
                 "recommends": recs,
                 "recommend_in_process": any(
                     (r.get("status") or "").upper() == "ISSUED" for r in recs),
