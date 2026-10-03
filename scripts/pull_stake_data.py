@@ -18,8 +18,10 @@ What it does:
                       "unit_number": ..., "unit_name": ..., "sex": ..., "birth_date": ...,
                       "positions": [{"name": ..., "unit_number": ..., "unit_name": ...,
                                      "set_apart": bool}],
-                      "recommends": [{"status": ..., "type": ..., "expiration": ...}],
-                      "recommend_in_process": bool}],
+                      "recommends": [{"status": ..., "type": ..., "expiration": ...,
+                                      "raw": {full raw sync record incl. recommendNumber,
+                                              mobile/paper format flags}}],
+                      "recommend_in_process": bool}]
          "leadership": {"<unit_number>": [{"position": ..., "person": ...,
                                            "person_uuid": ..., "set_apart": ...}]}}
 
