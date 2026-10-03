@@ -181,6 +181,9 @@ def pull() -> dict:
     # convenience flag) because the label mapping elsewhere collapses
     # ISSUED into "No", which would lose exactly this signal.
     recommends_by_uuid: dict[str, list[dict]] = {}
+    recommend_keys: set[str] = set()
+    recommend_status_values: dict[str, int] = {}
+    recommend_unit_by_uuid: dict[str, object] = {}
     for unit in payload.get("templeRecommendStatus") or []:
         if not isinstance(unit, dict):
             continue
@@ -190,10 +193,19 @@ def pull() -> dict:
             ruuid = r.get("memberUuid") or r.get("uuid")
             if not ruuid:
                 continue
+            recommend_keys.update(str(k) for k in r.keys())
+            status_val = str(r.get("status"))
+            recommend_status_values[status_val] = recommend_status_values.get(status_val, 0) + 1
+            recommend_unit_by_uuid.setdefault(str(ruuid), unit.get("unitNumber"))
+            # Keep the FULL raw record: earlier versions kept only
+            # status/type/expiration, which silently dropped any other
+            # fields the sync sends (e.g. a mobile/digital recommend
+            # indicator). `raw` preserves everything for downstream checks.
             recommends_by_uuid.setdefault(str(ruuid), []).append({
                 "status": r.get("status"),
                 "type": r.get("type"),
                 "expiration": r.get("expiration") or r.get("expirationDate"),
+                "raw": r,
             })
 
     members = []
@@ -234,6 +246,21 @@ def pull() -> dict:
 
     leadership = {str(k): v for k, v in staffing_by_unit(payload).items()}
 
+    # Recommends whose memberUuid matched no directory member — kept visible
+    # so a keying mismatch can never silently swallow someone's recommend.
+    member_uuids = {str(m["uuid"]) for m in members}
+    orphan_recommends = [
+        {
+            "uuid": ruuid,
+            "unit_number": recommend_unit_by_uuid.get(ruuid),
+            "unit_name": unit_names.get(int(recommend_unit_by_uuid[ruuid]))
+            if recommend_unit_by_uuid.get(ruuid) is not None else None,
+            "records": recs,
+        }
+        for ruuid, recs in recommends_by_uuid.items()
+        if ruuid not in member_uuids
+    ]
+
     data = {
         "meta": {
             "stake": stake_name,
@@ -241,7 +268,12 @@ def pull() -> dict:
             "pull_seconds": round((datetime.now(timezone.utc) - t0).total_seconds(), 1),
             "members": len(members),
             "units": len(units),
+            "recommend_keys": sorted(recommend_keys),
+            "recommend_status_values": recommend_status_values,
+            "recommends_total": sum(len(v) for v in recommends_by_uuid.values()),
+            "recommends_orphaned": len(orphan_recommends),
         },
+        "orphan_recommends": orphan_recommends,
         "contact_key_inventory": sorted(key_inventory),
         "units": units,
         "members": members,
