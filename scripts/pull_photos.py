@@ -58,7 +58,7 @@ def main() -> int:
         seen += 1
         try:
             img = Image.open(io.BytesIO(z.read(name))).convert("RGB")
-            img.thumbnail((240, 240))
+            img.thumbnail((960, 960))
             out = io.BytesIO()
             img.save(out, format="JPEG", quality=82, optimize=True)
             (OUT / f"{uuid}.jpg").write_bytes(out.getvalue())
