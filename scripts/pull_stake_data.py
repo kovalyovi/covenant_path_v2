@@ -114,7 +114,7 @@ def _readable_name(member: dict) -> str | None:
 CONTACT_NEEDLES = ("phone", "email", "contact", "mobile", "tel", "fax")
 # Known plural container keys — keep their raw values verbatim (list-of-dict
 # shape), since the scalar filter below would drop them.
-KEEP_RAW_KEYS = ("emails", "phones")
+KEEP_RAW_KEYS = ("emails", "phones", "addresses", "coordinates")
 
 
 def _contact_fields(d: dict) -> dict:
