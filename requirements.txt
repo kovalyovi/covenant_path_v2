@@ -4,7 +4,7 @@
 # (pip-compile --generate-hashes) is a tracked follow-up that needs a verified Render build.
 playwright==1.60.0
 python-dotenv==1.0.1
-requests==2.32.3
+requests==2.34.2
 cryptography==48.0.0
 google-api-python-client==2.187.0   # sheets_sync
 google-auth==2.41.1                  # sheets_sync (service account)
