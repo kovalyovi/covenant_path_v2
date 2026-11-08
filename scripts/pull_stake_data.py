@@ -4,18 +4,40 @@
 Usage:
     LCR_LOGIN='you@example.com' LCR_PASSWORD='...' python scripts/pull_stake_data.py
     # ...or put LCR_LOGIN / LCR_PASSWORD in a .env file at the repo root.
+    python scripts/pull_stake_data.py --from-raw tools/output/stake_data_raw.json
+    # ...normalize a previously captured raw /api/v5/sync payload (e.g. the
+    # daily-sync CI artifact) with NO login at all — the unblock while the
+    # headless Okta login is 428-blocked (2026-11-07/08).
 
 What it does:
-  1. Headless Church-account login (lcr_client.okta_login) -> tools/output/storage_state.json
-     (skipped when a live session file already exists).
-  2. Silently mints a Member Tools token off the live Okta session.
-  3. Pulls the whole-stake /api/v5/sync payload (one ~7MB call, no per-member fan-out).
-  4. Writes tools/output/stake_data.json::
+  1. Auth, token-first (2026-11-08): a stored Member Tools refresh token
+     (MEMBERTOOLS_REFRESH_TOKEN env, 45-day life, no session needed) is tried
+     first; else headless Church-account login (lcr_client.okta_login) ->
+     tools/output/storage_state.json (skipped when a live session file
+     already exists), then a Member Tools token is silently minted off the
+     live Okta session. --from-raw skips all of this.
+  2. Pulls the whole-stake /api/v5/sync payload (one ~7MB call, no per-member fan-out),
+     and saves it VERBATIM to tools/output/stake_data_raw.json (the Families
+     derivation needs households + unitStatistics + classifications +
+     names.listed, which the normalized file discards). --save-raw PATH to
+     override, --no-save-raw to skip.
+  3. Writes tools/output/stake_data.json::
 
         {"meta": {"stake": ..., "pulled_at": ..., "members": N, "units": M},
          "units": [{"unit_number": ..., "name": ..., "type": ...}],
          "members": [{"uuid": ..., "full_name": ..., "preferred_name": ...,
                       "unit_number": ..., "unit_name": ..., "sex": ..., "birth_date": ...,
+                      # RECORDED PRIESTHOOD (2026-11-08): the raw /api/v5/sync payload
+                      # carries households[].members[].priesthood (enum
+                      # DEACON/TEACHER/PRIEST/ELDER/HIGH_PRIEST/BISHOP/SEVENTY/PATRIARCH/
+                      # APOSTLE, absent = no current office) and ordinances[]
+                      # ({type, date} — BAPTISM/CONFIRMATION/ENDOWMENT plus ORDAIN_*
+                      # dates). These are the ONLY LCR-recorded priesthood signal in
+                      # the bulk pull, and they were previously dropped here, so a pull
+                      # could not tell whether an MP ordination had been recorded.
+                      # Keep them verbatim.
+                      "priesthood": "ELDER" | None,
+                      "ordinances": [{"type": ..., "date": ...}],
                       "positions": [{"name": ..., "unit_number": ..., "unit_name": ...,
                                      "set_apart": bool}],
                       "recommends": [{"status": ..., "type": ..., "expiration": ...,
@@ -37,12 +59,20 @@ Notes:
     ``python tools/lcr_crawler.py`` (writes the same storage_state.json),
     then re-run this script — it reuses the existing session file.
   - The Member Tools refresh token lives 45 days; this script mints a fresh one
-    on every run instead of storing it, so each run is self-contained.
+    on every run instead of storing it, so each run is self-contained. Pass a
+    stored one via MEMBERTOOLS_REFRESH_TOKEN to skip the Okta login entirely
+    (refresh() needs no session); an expired/invalid token falls back to the
+    Okta login with a warning, it never aborts the pull.
+  - The daily sync's stored token (Supabase, encrypted) is NOT retrievable
+    locally — the CI daily sync remains the canonical fresh-capture route,
+    and --from-raw is the local bridge from its raw-sync artifact.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,6 +80,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 OUT = ROOT / "tools" / "output" / "stake_data.json"
+RAW_OUT = ROOT / "tools" / "output" / "stake_data_raw.json"
 
 from lcr_client import membertools  # noqa: E402
 from lcr_client.auth import LcrSession  # noqa: E402
@@ -134,6 +165,28 @@ def _contact_fields(d: dict) -> dict:
     return out
 
 
+def _priesthood_fields(member: dict) -> dict:
+    """Recorded priesthood from the raw sync member record.
+
+    priesthood: direct enum (DEACON/TEACHER/PRIEST/ELDER/HIGH_PRIEST/BISHOP/
+    SEVENTY/PATRIARCH/APOSTLE) or None when the key is absent (no office).
+    ordinances: [{type, date}] verbatim — the bulk payload's ordinance list
+    carries BAPTISM/CONFIRMATION/ENDOWMENT dates AND ORDAIN_* dates
+    (ORDAIN_DEACON/TEACHER/PRIEST/ELDER/...), so both the office enum and the
+    ordination date are recorded signals (the office changes e.g. PRIEST ->
+    ELDER once Dave records it in LCR, and the ORDAIN_ELDER date appears).
+    """
+    office = member.get("priesthood")
+    ords = []
+    for o in member.get("ordinances") or []:
+        if isinstance(o, dict) and o.get("type"):
+            ords.append({"type": o.get("type"), "date": o.get("date")})
+    return {
+        "priesthood": office if isinstance(office, str) else None,
+        "ordinances": ords,
+    }
+
+
 def _positions(member: dict, unit_names: dict[int, str]) -> list[dict]:
     out = []
     for pos in member.get("positions") or []:
@@ -156,20 +209,52 @@ def _positions(member: dict, unit_names: dict[int, str]) -> list[dict]:
     return out
 
 
-def pull() -> dict:
+def _fetch_payload(*, save_raw: str | Path | None) -> dict:
+    """Whole-stake /api/v5/sync payload, token-first.
+
+    1. MEMBERTOOLS_REFRESH_TOKEN env -> membertools.refresh() (no session).
+    2. Else headless Okta login -> mint a Member Tools token off the session.
+    The raw payload is saved verbatim (save_raw path, or RAW_OUT by default)
+    unless save_raw is False.
+    """
+    refresh_token = (os.getenv("MEMBERTOOLS_REFRESH_TOKEN") or "").strip()
+    access_token = None
+    if refresh_token:
+        try:
+            tok = membertools.refresh(refresh_token)
+            access_token = tok.get("access_token")
+            if access_token:
+                print("[+] access token renewed from MEMBERTOOLS_REFRESH_TOKEN (no login)")
+        except membertools.MemberToolsError as exc:
+            print(f"[!] stored refresh token unusable ({exc}) — falling back to Okta login")
+    if not access_token:
+        # LCR session (headless login only when no session file exists).
+        session = LcrSession(auto_login=True)
+        # Member Tools token, silently minted off the live Okta session.
+        tok = membertools.mint_from_okta_session(session.session)
+        access_token = tok.get("access_token")
+        if not access_token:
+            raise membertools.MemberToolsError("token mint returned no access_token")
+
+    payload = membertools.fetch_sync(access_token)
+    if save_raw is not False:
+        raw_path = Path(save_raw) if save_raw else RAW_OUT
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        print(f"[+] raw /api/v5/sync payload saved -> {raw_path}")
+    return payload
+
+
+def pull(payload: dict | None = None, *, save_raw: str | Path | None = None) -> dict:
+    """Normalize a /api/v5/sync payload into the local roster dict.
+
+    payload: an already-fetched payload (e.g. from --from-raw); when None the
+    payload is fetched live (token-first auth, see _fetch_payload).
+    """
     t0 = datetime.now(timezone.utc)
 
-    # 1. LCR session (headless login only when no session file exists).
-    session = LcrSession(auto_login=True)
-
-    # 2. Member Tools token, silently minted off the live Okta session.
-    tok = membertools.mint_from_okta_session(session.session)
-    access_token = tok.get("access_token")
-    if not access_token:
-        raise membertools.MemberToolsError("token mint returned no access_token")
-
-    # 3. Whole-stake bulk pull.
-    payload = membertools.fetch_sync(access_token)
+    if payload is None:
+        payload = _fetch_payload(save_raw=save_raw)
 
     stake_name, units = _units(payload)
     unit_names = {u["unit_number"]: u["name"] for u in units}
@@ -239,6 +324,7 @@ def pull() -> dict:
                 "unit_name": unit_names.get(int(unum)) if unum is not None else None,
                 "sex": m.get("sex"),
                 "birth_date": m.get("birthDate") or m.get("birth_date"),
+                **_priesthood_fields(m),
                 "contact": contact,
                 "positions": _positions(m, unit_names),
                 "recommends": recs,
@@ -284,8 +370,23 @@ def pull() -> dict:
     return data
 
 
-def main() -> int:
-    data = pull()
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Pull the whole stake into tools/output/stake_data.json.")
+    parser.add_argument("--from-raw", metavar="PATH",
+                        help="normalize a saved raw /api/v5/sync payload instead of "
+                             "logging in (e.g. the daily-sync raw-sync artifact)")
+    parser.add_argument("--save-raw", metavar="PATH", default=None,
+                        help="where to save the raw payload on a live pull "
+                             f"(default: {RAW_OUT})")
+    parser.add_argument("--no-save-raw", action="store_true",
+                        help="do not save the raw payload on a live pull")
+    args = parser.parse_args(argv)
+    if args.from_raw:
+        payload = json.loads(Path(args.from_raw).read_text(encoding="utf-8"))
+        data = pull(payload)
+    else:
+        data = pull(save_raw=False if args.no_save_raw else args.save_raw)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
     meta = data["meta"]
