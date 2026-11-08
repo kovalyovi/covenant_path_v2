@@ -97,3 +97,6 @@ All three changes mirror the React web source; **pending CI `assembleDebug` + `:
   `field` per milestone, `expected`/`isMissing`/`goldenHourRows`/`nextSteps`/`GhRow`/`GhRowStatus`
   (1:1 with web), tested in `MilestonesTest`. `NeedsScreen` now uses `Milestones.isMissing` so N/A
   fields are excluded uniformly. `App.kt` passes `isAdmin` + `missionariesByUnit` into the detail.
+
+## Partial / Stub — Families tab (2026-11-08)
+- **Families tab — Not yet ported.** Web (migration 0067 + `FamiliesTab.tsx`) and the daily sync (Lists A + B derivation, aligned to Ricky Bloomfield's verified Mission-KPIs model) are live; the native tab bar still shows Table (no Leaders — Leaders was web-only) and has no Families screen. The native tab swap (Table → Families, Table into Settings) and a Families screen (cards, Love → Share → On Date → Baptized, Do Not Contact, unit-totals rollup) are the next step. No unverified native code was shipped — no Swift/Gradle toolchain exists in the agent VM to compile it.

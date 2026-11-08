@@ -58,8 +58,10 @@ export function DashboardShell() {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
   const [adminNonce, setAdminNonce] = useState(0); // #28: header Refresh remounts the console → reloads all panels
-  // Mobile: hide the bottom nav while scrolling DOWN, reveal it when scrolling back up.
-  const [navHidden, setNavHidden] = useState(false);
+  // The mobile bottom nav NEVER hides on scroll (2026-11-08): it is the primary nav, and all five
+  // tabs are always visible — hiding it while scrolling stranded leaders mid-list with no way back.
+  // (The old navHidden / hide-on-scroll-down behaviour was removed; onMainScroll now only records
+  // per-tab scroll offsets.)
   const lastScrollY = useRef(0);
   // Per-tab scroll memory: the one `main` scroll container is shared by every tab, so without this its
   // offset would carry across tab switches. We record each tab's offset on scroll (keyed by path) and
@@ -69,13 +71,7 @@ export function DashboardShell() {
   function onMainScroll(e: React.UIEvent<HTMLElement>) {
     const el = e.currentTarget;
     if (TAB_PATHS.has(location.pathname)) tabScroll.current[location.pathname] = el.scrollTop;
-    if (tier !== 'mobile') return;
-    // Mobile bottom-nav hide-on-scroll-down.
-    const y = el.scrollTop;
-    const last = lastScrollY.current;
-    if (y > last + 6 && y > 56) setNavHidden(true);
-    else if (y < last - 6) setNavHidden(false);
-    lastScrollY.current = y;
+    lastScrollY.current = el.scrollTop;
   }
   // Restore the entered tab's saved offset (or top) before paint, so switching tabs lands where you
   // left that tab — not at the previous tab's scroll position.
@@ -360,7 +356,7 @@ export function DashboardShell() {
         </main>
       </div>
       {tier === 'mobile' && (
-        <nav className={`bottomnav${navHidden ? ' bottomnav--hidden' : ''}`} aria-label="Primary">
+        <nav className="bottomnav" aria-label="Primary">
           {/* #31: a sliding indicator that glides to the active tab (hidden when a sheet route has no
               active tab). Width = one slot; it translates by activeIndex slots. */}
           {(() => {

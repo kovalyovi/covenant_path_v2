@@ -117,16 +117,9 @@
   padding: 6px 0 max(6px, env(safe-area-inset-bottom));
   overflow: hidden;
   max-height: 96px;
-  transition: max-height 0.25s ease, padding 0.25s ease, border-color 0.25s ease;
 }
-/* Hidden while scrolling down: COLLAPSE it (max-height + padding → 0) so the page reclaims the space
-   instead of leaving an empty strip. */
-.bottomnav--hidden {
-  max-height: 0;
-  padding-top: 0;
-  padding-bottom: 0;
-  border-top-color: transparent;
-}
+/* The bottom nav NEVER hides on scroll (2026-11-08) — the old .bottomnav--hidden collapse rule
+   was removed with the hide-on-scroll behaviour in DashboardShell. */
 .bottomnav__item {
   display: flex;
   flex-direction: column;

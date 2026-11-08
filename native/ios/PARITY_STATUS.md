@@ -87,3 +87,6 @@ parity is unaffected (this is platform-specific UI, intentionally iOS-only).
 
 ## Addendum (2026-06-10): notes on list rows
 - **List-row note lines** — newest leader note (+N) under each person in Golden Hour / Needs / by-date lists (`MemberRow` + `NoteLine`), the Baptisms timeline rows, and a note marker in the Table's Member cell. Data: one bulk RLS-scoped `member_comments` fetch per stake load (`SupabaseGateway.noteRows` -> `NotesIndex.build`, mirrored unit tests in `LogicTests`); posting a note on detail refreshes the index (`DashboardStore.reloadNotes`). **Pending CI build + simulator verification.**
+
+## Addendum (2026-11-08): Families tab — not yet ported
+- **Families tab — Not yet ported.** Web (migration 0067 + `FamiliesTab.tsx`) and the daily sync (Lists A + B derivation, aligned to Ricky Bloomfield's verified Mission-KPIs model) are live; the native tab bar still shows Table (no Leaders — Leaders was web-only) and has no Families screen. The native tab swap (Table → Families, Table into Settings) and a Families screen (cards, Love → Share → On Date → Baptized, Do Not Contact, unit-totals rollup) are the next step. No unverified native code was shipped — no Swift/Gradle toolchain exists in the agent VM to compile it.

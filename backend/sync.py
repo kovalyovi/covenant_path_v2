@@ -268,6 +268,19 @@ def sync_stake(client: LcrClient, members: list[dict], conn,
             logger.info("pruned %d departed unit(s) from stake %s (%s)",
                         removed, ctx.unit_name, ctx.unit_number)
     written = db.upsert_members(conn, stake_id, members, unit_id_by_number, unit_id_by_name)
+    # Part-member families, Lists A + B (migration 0067): derived in build_membertools_report from the
+    # bulk household directory and carried in _run_stats — upsert derived columns only (the DB
+    # function never touches leader-entered status / Do Not Contact / notes). Best-effort: never
+    # fails the data sync over a families write.
+    pmf_rows = (access or {}).get("_run_stats", {}).get("part_member_families") or []
+    if pmf_rows:
+        try:
+            wrote_pmf = db.upsert_part_member_families(
+                conn, stake_id, pmf_rows, unit_id_by_number, unit_id_by_name)
+            logger.info("part-member families (Lists A + B): %d row(s) upserted for stake %s",
+                        wrote_pmf, ctx.unit_name)
+        except Exception as exc:  # noqa: BLE001 — families are additive, not the member sync
+            logger.warning("part-member families upsert skipped for stake %s: %s", stake_id, exc)
     # Adopt any PENDING partner notes (recorded on a person before/while they were absent from the sync)
     # now that their member row exists — they inherit this stake's scope and become visible to leaders.
     try:

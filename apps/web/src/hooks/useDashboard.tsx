@@ -11,6 +11,7 @@ import { supabase } from '../lib/supabase';
 import { MEMBER_COLUMNS, type Member } from '../lib/member';
 import { buildNotesIndex, type NoteRow, type MemberNoteRow, type NoteSummary, type NoteThreadEntry } from '../logic/notes';
 import { mergedNote, type ManualMember, type MergePlan } from '../logic/manualMembers';
+import { type PartMemberFamily, type PartMemberStatus } from '../logic/partMemberFamilies';
 import { type TransferDate } from '../logic/transfers';
 import { type WardGoal } from '../logic/wardGoals';
 import { broker, type EnrollmentStatus } from '../lib/broker';
@@ -66,6 +67,26 @@ interface DashboardState {
   mergeManualMember: (plan: MergePlan) => Promise<void>;
   /** Remove a manual member (the leader added them by mistake / they're gone). */
   deleteManualMember: (id: string) => Promise<void>;
+  /** Part-member families (migration 0067): List A rows from the daily sync + leader-added
+   *  spouses / manual rows, scoped to the stake (RLS-gated server-side too). */
+  partFamilies: PartMemberFamily[];
+  reloadPartMemberFamilies: () => Promise<void>;
+  /** Move a family along the Identified → Love → Share → On Date → Baptized pipeline, or flag
+   *  Do Not Contact (with a reason). Stamps status_updated_at on every status change. */
+  updatePartFamilyStatus: (id: string, status: PartMemberStatus, reason?: string | null) => Promise<void>;
+  /** Edit a family's notes / assigned companionship. */
+  updatePartFamily: (id: string, patch: { notes?: string; assignedCompanionship?: string | null }) => Promise<void>;
+  /** Add a part-member family by hand — an unbaptized spouse (List B, no directory record) or a
+   *  child the LCR lists missed. Source 'manual' (or 'lcr_report' for a report import). */
+  addPartFamily: (input: {
+    unitId: string | null; unitName: string | null; householdName?: string | null;
+    memberPersonUuid?: string | null; memberName: string; nonmemberName: string;
+    nonmemberRole: 'spouse' | 'child'; nonmemberBirthDate?: string | null;
+    source?: 'lcr_report' | 'manual'; notes?: string;
+  }) => Promise<void>;
+  /** Remove a family row (added by mistake / household moved away). Leader-entered rows only in
+   *  practice; a List A row reappears on the next sync if the household still qualifies. */
+  deletePartFamily: (id: string) => Promise<void>;
   /** The stake's missionary transfer schedule (transfer_dates), oldest-first. */
   transferDates: TransferDate[];
   reloadTransferDates: () => Promise<void>;
@@ -324,6 +345,97 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     [reloadManualMembers],
   );
 
+  // --- Part-member families (migration 0067) -----------------------------------------------
+  const [partFamilies, setPartFamilies] = useState<PartMemberFamily[]>([]);
+
+  const loadPartMemberFamilies = useCallback(async (stakeId: string | null): Promise<PartMemberFamily[]> => {
+    try {
+      const base = supabase.from('part_member_families').select(
+        'id, unit_id, unit_name, household_uuid, household_name, member_person_uuid, member_name, '
+        + 'nonmember_name, nonmember_role, nonmember_birth_date, age_group, basis, named_spouse, '
+        + 'source, status, status_updated_at, '
+        + 'assigned_companionship, do_not_contact_reason, notes, created_by, created_at, updated_at, merged_into_uuid');
+      const scoped = stakeId != null ? base.eq('stake_id', stakeId) : base;
+      const { data } = await scoped.order('unit_name').order('household_name').order('nonmember_name');
+      // Supabase's generated row type for this table is a plain object with an `error` marker in
+      // some code paths — cast through unknown so a typed `data` never pretends to be a family.
+      return (data ?? []) as unknown as PartMemberFamily[];
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const reloadPartMemberFamilies = useCallback(async () => {
+    setPartFamilies(await loadPartMemberFamilies(currentIdRef.current));
+  }, [loadPartMemberFamilies]);
+
+  const updatePartFamilyStatus = useCallback(
+    async (id: string, status: PartMemberStatus, reason?: string | null) => {
+      const { error } = await supabase.from('part_member_families').update({
+        status,
+        status_updated_at: new Date().toISOString(),
+        do_not_contact_reason: status === 'do_not_contact' ? (reason ?? null) : null,
+        updated_at: new Date().toISOString(),
+      }).eq('id', id);
+      if (error) throw error;
+      await reloadPartMemberFamilies();
+    },
+    [reloadPartMemberFamilies],
+  );
+
+  const updatePartFamily = useCallback(
+    async (id: string, patch: { notes?: string; assignedCompanionship?: string | null }) => {
+      const { error } = await supabase.from('part_member_families').update({
+        ...(patch.notes !== undefined ? { notes: patch.notes } : {}),
+        ...(patch.assignedCompanionship !== undefined
+          ? { assigned_companionship: patch.assignedCompanionship } : {}),
+        updated_at: new Date().toISOString(),
+      }).eq('id', id);
+      if (error) throw error;
+      await reloadPartMemberFamilies();
+    },
+    [reloadPartMemberFamilies],
+  );
+
+  const addPartFamily = useCallback(
+    async (input: {
+      unitId: string | null; unitName: string | null; householdName?: string | null;
+      memberPersonUuid?: string | null; memberName: string; nonmemberName: string;
+      nonmemberRole: 'spouse' | 'child'; nonmemberBirthDate?: string | null;
+      source?: 'lcr_report' | 'manual'; notes?: string;
+    }) => {
+      const stakeId = currentIdRef.current;
+      const email = (await supabase.auth.getUser()).data.user?.email ?? '';
+      const { error } = await supabase.from('part_member_families').insert({
+        stake_id: stakeId,
+        unit_id: input.unitId,
+        unit_name: input.unitName,
+        household_name: input.householdName ?? null,
+        member_person_uuid: input.memberPersonUuid ?? null,
+        member_name: input.memberName.trim(),
+        nonmember_name: input.nonmemberName.trim(),
+        nonmember_role: input.nonmemberRole,
+        nonmember_birth_date: input.nonmemberBirthDate || null,
+        source: input.source ?? 'manual',
+        status: 'identified',
+        notes: input.notes?.trim() ?? '',
+        created_by: email,
+      });
+      if (error) throw error;
+      await reloadPartMemberFamilies();
+    },
+    [reloadPartMemberFamilies],
+  );
+
+  const deletePartFamily = useCallback(
+    async (id: string) => {
+      const { error } = await supabase.from('part_member_families').delete().eq('id', id);
+      if (error) throw error;
+      await reloadPartMemberFamilies();
+    },
+    [reloadPartMemberFamilies],
+  );
+
   const loadTransferDates = useCallback(async (stakeId: string | null): Promise<TransferDate[]> => {
     // The stake's transfer schedule, oldest-first (RLS-scoped: any leader in the stake can read).
     try {
@@ -497,15 +609,16 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       setError(null);
       await reloadStakes();
       try {
-        const [rows, nts, manuals] = await Promise.all([
+        const [rows, nts, manuals, pmf] = await Promise.all([
           loadMembers(currentIdRef.current), loadNotes(currentIdRef.current),
-          loadManualMembers(currentIdRef.current),
+          loadManualMembers(currentIdRef.current), loadPartMemberFamilies(currentIdRef.current),
         ]);
         if (!active) return;
         setMembers(rows);
         setNotes(nts.index);
         setThreads(nts.threads);
         setManualMembers(manuals);
+        setPartFamilies(pmf);
         // Not awaited — never delays first paint; caches enrollStatus for the Sync-settings sheet (#11).
         void reloadEnrollStatus();
         void reloadTransferDates();
@@ -545,14 +658,15 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     setError(null);
     setRefreshing(true); // #2: drives the navbar Refresh button's spinner so the action is visible
     try {
-      const [rows, nts, manuals] = await Promise.all([
+      const [rows, nts, manuals, pmf] = await Promise.all([
         loadMembers(currentIdRef.current), loadNotes(currentIdRef.current),
-        loadManualMembers(currentIdRef.current),
+        loadManualMembers(currentIdRef.current), loadPartMemberFamilies(currentIdRef.current),
       ]);
       setMembers(rows);
       setNotes(nts.index);
       setThreads(nts.threads);
       setManualMembers(manuals);
+      setPartFamilies(pmf);
       // also re-pull the stake's freshness/sync state so "Updated X ago" reflects the latest run.
       void reloadStakes();
       void reloadTransferDates();
@@ -568,7 +682,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     } finally {
       setRefreshing(false);
     }
-  }, [loadMembers, loadNotes, loadManualMembers, reloadEnrollStatus, reloadStakes, reloadTransferDates, reloadWardGoals]);
+  }, [loadMembers, loadNotes, loadManualMembers, loadPartMemberFamilies, reloadEnrollStatus, reloadStakes, reloadTransferDates, reloadWardGoals]);
 
   const switchStake = useCallback(
     (id: string) => {
@@ -581,12 +695,13 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         /* ignore */
       }
       setLoading(true);
-      Promise.all([loadMembers(id), loadNotes(id), loadManualMembers(id)])
-        .then(([rows, nts, manuals]) => {
+      Promise.all([loadMembers(id), loadNotes(id), loadManualMembers(id), loadPartMemberFamilies(id)])
+        .then(([rows, nts, manuals, pmf]) => {
           setMembers(rows);
           setNotes(nts.index);
           setThreads(nts.threads);
           setManualMembers(manuals);
+          setPartFamilies(pmf);
           void loadTransferDates(id).then(setTransferDates);
           void loadWardGoals(id).then(setWardGoals);
           void reloadEnrollStatus();
@@ -594,7 +709,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         .catch((e) => setError(e instanceof Error ? e.message : String(e)))
         .finally(() => setLoading(false));
     },
-    [applyCurrentStake, loadMembers, loadNotes, loadManualMembers, loadTransferDates, loadWardGoals, reloadEnrollStatus],
+    [applyCurrentStake, loadMembers, loadNotes, loadManualMembers, loadPartMemberFamilies, loadTransferDates, loadWardGoals, reloadEnrollStatus],
   );
 
   const markSyncing = useCallback(() => {
@@ -616,6 +731,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     () => ({
       loading, refreshing, error, members, notes, threads, reloadNotes, showNotes, setShowNotes,
       manualMembers, reloadManualMembers, addManualMember, updateManualMember, mergeManualMember, deleteManualMember,
+      partFamilies, reloadPartMemberFamilies, updatePartFamilyStatus, updatePartFamily, addPartFamily, deletePartFamily,
       transferDates, reloadTransferDates, upsertTransferDate, deleteTransferDate,
       wardGoals, reloadWardGoals, upsertWardGoal,
       stakes, currentStakeId, stakeName, lastSynced,
@@ -627,6 +743,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     [
       loading, refreshing, error, members, notes, threads, reloadNotes, showNotes, setShowNotes,
       manualMembers, reloadManualMembers, addManualMember, updateManualMember, mergeManualMember, deleteManualMember,
+      partFamilies, reloadPartMemberFamilies, updatePartFamilyStatus, updatePartFamily, addPartFamily, deletePartFamily,
       transferDates, reloadTransferDates, upsertTransferDate, deleteTransferDate,
       wardGoals, reloadWardGoals, upsertWardGoal,
       stakes, currentStakeId, stakeName, lastSynced,

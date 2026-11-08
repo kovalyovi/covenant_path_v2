@@ -46,9 +46,10 @@ export const TABS: TabDef[] = [
   { path: 'golden-hour', label: 'Golden Hour', icon: 'timelapse', color: '#F9A825' },
   { path: 'needs', label: 'Needs', icon: 'checklist', color: '#D84315' },
   { path: 'kpis', label: 'KPIs', icon: 'insights', color: '#2E7D32' },
-  { path: 'table', label: 'Table', icon: 'grid_on', color: '#5E35B1' },
-  // #12: per-unit leadership + staffing gaps + missionaries (short label so the 6-item nav fits).
-  { path: 'leadership', label: 'Leaders', icon: 'badge', color: '#00838F' },
+  // Families (part-member families, Turley proposal) replaced Table + Leaders in the tab bar
+  // (2026-11-08): Table and Leaders now live in Settings. The tab bar shows ALL five tabs, always
+  // — never hidden behind an overflow/"more" menu, and the mobile bottom nav never hides on scroll.
+  { path: 'families', label: 'Families', icon: 'groups', color: '#6A1B9A' },
   // "By Month" is no longer its own tab — the chart now lives at the bottom of KPIs (#1).
 ];
 

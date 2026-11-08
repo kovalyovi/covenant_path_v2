@@ -1,6 +1,6 @@
 // App routing (React Router v7) — mirrors the Flutter go_router map (R1). Top-level: `/login` and
 // `/` (the dashboard shell) with the 5 tab children `/baptisms` · `/golden-hour` · `/needs` ·
-// `/kpis` · `/table`, plus `/person/:id`, `/settings`, `/invite`, `/admin`. Auth is enforced by a
+// `/kpis` · `/families`, plus `/person/:id`, `/settings`, `/invite`, `/admin`. Auth is enforced by a
 // guard that re-evaluates on every Supabase auth change (sign-in / sign-out / token refresh):
 // no session → /login; an authed user at /login → /. A no-access member is blocked at login (N2),
 // so they never reach a session here.
@@ -25,6 +25,7 @@ import { BaptismsTab } from './pages/tabs/BaptismsTab';
 import { GoldenHourTab } from './pages/tabs/GoldenHourTab';
 import { NeedsTab } from './pages/tabs/NeedsTab';
 import { TableTab } from './pages/tabs/TableTab';
+import { FamiliesTab } from './pages/tabs/FamiliesTab';
 import { ReauthPage } from './pages/ReauthPage';
 import { InvitePage } from './pages/InvitePage';
 import { ClaimPage } from './pages/ClaimPage';
@@ -49,6 +50,9 @@ const BG_TABS: Record<string, React.ReactNode> = {
   '/golden-hour': <GoldenHourTab />,
   '/needs': <NeedsTab />,
   '/kpis': <LazyRoute><KpisTab /></LazyRoute>,
+  '/families': <FamiliesTab />,
+  // Table + Leaders no longer have tabs — they live in Settings — but a sheet opened over a
+  // legacy /table or /leadership deep link still needs a backdrop.
   '/table': <TableTab />,
   '/leadership': <LazyRoute><LeadershipTab /></LazyRoute>,
 };
@@ -106,8 +110,11 @@ export const router = createBrowserRouter([
           { path: 'golden-hour', element: <GoldenHourTab /> },
           { path: 'needs', element: <NeedsTab /> },
           { path: 'kpis', element: <LazyRoute><KpisTab /></LazyRoute> },
-          { path: 'table', element: <TableTab /> },
-          { path: 'leadership', element: <LazyRoute><LeadershipTab /></LazyRoute> },
+          { path: 'families', element: <FamiliesTab /> },
+          // Table + Leaders moved into Settings (2026-11-08) — old deep links redirect there
+          // instead of 404ing.
+          { path: 'table', element: <Navigate to="/settings" replace /> },
+          { path: 'leadership', element: <Navigate to="/settings" replace /> },
           // "By Month" is no longer its own tab — the chart now lives at the bottom of KPIs (#1).
           { path: 'by-month', element: <Navigate to="/kpis" replace /> },
           // Settings + Admin overlay the dashboard as SIDE SHEETS but stay URL-landable: each renders

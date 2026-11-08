@@ -273,6 +273,51 @@ def upsert_members(conn, stake_id: str, members: list[dict],
     return len(rows)
 
 
+def upsert_part_member_families(conn, stake_id: str, rows: list[dict],
+                                unit_id_by_number: dict[int, str],
+                                unit_id_by_name: dict[str, str] | None = None) -> int:
+    """Upsert derived part-member families, Lists A + B (migration 0067). Idempotent, keyed by the
+    partial unique index (stake_id, member_person_uuid, nonmember_name, nonmember_role, source)
+    WHERE source in ('lcr_list_a', 'lcr_list_b').
+
+    ONLY the sync-derived columns are written on conflict (household, unit, names, birth date,
+    age_group, basis, named_spouse). The leader-entered columns — status, status_updated_at,
+    assigned_companionship, do_not_contact_reason, notes, merged_into_uuid — are NEVER touched by
+    a sync, so a re-derived row can't reset a family's Love/Share stage or clear a Do Not Contact
+    flag. Rows are inserted with status='identified' (the DB default). Returns rows written."""
+    unit_id_by_name = unit_id_by_name or {}
+    clean = [r for r in (rows or []) if r.get("nonmember_name")
+             and r.get("source") in ("lcr_list_a", "lcr_list_b")]
+    if not clean:
+        return 0
+    values = []
+    for r in clean:
+        unit_name = r.get("unit_name")
+        unit_id = unit_id_by_number.get(r.get("unit_number")) or unit_id_by_name.get(unit_name)
+        values.append((stake_id, unit_id, unit_name,
+                       r.get("household_uuid"), r.get("household_name"),
+                       r.get("member_person_uuid"), r.get("member_name"),
+                       r.get("nonmember_name"), r.get("nonmember_role") or "child",
+                       r.get("nonmember_birth_date"), r.get("age_group"),
+                       r.get("basis"), r.get("named_spouse"), r.get("source")))
+    cols = ("stake_id, unit_id, unit_name, household_uuid, household_name, "
+            "member_person_uuid, member_name, nonmember_name, nonmember_role, "
+            "nonmember_birth_date, age_group, basis, named_spouse, source")
+    sql = (f"insert into part_member_families ({cols}) values %s "
+           f"on conflict (stake_id, member_person_uuid, nonmember_name, nonmember_role, source) "
+           f"where source in ('lcr_list_a', 'lcr_list_b') do update set "
+           f"unit_id = excluded.unit_id, unit_name = excluded.unit_name, "
+           f"household_uuid = excluded.household_uuid, household_name = excluded.household_name, "
+           f"member_name = excluded.member_name, "
+           f"nonmember_birth_date = excluded.nonmember_birth_date, "
+           f"age_group = excluded.age_group, basis = excluded.basis, "
+           f"named_spouse = excluded.named_spouse, updated_at = now()")
+    with conn.cursor() as cur:
+        psycopg2.extras.execute_values(cur, sql, values)
+    conn.commit()
+    return len(values)
+
+
 def adopt_orphan_notes(conn, stake_id: str) -> int:
     """Attach PENDING partner notes (member_comments with a NULL stake_id) to this stake once their
     person is synced. The partner-notes lane lets a leader record notes on someone not yet in `members`

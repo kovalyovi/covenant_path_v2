@@ -98,14 +98,16 @@ export function Columns({ cols, children, minColWidth }: { cols: number; childre
 interface SectionTitleProps {
   title: string;
   count: number;
-  byDate: boolean;
-  onToggle: (byDate: boolean) => void;
+  /** The Unit/Date toggle is optional: section titles that don't group by date (Families)
+   *  omit it entirely instead of rendering a dead toggle. */
+  byDate?: boolean;
+  onToggle?: (byDate: boolean) => void;
   ascending?: boolean;
   onAscToggle?: () => void;
 }
 
 /** Title + count on the left; a Unit/Date toggle (and optional asc/desc) on the right. Mirrors `_SectionTitle`. */
-export function SectionTitle({ title, count, byDate, onToggle, ascending, onAscToggle }: SectionTitleProps) {
+export function SectionTitle({ title, count, byDate = false, onToggle, ascending, onAscToggle }: SectionTitleProps) {
   return (
     <div className="section-title">
       <div className="section-title__left">
@@ -115,15 +117,17 @@ export function SectionTitle({ title, count, byDate, onToggle, ascending, onAscT
       </div>
       <div className="row" style={{ gap: 8 }}>
         {onAscToggle && <SortToggle ascending={ascending === true} onClick={onAscToggle} />}
-        <Segmented<'unit' | 'date'>
-          ariaLabel="Group by"
-          value={byDate ? 'date' : 'unit'}
-          onChange={(v) => onToggle(v === 'date')}
-          options={[
-            { value: 'unit', label: 'Unit', icon: 'groups' },
-            { value: 'date', label: 'Date', icon: 'event' },
-          ]}
-        />
+        {onToggle && (
+          <Segmented<'unit' | 'date'>
+            ariaLabel="Group by"
+            value={byDate ? 'date' : 'unit'}
+            onChange={(v) => onToggle(v === 'date')}
+            options={[
+              { value: 'unit', label: 'Unit', icon: 'groups' },
+              { value: 'date', label: 'Date', icon: 'event' },
+            ]}
+          />
+        )}
       </div>
     </div>
   );

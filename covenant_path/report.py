@@ -595,11 +595,22 @@ def build_membertools_report(
     # The stake/ward structure from the payload itself, so the sync needs NO live LCR session for the
     # stake identity (the LCR session dies within days; the 45-day Member Tools token outlives it).
     from covenant_path.membertools_adapter import (
-        context_from_sync, staffing_by_unit, missionaries_by_unit)
+        context_from_sync, staffing_by_unit, missionaries_by_unit, derive_part_member_families,
+        derive_part_member_families_list_b)
     stats["unit_context"] = context_from_sync(payload)
     # Per-unit leadership roster for the Leadership tab (#12) — session-independent (from the bulk
     # household directory); stored on units.staffing in sync_stake, RLS-scoped by units_select.
     stats["staffing_by_unit"] = staffing_by_unit(payload)
+    # Part-member families, Lists A + B (migration 0067): unbaptized 9+ and unbaptized spouses,
+    # derived from the same bulk household directory (aligned to Ricky's verified model — see
+    # membertools_adapter). sync_stake upserts these (derived columns only — leader-entered status
+    # / Do Not Contact / notes are never overwritten). Best-effort: a derivation hiccup must
+    # never fail the member sync.
+    try:
+        stats["part_member_families"] = (derive_part_member_families(payload)
+                                         + derive_part_member_families_list_b(payload))
+    except Exception:  # noqa: BLE001 — part-member families are additive; the member sync is critical
+        stats["part_member_families"] = []
     # Per-unit missionary COMPANIONSHIPS (#3a) — session-independent (from the bulk missionariesAssigned),
     # so the roster refreshes every sync (the old /mlt path needed a live LCR session). Keyed by unit
     # number; sync_stake maps to unit name + stores on stakes.missionaries.

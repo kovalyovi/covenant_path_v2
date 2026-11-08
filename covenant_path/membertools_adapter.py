@@ -839,3 +839,275 @@ def _name_index(payload: dict) -> dict[str, str]:
                 if u and nm:
                     idx[u] = nm
     return idx
+
+
+# --- part-member families, List A (migration 0067) -----------------------------------------------
+# --- part-member families (migration 0067, Turley / NCRM proposal) ----------------------------------
+# Two LCR lists, derived from the same /api/v5/sync payload the daily sync already pulls.
+# Aligned to the verified model in rickybloomfield/Mission-KPIs (docs/part-member-families.md,
+# PartMemberFamilyReport.swift — read 2026-11-08 via the user's collaborator access; his capture:
+# 2,661 people / 1,374 households, membership verified 2,597/2,597 by `MEMBER` vs `mrn`).
+#
+# Membership is `households[].members[].classifications[]` containing `MEMBER` (fallback: an `mrn`
+# on the record — the two agreed on every row of Ricky's capture). It is NOT the ordinances list:
+# non-members may carry no `ordinances` key at all, so an ordinances-based derivation silently
+# returns 0 rows for them (the first version of this function made exactly that mistake).
+#
+# List A (unbaptized 9+): LCR's own per-unit uuid set `unitStatistics[].membersOfRecordAge9OrOlderUuids`
+# when a unit ships it, else the equivalent derivation `!isMemberOfRecord && age >= 9` (verified
+# identical on Ricky's capture). Per unit, not per sync — a ward-scoped calling gets statistics for
+# its own ward while households span the stake. The name "children" misleads: 20 of Ricky's 64 were
+# adults, up to age 38 — no baptized-member-in-household requirement, and `nonmember_role` stays
+# 'child' for the LCR statistic rows (they are members of record 9+); `age_group` carries ADULT /
+# YOUTH / CHILD so the UI can show the difference.
+#
+# List B (unbaptized spouses), graded by evidence — never "married alone" (that listed 255 married
+# members on one capture, 866 once marital status was unavailable — mostly widows/single members):
+#   * `unbaptized_spouse_in_home` — an unbaptized ADULT lives with a married member
+#     (`unitStatistics[].marriedAdultsUuids` when the unit ships it, else any member adult — each
+#     basis below demands a second signal of its own, so this no longer balloons).
+#   * `spouse_not_on_record` — a single member adult whose household `names.listed` is in couple
+#     form ("Adkins, Roger & Jane") with only one on the roster; the spouse name is parsed out
+#     (`named_spouse`, "Jane Adkins") — a CANDIDATE to confirm with ward leadership, kept separate.
+# A lone married member under a single-name household is deliberately NOT listed (stale marital
+# status, or a spouse whose record lives elsewhere — LCR's own flag would exclude the latter too).
+# Pure (no DB, no network) so it unit-tests; the sync upserts ONLY the derived columns and never
+# overwrites leader-entered status / Do Not Contact / notes (backend.db.upsert_part_member_families).
+
+
+def _parse_birth_date(value: str | None) -> date | None:
+    """ISO YYYY-MM-DD first, then the Member Tools display form ('6 Feb 2026'). None when unparseable."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    s = value.strip()[:10]
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        pass
+    for fmt in ("%d %b %Y", "%d %B %Y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(value.strip(), fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _age_years(birth: date, today: date) -> int:
+    return today.year - birth.year - ((today.month, today.day) < (birth.month, birth.day))
+
+
+def _is_member_of_record(m: dict) -> bool:
+    """`classifications` contains MEMBER; fall back to an `mrn` on the record (the two agreed on
+    every row of the verified capture)."""
+    cls = m.get("classifications")
+    if isinstance(cls, list):
+        return any(isinstance(c, str) and c.upper() == "MEMBER" for c in cls)
+    return bool(m.get("mrn"))
+
+
+def _age_group(m: dict) -> str | None:
+    g = m.get("ageGroup")
+    return g.upper() if isinstance(g, str) and g else None
+
+
+def _household_listed_name(hh: dict) -> str | None:
+    """The clerk-entered listed name verbatim (`names.listed`), e.g. 'Adkins, Roger & Jane'."""
+    names = hh.get("names")
+    if isinstance(names, dict):
+        v = names.get("listed")
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    v = hh.get("listedName")
+    return v.strip() if isinstance(v, str) and v.strip() else None
+
+
+def _couple_name(listed: str) -> tuple[str | None, str, str] | None:
+    """Parse a couple-form listed name into (surname, first, second) — Ricky's
+    `PartMemberFamilyReport.coupleName`: split on '&', then 'Surname, First' on the head."""
+    halves = [h.strip() for h in listed.split("&")]
+    if len(halves) != 2 or not halves[0] or not halves[1]:
+        return None
+    head = [p.strip() for p in halves[0].split(",", 1)]
+    if len(head) == 2 and head[0] and head[1]:
+        return (head[0], head[1], halves[1])
+    return (None, halves[0], halves[1])
+
+
+def _named_spouse(listed: str, member_names: list[str]) -> str | None:
+    """The person a couple-form listed name names BESIDES the member on the roster, in
+    'Given Surname' order ('Bauer, Brandon & Beth' with 'Toledo, Beth' on record -> 'Brandon
+    Bauer'). Matches on the first given name; nil when neither or both halves match the member."""
+    couple = _couple_name(listed)
+    if not couple:
+        return None
+    surname, first, second = couple
+
+    def words(text: str) -> list[str]:
+        return [w.strip(".,").lower() for w in re.split(r"[\s,]+", text) if w.strip(".,")]
+
+    member_words = {w for n in member_names for w in words(n)}
+
+    def is_member(half: str) -> bool:
+        ws = words(half)
+        return bool(ws) and ws[0] in member_words
+
+    first_is_member, second_is_member = is_member(first), is_member(second)
+    if first_is_member == second_is_member:
+        return None
+    spouse = second if first_is_member else first
+    if surname and words(spouse) and words(spouse)[-1] == surname.lower():
+        return spouse
+    return f"{spouse} {surname}" if surname else spouse
+
+
+def _unit_uuid_sets(payload: dict, key: str) -> tuple[set[str], set[int]]:
+    """(uuid set, units that shipped it) for a per-unit `unitStatistics[]` uuid-set field."""
+    uuids: set[str] = set()
+    units: set[int] = set()
+    for st in (payload.get("unitStatistics") or []):
+        if not isinstance(st, dict):
+            continue
+        v = st.get(key)
+        if isinstance(v, list):
+            if st.get("unitNumber") is not None:
+                units.add(int(st["unitNumber"]))
+            uuids.update(u for u in v if isinstance(u, str))
+    return uuids, units
+
+
+def _pmf_members(hh: dict, today: date) -> list[dict]:
+    """Normalized household roster for the part-member derivation."""
+    out: list[dict] = []
+    for m in (hh.get("members") or []):
+        if not isinstance(m, dict):
+            continue
+        uuid = m.get("uuid") or m.get("memberUuid") or m.get("id")
+        if not uuid:
+            continue
+        birth = _parse_birth_date(_birth_date(m))
+        out.append({
+            "uuid": uuid,
+            "name": _name(m),
+            "birth": birth,
+            "birth_raw": _birth_date(m),
+            "age_years": _age_years(birth, today) if birth else None,
+            "age_group": _age_group(m),
+            "is_member": _is_member_of_record(m),
+        })
+    return out
+
+
+def _pmf_row(*, household_uuid, household_name, unit_number, unit_name, member, nonmember,
+             role, source, basis=None, named_spouse=None):
+    return {
+        "household_uuid": household_uuid,
+        "household_name": household_name,
+        "unit_number": unit_number,
+        "unit_name": unit_name,
+        "member_person_uuid": member["uuid"] if member else None,
+        "member_name": member["name"] if member else None,
+        "nonmember_name": nonmember["name"],
+        "nonmember_role": role,
+        "nonmember_birth_date": (nonmember["birth_raw"] or "")[:10] or None,
+        "age_years": nonmember["age_years"],
+        "age_group": nonmember["age_group"],
+        "source": source,
+        "basis": basis,
+        "named_spouse": named_spouse,
+    }
+
+
+def _pmf_link(members: list[dict], today: date) -> dict | None:
+    """The member anchor a leader would contact: oldest member adult first, else oldest member."""
+    ms = [m for m in members if m["is_member"]]
+    if not ms:
+        return None
+
+    def key(m: dict) -> tuple[int, str]:
+        adult = 0 if (m["age_years"] is not None and m["age_years"] >= 18) else 1
+        return (adult, m["birth"].isoformat() if m["birth"] else "9999-12-31")
+    return sorted(ms, key=key)[0]
+
+
+def derive_part_member_families(payload: dict, today: date | None = None) -> list[dict]:
+    """List A part-member families from a /api/v5/sync payload. One row per unbaptized person 9+
+    (member of record, no BAPTISM — the LCR statistic's own population), in a household with a
+    member anchor. Rows are JSON-safe dicts keyed to the part_member_families columns (plus
+    `age_years`, used for the UI's age band — the table stores the birth date, not the age)."""
+    today = today or date.today()
+    units = unit_names(payload)
+    unbaptized_uuids, units_with_set = _unit_uuid_sets(payload, "membersOfRecordAge9OrOlderUuids")
+    out: list[dict] = []
+    for hh in (payload.get("households") or []):
+        if not isinstance(hh, dict):
+            continue
+        hh_uuid = hh.get("uuid") or hh.get("householdUuid")
+        hh_name = hh.get("name")
+        unum = hh.get("unitNumber")
+        unum_i = int(unum) if unum is not None else None
+        members = _pmf_members(hh, today)
+        link = _pmf_link(members, today)
+        if not link:
+            continue
+        for m in members:
+            if m["is_member"]:
+                continue
+            if unum_i is not None and unum_i in units_with_set:
+                if m["uuid"] not in unbaptized_uuids:
+                    continue
+            elif m["age_years"] is None or m["age_years"] < 9:
+                continue
+            out.append(_pmf_row(
+                household_uuid=hh_uuid, household_name=hh_name,
+                unit_number=unum_i, unit_name=units.get(unum_i) if unum_i is not None else None,
+                member=link, nonmember=m, role="child", source="lcr_list_a"))
+    return out
+
+
+def derive_part_member_families_list_b(payload: dict, today: date | None = None) -> list[dict]:
+    """List B part-member families (unbaptized spouses), graded by evidence — see the module
+    header. One row per unbaptized adult in the home (`unbaptized_spouse_in_home`), or one row
+    naming the parsed spouse for a couple-form household (`spouse_not_on_record`, a candidate to
+    confirm with ward leadership). Never 'married alone': a lone married member under a
+    single-name household is not listed."""
+    today = today or date.today()
+    units = unit_names(payload)
+    married_uuids, units_with_marriage = _unit_uuid_sets(payload, "marriedAdultsUuids")
+    out: list[dict] = []
+    for hh in (payload.get("households") or []):
+        if not isinstance(hh, dict):
+            continue
+        hh_uuid = hh.get("uuid") or hh.get("householdUuid")
+        hh_name = hh.get("name")
+        unum = hh.get("unitNumber")
+        unum_i = int(unum) if unum is not None else None
+        members = _pmf_members(hh, today)
+        adults = [m for m in members if m["age_group"] == "ADULT"]
+        member_adults = [m for m in adults if m["is_member"]]
+        nonmember_adults = [m for m in adults if not m["is_member"]]
+        marriage_known = unum_i is not None and unum_i in units_with_marriage
+        married = [m for m in member_adults
+                   if (not marriage_known or m["uuid"] in married_uuids)]
+        if not married:
+            continue
+        link = sorted(married, key=lambda m: (m["birth"].isoformat() if m["birth"]
+                                              else "9999-12-31"))[0]
+        unit_name = units.get(unum_i) if unum_i is not None else None
+        if nonmember_adults:
+            for nm in nonmember_adults:
+                out.append(_pmf_row(
+                    household_uuid=hh_uuid, household_name=hh_name, unit_number=unum_i,
+                    unit_name=unit_name, member=link, nonmember=nm, role="spouse",
+                    source="lcr_list_b", basis="unbaptized_spouse_in_home"))
+        elif len(member_adults) == 1:
+            listed = _household_listed_name(hh)
+            if listed and _couple_name(listed):
+                named = _named_spouse(listed, [member_adults[0]["name"] or ""])
+                spouse = {"name": named or listed, "birth_raw": None, "birth": None,
+                          "age_years": None, "age_group": "ADULT"}
+                out.append(_pmf_row(
+                    household_uuid=hh_uuid, household_name=hh_name, unit_number=unum_i,
+                    unit_name=unit_name, member=member_adults[0], nonmember=spouse,
+                    role="spouse", source="lcr_list_b", basis="spouse_not_on_record",
+                    named_spouse=named))
+    return out
