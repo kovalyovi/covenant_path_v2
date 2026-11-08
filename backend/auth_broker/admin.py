@@ -514,8 +514,10 @@ def enrollment_status(email: str, auth_id: str) -> dict:
             # read)? Drives the "refresh patriarchal" banner alongside is_provider + patriarchal_pending.
             "can_refresh_patriarchal": "menu.view.member.profiles" in (coverage.get("features") or []),
             "enrolled_at": cred.get("updated_at"),
-            # last_failed_at is AVAILABLE (used above to derive `state`) but no client reads the raw
-            # timestamp — the staleness verdict lives in `state`; trimmed from the response.
+            # last_failed_at is when the delegated sync last failed (the moment the stored
+            # session died). The fill sheet reads it so a stale credential shows "expired since
+            # …" instead of a generic re-auth prompt.
+            "last_failed_at": cred.get("last_failed_at"),
             "last_error": cred.get("last_error"),
         }
     # Does THIS viewer hold a stake-level role here? Only a stake leader may take over the sync with

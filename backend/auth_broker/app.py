@@ -447,6 +447,13 @@ def auth_profile_refresh_status(authorization: str = Header(default="")) -> dict
     out = enroll.profile_refresh_status(status["unit_number"], status["stake_id"])
     out["can_refresh"] = (status.get("credential", {}).get("state") != "revoked"
                           and status.get("credential", {}).get("can_refresh_patriarchal") is not False)
+    # Credential state rides along so the sheet can show "session expired — re-authorize" on
+    # OPEN, instead of only discovering it after a Fill Now click. A credential can read "active"
+    # while its /mlt session is dead (the daily sync succeeds on the Member Tools token), so the
+    # durable needs_reauth in the status body is the authoritative signal — this field is the
+    # second, cheaper signal for a sync-failed (stale) credential.
+    out["credential_state"] = status.get("credential", {}).get("state")
+    out["credential_last_failed_at"] = status.get("credential", {}).get("last_failed_at")
     return out
 
 

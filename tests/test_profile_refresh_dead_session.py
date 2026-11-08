@@ -154,3 +154,123 @@ def test_unfillable_run_reports_no_reauth_to_the_client(worker_env, monkeypatch)
     out = enroll.profile_refresh_status(503991, "stake-1")
     assert out["needs_reauth"] is False
     assert out["unfillable"] is True
+
+
+# --- guard 4: the status route survives a broker restart ------------------------------------------
+# _REFRESH_PROGRESS is in-memory; Render sleeps the broker, so after a restart the sheet used to
+# open with no needs_reauth / unfillable signal at all — the leader had to click Fill Now to
+# discover the dead session. The durable last run in sync_diagnostics must carry it instead.
+
+def _status_with_last_run(monkeypatch, last_payload):
+    monkeypatch.setattr(enroll, "_profile_worklist",
+                        lambda stake_id: [{"person_uuid": f"p{i}"} for i in range(8)])
+    monkeypatch.setattr(enroll.requests, "get", lambda *a, **k: _Resp())
+    # profile_refresh_status reads the last run from sync_diagnostics via a different GET; the
+    # worklist above is read via the members endpoint in the same fake — distinguish by URL.
+    orig_get = enroll.requests.get
+
+    def fake_get(url, *a, **k):
+        if "sync_diagnostics" in url:
+            class _Diag(_Resp):
+                def json(self):
+                    return [{"run_at": "2026-11-08T00:00:00+00:00", "payload": last_payload}]
+            return _Diag()
+        return _Resp()
+    monkeypatch.setattr(enroll.requests, "get", fake_get)
+    enroll._REFRESH_PROGRESS.pop(503991, None)
+    return enroll.profile_refresh_status(503991, "stake-1")
+
+
+def test_status_reports_needs_reauth_after_restart(monkeypatch):
+    out = _status_with_last_run(
+        monkeypatch, {"source": "on_demand", "total": 8, "filled": 0,
+                      "outcome": "needs_reauth", "reasons": {"fetch_failed": 8}})
+    assert out["needs_reauth"] is True
+    assert out["unfillable"] is False
+
+
+def test_status_reports_unfillable_after_restart(monkeypatch):
+    out = _status_with_last_run(
+        monkeypatch, {"source": "on_demand", "total": 8, "filled": 0,
+                      "outcome": "done", "reasons": {"not_found": 8}, "unfillable": True})
+    assert out["needs_reauth"] is False
+    assert out["unfillable"] is True
+
+
+# --- guard 5: the provider is emailed once per streak ---------------------------------------------
+# A dead /mlt session is silent by design elsewhere: the daily sync succeeds on the Member Tools
+# token, so no sync-failure email ever fires. The profile-refresh outcome must email the provider
+# itself — once per streak, with the missing counts and a re-auth link — and a successful fill
+# after a needs_reauth streak closes the loop.
+
+def test_needs_reauth_run_emails_provider_once_per_streak(worker_env, monkeypatch):
+    notified: list = []
+    monkeypatch.setattr(enroll, "_notify_profile_refresh",
+                        lambda stake_id, **kw: notified.append((stake_id, kw)))
+    prog = _run(monkeypatch, lambda client, row: ({}, "fetch_failed"))
+    assert prog["state"] == "needs_reauth"
+    assert len(notified) == 1
+    assert notified[0][1]["outcome"] == "needs_reauth"
+    assert notified[0][1]["total"] == 8 and notified[0][1]["filled"] == 0
+
+
+def test_repeat_needs_reauth_run_does_not_email_again(worker_env, monkeypatch):
+    notified: list = []
+    monkeypatch.setenv("RESEND_API_KEY", "test-key")
+    monkeypatch.setattr(enroll, "_last_profile_refresh_outcome", lambda stake_id: "needs_reauth")
+    monkeypatch.setattr(enroll, "_notify_profile_refresh",
+                        lambda stake_id, **kw: notified.append((stake_id, kw)))
+    _run(monkeypatch, lambda client, row: ({}, "fetch_failed"))
+    assert notified == []
+
+
+def test_successful_fill_after_needs_reauth_emails_confirmation(worker_env, monkeypatch):
+    notified: list = []
+    monkeypatch.setenv("RESEND_API_KEY", "test-key")
+    monkeypatch.setattr(enroll, "_last_profile_refresh_outcome", lambda stake_id: "needs_reauth")
+    monkeypatch.setattr(enroll, "_notify_profile_refresh",
+                        lambda stake_id, **kw: notified.append((stake_id, kw)))
+    prog = _run(monkeypatch, lambda client, row: ({"patriarchal_blessing": "Yes"}, "filled"))
+    assert prog["state"] == "done"
+    assert len(notified) == 1 and notified[0][1]["outcome"] == "done"
+    assert notified[0][1]["filled"] == 8
+
+
+def test_notify_is_a_noop_without_email_configured(monkeypatch):
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    assert enroll._notify_profile_refresh("stake-1", outcome="needs_reauth", filled=0,
+                                          total=8, missing={"patriarchal_blessing": 8}) is False
+
+
+def test_notify_sends_provider_email_with_counts_and_reauth_link(monkeypatch):
+    monkeypatch.setenv("RESEND_API_KEY", "test-key")
+    monkeypatch.setenv("APP_URL", "https://app.example.org")
+    monkeypatch.setattr(enroll, "SUPABASE_URL", "https://x")
+    monkeypatch.setattr(enroll, "SERVICE_KEY", "k")
+    monkeypatch.setattr(enroll, "_sb_h", lambda: {})
+
+    class _G(_Resp):
+        def __init__(self, payload):
+            self._p = payload
+            self.status_code = 200
+
+        def json(self):
+            return self._p
+
+    def fake_get(url, *a, **k):
+        if url.endswith("/stake_credentials"):
+            return _G([{"principal_email": "provider@example.org"}])
+        return _G([{"name": "Raleigh North Carolina West Stake"}])
+    monkeypatch.setattr(enroll.requests, "get", fake_get)
+    sent: list = []
+    from backend.auth_broker import admin
+    monkeypatch.setattr(admin, "_send_email",
+                        lambda to, subject, html: sent.append((to, subject, html)))
+    assert enroll._notify_profile_refresh(
+        "stake-1", outcome="needs_reauth", filled=0, total=8,
+        missing={"patriarchal_blessing": 8}) is True
+    assert len(sent) == 1
+    to, subject, html = sent[0]
+    assert to == "provider@example.org"
+    assert "re-authorize" in subject.lower() and "Raleigh" in subject
+    assert "patriarchal_blessing (8)" in html and "/reauth" in html

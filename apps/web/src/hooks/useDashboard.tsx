@@ -526,6 +526,21 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Re-read enrollment status when the user comes back to the tab: a session can expire, a
+  // fill can finish, or a re-auth can happen in another tab while this one sits idle — the
+  // banner and the fill sheet must show the current state, not the bootstrap snapshot.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void reloadEnrollStatus();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, [reloadEnrollStatus]);
+
   const refresh = useCallback(async () => {
     setError(null);
     setRefreshing(true); // #2: drives the navbar Refresh button's spinner so the action is visible
@@ -542,7 +557,12 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       void reloadStakes();
       void reloadTransferDates();
       void reloadWardGoals();
-      if (rows.length === 0) void reloadEnrollStatus();
+      // Always re-read enrollment status: the banner's pending count, the credential state and
+      // canRefreshPatriarchal all live in this snapshot, and a fill / re-auth / expired session
+      // changes them without changing the member rows. (Was: only when rows were empty — so the
+      // "80 members missing profile details" banner kept showing after a successful fill until
+      // a full page reload.)
+      void reloadEnrollStatus();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -569,7 +589,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
           setManualMembers(manuals);
           void loadTransferDates(id).then(setTransferDates);
           void loadWardGoals(id).then(setWardGoals);
-          if (rows.length === 0) void reloadEnrollStatus();
+          void reloadEnrollStatus();
         })
         .catch((e) => setError(e instanceof Error ? e.message : String(e)))
         .finally(() => setLoading(false));

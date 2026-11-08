@@ -232,9 +232,23 @@ def _refresh_profile_worker(cookies: list[dict], unit_number: int, source: str =
                     ", ".join(f"{k}={v}" for k, v in sorted(reasons.items())) or "no members")
         _prog(state=state, finished_at=_now_iso(), reasons=reasons, unfillable=unfillable,
               error="session could not reach /mlt" if dead_session else None)
+        # Email the provider (once per streak — see _notify_profile_refresh): a needs_reauth
+        # outcome is otherwise silent — the daily sync still succeeds on the Member Tools token,
+        # so nobody hears about the dead /mlt session until a leader happens to open the sheet.
+        # A successful fill after a needs_reauth streak closes the loop the same way.
+        # The previous outcome is only read when email is configured (no network in tests/dev).
+        _prev_outcome = (_last_profile_refresh_outcome(stake_id)
+                         if os.environ.get("RESEND_API_KEY") else None)
         _record_profile_refresh(stake_id, {"source": source, "total": len(members),
                                            "filled": filled, "outcome": state,
-                                           "reasons": reasons})
+                                           "reasons": reasons,
+                                           **({"unfillable": True} if unfillable else {})})
+        if state == "needs_reauth" and _prev_outcome != "needs_reauth":
+            _notify_profile_refresh(stake_id, outcome="needs_reauth", filled=filled,
+                                    total=len(members), missing=missing_counts(members))
+        elif state == "done" and filled > 0 and _prev_outcome == "needs_reauth":
+            _notify_profile_refresh(stake_id, outcome="done", filled=filled,
+                                    total=len(members), missing=missing_counts(members))
     except Exception as exc:  # noqa: BLE001 — strictly best-effort; a login must never be affected
         logger.warning("profile refresh worker failed for stake %s: %s", unit_number, exc)
         _prog(state="failed", error=str(exc)[:300], finished_at=_now_iso())
@@ -253,6 +267,93 @@ def _record_profile_refresh(stake_id: str, payload: dict) -> None:
                            r.status_code, r.text[:120])
     except requests.RequestException as exc:
         logger.warning("profile refresh: diagnostics row not recorded: %s", exc)
+
+
+def _last_profile_refresh_outcome(stake_id: str) -> str | None:
+    """Outcome ('done' / 'needs_reauth' / ...) of the most recent durable profile-refresh run,
+    from sync_diagnostics — the signal that survives a broker restart, unlike the in-memory
+    _REFRESH_PROGRESS. Best-effort: any failure returns None (never block a fill)."""
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/sync_diagnostics", headers=_sb_h(),
+                         params={"stake_id": f"eq.{stake_id}", "kind": "eq.profile_refresh",
+                                 "select": "payload", "order": "run_at.desc",
+                                 "limit": "1"}, timeout=8)
+        rows = r.json() if r.status_code == 200 else []
+        return (rows[0].get("payload") or {}).get("outcome") if rows else None
+    except Exception:  # noqa: BLE001 — durable history is a nicety, not the fill
+        return None
+
+
+def missing_counts(members: list[dict]) -> dict[str, int]:
+    """Per-field missing counts for a profile-refresh worklist (same definition as
+    profile_refresh_status: a field is missing when it is NULL / empty)."""
+    out: dict[str, int] = {}
+    for row in members:
+        for c in _PROFILE_REFRESH_COLUMNS:
+            v = row.get(c)
+            if v is None or (isinstance(v, str) and not v):
+                out[c] = out.get(c, 0) + 1
+    return {c: n for c, n in out.items() if n}
+
+
+def _notify_profile_refresh(stake_id: str, *, outcome: str, filled: int, total: int,
+                            missing: dict[str, int]) -> bool:
+    """Email the stake's credential provider about a profile-refresh outcome — once per streak.
+
+    * needs_reauth: the stored Church session can't reach /mlt any more, so the missing profile
+      fields (patriarchal blessing above all) can't fill until the provider re-authorizes. This
+      is otherwise silent: the daily sync still succeeds on the Member Tools token, so no sync
+      failure ever fires the stale-credential email.
+    * done (after a needs_reauth streak): the fill worked — close the loop with the counts.
+
+    Best-effort and never raises: email must never break a fill or a login. No RESEND_API_KEY
+    (e.g. tests, local dev) → no-op, before any network. The caller dedupes by previous outcome
+    so repeated runs in one streak send at most one email."""
+    if not os.environ.get("RESEND_API_KEY"):
+        return False
+    try:
+        from backend.auth_broker import admin
+        cred = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=_sb_h(),
+                            params={"stake_id": f"eq.{stake_id}",
+                                    "select": "principal_email,principal_name,revoked",
+                                    "limit": "1"}, timeout=8).json()
+        to = ((cred[0].get("principal_email") or "").strip() if cred else "")
+        if not to:
+            return False
+        stake = requests.get(f"{SUPABASE_URL}/rest/v1/stakes", headers=_sb_h(),
+                             params={"id": f"eq.{stake_id}", "select": "name",
+                                     "limit": "1"}, timeout=8).json()
+        name = (stake[0].get("name") if stake else None) or "your stake"
+        from html import escape
+        safe = escape(str(name))
+        reauth_url = os.environ.get("APP_URL", "https://app.membercovenantpath.org").rstrip("/") + "/reauth"
+        if outcome == "needs_reauth":
+            missing_list = ", ".join(f"{c} ({n})" for c, n in sorted(missing.items())) or "profile details"
+            admin._send_email(
+                to,
+                f"Covenant Path — re-authorize to fill missing profile details for {safe}",
+                (f"<p>The daily sync for <b>{safe}</b> is still working, but the Church session "
+                 f"behind it has expired for member-profile reads, so <b>{total} member(s)</b> still "
+                 f"have missing profile details that the daily sync can't pull: {escape(missing_list)}.</p>"
+                 f'<p style="margin:18px 0"><a href="{escape(reauth_url)}" '
+                 f'style="background:#7c5cff;color:#fff;padding:11px 20px;border-radius:8px;'
+                 f'text-decoration:none;font-weight:600">Re-authorize &amp; fill</a></p>'
+                 f"<p>It takes under a minute — sign in once on the Church page and the fill runs "
+                 f"automatically afterwards. (You can also do it in the app → <b>Fill missing data</b> "
+                 f"→ <b>Re-authorize &amp; fill</b>.) You'll get this nudge once until the fill "
+                 f"succeeds.</p>"))
+        else:
+            admin._send_email(
+                to,
+                f"Covenant Path — profile details filled for {safe}",
+                (f"<p>Good news — the missing profile details for <b>{safe}</b> are filled: "
+                 f"<b>{filled} of {total} members</b> updated on the latest re-authorization.</p>"
+                 f"<p>No action needed. The daily sync keeps the rest current.</p>"))
+        logger.info("profile refresh %s email sent to provider for stake %s", outcome, stake_id)
+        return True
+    except Exception as exc:  # noqa: BLE001 — email is a notification, never the fill
+        logger.warning("profile refresh email skipped for stake %s: %s", stake_id, exc)
+        return False
 
 
 def profile_refresh_status(unit_number: int, stake_id: str) -> dict:
@@ -278,15 +379,29 @@ def profile_refresh_status(unit_number: int, stake_id: str) -> dict:
         last = rows[0] if rows else None
     except requests.RequestException:
         pass
+    # Durable truth: the in-memory progress above is wiped by a broker restart (Render free tier
+    # sleeps), so a needs_reauth outcome recorded in sync_diagnostics must still surface after
+    # one — otherwise the sheet opens looking fillable and only a Fill Now click discovers the
+    # dead session. Same for unfillable: a run that filled nothing because no member has a
+    # readable record stays finished, not broken, across restarts.
+    last_payload = (last or {}).get("payload") or {}
+    last_outcome = last_payload.get("outcome")
+    durable_needs_reauth = (not progress) and last_outcome == "needs_reauth"
+    durable_unfillable = ((not progress) and (
+        last_payload.get("unfillable") is True
+        or (last_outcome == "done" and (last_payload.get("filled") or 0) == 0
+            and (last_payload.get("total") or 0) > 0
+            and (last_payload.get("reasons") or {}).get("fetch_failed", 0) == 0)))
     return {"running": progress.get("state") == "running",
             "progress": progress or None,
             # The last run couldn't reach /mlt -> the client should offer re-auth rather than
-            # present a completed-looking "0 of N updated".
-            "needs_reauth": progress.get("state") == "needs_reauth",
+            # present a completed-looking "0 of N updated". Durable (last_refresh) so it survives
+            # a broker restart, not just the in-memory worker state.
+            "needs_reauth": progress.get("state") == "needs_reauth" or durable_needs_reauth,
             # ...but a run that filled nothing because every remaining member has NO readable LCR
             # record is finished, not broken. The sheet says so instead of offering a re-auth that
             # would change nothing.
-            "unfillable": progress.get("unfillable") is True,
+            "unfillable": progress.get("unfillable") is True or durable_unfillable,
             "reasons": progress.get("reasons") or {},
             "members_with_gaps": len(members),
             "missing": {c: n for c, n in missing.items() if n},
@@ -305,14 +420,25 @@ def start_profile_refresh(unit_number: int, stake_id: str) -> dict:
     members = _profile_worklist(stake_id)
     if not members:
         return {"status": "nothing_to_fill", "members_with_gaps": 0}
+
+    def _needs(reason: str) -> dict:
+        # The viewer in the app sees this answer — but the credential's PROVIDER (who must do
+        # the re-authorizing) may be a different leader, and may never open the sheet. Email
+        # them once per streak, with the missing counts, so the dead session isn't silent.
+        if os.environ.get("RESEND_API_KEY"):
+            prev = _last_profile_refresh_outcome(stake_id)
+            if prev != "needs_reauth":
+                _notify_profile_refresh(stake_id, outcome="needs_reauth", filled=0,
+                                        total=len(members), missing=missing_counts(members))
+        return {"status": "needs_reauth", "reason": reason,
+                "members_with_gaps": len(members)}
     # Load + decrypt the stored credential (REST — the broker has no psycopg2).
     r = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=_sb_h(),
                      params={"stake_id": f"eq.{stake_id}", "select": "credential_enc,revoked",
                              "limit": "1"}, timeout=30)
     rows = r.json() if r.status_code == 200 else []
     if not rows or rows[0].get("revoked") or not rows[0].get("credential_enc"):
-        return {"status": "needs_reauth", "reason": "no_credential",
-                "members_with_gaps": len(members)}
+        return _needs("no_credential")
     try:
         from backend import credentials
         secret = json.loads(credentials._decrypt_envelope(rows[0]["credential_enc"]).decode("utf-8"))
@@ -320,8 +446,7 @@ def start_profile_refresh(unit_number: int, stake_id: str) -> dict:
     except Exception as exc:  # noqa: BLE001 — an undecryptable blob = effectively no credential
         logger.warning("profile refresh: stored credential unreadable for stake %s: %s",
                        unit_number, exc)
-        return {"status": "needs_reauth", "reason": "credential_unreadable",
-                "members_with_gaps": len(members)}
+        return _needs("credential_unreadable")
     # Fast liveness probe: GET the first gap member's /mlt profile PAGE. Live session → 200 HTML;
     # dead session → redirect to the identity host (AuthExpiredError) or a 404 on the RSC route
     # (observed in the 2026-07-06 sync logs) — both raise. This is the exact route the worker's
@@ -334,8 +459,7 @@ def start_profile_refresh(unit_number: int, stake_id: str) -> dict:
         page = client.session.get_text(
             f"https://lcr.churchofjesuschrist.org/mlt/records/member-profile/{members[0]['person_uuid']}")
     except Exception:  # noqa: BLE001 — any failure = the stored session can't reach /mlt
-        return {"status": "needs_reauth", "reason": "session_expired",
-                "members_with_gaps": len(members)}
+        return _needs("session_expired")
     # `get_text` only raises on 4xx/5xx or a redirect to the IDENTITY host. A dead LCR session can
     # still answer 200 from lcr.churchofjesuschrist.org with a sign-in / empty app shell, which is
     # how this probe passed on a dead session and let the worker grind through every member and fill
@@ -343,8 +467,7 @@ def start_profile_refresh(unit_number: int, stake_id: str) -> dict:
     if not _looks_like_member_profile(page):
         logger.info("profile refresh: /mlt probe returned a non-profile page for stake %s "
                     "(dead session answering 200)", unit_number)
-        return {"status": "needs_reauth", "reason": "session_expired",
-                "members_with_gaps": len(members)}
+        return _needs("session_expired")
     _refresh_profile_async(cookies, unit_number, source="on_demand")
     return {"status": "started", "members_with_gaps": len(members)}
 

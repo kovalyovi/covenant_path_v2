@@ -73,6 +73,8 @@ export interface CredentialInfo {
   enrolledAt?: string | null;
   /** When state === 'stale', the last sync error (e.g. "SSO did not complete…"). */
   lastError?: string | null;
+  /** When the delegated sync last failed — the moment the stored session died. */
+  lastFailedAt?: string | null;
   /** This calling can read the member-profile patriarchal flag — gates the "refresh patriarchal" banner. */
   canRefreshPatriarchal?: boolean;
 }
@@ -112,6 +114,7 @@ function credFromJson(j: Record<string, unknown>): CredentialInfo {
     isProvider: j['is_provider'] === true,
     enrolledAt: (j['enrolled_at'] as string) ?? null,
     lastError: (j['last_error'] as string) ?? null,
+    lastFailedAt: (j['last_failed_at'] as string) ?? null,
     canRefreshPatriarchal: j['can_refresh_patriarchal'] === true,
   };
 }

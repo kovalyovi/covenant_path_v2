@@ -24,6 +24,12 @@ export interface FillStatus {
   membersWithGaps: number;
   missing: Record<string, number>;
   canRefresh: boolean;
+  /** Credential state from the status route ('active' | 'stale' | 'revoked' | 'none'): a stale
+   *  credential means the delegated sync last failed — the stored session is dead even if the
+   *  last profile run predates it. The sheet offers re-auth on open instead of a Fill Now
+   *  that would only discover it. */
+  credentialState?: string;
+  credentialLastFailedAt?: string | null;
   lastRefresh: { run_at?: string; payload?: { filled?: number; total?: number; outcome?: string } } | null;
 }
 
@@ -36,6 +42,8 @@ function statusFromJson(j: Record<string, unknown>): FillStatus {
     membersWithGaps: Number(j['members_with_gaps'] ?? 0) || 0,
     missing: (j['missing'] as Record<string, number>) ?? {},
     canRefresh: j['can_refresh'] !== false,
+    credentialState: (j['credential_state'] as string) ?? undefined,
+    credentialLastFailedAt: (j['credential_last_failed_at'] as string) ?? null,
     lastRefresh: (j['last_refresh'] as FillStatus['lastRefresh']) ?? null,
   };
 }
@@ -66,6 +74,10 @@ export function FillDataSheet({
   onFilledRef.current = onFilled;
 
   const isLeader = enrollStatus?.viewerIsStakeLeader === true && broker.available;
+  // enrollStatus is a bootstrap snapshot that may not have arrived yet: while it's null we
+  // don't know whether the viewer is a stake leader — show "Checking…" instead of the
+  // not-a-leader message, which used to read as "nothing can be refreshed".
+  const accessUnknown = enrollStatus == null && broker.available;
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -74,6 +86,10 @@ export function FillDataSheet({
       setStatus(s);
       setError(null);
       if (s.needsReauth) setNeedsReauth(true);
+      // A stale credential (sync last failed) or a durable needs_reauth outcome means the
+      // stored session is already known dead — offer re-auth on open, don't let Fill Now be
+      // the thing that discovers it.
+      if (s.credentialState === 'stale' || s.credentialState === 'revoked') setNeedsReauth(true);
       if (s.unfillable) setUnfillable(true);
       // Fire the reload exactly once, on the running→finished edge.
       if (wasRunning.current && !s.running) {
@@ -166,7 +182,9 @@ export function FillDataSheet({
       <div className="form-stack" style={{ gap: 14 }}>
         <p className="tiny" style={{ margin: 0, opacity: 0.85 }}>{t('fillData.intro')}</p>
 
-        {!isLeader && <p style={{ margin: 0 }}>{t('fillData.notLeader')}</p>}
+        {!isLeader && !accessUnknown && <p style={{ margin: 0 }}>{t('fillData.notLeader')}</p>}
+
+        {accessUnknown && <p style={{ margin: 0 }}>{t('fillData.checking')}</p>}
 
         {isLeader && noAccess && (
           <div className="banner banner--info" role="status">{t('fillData.noAccess')}</div>
