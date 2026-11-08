@@ -1,0 +1,38 @@
+name: Apply migrations (Supabase)
+
+# One-off / on-demand migration apply: replays backend/migrations/*.sql in order
+# against the PROD database (python -m backend.apply). All migrations are additive
+# + idempotent (IF NOT EXISTS / DO-block guards), so re-running is safe.
+#
+# Added 2026-11-08: D82 shipped code that reads stake_credentials.id (migration 0068)
+# before the migration was applied, and the hourly daily sync failed on
+# `column "id" does not exist` — code + migration must land together, and this workflow
+# is how the migration lands when the operator can't run it locally.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apply-migrations
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install psycopg2-binary
+      - name: Apply migrations
+        run: python -m backend.apply
