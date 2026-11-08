@@ -78,8 +78,9 @@ Executive Secretary / Assistant, High Council.
   (escalation-safe — you can only clone what you already hold); recursive; audited; revocable.
 - **Login gate (N2):** signing in with a Church account whose calling grants **no** data access and
   who holds **no** role/power-user grant is told at login they don't have access and is not signed
-  in. Sync enrollment uses **most-elevated-wins-if-incomplete** — your Church session gathers your
-  stake's data only when the stake has no equal-or-better connection yet.
+  in. Sync enrollment uses **highest-wins** — a stake keeps one credential row per leader and the
+  sync always runs on the broadest live one, so a narrower re-authorization is stored as a backup
+  and never reduces coverage.
 
 ---
 

@@ -93,6 +93,11 @@ deleted 2026-06-13 — there is no Flutter surface anymore.)
   `kpis.ts`), Swift `native/ios/Sources/CovenantPathKit/Logic/`, Kotlin
   `native/android/.../logic/` — all with mirrored unit tests. Change a metric/milestone → update
   all three.
+- **Website-only (user decision 2026-11-08): native parity is CANCELLED, not deferred.** Work on the
+  WEBSITE only; designs are mobile-first but must still support desktop properly. Do NOT build
+  native (iOS/Android) counterparts for new web features (e.g. the Families tab) and do NOT treat
+  the native backlog as open work. The table above still describes the surfaces that exist; it no
+  longer implies new features ship to all three.
 - Clients stay **CORS-free** (read Supabase only); RLS is the access gate.
 - The agent can build/verify **web** locally but **not native** — make the matching native edits and
   **flag them for CI/AVD verification** (see `native/PARITY.md`).

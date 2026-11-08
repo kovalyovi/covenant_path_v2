@@ -166,6 +166,45 @@ def test_enrolled_stakes_object_embed() -> None:
             setattr(admin, k, v)
 
 
+def test_enrolled_stakes_list_embed_picks_effective() -> None:
+    """0068: the embed is now a LIST (one row per holder). _enrolled_stakes must surface the
+    EFFECTIVE credential (highest live rank) and the holder count — a narrower standby row never
+    shadows the broadest live one."""
+    saved = {k: getattr(admin, k) for k in
+             ("_member_counts", "_reauths_30d", "_jobs_last_7d")}
+    saved_get = admin.requests.get
+    saved_cfg = (admin.SUPABASE_URL, admin.SERVICE_KEY)
+    try:
+        admin.SUPABASE_URL = admin.SUPABASE_URL or "https://test.supabase.co"
+        admin.SERVICE_KEY = admin.SERVICE_KEY or "test-key"
+        admin._member_counts = lambda: {"stake-uuid": 84}
+        admin._reauths_30d = lambda: {503991: 0}
+        admin._jobs_last_7d = lambda: {}
+        admin.requests.get = lambda *a, **k: _FakeResp([{
+            "id": "stake-uuid", "name": "Raleigh", "unit_number": 503991,
+            "last_synced_at": None, "sync_state": None, "onboarded_at": None,
+            "stake_credentials": [  # LIST — the 0068 shape
+                {"principal_name": "Junior", "principal_email": "junior@example.com",
+                 "revoked": False, "coverage": {"complete": False}, "access_rank": 50,
+                 "updated_at": "2026-11-08T00:00:00", "last_failed_at": None, "last_error": None,
+                 "last_succeeded_at": None, "has_refresh_token": False},
+                {"principal_name": "Boss", "principal_email": "boss@example.com",
+                 "revoked": False, "coverage": {"complete": True}, "access_rank": 1000,
+                 "updated_at": "2026-11-01T00:00:00", "last_failed_at": None, "last_error": None,
+                 "last_succeeded_at": None, "has_refresh_token": True}] }])
+        rows = admin._enrolled_stakes()
+        cred = (rows[0] or {}).get("credential") or {}
+        check("enrolled_stakes: LIST embed picks the highest-rank provider",
+              cred.get("principal_email") == "boss@example.com")
+        check("enrolled_stakes: holder count counts live rows",
+              cred.get("credential_holders") == 2)
+    finally:
+        admin.requests.get = saved_get
+        admin.SUPABASE_URL, admin.SERVICE_KEY = saved_cfg
+        for k, v in saved.items():
+            setattr(admin, k, v)
+
+
 def test_enrolled_stakes_self_renewing_from_membertools() -> None:
     """A1 (REAL BUG): the self_renewing chip showed the OPPOSITE of truth — it read the OLD LCR
     has_refresh_token (~always false), but 45-day self-renewal now lives in the Member Tools refresh
@@ -1912,6 +1951,59 @@ def test_full_eval_enroll_reaches_scrape_and_stores() -> None:
         restore()
 
 
+def test_full_eval_narrower_enroll_stored_as_backup() -> None:
+    """REGRESSION (2026-11-08): a leader re-authorizing while a BROADER credential already provides
+    the sync must still get stored — as a standby — not refused with the old "already provided with
+    broader access … no change is needed" dead-end. The RPC (0068) stores every enrollment; the
+    sync keeps running on the effective (broadest) provider. The pre-RPC summary is the broader
+    provider, so would_downgrade is computed (R4 warning) but no longer blocks storage."""
+    import types as _types
+    ctx = _types.SimpleNamespace(active_position="Stake President",
+                                 positions=[{"name": "Stake President", "id": 1}],
+                                 child_units=[], unit_number=503991, unit_name="Test Stake")
+    restore = _full_eval_env(ctx)
+    # The broader credential already on file (the incident: ILYA's own stored credential outranked
+    # his fresh session's scrape).
+    enroll._stored_credential_summary = lambda unit: {
+        "coverage": {"complete": True}, "access_rank": 1000,
+        "provider_email": "boss@example.org", "provider_name": "Boss"}
+    try:
+        out = enroll.evaluate_and_maybe_store(
+            [{"name": "sid", "value": "x", "domain": "d", "path": "/"}],
+            {"email": "junior@example.org", "name": "Junior"}, True, request_id="rid-backup")
+        check("backup: authorized", out.get("authorized") is True)
+        check("backup: STORED (never refused)", out.get("stored") is True)
+        check("backup: no enroll_blocked", out.get("enroll_blocked") is None)
+        check("backup: stored_as_backup", out.get("stored_as_backup") is True)
+        check("backup: not effective", out.get("is_effective") is False)
+        check("backup: effective_provider named", out.get("effective_provider") == "Boss")
+    finally:
+        restore()
+
+
+def test_full_eval_same_email_reauth_is_effective() -> None:
+    """Same 0068 shape, same leader: re-authorizing your own effective credential stays effective
+    (stored_as_backup False) — the provider's own re-auth is the normal path, not a backup."""
+    import types as _types
+    ctx = _types.SimpleNamespace(active_position="Stake President",
+                                 positions=[{"name": "Stake President", "id": 1}],
+                                 child_units=[], unit_number=503991, unit_name="Test Stake")
+    restore = _full_eval_env(ctx)
+    enroll._stored_credential_summary = lambda unit: {
+        "coverage": {"complete": True}, "access_rank": 1000,
+        "provider_email": "president@example.org", "provider_name": "Pres"}
+    try:
+        out = enroll.evaluate_and_maybe_store(
+            [{"name": "sid", "value": "x", "domain": "d", "path": "/"}],
+            {"email": "president@example.org", "name": "Pres"}, True, request_id="rid-effective")
+        check("effective: stored", out.get("stored") is True)
+        check("effective: is_effective", out.get("is_effective") is True)
+        check("effective: not a backup", out.get("stored_as_backup") is False)
+        check("effective: effective_provider is me", out.get("effective_provider") == "Pres")
+    finally:
+        restore()
+
+
 def test_full_eval_new_stake_offers_enroll() -> None:
     """Same regression, store=False flavor: a leader whose stake has NO usable credential must get
     authorized + can_enroll (the post-login "set up daily sync" offer). The NameError silently
@@ -2462,6 +2554,20 @@ def test_membertools_persist_verifies_after_patch() -> None:
         except RuntimeError:
             raised = True
         check("membertools persist: empty verify-GET raises (catches the silent no-op)", raised)
+
+        # 0068: the token lands on the ENROLLER's own row (per-email PATCH) — never on the
+        # effective provider's row. A standby holder's token waits on their row until promotion.
+        patched_params: dict = {}
+
+        def patch_capture(*a, **k):
+            patched_params.update(k.get("params") or {})
+            return _FakeResp(None, status=204)
+
+        enroll.requests.patch = patch_capture
+        enroll.requests.get = get_ok
+        enroll.persist_membertools_refresh_rest(503991, "R-TOKEN", "Junior@Example.org")
+        check("membertools persist: PATCH targets the enroller's row",
+              patched_params.get("principal_email") == "eq.junior@example.org")
     finally:
         (enroll.requests.get, enroll.requests.patch, enroll.SUPABASE_URL, enroll.SERVICE_KEY,
          _cred._encrypt_envelope) = saved

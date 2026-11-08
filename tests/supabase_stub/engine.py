@@ -5,12 +5,13 @@ Implements ONLY what backend/auth_broker actually sends (admin.py / enroll.py /
 identity_cache.py / session_mint.py / app.py):
   - filters: eq. / neq. / is.null / not.is.null / in.(...) / gt|gte|lt|lte.
   - select projection, including the stakes -> stake_credentials embed. PostgREST returns a
-    TO-ONE embed as a JSON OBJECT (or null) — the exact shape bug 2026-06-09 was about — so
-    the relationship map marks it to_one and this engine reproduces that.
+    TO-MANY embed as a JSON LIST (0068 made the relationship one-stake-to-many-credentials) — the
+    broker normalizes list-or-object defensively (the 2026-06-09 shape bug: a to-one embed arrived
+    as an object and iterating it yielded keys).
   - order=col.asc|desc[.nullslast], limit/offset, Range header, Prefer: count=exact
     (Content-Range "start-end/total"), return=representation|minimal,
     resolution=merge-duplicates (+ on_conflict).
-  - rpc/enroll_stake_credential replicating migration 0041's upsert WHERE arms faithfully.
+  - rpc/enroll_stake_credential replicating migration 0068 faithfully.
 """
 
 from __future__ import annotations
@@ -22,16 +23,18 @@ from datetime import datetime, timezone
 RESERVED_PARAMS = {"select", "order", "limit", "offset", "on_conflict", "apikey", "columns"}
 
 # parent table -> {embed name -> (parent key, child key, to_one)}
+# stakes -> stake_credentials is TO-MANY since 0068 (one row per leader per stake).
 RELATIONSHIPS = {
-    "stakes": {"stake_credentials": ("id", "stake_id", True)},
+    "stakes": {"stake_credentials": ("id", "stake_id", False)},
 }
 
-# upsert key when on_conflict isn't sent (PostgREST defaults to the primary key)
+# upsert key when on_conflict isn't sent (PostgREST defaults to the primary key).
+# stake_credentials' PK is the surrogate id since 0068 (was stake_id under the single-row model).
 DEFAULT_PK = {
     "church_identities": "username",
     "app_admins": "email",
     "stake_settings": "stake_id",
-    "stake_credentials": "stake_id",
+    "stake_credentials": "id",
 }
 
 
@@ -252,22 +255,22 @@ class Store:
                 self.tables[table] = [r for r in rows
                                       if _as_str(r.get(col)) != _as_str(stake_id)]
 
-    # ---- the 0055 enroll RPC ------------------------------------------------------------
+    # ---- the 0068 enroll RPC ------------------------------------------------------------
     def rpc_enroll_stake_credential(self, body: dict) -> str:
-        """Replicates backend/migrations/0055_credential_most_elevated_wins.sql:
+        """Replicates backend/migrations/0068_multi_credential_highest_wins.sql:
 
           insert into stakes ... on conflict (unit_number) do update set name -> stake id
-          insert into stake_credentials ... on conflict (stake_id) do update set
+          insert into stake_credentials ... on conflict (stake_id, principal_email) do update set
               <all enroll columns>, revoked=false, revoked_at=null, updated_at=now(),
-              last_failed_at=null, last_error=null, stale_notified_at=null
-          WHERE lower(existing.principal_email) = lower(excluded.principal_email)  -- same leader refresh
-             OR existing.revoked                                                   -- dead -> anyone
-             OR excluded.access_rank >= coalesce(existing.access_rank, -1)         -- most-elevated-wins
+              last_failed_at=null, last_error=null, stale_notified_at=null,
+              access_rank = greatest(old, new) (a degraded scrape never demotes a leader),
+              coverage.complete = old-complete OR new-complete (complete side's features win)
+          Effective holder = max access_rank among non-revoked rows (freshest wins a tie).
 
-        STRICT most-elevated-wins: a LOWER-access leader can no longer clobber a higher one via the old
-        incomplete/last_failed_at hatches (the Raleigh/Ricky incident). One stake_credential_history row
-        is appended per attempt (enrolled | refreshed | took_over | blocked_downgrade).
-        (A false WHERE leaves the existing row untouched; the stake id is returned either way.)
+        D82 supersedes 0055's single-row most-elevated-wins: a narrower enrollment is no longer
+        REFUSED — it is stored as a standby, and the sync keeps running on the highest live
+        credential. History actions: enrolled | refreshed | took_over | stored_backup.
+        (The stake id is returned either way.)
         """
         with self.lock:
             unit_number = body.get("p_unit_number")
@@ -283,61 +286,88 @@ class Store:
                 stake["name"] = body.get("p_stake_name")
             stake_id = stake["id"]
 
-            new = {
-                "stake_id": stake_id,
-                "principal_name": body.get("p_principal_name"),
-                "principal_email": (body.get("p_principal_email") or "").lower(),
-                "granting_role_ids": body.get("p_granting_role_ids"),
-                "credential_enc": body.get("p_credential_enc"),
-                "coverage": body.get("p_coverage"),
-                "access_rank": body.get("p_access_rank"),
-                "expires_at": body.get("p_expires_at"),
-                "has_refresh_token": body.get("p_has_refresh_token"),
-                "revoked": False,
-                "revoked_at": None,
-                "updated_at": _now(),
-                "last_failed_at": None,
-                "last_error": None,
-                "stale_notified_at": None,
-            }
+            in_email = (body.get("p_principal_email") or "").lower()
+            new_rank = body.get("p_access_rank")
+            new_cov = body.get("p_coverage") or {}
+            new_complete = bool(new_cov.get("complete"))
             creds = self.tables.setdefault("stake_credentials", [])
             history = self.tables.setdefault("stake_credential_history", [])
-            in_email = new["principal_email"]
 
-            def _log(action, prior_email, prior_rank):
+            def _effective(rows):
+                live = [c for c in rows if not c.get("revoked")]
+                if not live:
+                    return None
+                return max(live, key=lambda c: (
+                    c.get("access_rank") if c.get("access_rank") is not None else -1,
+                    c.get("updated_at") or ""))
+
+            prior = _effective([c for c in creds if _as_str(c.get("stake_id")) == _as_str(stake_id)])
+            prior_email = (prior or {}).get("principal_email") or None
+            prior_rank = (prior or {}).get("access_rank")
+            had_rows = any(_as_str(c.get("stake_id")) == _as_str(stake_id) for c in creds)
+            own = next((c for c in creds
+                        if _as_str(c.get("stake_id")) == _as_str(stake_id)
+                        and (c.get("principal_email") or "").lower() == in_email), None)
+            had_own_row = own is not None
+
+            def _log(action):
                 history.append({
                     "id": str(uuid.uuid4()), "stake_id": stake_id, "action": action,
-                    "principal_name": new.get("principal_name"), "principal_email": in_email,
-                    "access_rank": new.get("access_rank"),
-                    "coverage_complete": bool((new.get("coverage") or {}).get("complete")),
-                    "has_refresh_token": new.get("has_refresh_token"),
+                    "principal_name": body.get("p_principal_name"), "principal_email": in_email,
+                    "access_rank": new_rank,
+                    "coverage_complete": new_complete,
+                    "has_refresh_token": body.get("p_has_refresh_token"),
                     "prior_principal_email": prior_email, "prior_access_rank": prior_rank,
                     "created_at": _now()})
 
-            existing = next((c for c in creds
-                             if _as_str(c.get("stake_id")) == _as_str(stake_id)), None)
-            if existing is None:
-                creds.append({"id": str(uuid.uuid4()), **new})
-                _log("enrolled", None, None)
-                return stake_id
-
-            prior_email = (existing.get("principal_email") or "").lower()
-            prior_rank = existing.get("access_rank")
-            new_rank = new.get("access_rank")
-            old_rank = existing.get("access_rank")
-            # STRICT most-elevated-wins (0055): same leader refresh, OR existing revoked, OR incoming
-            # rank >= existing. The incomplete/last_failed_at hatches are GONE — a lower-access leader
-            # can no longer clobber a higher one. `null >= x` is falsy (rank-less incoming can't win).
-            replaced = (
-                in_email == prior_email
-                or bool(existing.get("revoked"))
-                or (new_rank is not None and new_rank >= (old_rank if old_rank is not None else -1))
-            )
-            if replaced:
-                existing.update(new)
-                action = ("refreshed" if in_email == prior_email
-                          else "took_over" if prior_email else "enrolled")
+            if own is None:
+                # First enrollment for this leader: their own row (a standby when a broader
+                # credential already provides the stake).
+                creds.append({
+                    "id": str(uuid.uuid4()), "stake_id": stake_id,
+                    "principal_name": body.get("p_principal_name"),
+                    "principal_email": in_email,
+                    "granting_role_ids": body.get("p_granting_role_ids"),
+                    "credential_enc": body.get("p_credential_enc"),
+                    "coverage": body.get("p_coverage"),
+                    "access_rank": new_rank,
+                    "expires_at": body.get("p_expires_at"),
+                    "has_refresh_token": body.get("p_has_refresh_token"),
+                    "revoked": False, "revoked_at": None, "updated_at": _now(),
+                    "last_failed_at": None, "last_error": None, "stale_notified_at": None,
+                })
+                # A fresh row is effective iff no broader live credential exists (tie → the fresh
+                # row wins, matching SQL's updated_at-desc tie-break).
+                effective = _effective([c for c in creds if _as_str(c.get("stake_id")) == _as_str(stake_id)])
+                if not had_rows:
+                    action = "enrolled"
+                elif effective is not None and (effective.get("principal_email") or "").lower() == in_email:
+                    action = "took_over"
+                else:
+                    action = "stored_backup"
             else:
-                action = "blocked_downgrade"
-            _log(action, prior_email or None, prior_rank)
+                # Same leader re-authorizing: refresh their row, keeping their HIGHEST demonstrated
+                # rank and the complete side's coverage (a degraded scrape never demotes them).
+                old_complete = bool((own.get("coverage") or {}).get("complete"))
+                own.update({
+                    "principal_name": body.get("p_principal_name"),
+                    "granting_role_ids": body.get("p_granting_role_ids"),
+                    "credential_enc": body.get("p_credential_enc"),
+                    "coverage": {
+                        "complete": old_complete or new_complete,
+                        "features": ((own.get("coverage") or {}).get("features")
+                                     if old_complete else new_cov.get("features")),
+                        "missing": ((own.get("coverage") or {}).get("missing")
+                                    if old_complete else new_cov.get("missing")),
+                    },
+                    "access_rank": max(
+                        [r for r in (own.get("access_rank"), new_rank) if r is not None],
+                        default=None),
+                    "expires_at": body.get("p_expires_at"),
+                    "has_refresh_token": body.get("p_has_refresh_token"),
+                    "revoked": False, "revoked_at": None, "updated_at": _now(),
+                    "last_failed_at": None, "last_error": None, "stale_notified_at": None,
+                })
+                action = "refreshed"
+            _log(action)
             return stake_id

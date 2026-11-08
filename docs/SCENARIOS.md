@@ -35,19 +35,26 @@ by stable ID + sentinels + freshness); every grant/revoke and login is **audited
 
 ## Axis 2 — access level vs the existing credential/role (same / higher / lower / none)
 
-Applies to the **enroll RPC** (which leader's delegated session backs a stake) — "most-elevated wins"
-with same-principal-refresh and stale-takeover. SQL is migration **0038**; the offline suite asserts
-the decision table the broker relies on.
+Applies to the **enroll RPC** (which leader's delegated session backs a stake) — "highest-wins"
+(migration **0068**, D82): a stake holds one credential row per leader; the sync always uses the
+EFFECTIVE row (highest live `access_rank`, freshest on a tie). Enrolling NEVER refuses and NEVER
+downgrades — a narrower enrollment is stored as a standby and becomes effective automatically if
+the broader one is revoked or lapses. The 2026-11-08 incident that drove this: the provider's own
+re-auth was refused outright when his fresh session scraped a lower rank than his stored
+credential, leaving the stake with no fallback at all. SQL is migration **0068** (supersedes
+0055's single-row most-elevated-wins-by-refusal); the offline suite asserts the decision table
+the broker relies on.
 
 | # | Incoming vs stored | Expected | Enforced by | Offline check |
 |---|---|---|---|---|
-| 2.1 | **none** stored | insert | `enroll_stake_credential` (0038) | `scenario_enroll_most_elevated_wins` |
-| 2.2 | **same** principal (refresh) | replace (you can always renew your own session) | 0038 `principal_email` clause | `scenario_enroll_most_elevated_wins` |
-| 2.3 | **higher** access, different leader | replace | 0038 `access_rank >` clause | `scenario_enroll_most_elevated_wins` |
-| 2.4 | **equal** access, different leader | replace (fresher session wins) | 0038 `access_rank >=` clause | `scenario_enroll_most_elevated_wins` |
-| 2.5 | **lower** access, different leader, stored **healthy** | **keep** stored (no clobber) | 0038 WHERE all-false | `scenario_enroll_most_elevated_wins` |
-| 2.6 | **lower** access, but stored is **failing/stale** | replace (takeover of a dead credential) | 0038 `last_failed_at is not null` | `scenario_enroll_most_elevated_wins` |
-| 2.7 | **lower** access, but stored is **incomplete** coverage | replace | 0038 `coverage->>'complete' = false` | `scenario_enroll_most_elevated_wins` |
+| 2.1 | **none** stored | insert; stored + effective | `enroll_stake_credential` (0068) | `scenario_enroll_most_elevated_wins` |
+| 2.2 | **same** principal (refresh) | refresh own row (rank = greatest(old, new), coverage = old OR new); still effective | 0068 per-email upsert | `scenario_enroll_most_elevated_wins` |
+| 2.3 | **higher** access, different leader | stored + effective at once (`took_over`) | 0068 effective = max rank | `scenario_enroll_most_elevated_wins` |
+| 2.4 | **equal** access, different leader | stored + effective (fresher session wins the tie) | 0068 `updated_at desc` tie-break | `scenario_enroll_most_elevated_wins` |
+| 2.5 | **lower** access, different leader, stored **healthy** | **stored as standby** (`stored_backup`); sync keeps running on the broader credential | 0068 effective = max rank | `scenario_enroll_most_elevated_wins` |
+| 2.6 | **lower** access, but stored is **failing/stale** | stored as standby — a lower leader still never *appears* to take over the higher one; the higher credential heals only via its own leader's re-auth | 0068 effective = max rank | `scenario_enroll_most_elevated_wins` |
+| 2.7 | **lower** access, but stored is **incomplete** coverage | stored as standby (same as 2.5) | 0068 effective = max rank | `scenario_enroll_most_elevated_wins` |
+| 2.8 | **any** access, stored row is **revoked** | stored + effective (the revoked row is dead history; a same-email re-enroll un-revokes its own row and clears the failure state) | 0068 `revoked = false` on upsert | `scenario_enroll_most_elevated_wins`, `tests/e2e/test_enroll_flows.py` |
 
 ## Axis 3 — admin vs non-admin
 
@@ -156,7 +163,7 @@ These were the in-flight features; they shipped (commits `5ae7de8`, `b83a809`, `
 - [x] **Unenroll tiers** — `revoke` (credential only, roles stay) · `wipe_stake_members` (delete
       members, keep stake+roles+cred) · `remove_stake` (credential+members+roles+diagnostics+stake row).
       The two new tiers are SECURITY DEFINER RPCs (migration `0039`), exercised by the live SQL path;
-      `revoke` + the most-elevated-wins re-enroll are covered offline by `scenario_enroll_most_elevated_wins`.
+      `revoke` + the highest-wins re-enroll are covered offline by `scenario_enroll_most_elevated_wins`.
 - [x] **Stale / takeover** — **covered offline**: `scenario_credential_staleness_alert_edge` proves
       `mark_failed`/`claim_stale_notification` fire ONE alert per failure streak and `mark_succeeded`
       clears it (no spam); `scenario_enroll_most_elevated_wins` proves the 0038 takeover (same-principal

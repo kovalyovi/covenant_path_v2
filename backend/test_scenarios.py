@@ -1300,10 +1300,11 @@ def scenario_credential_save_roundtrip_encrypted():
 
         def fetchone(self):
             p = captured["insert"]
-            # save_credential params order: (stake_id, principal_name, granting_role_ids, blob,
-            #   coverage_json, access_rank, expires_at). get_credential selects, in order:
-            #   principal_name, granting_role_ids, credential_enc, expires_at, revoked, coverage, access_rank
-            return (p[1], p[2], p[3], p[6], False, None, p[5])
+            # save_credential params order: (stake_id, principal_name, principal_email,
+            #   granting_role_ids, blob, coverage_json, access_rank, expires_at). get_credential
+            #   selects, in order: id, principal_name, principal_email, granting_role_ids,
+            #   credential_enc, expires_at, revoked, coverage, access_rank.
+            return (1, p[1], p[2], p[3], p[4], p[7], False, None, p[6])
 
     class _Conn:
         def cursor(self):
@@ -1317,7 +1318,7 @@ def scenario_credential_save_roundtrip_encrypted():
              "cookies": [{"name": "idx", "value": "SUPER-SECRET-COOKIE"}],
              "refresh_token": "RT-SECRET", "access_rank": 100, "expires_at": None}
     credentials.save_credential(conn, "stake-x", grant)
-    blob = captured["insert"][3]
+    blob = captured["insert"][4]
     got = credentials.get_credential(conn, "stake-x")
 
     return [
@@ -1330,54 +1331,63 @@ def scenario_credential_save_roundtrip_encrypted():
 
 
 def scenario_enroll_most_elevated_wins():
-    """AXIS 2 (same/higher/lower/none access vs existing credential): the enroll RPC's STRICT most-
-    elevated-wins + same-principal rule. Pure-logic mirror of the WHERE clause in migration 0055 (the
-    SQL is what runs in prod; this asserts the decision table the broker relies on).
+    """AXIS 2 (same/higher/lower/none access vs existing credential): the enroll RPC's HIGHEST-WINS
+    multi-credential model (migration 0068). Pure-logic mirror of the RPC's decision table (the SQL
+    is what runs in prod; this asserts the table the broker relies on).
 
-    The Raleigh/Ricky incident (2026-06-18) reversed the old policy: a LOWER-access leader can no longer
-    take over a higher one's credential just because it is incomplete or temporarily failing. Those two
-    rank-ungated hatches let a rank-4 high councilor clobber a rank-1000 clerk whose session had aged
-    out. Now: same-leader refresh, OR existing fully revoked, OR incoming rank >= existing — nothing
-    else. A failing/incomplete HIGHER credential heals only via its own leader (or an equal/higher) re-
-    authorizing, or is freed when _revoke_if_ineligible revokes a lapsed calling."""
-    def enroll_replaces(existing, incoming):
-        """Returns True iff ON CONFLICT would replace the stored credential (migration 0055 WHERE)."""
-        if existing is None:
-            return True  # fresh insert
-        if incoming["principal_email"].lower() == (existing.get("principal_email") or "").lower():
-            return True  # (1) same leader re-authorizing
-        if existing.get("revoked"):
-            return True  # (2) dead/invalid credential -> anyone may take over
-        # (3) most-elevated-wins: incoming at least as privileged. A strictly LOWER rank never wins,
-        #     even against an incomplete/failing holder.
-        return incoming["access_rank"] >= (existing.get("access_rank")
-                                           if existing.get("access_rank") is not None else -1)
+    The 2026-11-08 incident reversed the old STRICT most-elevated-wins rule (0055), which REFUSED a
+    narrower enrollment outright — so the provider's own re-auth was refused when his fresh session
+    scraped a lower rank than his stored credential, and the stake had no fallback at all. Now every
+    enrollment is STORED under its own email and the sync always uses the EFFECTIVE credential: the
+    highest live rank, freshest on a tie. A narrower enrollment is a standby (it becomes effective
+    automatically if the broader one is revoked or lapses); a broader one takes over at once. The
+    Raleigh/Ricky lesson still holds — a LOWER-access leader can never appear to have taken over a
+    higher one's credential — but the mechanism is effectiveness, not refusal. Same-leader refresh
+    never demotes: per-leader rank is greatest(old, new) and coverage is old-OR-new."""
+    def enroll_outcome(existing_rows, incoming):
+        """Returns (stored, is_effective, my_final_rank) for an enrollment under migration 0068.
+        `existing_rows` is the stake's live credential rows BEFORE the enroll."""
+        rows = [dict(r) for r in existing_rows]
+        # Per-email upsert: refresh your own row (greatest rank, coverage OR), or add a new row.
+        mine = next((r for r in rows
+                     if r["principal_email"].lower() == incoming["principal_email"].lower()), None)
+        if mine is not None:
+            mine["access_rank"] = max(mine["access_rank"], incoming["access_rank"])
+            mine["coverage"] = {"complete": bool((mine.get("coverage") or {}).get("complete"))
+                                or bool((incoming.get("coverage") or {}).get("complete"))}
+        else:
+            rows.append(dict(incoming))
+        live = [r for r in rows if not r.get("revoked")]
+        effective = max(live, key=lambda r: (r["access_rank"], r.get("updated_at") or ""))
+        my_row = next(r for r in rows
+                      if r["principal_email"].lower() == incoming["principal_email"].lower())
+        return (True, effective["principal_email"].lower() == incoming["principal_email"].lower(),
+                my_row["access_rank"])
 
-    healthy_high = {"access_rank": 100, "principal_email": "boss@x.org",
-                    "coverage": {"complete": True}, "revoked": False, "last_failed_at": None}
-
-    same_principal = {"access_rank": 100, "principal_email": "boss@x.org"}     # same person refresh
-    higher = {"access_rank": 200, "principal_email": "other@x.org"}            # higher access
-    equal_other = {"access_rank": 100, "principal_email": "peer@x.org"}        # equal, different leader
-    lower_other = {"access_rank": 50, "principal_email": "junior@x.org"}       # lower, different leader
-
-    healthy_failing = dict(healthy_high, last_failed_at="2026-06-01T00:00:00")  # stale (still HIGHER)
-    incomplete = dict(healthy_high, coverage={"complete": False})               # partial (still HIGHER)
-    revoked_high = dict(healthy_high, revoked=True)                             # explicitly dead
+    boss = {"access_rank": 100, "principal_email": "boss@x.org",
+            "coverage": {"complete": True}, "revoked": False, "updated_at": "2026-11-01"}
+    junior = {"access_rank": 50, "principal_email": "junior@x.org",
+              "coverage": {"complete": False}, "revoked": False, "updated_at": "2026-11-08"}
+    peer = {"access_rank": 100, "principal_email": "peer@x.org",
+            "coverage": {"complete": True}, "revoked": False, "updated_at": "2026-11-08"}
+    higher = {"access_rank": 200, "principal_email": "other@x.org",
+              "coverage": {"complete": True}, "revoked": False, "updated_at": "2026-11-08"}
 
     return [
-        ("none existing -> insert", enroll_replaces(None, lower_other), True),
-        ("same principal refresh wins (even healthy)", enroll_replaces(healthy_high, same_principal), True),
-        ("higher access wins", enroll_replaces(healthy_high, higher), True),
-        ("equal access (fresher session) wins", enroll_replaces(healthy_high, equal_other), True),
-        ("lower access different leader CANNOT clobber healthy", enroll_replaces(healthy_high, lower_other), False),
-        # Raleigh/Ricky regression: a LOWER credential must NOT win against a higher one that is merely
-        # failing or incomplete (it used to — that was the bug).
-        ("lower access CANNOT take over a FAILING higher credential", enroll_replaces(healthy_failing, lower_other), False),
-        ("lower access CANNOT take over an INCOMPLETE higher credential", enroll_replaces(incomplete, lower_other), False),
-        # A genuinely revoked credential is still reclaimable by anyone (incl. lower) so a stake whose
-        # leader is gone is never permanently stuck.
-        ("any access CAN take over a REVOKED credential", enroll_replaces(revoked_high, lower_other), True),
+        ("none existing -> stored + effective", enroll_outcome([], junior), (True, True, 50)),
+        ("lower enroll vs healthy higher -> stored as standby", enroll_outcome([boss], junior), (True, False, 50)),
+        ("higher enroll vs healthy lower -> stored + effective at once",
+         enroll_outcome([junior], higher), (True, True, 200)),
+        ("equal rank, fresher -> effective (tie breaks to latest)", enroll_outcome([boss], peer), (True, True, 100)),
+        ("same principal refresh -> stored + still effective", enroll_outcome([boss], boss), (True, True, 100)),
+        ("same principal refresh never demotes (rank stays max)",
+         enroll_outcome([boss], dict(boss, access_rank=4, coverage={"complete": False})), (True, True, 100)),
+        ("lower enroll vs FAILING higher -> still standby (never appears to take over)",
+         enroll_outcome([dict(boss, last_failed_at="2026-06-01T00:00:00")], junior), (True, False, 50)),
+        ("lower enroll vs INCOMPLETE higher -> still standby",
+         enroll_outcome([dict(boss, coverage={"complete": False})], junior), (True, False, 50)),
+        ("enroll after higher revoked -> stored + effective",
+         enroll_outcome([dict(boss, revoked=True)], junior), (True, True, 50)),
     ]
 
 

@@ -55,10 +55,15 @@ export interface BrokerResult {
   wardScoped?: boolean;
   enrollBlockReason?: string;
   /** The stake already has a credential and THIS session is strictly weaker — re-authorizing with it
-   *  would reduce coverage, so the UI warns first (R4). existingProvider names who currently provides it. */
+   *  stores it as a backup under the broader provider (0068), so the UI warns first (R4). existingProvider
+   *  names who currently provides it. */
   wouldDowngrade?: boolean;
   existingProvider?: string | null;
   existingComplete?: boolean;
+  /** 0068: this enroll was stored as a standby — the sync keeps running on the effective provider. */
+  storedAsBackup?: boolean;
+  /** 0068: name of the leader whose credential currently provides the sync. */
+  effectiveProvider?: string | null;
 }
 
 export function mfaRequired(r: BrokerResult): boolean {
@@ -70,6 +75,10 @@ export interface CredentialInfo {
   complete: boolean;
   principalName?: string | null;
   isProvider: boolean;
+  /** 0068: this viewer holds a live credential row for the stake (possibly as a standby). */
+  isCredentialHolder?: boolean;
+  /** 0068: how many leaders hold a live credential row for this stake. */
+  holders?: number;
   enrolledAt?: string | null;
   /** When state === 'stale', the last sync error (e.g. "SSO did not complete…"). */
   lastError?: string | null;
@@ -112,6 +121,8 @@ function credFromJson(j: Record<string, unknown>): CredentialInfo {
     complete: j['complete'] === true,
     principalName: (j['principal_name'] as string) ?? null,
     isProvider: j['is_provider'] === true,
+    isCredentialHolder: j['is_credential_holder'] === true,
+    holders: typeof j['holders'] === 'number' ? (j['holders'] as number) : undefined,
     enrolledAt: (j['enrolled_at'] as string) ?? null,
     lastError: (j['last_error'] as string) ?? null,
     lastFailedAt: (j['last_failed_at'] as string) ?? null,
@@ -329,6 +340,11 @@ export class BrokerClient {
       wouldDowngrade: enroll?.['would_downgrade'] === true,
       existingProvider: (enroll?.['existing_provider'] as string) ?? null,
       existingComplete: enroll?.['existing_complete'] === true,
+      // 0068: the enroll is always stored now — a narrower session lands as a standby and the
+      // sync keeps running on the effective (broadest) provider. The dialog shows an info note
+      // for that case instead of the old "no change is needed" error.
+      storedAsBackup: enroll?.['stored_as_backup'] === true,
+      effectiveProvider: (enroll?.['effective_provider'] as string) ?? null,
     };
   }
 

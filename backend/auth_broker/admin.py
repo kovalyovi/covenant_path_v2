@@ -440,8 +440,12 @@ def enrollment_status(email: str, auth_id: str) -> dict:
             stake = _one("stakes", {"select": "id,name,unit_number,last_synced_at",
                                     "unit_number": f"eq.{ident['unit_number']}", "limit": "1"})
             if stake:
+                # The EFFECTIVE credential (0068): highest live rank — its state is the stake's.
                 cred2 = _one("stake_credentials", {"select": "revoked,last_failed_at",
-                                                   "stake_id": f"eq.{stake['id']}", "limit": "1"})
+                                                   "stake_id": f"eq.{stake['id']}",
+                                                   "revoked": "is.false",
+                                                   "order": "access_rank.desc.nullslast,updated_at.desc",
+                                                   "limit": "1"})
                 state = ("none" if not cred2
                          else "revoked" if cred2.get("revoked")
                          else "stale" if cred2.get("last_failed_at") else "active")
@@ -487,17 +491,32 @@ def enrollment_status(email: str, auth_id: str) -> dict:
         "stake_id": f"eq.{stake_id}", "patriarchal_blessing": "is.null",
         "person_uuid": "not.is.null", "baptism_date": "not.is.null"}) or 0
 
-    # 4. Get credential state
+    # 4. Get credential state — the EFFECTIVE row (0068): highest live rank, freshest on a tie.
+    # A narrower standby row never shadows the broadest live one. Fetch a handful of rows ordered
+    # by rank (not just limit 1): when every row is REVOKED the state must still read "revoked"
+    # (not "none") so the app shows the re-authorize banner and "Sync now" stays refused with 409.
     cred_r = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=headers,
                           params={"select": "principal_name,principal_email,revoked,coverage,access_rank,"
                                             "updated_at,last_failed_at,last_error",
-                                  "stake_id": f"eq.{stake_id}", "limit": "1"}, timeout=_TIMEOUT)
+                                  "stake_id": f"eq.{stake_id}",
+                                  "order": "access_rank.desc.nullslast,updated_at.desc",
+                                  "limit": "20"}, timeout=_TIMEOUT)
     creds = cred_r.json() if cred_r.status_code == 200 else []
-    cred = creds[0] if creds else None
+    live = [c for c in creds if not c.get("revoked")]
+    cred = live[0] if live else (creds[0] if creds else None)
+    # How many leaders hold a live credential for this stake, and does THIS viewer hold one
+    # (possibly as a standby)? A standby holder can still re-authorize their own row.
+    holders = _count_where("stake_credentials",
+                           {"stake_id": f"eq.{stake_id}", "revoked": "is.false"}) or 0
+    own_row = _one("stake_credentials",
+                   {"select": "id", "stake_id": f"eq.{stake_id}",
+                    "principal_email": f"eq.{email.lower()}", "revoked": "is.false",
+                    "limit": "1"}) if email else None
 
     cred_info: dict
     if not cred:
-        cred_info = {"state": "none"}
+        cred_info = {"state": "none", "holders": holders,
+                     "is_credential_holder": bool(own_row)}
     else:
         coverage = cred.get("coverage") or {}
         # active / stale (last delegated sync failed — session needs re-auth) / revoked. The app shows a
@@ -510,6 +529,8 @@ def enrollment_status(email: str, auth_id: str) -> dict:
             "principal_name": cred.get("principal_name"),
             # Match on the stored email (principal_name is just a display name).
             "is_provider": (cred.get("principal_email") or "").lower() == email.lower(),
+            "is_credential_holder": bool(own_row),
+            "holders": holders,
             # Can THIS credential's calling pull the patriarchal blessing flag (the member-profile
             # read)? Drives the "refresh patriarchal" banner alongside is_provider + patriarchal_pending.
             "can_refresh_patriarchal": "menu.view.member.profiles" in (coverage.get("features") or []),
@@ -541,30 +562,43 @@ def enrollment_status(email: str, auth_id: str) -> dict:
 
 def revoke_credential(stake_id: str, email: str) -> dict:
     """Revoke the stake credential on behalf of the signed-in user.
-    Only succeeds if the user is the active principal (is_provider check)."""
+    Only succeeds if the user holds a live credential row for this stake. Revokes ONLY their own
+    row (0068) — the other holders' rows stay live, and the next-highest becomes effective."""
     headers = _sb_headers()
-    # Verify the caller is actually the provider for this stake
+    # Verify the caller actually holds a credential row for this stake
     cred_r = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=headers,
                           params={"select": "principal_email,revoked", "stake_id": f"eq.{stake_id}",
+                                  "principal_email": f"eq.{email.lower()}",
                                   "limit": "1"}, timeout=_TIMEOUT)
     creds = cred_r.json() if cred_r.status_code == 200 else []
     cred = creds[0] if creds else None
     if not cred:
+        # No row of their own: distinguish "nobody holds a credential" (404) from "someone else
+        # does" (403 — only a holder can revoke their own row).
+        any_r = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=headers,
+                             params={"select": "id", "stake_id": f"eq.{stake_id}",
+                                     "revoked": "is.false", "limit": "1"}, timeout=_TIMEOUT)
+        any_rows = any_r.json() if any_r.status_code == 200 else []
+        if any_rows:
+            raise NotAdmin("only a credential holder can revoke their own credential")
         raise AdminError("no credential on file for this stake")
     if cred.get("revoked"):
         return {"status": "already_revoked"}
-    if (cred.get("principal_email") or "").lower() != email.lower():
-        raise NotAdmin("only the credential provider can revoke")
-    return _patch_revoke(stake_id, headers)
+    return _patch_revoke(stake_id, headers, principal_email=email.lower())
 
 
-def _patch_revoke(stake_id: str, headers: dict) -> dict:
+def _patch_revoke(stake_id: str, headers: dict, principal_email: str | None = None) -> dict:
+    """Revoke credential row(s). With a principal_email only that leader's row is revoked (their
+    own self-service revoke); without one (admin override) ALL of the stake's rows are revoked."""
     _cache_clear()  # the enrolled-stakes view must reflect the revoke immediately
     from datetime import datetime, timezone
+    params: dict = {"stake_id": f"eq.{stake_id}"}
+    if principal_email:
+        params["principal_email"] = f"eq.{principal_email.lower()}"
     r = requests.patch(
         f"{SUPABASE_URL}/rest/v1/stake_credentials",
         headers={**headers, "Prefer": "return=minimal"},
-        params={"stake_id": f"eq.{stake_id}"},
+        params=params,
         json={"revoked": True, "revoked_at": datetime.now(timezone.utc).isoformat()},
         timeout=_TIMEOUT)
     if r.status_code >= 300:
@@ -706,12 +740,16 @@ def _enrolled_stakes() -> list[dict]:
     reauths = _reauths_30d()   # stake_unit -> re-authorizations in 30d (cadence visibility)
     out = []
     for s in r.json():
-        # PostgREST returns a to-one embed as a JSON OBJECT (not a list) — `creds[0]` on a dict
-        # would KeyError. Normalize to a list so a single stored credential still reads. (Same shape
-        # bug that broke enroll._stored_credential_summary → the "always prompted to set up" issue.)
+        # PostgREST returns a to-many embed as a JSON LIST (0068) — older to-one rows arrive as a
+        # single OBJECT (or null). Normalize, then take the EFFECTIVE credential: highest live rank,
+        # freshest on a tie. A narrower standby row never shadows the broadest live one.
         sc = s.get("stake_credentials")
         creds = sc if isinstance(sc, list) else ([sc] if isinstance(sc, dict) else [])
-        cred = creds[0] if creds else None
+        live = [c for c in creds if isinstance(c, dict) and not c.get("revoked")]
+        cred = (max(enumerate(live), key=lambda t: (
+            t[1].get("access_rank") if t[1].get("access_rank") is not None else -1,
+            t[1].get("updated_at") or "",
+            t[0]))[1] if live else None)
         cov = (cred or {}).get("coverage") or {}
         # AVAILABLE on the stake/credential rows but NOT emitted — no admin-console surface (web,
         # iOS, or Android) reads them: stakes.onboarded_at, and credential access_rank /
@@ -748,23 +786,26 @@ def _enrolled_stakes() -> list[dict]:
                 "token_expires_in_days": _token_days_left(
                     cred.get("membertools_minted_at"), cred.get("membertools_refresh_enc")),
                 "reauths_30d": reauths.get(s.get("unit_number"), 0),
+                # How many leaders hold a live credential for this stake (0068).
+                "credential_holders": len(live),
             },
         })
     return out
 
 
 def admin_revoke_stake(stake_id: str) -> dict:
-    """Admin override: revoke any stake's credential (no provider check). For ops support."""
+    """Admin override: revoke ALL of a stake's credential rows (no provider check). For ops support."""
     return _patch_revoke(stake_id, _sb_headers())
 
 
 def send_reauth_email(stake_id: str) -> dict:
     """B3: on demand from the ops worklist, email the stake's credential PROVIDER the re-authorize
     nudge (the same day-40 body + /reauth deep link the daily sync sends near expiry). Looks up the
-    provider email + stake name over REST (the broker holds no DB connection). NotFound (-> 404) when
-    there's no credential / no provider email to send to."""
+    EFFECTIVE provider email (0068: highest live rank) + stake name over REST (the broker holds no
+    DB connection). NotFound (-> 404) when there's no credential / no provider email to send to."""
     cred = _one("stake_credentials",
                 {"select": "principal_email,principal_name,revoked", "stake_id": f"eq.{stake_id}",
+                 "revoked": "is.false", "order": "access_rank.desc.nullslast,updated_at.desc",
                  "limit": "1"})
     if not cred:
         raise NotFound("no credential on file for this stake")
@@ -817,18 +858,18 @@ def wipe_stake_data(stake_id: str) -> dict:
 
 
 def wipe_stake_data_as_provider(stake_id: str, email: str) -> dict:
-    """Provider self-service tier of wipe_stake_data: the SAME wipe RPC, but gated to the
-    credential's principal (mirrors revoke_credential). NotFound when the stake has no
-    credential on file (-> 404); NotAdmin when the caller isn't the provider (-> 403)."""
+    """Provider self-service tier of wipe_stake_data: the SAME wipe RPC, but gated to a credential
+    HOLDER (0068: any leader holding a live row for the stake — not just the effective provider).
+    NotFound when the stake has no credential on file (-> 404); NotAdmin when the caller isn't a
+    holder (-> 403)."""
     cred_r = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=_sb_headers(),
                           params={"select": "principal_email", "stake_id": f"eq.{stake_id}",
-                                  "limit": "1"}, timeout=_TIMEOUT)
+                                  "revoked": "is.false", "limit": "10"}, timeout=_TIMEOUT)
     creds = cred_r.json() if cred_r.status_code == 200 else []
-    cred = creds[0] if creds else None
-    if not cred:
+    if not creds:
         raise NotFound("no credential on file for this stake")
-    if (cred.get("principal_email") or "").lower() != email.lower():
-        raise NotAdmin("only the credential provider can wipe stake data")
+    if email.lower() not in {(c.get("principal_email") or "").lower() for c in creds}:
+        raise NotAdmin("only a credential holder can wipe stake data")
     return wipe_stake_data(stake_id)
 
 

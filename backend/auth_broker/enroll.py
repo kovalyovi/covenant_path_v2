@@ -321,9 +321,13 @@ def _notify_profile_refresh(stake_id: str, *, outcome: str, filled: int, total: 
         return False
     try:
         from backend.auth_broker import admin
+        # The EFFECTIVE provider (0068): highest live rank — the re-auth nudge goes to the leader
+        # whose session actually drives the sync.
         cred = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=_sb_h(),
                             params={"stake_id": f"eq.{stake_id}",
                                     "select": "principal_email,principal_name,revoked",
+                                    "revoked": "is.false",
+                                    "order": "access_rank.desc.nullslast,updated_at.desc",
                                     "limit": "1"}, timeout=8).json()
         to = ((cred[0].get("principal_email") or "").strip() if cred else "")
         if not to:
@@ -451,9 +455,12 @@ def start_profile_refresh(unit_number: int, stake_id: str) -> dict:
                                         total=len(members), missing=missing_counts(members))
         return {"status": "needs_reauth", "reason": reason,
                 "members_with_gaps": len(members)}
-    # Load + decrypt the stored credential (REST — the broker has no psycopg2).
+    # Load + decrypt the EFFECTIVE credential (REST — the broker has no psycopg2): highest live
+    # rank (0068), so the fill runs on the broadest session, never a narrower standby's.
     r = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=_sb_h(),
                      params={"stake_id": f"eq.{stake_id}", "select": "credential_enc,revoked",
+                             "revoked": "is.false",
+                             "order": "access_rank.desc.nullslast,updated_at.desc",
                              "limit": "1"}, timeout=30)
     rows = r.json() if r.status_code == 200 else []
     if not rows or rows[0].get("revoked") or not rows[0].get("credential_enc"):
@@ -492,8 +499,10 @@ def start_profile_refresh(unit_number: int, stake_id: str) -> dict:
 
 
 def _stored_credential_summary(unit_number: int) -> dict | None:
-    """The stake's current NON-REVOKED credential — coverage + access_rank — or None when there's no
-    credential at all (or it's revoked). Drives `can_enroll` (offer to SET UP sync) and `can_improve`.
+    """The stake's EFFECTIVE credential — coverage + access_rank + provider — or None when there's
+    no credential at all (or all are revoked). Effective = HIGHEST access_rank among live rows
+    (0068: a stake may hold several enrolled leaders; the sync runs on the broadest one). Drives
+    `can_enroll` (offer to SET UP sync) and `can_improve`.
 
     A STALE-but-present credential is NOT None here — re-authorization is surfaced by the dashboard
     "re-authorize" BANNER (from enrollment_status state='stale'), NOT the "set up sync" prompt, so a
@@ -508,29 +517,47 @@ def _stored_credential_summary(unit_number: int) -> dict | None:
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/stakes", headers=sb,
             params={"select": "id,stake_credentials(coverage,access_rank,revoked,"
-                              "principal_name,principal_email)",
+                              "principal_name,principal_email,updated_at)",
                     "unit_number": f"eq.{unit_number}", "limit": "1"}, timeout=30)
         rows = r.json() if r.status_code == 200 else []
         if not rows:
             return None
-        cred = _first_usable_credential(rows[0].get("stake_credentials"))
-        if not cred:
+        creds = _usable_credentials(rows[0].get("stake_credentials"))
+        if not creds:
             return None
+        cred = _highest_credential(creds)
         # provider_name/email power the "your stake's sync is already provided by X" message and the
         # revoke-risk warning (R3); coverage/access_rank power the downgrade warning (R4).
         return {"coverage": cred.get("coverage") or {}, "access_rank": cred.get("access_rank"),
                 "provider_name": cred.get("principal_name"),
-                "provider_email": cred.get("principal_email")}
+                "provider_email": cred.get("principal_email"),
+                "holders": len(creds)}
     except Exception as exc:  # noqa: BLE001
         logger.warning("stored-credential lookup skipped: %s", exc)
         return None
 
 
-def _first_usable_credential(embed) -> dict | None:
-    """The first NON-REVOKED credential from a PostgREST embed that may be a single object (to-one
-    relationship), a list, or None. Shared so the dict-vs-list normalization lives in one place."""
+def _usable_credentials(embed) -> list[dict]:
+    """The NON-REVOKED credentials from a PostgREST embed that may be a list, a single object
+    (to-one relationship), or None. Shared so the dict-vs-list normalization lives in one place."""
     creds = embed if isinstance(embed, list) else ([embed] if isinstance(embed, dict) else [])
-    return next((c for c in creds if isinstance(c, dict) and not c.get("revoked")), None)
+    return [c for c in creds if isinstance(c, dict) and not c.get("revoked")]
+
+
+def _highest_credential(creds: list[dict]) -> dict | None:
+    """The EFFECTIVE credential (0068): highest access_rank, freshest winning a tie. A narrower
+    standby row never shadows the broadest live one."""
+    if not creds:
+        return None
+    return max(enumerate(creds), key=lambda t: (
+        t[1].get("access_rank") if t[1].get("access_rank") is not None else -1,
+        t[1].get("updated_at") or "",
+        t[0]))[1]
+
+
+def _first_usable_credential(embed) -> dict | None:
+    """Back-compat alias: the highest live credential (was: the first non-revoked row)."""
+    return _highest_credential(_usable_credentials(embed))
 
 
 def _user_context_with_establish(cookies: list[dict]):
@@ -937,30 +964,25 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
         timeout=60)
     if r.status_code >= 300:
         raise RuntimeError(f"enroll RPC failed ({r.status_code}): {r.text[:160]}")
-    # Did the STRICT most-elevated-wins RPC (migration 0055) actually accept this session, or refuse it
-    # as a downgrade of a stronger on-file credential? The RPC returns the stake id either way (a false
-    # ON CONFLICT WHERE simply leaves the existing row untouched), so re-read the current holder: if it
-    # is NOT us, a higher/equal leader still provides the sync and we changed nothing. Report that
-    # honestly instead of a false "sync enabled" — the Raleigh/Ricky lesson: a LOWER-access leader must
-    # never appear to have taken over a higher one's credential (and must not trigger a kickoff sync).
+    # HIGHEST-WINS (migration 0068): the RPC stores EVERY enrollment under its own email — it never
+    # refuses a narrower one. Re-read the EFFECTIVE holder: if it is NOT us, a broader leader still
+    # provides the sync and our credential is kept as a standby (it becomes effective automatically
+    # if theirs is revoked or lapses). Report that honestly — the client shows "stored as a backup;
+    # sync keeps running on X" instead of the old "no change is needed" dead-end, which refused the
+    # provider's own re-auth outright (2026-11-08: ILYA's fresh session scraped a lower rank than his
+    # stored credential and nothing was stored at all). A LOWER-access leader still never appears to
+    # have taken over a higher one's credential — and must not trigger a kickoff sync (below).
     post = _stored_credential_summary(ctx.unit_number)
     stored_email = ((post or {}).get("provider_email") or "").lower()
-    if stored_email and stored_email != (identity.get("email") or "").lower():
-        logger.info("enroll: RPC refused a downgrade for stake %s — sync stays with %s (rank %s); this "
-                    "session (rank %s) did not replace it", ctx.unit_number,
-                    (post or {}).get("provider_name"), (post or {}).get("access_rank"), rank)
-        base["enroll_blocked"] = "downgrade"
-        base["would_downgrade"] = True  # the client's "left in place, no change needed" copy
-        base["enroll_block_reason"] = (
-            f"This stake's daily sync is already provided by "
-            f"{(post or {}).get('provider_name') or 'another leader'} with broader access, so your "
-            "account was left as-is to avoid reducing coverage. Ask them to re-authorize if the sync "
-            "needs refreshing.")
-        base["existing_provider"] = (post or {}).get("provider_name")
-        # 'enroll_blocked' for the same reason as the ward-scoped refusal above: the login succeeded,
-        # only the credential take-over was declined.
-        _audit("enroll_blocked", error="downgrade refused — stronger credential already on file")
-        return base
+    my_email = (identity.get("email") or "").lower()
+    is_effective = bool(stored_email and stored_email == my_email)
+    base["effective_provider"] = (post or {}).get("provider_name")
+    base["is_effective"] = is_effective
+    base["stored_as_backup"] = bool(post is not None and not is_effective)
+    if post is not None and not is_effective:
+        logger.info("enroll: stored %s (rank %s) as a BACKUP for stake %s — sync stays with %s "
+                    "(rank %s)", identity.get("email"), rank, ctx.unit_number,
+                    (post or {}).get("provider_name"), (post or {}).get("access_rank"))
     logger.info("enrolled stake %s (%s): coverage_complete=%s rank=%s",
                 ctx.unit_name, ctx.unit_number, coverage["complete"], rank)
     # The Member Tools 45-day token is minted by the credential-capture login flow (web_session.py) —
@@ -969,7 +991,8 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
     # a missing token (e.g. the leader has never used Member Tools) doesn't fail the enroll.
     if membertools_refresh:
         try:
-            persist_membertools_refresh_rest(ctx.unit_number, membertools_refresh)
+            persist_membertools_refresh_rest(ctx.unit_number, membertools_refresh,
+                                             identity.get("email"))
             logger.info("enroll: stored Member Tools 45-day token for stake %s (len=%d) — daily sync "
                         "is now self-renewing for ~45 days", ctx.unit_number, len(membertools_refresh))
         except Exception as exc:  # noqa: BLE001
@@ -1013,11 +1036,17 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
     return base
 
 
-def persist_membertools_refresh_rest(unit_number: int, refresh_token: str) -> None:
+def persist_membertools_refresh_rest(unit_number: int, refresh_token: str,
+                                     principal_email: str | None = None) -> None:
     """Persist the Member Tools refresh token via Supabase REST (the broker has no psycopg2):
     resolve the stake id, then PATCH stake_credentials with the Fernet-encrypted token. Mirrors the
     psycopg2 path in backend.credentials.save_membertools_refresh (same envelope + column). Called by
-    the credential-capture flow (web_session.py) right after a one-MFA login mints the 45-day token."""
+    the credential-capture flow (web_session.py) right after a one-MFA login mints the 45-day token.
+
+    The token is minted off THIS leader's session, so it lands on THIS leader's row (0068) — never
+    on the effective provider's row. The daily sync reads the token off the effective row; a standby
+    holder's token simply waits on their row until they become effective (e.g. the top credential
+    is revoked), when the sync picks it up with no re-enroll."""
     from backend import credentials
     h = {"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}", "Content-Type": "application/json"}
     s = requests.get(f"{SUPABASE_URL}/rest/v1/stakes",
@@ -1033,7 +1062,8 @@ def persist_membertools_refresh_rest(unit_number: int, refresh_token: str) -> No
     r = requests.patch(
         f"{SUPABASE_URL}/rest/v1/stake_credentials",
         headers={**h, "Prefer": "return=minimal"},
-        params={"stake_id": f"eq.{stake_id}"},
+        params={"stake_id": f"eq.{stake_id}",
+                "principal_email": f"eq.{(principal_email or '').lower()}"},
         # A fresh bootstrap mint legitimately starts a new 45-day clock; the daily-sync refresh path
         # preserves this anchor across renewals (it never re-mints unless the token actually expires).
         json={"membertools_refresh_enc": blob,
@@ -1046,7 +1076,9 @@ def persist_membertools_refresh_rest(unit_number: int, refresh_token: str) -> No
     # it's still empty, so the caller's ERROR path fires immediately instead of days later.
     chk = requests.get(
         f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=h,
-        params={"stake_id": f"eq.{stake_id}", "select": "membertools_refresh_enc"}, timeout=30)
+        params={"stake_id": f"eq.{stake_id}",
+                "principal_email": f"eq.{(principal_email or '').lower()}",
+                "select": "membertools_refresh_enc"}, timeout=30)
     saved = chk.json() if chk.status_code == 200 else []
     if not saved or not (saved[0] or {}).get("membertools_refresh_enc"):
         raise RuntimeError(

@@ -35,6 +35,9 @@ function status(cred: Partial<CredentialInfo>, extra: Partial<EnrollmentStatus> 
       state: 'active',
       complete: true,
       isProvider: true,
+      // 0068: the effective provider always holds a row; tests that model a viewer who never
+      // enrolled must override this to false.
+      isCredentialHolder: true,
       principalName: 'Test Leader',
       enrolledAt: null,
       lastError: null,
@@ -97,19 +100,28 @@ describe('SyncSettingsSheet credential states', () => {
     expect(revokeBtn()).toBeTruthy();
   });
 
-  it('active non-provider, NOT a stake leader: status only, no action buttons', () => {
-    renderSheet(status({ state: 'active', isProvider: false }, { viewerIsStakeLeader: false }));
+  it('active non-provider, NOT a stake leader, holds no row: status only, no action buttons', () => {
+    renderSheet(status({ state: 'active', isProvider: false, isCredentialHolder: false }, { viewerIsStakeLeader: false }));
     expect(reauthBtn()).toBeNull();
     expect(syncNowBtn()).toBeNull();
     expect(revokeBtn()).toBeNull();
     expect(takeOverBtn()).toBeNull();
   });
 
+  // 0068: a viewer who holds a STANDBY row (not the effective provider) can revoke their OWN row,
+  // sees the backup note, but can't Sync now (the sync runs on the provider's credential).
+  it('active standby holder: shows Revoke + backup note, hides Sync now', () => {
+    renderSheet(status({ state: 'active', isProvider: false, isCredentialHolder: true, holders: 2 }));
+    expect(screen.getByText(/stored as a backup/)).toBeTruthy();
+    expect(syncNowBtn()).toBeNull();
+    expect(revokeBtn()).toBeTruthy();
+  });
+
   // The Raleigh/Ricky bug (2026-06-18): a stake leader who isn't the current provider had NO way to
   // put their own (broader-access) credential in place. They must now get a take-over action.
   it('active non-provider STAKE LEADER: offers "Use my account for sync"', () => {
     const { onReauth, onClose } = renderSheet(
-      status({ state: 'active', isProvider: false, principalName: 'Ricky' }, { viewerIsStakeLeader: true }),
+      status({ state: 'active', isProvider: false, isCredentialHolder: false, principalName: 'Ricky' }, { viewerIsStakeLeader: true }),
     );
     expect(syncNowBtn()).toBeNull(); // not the provider → can't sync/revoke theirs
     expect(revokeBtn()).toBeNull();

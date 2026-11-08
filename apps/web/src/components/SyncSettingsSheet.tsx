@@ -62,10 +62,12 @@ export function SyncSettingsSheet({ open, onClose, initial, onLoaded, onRevoke, 
   // TAKE-OVER (the Raleigh/Ricky bug, 2026-06-18): an ACTIVE credential provided by SOMEONE ELSE used
   // to leave a higher-access stake leader with no action at all — they couldn't put their own (broader)
   // credential in place. Offer it now to any stake-level leader who isn't already the provider. The
-  // broker's most-elevated-wins rule decides on submit: a higher/equal account takes over; a strictly
-  // lower one is told its access is narrower and nothing changed (so a lower leader can't clobber).
+  // broker's highest-wins rule decides on submit (0068): a broader account takes over at once; a
+  // strictly narrower one is stored as a standby and never reduces coverage.
   const canTakeOver =
     credState === 'active' && !isProvider && status?.viewerIsStakeLeader === true;
+  // A standby holder can revoke their OWN row (0068) — the effective provider's row is untouched.
+  const isHolder = cred?.isCredentialHolder === true;
 
   /** Provider self-service wipe: deletes the stake's MEMBER records (access + the sync credential
    *  stay; data re-populates on the next sync) — the self-serve mirror of the admin "Wipe data". */
@@ -141,6 +143,15 @@ export function SyncSettingsSheet({ open, onClose, initial, onLoaded, onRevoke, 
                 color={credState === 'active' ? 'var(--success)' : 'var(--warning)'}
               />
               {cred.principalName && <Row label="Provided by" value={cred.principalName} />}
+              {cred.holders != null && cred.holders > 1 && (
+                <Row label="Credential holders" value={String(cred.holders)} />
+              )}
+              {isHolder && !isProvider && (
+                <p className="tiny muted" style={{ marginTop: 4 }}>
+                  Your credential is stored as a backup — the sync runs on {cred.principalName || 'another leader'}'s
+                  broader access, and yours takes over automatically if theirs is revoked.
+                </p>
+              )}
               {cred.enrolledAt && <Row label="Enrolled" value={fmtDateTime(cred.enrolledAt)} />}
               <Row label="Coverage" value={cred.complete ? 'Complete' : 'Partial'} />
               {credState === 'stale' && cred.lastError && (
@@ -171,9 +182,10 @@ export function SyncSettingsSheet({ open, onClose, initial, onLoaded, onRevoke, 
               <div className="row" style={{ alignItems: 'flex-start', gap: 6, marginTop: 16 }}>
                 <Icon name="key" size={15} color="var(--primary)" />
                 <span className="small muted">
-                  This stake's sync is provided by {cred?.principalName || 'another leader'}. If your
-                  calling has the same or broader access, you can take it over with your own Church
-                  account.
+                  This stake's sync runs on {cred?.principalName || 'another leader'}'s credential
+                  {cred?.holders != null && cred.holders > 1 ? ` (${cred.holders} leaders hold one)` : ''}.
+                  Re-authorizing never reduces coverage: if your access is broader it takes over at
+                  once, and if narrower it's kept as a backup.
                 </span>
               </div>
               <Button
@@ -194,11 +206,12 @@ export function SyncSettingsSheet({ open, onClose, initial, onLoaded, onRevoke, 
               Sync my stake now
             </Button>
           )}
-          {isProvider && credState !== 'revoked' && credState !== 'none' && (
+          {isHolder && credState !== 'revoked' && credState !== 'none' && (
             <>
               {/* R3 revoke-risk: a complete (full-access) credential keeps the WHOLE stake synced for
-                  every leader. Warn before revoking — the data freezes until someone re-authorizes. */}
-              {cred?.complete && (
+                  every leader. Warn before revoking — but only when THIS viewer is the effective
+                  provider: revoking a standby row leaves the sync untouched. */}
+              {isProvider && cred?.complete && (
                 <div className="row" style={{ alignItems: 'flex-start', gap: 6, marginTop: 12 }}>
                   <Icon name="warning" size={15} color="var(--warning)" />
                   <span className="small" style={{ color: 'var(--warning)' }}>
@@ -220,7 +233,7 @@ export function SyncSettingsSheet({ open, onClose, initial, onLoaded, onRevoke, 
               </Button>
             </>
           )}
-          {isProvider && (
+          {isHolder && (
             <Button
               variant="outlined"
               icon="error"

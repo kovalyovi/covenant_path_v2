@@ -43,13 +43,14 @@ def test_enroll_with_consent_stores_credential_and_kicks_audit(stack):
 
 
 def test_reenroll_after_revoke_unrevokes_and_clears_failure_state(stack):
-    """The 2026-06-10 regression scenario: a REVOKED credential exists; a fresh consented
-    enroll must un-revoke it and clear last_failed_at/last_error (0041 WHERE arm #1)."""
+    """The 2026-06-10 regression scenario: a REVOKED credential exists for THIS leader; a fresh
+    consented enroll must un-revoke it and clear last_failed_at/last_error (0068 per-email upsert —
+    the old 0041 WHERE arm #1, now scoped to the leader's own row)."""
     stack.seed(
         stakes=[stake_row()],
         stake_credentials=[credential_row(
-            principal_name=WARD_LEADER.name, principal_email=WARD_LEADER.email,
-            access_rank=4, coverage=PARTIAL_COVERAGE, has_refresh_token=False,
+            principal_name=PRESIDENT.name, principal_email=PRESIDENT.email,
+            access_rank=1000, coverage={"complete": True}, has_refresh_token=True,
             revoked=True, revoked_at="2026-06-09T08:00:00+00:00",
             last_failed_at="2026-06-09T07:00:00+00:00", last_error="LCR session expired",
             stale_notified_at="2026-06-09T07:30:00+00:00",
@@ -71,6 +72,37 @@ def test_reenroll_after_revoke_unrevokes_and_clears_failure_state(stack):
     assert cred["principal_email"] == PRESIDENT.email
     assert cred["access_rank"] == 1000
     assert cred["coverage"]["complete"] is True
+
+
+def test_enroll_over_other_leaders_revoked_row_keeps_it_as_history(stack):
+    """0068: a REVOKED credential belonging to ANOTHER leader is dead history, not something a new
+    enroll "takes over" — the new leader gets their own row, and the revoked row stays (revoked).
+    The stake ends up with one live credential: the enroller's, effective at once."""
+    stack.seed(
+        stakes=[stake_row()],
+        stake_credentials=[credential_row(
+            principal_name=WARD_LEADER.name, principal_email=WARD_LEADER.email,
+            access_rank=4, coverage=PARTIAL_COVERAGE, has_refresh_token=False,
+            revoked=True, revoked_at="2026-06-09T08:00:00+00:00",
+            last_failed_at="2026-06-09T07:00:00+00:00", last_error="LCR session expired",
+            stale_notified_at="2026-06-09T07:30:00+00:00",
+        )],
+    )
+    res = stack.login(PRESIDENT.username, PRESIDENT.password, enroll=True)
+    assert res.status_code == 200, res.text
+    assert res.json()["enroll"]["stored"] is True
+
+    creds = stack.stub_rows("stake_credentials")
+    assert len(creds) == 2, "the other leader's revoked row is retained, not replaced"
+    live = [c for c in creds if not c.get("revoked")]
+    assert len(live) == 1 and live[0]["principal_email"] == PRESIDENT.email
+    assert live[0]["revoked"] is False
+    assert live[0]["last_failed_at"] is None
+    assert live[0]["last_error"] is None
+    dead = [c for c in creds if c.get("revoked")]
+    assert len(dead) == 1 and dead[0]["principal_email"] == WARD_LEADER.email
+    assert live[0]["access_rank"] == 1000
+    assert live[0]["coverage"]["complete"] is True
 
 
 def test_plain_login_offers_can_enroll_when_stake_has_no_credential(stack):

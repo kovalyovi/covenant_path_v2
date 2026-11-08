@@ -93,17 +93,6 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
     // failed (e.g. LCR outage — the 2026-06-10 "couldn't do sync for his stake" report), nothing was
     // stored: say so and keep the dialog open instead of toasting a success that didn't happen.
     if (!r.stored) {
-      // A NON-failure reason nothing was stored: this session is strictly WEAKER than the credential
-      // already keeping the stake synced — re-authorizing with it would reduce coverage (R4). Say so
-      // plainly rather than implying an error.
-      if (r.wouldDowngrade) {
-        setError(
-          `This stake's daily sync is already provided by ${r.existingProvider || 'another leader'} ` +
-            'with broader access. Your access is narrower, so it was left in place to avoid reducing ' +
-            'coverage. No change is needed.',
-        );
-        return;
-      }
       setError(
         'Your sign-in worked, but the daily sync could not be set up' +
           (r.enrollError ? ` — ${r.enrollError}` : '.') +
@@ -111,7 +100,15 @@ export function ReauthDialog({ open, onClose }: { open: boolean; onClose: () => 
       );
       return;
     }
-    toast.show({ message: 'Daily sync authorized — your stake will refresh within minutes.' });
+    // 0068: the credential is always stored now. A narrower session lands as a standby — the sync
+    // keeps running on the effective (broadest) provider — so say that instead of the old
+    // "no change is needed" dead-end: the 2026-11-08 incident refused the provider's own re-auth
+    // outright when his fresh session scraped a lower rank than his stored credential.
+    toast.show({
+      message: r.storedAsBackup
+        ? `Saved as a backup — the daily sync keeps running on ${r.effectiveProvider ?? 'another leader'}'s broader access.`
+        : 'Daily sync authorized — your stake will refresh within minutes.',
+    });
     void d.reloadEnrollStatus();
     resetAll();
     setUsername('');

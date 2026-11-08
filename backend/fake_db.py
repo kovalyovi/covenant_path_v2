@@ -324,10 +324,23 @@ class FakeDB:
         return row
 
     def credential(self, stake_id) -> dict | None:
-        for c in self.stake_credentials:
-            if c["stake_id"] == stake_id:
-                return c
-        return None
+        """The stake's EFFECTIVE credential (0068): highest access_rank among live rows, freshest
+        winning a tie — the same row the real queries target. Never a narrower standby."""
+        live = [c for c in self.stake_credentials
+                if c["stake_id"] == stake_id and not c.get("revoked")]
+        if not live:
+            return None
+        # Highest rank wins; a tie goes to the freshest row (updated_at), then the most recently
+        # added — mirroring SQL's `order by access_rank desc nulls last, updated_at desc`.
+        return max(enumerate(live), key=lambda t: (
+            t[1].get("access_rank") if t[1].get("access_rank") is not None else -1,
+            t[1].get("updated_at") or "",
+            t[0]))[1]
+
+    def credentials_for(self, stake_id) -> list[dict]:
+        """ALL live credential rows for a stake (every enrolled leader/calling)."""
+        return [c for c in self.stake_credentials
+                if c["stake_id"] == stake_id and not c.get("revoked")]
 
     # query helpers for assertions
     def member(self, person_uuid: str) -> dict | None:

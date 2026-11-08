@@ -48,8 +48,9 @@ granted-feature count) **and `coverage`** (complete? what's missing? who to ask)
 - **`should_take_over`** (backend/onboarding.py): when the active credential is *incomplete* and a
   newly-signed-in leader's access would *strictly improve* it, the app offers them the takeover
   ("can_improve"). A complete credential never bothers anyone.
-- **Enroll RPC (migration 0038)**: most-elevated-wins — a lower-access leader can never downgrade a
-  healthy higher credential; same-principal / equal-rank / stale-credential re-enrolls DO refresh.
+- **Enroll RPC (migration 0068)**: highest-wins — a stake holds one credential row per leader and
+  the sync always uses the broadest live one; every enrollment is stored (a narrower one as a
+  standby) and a same-principal re-enroll refreshes that leader's own row, never demoting it.
 - The **fast login path** (perf fix) skips the live access probe only when the stake already has a
   usable credential — whenever the level question matters (enroll / takeover / no usable
   credential), the full live probe runs and its result is stored.

@@ -23,6 +23,21 @@ from lcr_client.token_store import _load_key
 logger = get_logger()
 
 
+# --- effective-credential selection (migration 0068) --------------------------------------
+# A stake may hold MULTIPLE credentials (one row per leader/calling). The EFFECTIVE credential —
+# the one the daily sync, the profile refresh, and the alerts all use — is the HIGHEST access_rank
+# among live (non-revoked) rows, freshest winning a tie. Every read/write below targets it, so a
+# narrower standby row can never shadow the broadest live one, and a revoked/dead top row falls
+# through to the next-highest standby with no re-enroll.
+_EFFECTIVE_ORDER = "access_rank desc nulls last, updated_at desc"
+
+
+def _effective_id_subquery() -> str:
+    """`id = (<this>)` — the effective row for a stake (params: stake_id)."""
+    return ("(select id from stake_credentials where stake_id=%s and not revoked "
+            f"order by {_EFFECTIVE_ORDER} limit 1)")
+
+
 def _fernet() -> Fernet:
     return Fernet(_load_key())
 
@@ -61,20 +76,28 @@ def _decrypt_envelope(blob: str) -> bytes:
 
 def save_credential(conn, stake_id: str, grant: dict) -> None:
     """Encrypt + store a stake's delegated session. `grant` like token_store's record, plus
-    optional `coverage` (allowed-feature info) and `access_rank` for most-elevated comparison."""
+    optional `coverage` (allowed-feature info) and `access_rank` for most-elevated comparison.
+
+    One row per LEADER per stake (0068): upsert on (stake_id, principal_email), replacing only
+    that leader's own row — another leader's row is never touched."""
     blob = _encrypt_envelope(json.dumps({
         "cookies": grant.get("cookies"),
         "refresh_token": grant.get("refresh_token"),
     }).encode("utf-8"))
     import psycopg2.extras  # lazy: keeps the broker (encrypt-only) from needing psycopg2
     coverage = grant.get("coverage")
+    principal = grant.get("principal")
+    principal_name = ((principal or {}).get("name") if isinstance(principal, dict)
+                      else grant.get("principal_name"))
+    principal_email = ((principal or {}).get("email") if isinstance(principal, dict)
+                       else grant.get("principal_email") or "")
     with conn.cursor() as cur:
         cur.execute("""
             insert into stake_credentials
-                (stake_id, principal_name, granting_role_ids, credential_enc, coverage,
-                 access_rank, expires_at, revoked, updated_at)
-            values (%s,%s,%s,%s,%s,%s,%s,false, now())
-            on conflict (stake_id) do update set
+                (stake_id, principal_name, principal_email, granting_role_ids, credential_enc,
+                 coverage, access_rank, expires_at, revoked, updated_at)
+            values (%s,%s,%s,%s,%s,%s,%s,%s,false, now())
+            on conflict (stake_id, principal_email) do update set
                 principal_name=excluded.principal_name,
                 granting_role_ids=excluded.granting_role_ids,
                 credential_enc=excluded.credential_enc,
@@ -82,8 +105,7 @@ def save_credential(conn, stake_id: str, grant: dict) -> None:
                 access_rank=excluded.access_rank,
                 expires_at=excluded.expires_at,
                 revoked=false, revoked_at=null, updated_at=now()
-        """, (stake_id, (grant.get("principal") or {}).get("name") if isinstance(grant.get("principal"), dict)
-              else grant.get("principal_name"),
+        """, (stake_id, principal_name, (principal_email or "").lower(),
               grant.get("granting_role_ids"), blob,
               psycopg2.extras.Json(coverage) if coverage is not None else None,
               grant.get("access_rank"), grant.get("expires_at")))
@@ -92,23 +114,27 @@ def save_credential(conn, stake_id: str, grant: dict) -> None:
 
 
 def get_credential(conn, stake_id: str) -> dict | None:
-    """Decrypt + return a stake's credential ({cookies, refresh_token, ...}) or None."""
+    """Decrypt + return a stake's EFFECTIVE credential ({cookies, refresh_token, ...}) or None —
+    the highest-rank live row (0068), never a narrower standby."""
     with conn.cursor() as cur:
-        cur.execute("""select principal_name, granting_role_ids, credential_enc, expires_at,
-                              revoked, coverage, access_rank
-                       from stake_credentials where stake_id=%s""", (stake_id,))
+        cur.execute(f"""select id, principal_name, principal_email, granting_role_ids,
+                              credential_enc, expires_at, revoked, coverage, access_rank
+                       from stake_credentials where stake_id=%s and not revoked
+                       order by {_EFFECTIVE_ORDER} limit 1""", (stake_id,))
         row = cur.fetchone()
     if not row:
         return None
-    secret = json.loads(_decrypt_envelope(row[2]).decode("utf-8"))
-    return {"principal_name": row[0], "granting_role_ids": row[1], "expires_at": row[3],
-            "revoked": row[4], "coverage": row[5], "access_rank": row[6], **secret}
+    secret = json.loads(_decrypt_envelope(row[4]).decode("utf-8"))
+    return {"id": row[0], "principal_name": row[1], "principal_email": row[2],
+            "granting_role_ids": row[3], "expires_at": row[5],
+            "revoked": row[6], "coverage": row[7], "access_rank": row[8], **secret}
 
 
 def list_active_stakes(conn) -> list[dict]:
-    """Stakes with a non-revoked credential, for the daily multi-stake loop."""
+    """Stakes with at least one non-revoked credential, for the daily multi-stake loop.
+    DISTINCT: a stake with several enrolled leaders still syncs once, on its effective credential."""
     with conn.cursor() as cur:
-        cur.execute("""select c.stake_id, s.unit_number, s.name
+        cur.execute("""select distinct c.stake_id, s.unit_number, s.name
                        from stake_credentials c join stakes s on s.id=c.stake_id
                        where not c.revoked""")
         return [{"stake_id": r[0], "unit_number": r[1], "name": r[2]} for r in cur.fetchall()]
@@ -128,27 +154,29 @@ def stake_id_for_unit(conn, unit_number: int) -> str | None:
 
 def save_membertools_refresh(conn, stake_id: str, refresh_token: str,
                              minted_at: str | None = None) -> None:
-    """Persist a stake's Member Tools refresh token (encrypted). Preserves the ORIGINAL mint date
-    across refreshes (rotation is off) so the 45-day clock isn't reset by a renewal."""
+    """Persist a stake's Member Tools refresh token (encrypted) on the EFFECTIVE credential.
+    Preserves the ORIGINAL mint date across refreshes (rotation is off) so the 45-day clock
+    isn't reset by a renewal."""
     if not refresh_token:
         return
     blob = _encrypt_envelope(json.dumps({"refresh_token": refresh_token}).encode("utf-8"))
     with conn.cursor() as cur:
         cur.execute(
-            """update stake_credentials
+            f"""update stake_credentials
                   set membertools_refresh_enc = %s,
                       membertools_minted_at = coalesce(membertools_minted_at, %s, now())
-                where stake_id = %s""",
+                where id = {_effective_id_subquery()}""",
             (blob, minted_at, stake_id))
     conn.commit()
     logger.info("saved Member Tools refresh token for stake %s", stake_id)
 
 
 def get_membertools_refresh(conn, stake_id: str) -> dict | None:
-    """{refresh_token, minted_at} for a stake (decrypted), or None when absent/empty."""
+    """{refresh_token, minted_at} for a stake's EFFECTIVE credential (decrypted), or None."""
     with conn.cursor() as cur:
-        cur.execute("""select membertools_refresh_enc, membertools_minted_at
-                       from stake_credentials where stake_id=%s and not revoked""", (stake_id,))
+        cur.execute(f"""select membertools_refresh_enc, membertools_minted_at
+                       from stake_credentials where stake_id=%s and not revoked
+                       order by {_EFFECTIVE_ORDER} limit 1""", (stake_id,))
         row = cur.fetchone()
     if not row or not row[0]:
         return None
@@ -162,20 +190,32 @@ def get_membertools_refresh(conn, stake_id: str) -> dict | None:
 
 
 def clear_membertools_refresh(conn, stake_id: str) -> None:
-    """Drop a stake's Member Tools refresh token (it hit the 45-day wall / was revoked) so the next
-    sync re-mints off a fresh Okta session instead of looping on a dead refresh token."""
+    """Drop a stake's Member Tools refresh token (it hit the 45-day wall / was revoked) from the
+    EFFECTIVE credential so the next sync re-mints off a fresh Okta session instead of looping
+    on a dead refresh token."""
     with conn.cursor() as cur:
-        cur.execute("""update stake_credentials
+        cur.execute(f"""update stake_credentials
                        set membertools_refresh_enc = null, membertools_minted_at = null
-                       where stake_id = %s""", (stake_id,))
+                       where id = {_effective_id_subquery()}""", (stake_id,))
     conn.commit()
 
 
-def revoke(conn, stake_id: str, reason: str = "manual") -> None:
+def revoke(conn, stake_id: str, reason: str = "manual", principal_email: str | None = None) -> None:
+    """Revoke a stake credential. With no principal_email this revokes the EFFECTIVE row (the one
+    the sync ran with — what _revoke_if_ineligible and the scope-mismatch guard mean). Pass a
+    principal_email to revoke one leader's own row, leaving the other holders untouched."""
     with conn.cursor() as cur:
-        cur.execute("""update stake_credentials set revoked=true, revoked_at=now(),
-                       audit = audit || %s::jsonb where stake_id=%s""",
-                    (json.dumps([{"event": "revoked", "reason": reason}]), stake_id))
+        if principal_email:
+            cur.execute("""update stake_credentials set revoked=true, revoked_at=now(),
+                           audit = audit || %s::jsonb
+                           where stake_id=%s and lower(principal_email)=lower(%s)""",
+                        (json.dumps([{"event": "revoked", "reason": reason}]), stake_id,
+                         principal_email))
+        else:
+            cur.execute(f"""update stake_credentials set revoked=true, revoked_at=now(),
+                           audit = audit || %s::jsonb
+                           where id = {_effective_id_subquery()}""",
+                        (json.dumps([{"event": "revoked", "reason": reason}]), stake_id))
     conn.commit()
     logger.warning("revoked stake credential %s (%s)", stake_id, reason)
 
@@ -184,30 +224,35 @@ def revoke(conn, stake_id: str, reason: str = "manual") -> None:
 #     the enroll-RPC takeover clause, and the ops staleness view. -----------------------------------
 
 def mark_failed(conn, stake_id: str, error: str) -> None:
-    """Stamp a credential as currently FAILING (its delegated session couldn't mint). Records the
-    reason; leaves stale_notified_at to the alert edge below."""
+    """Stamp the EFFECTIVE credential as currently FAILING (its delegated session couldn't mint).
+    Records the reason; leaves stale_notified_at to the alert edge below."""
     with conn.cursor() as cur:
-        cur.execute("update stake_credentials set last_failed_at=now(), last_error=%s where stake_id=%s",
+        cur.execute(f"update stake_credentials set last_failed_at=now(), last_error=%s "
+                    f"where id={_effective_id_subquery()}",
                     ((error or "")[:500], stake_id))
     conn.commit()
 
 
 def mark_succeeded(conn, stake_id: str) -> None:
-    """Stamp a credential healthy after a successful sync — clears the failing + notified state so the
-    NEXT failure re-alerts (the success->failure edge), never spamming on a streak of failures."""
+    """Stamp the EFFECTIVE credential healthy after a successful sync — clears the failing +
+    notified state so the NEXT failure re-alerts (the success->failure edge), never spamming on
+    a streak of failures."""
     with conn.cursor() as cur:
-        cur.execute("update stake_credentials set last_succeeded_at=now(), last_failed_at=null, "
-                    "last_error=null, stale_notified_at=null where stake_id=%s", (stake_id,))
+        cur.execute(f"update stake_credentials set last_succeeded_at=now(), last_failed_at=null, "
+                    f"last_error=null, stale_notified_at=null where id={_effective_id_subquery()}",
+                    (stake_id,))
     conn.commit()
 
 
 def claim_stale_notification(conn, stake_id: str) -> bool:
-    """Atomically claim the right to send ONE stale-credential alert for this failure streak. Returns
-    True only the FIRST failure after a success (mark_succeeded cleared stale_notified_at). Subsequent
-    consecutive failures return False, so we email once per streak, not once per run."""
+    """Atomically claim the right to send ONE stale-credential alert for this failure streak on
+    the EFFECTIVE credential. Returns True only the FIRST failure after a success
+    (mark_succeeded cleared stale_notified_at). Subsequent consecutive failures return False,
+    so we email once per streak, not once per run."""
     with conn.cursor() as cur:
-        cur.execute("update stake_credentials set stale_notified_at=now() "
-                    "where stake_id=%s and stale_notified_at is null", (stake_id,))
+        cur.execute(f"update stake_credentials set stale_notified_at=now() "
+                    f"where id={_effective_id_subquery()} and stale_notified_at is null",
+                    (stake_id,))
         claimed = cur.rowcount > 0
     conn.commit()
     return claimed
@@ -228,13 +273,14 @@ def claim_age_notification(conn, stake_id: str, min_age_days: int) -> bool:
     (`membertools_minted_at is null`) this is byte-identical to the prior updated_at behavior."""
     with conn.cursor() as cur:
         cur.execute(
-            """update stake_credentials set age_notified_at = now()
-               where stake_id = %s
-                 and not revoked
-                 and coalesce(has_refresh_token, false) = false
-                 and coalesce(membertools_minted_at, updated_at) < now() - make_interval(days => %s)
-                 and (age_notified_at is null
-                      or age_notified_at < coalesce(membertools_minted_at, updated_at))""",
+            f"""update stake_credentials set age_notified_at = now()
+                 where id = (select id from stake_credentials where stake_id = %s
+                   and not revoked
+                   and coalesce(has_refresh_token, false) = false
+                   and coalesce(membertools_minted_at, updated_at) < now() - make_interval(days => %s)
+                   and (age_notified_at is null
+                        or age_notified_at < coalesce(membertools_minted_at, updated_at))
+                   order by {_EFFECTIVE_ORDER} limit 1)""",
             (stake_id, min_age_days))
         claimed = cur.rowcount > 0
     conn.commit()
@@ -242,9 +288,10 @@ def claim_age_notification(conn, stake_id: str, min_age_days: int) -> bool:
 
 
 def provider_email(conn, stake_id: str) -> str | None:
-    """The email of the leader whose session backs this stake (for the stale-credential alert)."""
+    """The email of the leader whose session backs this stake — the EFFECTIVE provider (highest
+    live rank), for the stale-credential alert."""
     with conn.cursor() as cur:
-        cur.execute("select principal_email from stake_credentials where stake_id=%s and not revoked",
-                    (stake_id,))
+        cur.execute(f"select principal_email from stake_credentials where stake_id=%s and not revoked "
+                    f"order by {_EFFECTIVE_ORDER} limit 1", (stake_id,))
         row = cur.fetchone()
     return (row[0] if row else None) or None

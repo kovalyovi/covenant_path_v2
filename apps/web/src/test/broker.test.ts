@@ -114,3 +114,44 @@ describe('broker warm gate (cold-start fix)', () => {
     expect(calls.filter((u) => u === PASSWORD).length).toBe(2);
   });
 });
+
+describe('broker enroll mapping (0068 highest-wins)', () => {
+  it('maps stored_as_backup + effective_provider so the dialog can show the backup note', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === HEALTH) return jsonResponse({ ok: true });
+      return jsonResponse({
+        session: { email: 'junior@x.org', otp: '123456' },
+        enroll: {
+          stored: true, authorized: true, stored_as_backup: true,
+          effective_provider: 'Boss', would_downgrade: true,
+        },
+      });
+    }));
+
+    const r = await new BrokerClient().password('user', 'pass');
+    expect(r.stored).toBe(true);
+    expect(r.storedAsBackup).toBe(true);
+    expect(r.effectiveProvider).toBe('Boss');
+    // The R4 warning is still computed, but it no longer blocks storage.
+    expect(r.wouldDowngrade).toBe(true);
+  });
+
+  it('maps is_credential_holder + holders from enrollment-status', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === HEALTH) return jsonResponse({ ok: true });
+      return jsonResponse({
+        stake_name: 'Test Stake', stake_id: 'stake-1', unit_number: 503991,
+        member_count: 42, has_data: true, patriarchal_pending: 0,
+        credential: {
+          state: 'active', complete: false, principal_name: 'Boss',
+          is_provider: false, is_credential_holder: true, holders: 2,
+        },
+      });
+    }));
+
+    const s = await new BrokerClient().enrollmentStatus();
+    expect(s.credential.isProvider).toBe(false);
+    expect(s.credential.isCredentialHolder).toBe(true);
+    expect(s.credential.holders).toBe(2);
+  });
+});
