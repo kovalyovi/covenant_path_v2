@@ -565,6 +565,7 @@ def build_membertools_report(
     cache: "ProfileCache | None" = None,
     include_returning: bool = True,
     verbose: bool = True,
+    raw_out: str | None = None,
 ) -> tuple[list[CovenantPathMember], dict]:
     """Build the covenant-path report from the RELIABLE Member Tools bulk API instead of the fragile
     one-work cluster. ONE POST /api/v5/sync replaces the per-unit progress-record + per-person details
@@ -588,6 +589,19 @@ def build_membertools_report(
         raise membertools.MemberToolsError("no Member Tools access token")
 
     payload = membertools.fetch_sync(access_token)
+    if raw_out:
+        # Ops escape hatch (2026-11-08): persist the RAW /api/v5/sync payload (households +
+        # unitStatistics + classifications + names.listed) for offline verification — the Families
+        # derivation needs fields the flattened member rows discard, and the LCR pull script's
+        # headless Okta login is broken (HTTP 428), so the daily sync's stored-token path is the
+        # only working fresh capture. Member PII — treat the file like the roster artifact.
+        import json as _json
+        from pathlib import Path as _Path
+        _p = _Path(raw_out)
+        _p.parent.mkdir(parents=True, exist_ok=True)
+        _p.write_text(_json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        if verbose:
+            print(f"[membertools] raw /api/v5/sync payload saved -> {_p}")
     members = adapt_sync(payload, include_returning=include_returning)
     stats = {"source": "membertools", "units": 1, "units_failed": 0, "failed_units": [],
              "failed_unit_numbers": [], "members": len(members), "profile_ok": 0, "profile_cached": 0,

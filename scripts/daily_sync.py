@@ -253,7 +253,8 @@ def _sync_one(args) -> dict:
         args._mt_access_token = access_token  # for the /api/v5/sync/files bundle photo pass (#11)
         rows, mt_stats = build_membertools_report(
             client, access_token=access_token, with_profile=args.with_profile,
-            access=access, cache=cache, verbose=args.verbose)
+            access=access, cache=cache, verbose=args.verbose,
+            raw_out=getattr(args, "save_raw_sync", None))
         # The stake/ward structure from the payload — lets the Supabase sync run with NO live LCR
         # session (it dies within days; the 45-day token outlives it). Stash it off _run_stats so it
         # isn't written to the diagnostics row.
@@ -1160,6 +1161,9 @@ def main() -> int:
     ap.add_argument("--only", type=int, metavar="UNIT", default=None,
                     help="with --list-stakes, emit only this stake's unit (the OPS per-stake dispatch)")
     ap.add_argument("--quiet", dest="verbose", action="store_false", default=True)
+    ap.add_argument("--save-raw-sync", default=None, metavar="PATH",
+                    help="save the raw /api/v5/sync payload to PATH (ops verification; member PII — "
+                         "treat like the roster artifact, never commit)")
     args = ap.parse_args()
     # Env switch mirrors --no-self-baseline so the GitHub workflow can flip the cutover without
     # editing the command line (set repo variable DELEGATED_ONLY=1).

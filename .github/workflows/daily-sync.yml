@@ -35,6 +35,10 @@ on:
         description: "Sync only this stake (unit number); blank = all enrolled"
         type: string
         default: ""
+      save_raw_sync:
+        description: "Also save the raw /api/v5/sync payload as an artifact (ops verification; member PII, 7-day retention)"
+        type: boolean
+        default: false
       unit:
         description: "With 'stake': re-pull only this ONE ward/branch (OPS per-unit refetch)"
         type: string
@@ -163,8 +167,23 @@ jobs:
             ARGS="$ARGS --supabase"
           fi
           [ "$PHOTOS" = "true" ] && ARGS="$ARGS --photos"
+          # Ops verification: persist the raw /api/v5/sync payload (households + unitStatistics +
+          # classifications) for offline checks — e.g. the Families derivation ground-truth
+          # comparison. Only on explicit dispatch; scheduled runs never write it.
+          if [ "${{ inputs.save_raw_sync }}" = "true" ]; then
+            ARGS="$ARGS --save-raw-sync tools/output/stake_data_raw.json"
+          fi
           echo "running: python scripts/daily_sync.py $ARGS"
           python scripts/daily_sync.py $ARGS
+
+      - name: Upload raw sync payload (ops verification only)
+        if: ${{ inputs.save_raw_sync == true }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: raw-sync-${{ matrix.stake }}
+          path: tools/output/stake_data_raw.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload run artifacts (logs + summaries, no PII output)
         if: always()
