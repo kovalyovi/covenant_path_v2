@@ -7,11 +7,12 @@ username+password only; see tests/test_web_session.py for the token-minting capt
 from __future__ import annotations
 
 from tests.e2e.seed_helpers import (
-    PARTIAL_COVERAGE, STAKE_ID, WARD_LEADER, credential_row, stake_row,
+    COMPLETE_COVERAGE, PARTIAL_COVERAGE, STAKE_ID, WARD_LEADER, credential_row, stake_row,
 )
 from tests.mock_lcr.personas import PERSONAS, STAKE_NAME, STAKE_UNIT
 
 PRESIDENT = PERSONAS["president.complete"]
+CLERK = PERSONAS["assistantclerk.stake"]
 
 
 def test_enroll_with_consent_stores_credential_and_kicks_audit(stack):
@@ -113,3 +114,74 @@ def test_plain_login_offers_can_enroll_when_stake_has_no_credential(stack):
     assert enroll["can_enroll"] is True, "no usable credential -> offer to set up sync"
     assert enroll["stored"] is False
     assert stack.stub_rows("stake_credentials") == [], "a plain login must never store"
+
+
+def test_narrower_reauth_stored_as_backup(stack):
+    """D82 / 2026-11-08 live incident: the stake's effective credential belongs to the
+    president (rank 1000, complete); a stake assistant clerk re-authorizes with a strictly
+    weaker session (rank 4, partial). The clerk's credential must be STORED as a standby —
+    never refused — the sync keeps running on the president, and the response names the
+    effective provider so the dialog can say so."""
+    stack.seed(
+        stakes=[stake_row()],
+        stake_credentials=[credential_row(
+            principal_name=PRESIDENT.name, principal_email=PRESIDENT.email,
+            access_rank=1000, coverage=COMPLETE_COVERAGE, has_refresh_token=True,
+        )],
+    )
+    res = stack.login(CLERK.username, CLERK.password, enroll=True)
+    assert res.status_code == 200, res.text
+    enroll = res.json()["enroll"]
+    assert enroll["authorized"] is True
+    assert enroll["stored"] is True
+    assert enroll["stored_as_backup"] is True
+    assert enroll["is_effective"] is False
+    assert enroll["effective_provider"] == PRESIDENT.name
+
+    creds = stack.stub_rows("stake_credentials")
+    assert len(creds) == 2, "the clerk gets their own row; the president's row stays"
+    live = [c for c in creds if not c.get("revoked")]
+    assert len(live) == 2
+    effective = max(live, key=lambda c: c["access_rank"])
+    assert effective["principal_email"] == PRESIDENT.email, \
+        "the sync still runs on the president's broader credential"
+    clerk_rows = [c for c in live if c["principal_email"] == CLERK.email]
+    assert len(clerk_rows) == 1
+    assert clerk_rows[0]["access_rank"] == 4
+    assert clerk_rows[0]["coverage"]["complete"] is False
+    history = stack.stub_rows("stake_credential_history")
+    assert any(h["action"] == "stored_backup" for h in history)
+
+
+def test_undetermined_access_enroll_surfaces_error(stack):
+    """2026-11-08 re-auth incident: LCR returns no callings for the session (platform
+    positions empty) while the classic context still shows the calling — the eval lands
+    'undetermined' (authorized=None). A consented enroll must then carry a non-empty error
+    so the dialog says WHY nothing was stored, never a bare 'could not be set up'."""
+    stack.scenario("empty_positions")
+    res = stack.login(PRESIDENT.username, PRESIDENT.password, enroll=True)
+    assert res.status_code == 200, res.text
+    enroll = res.json()["enroll"]
+    assert enroll["authorized"] is None
+    assert enroll["stored"] is False
+    assert isinstance(enroll.get("error"), str) and enroll["error"], \
+        "a consented enroll that stores nothing must say why"
+    assert "callings" in enroll["error"]
+    assert stack.stub_rows("stake_credentials") == [], "nothing stored on undetermined access"
+    audits = stack.audit_rows(outcome="undetermined", email=PRESIDENT.email)
+    assert audits, "the undetermined eval must still be audited"
+
+
+def test_enroll_rpc_failure_surfaces_error(stack):
+    """A failing enroll RPC must surface its reason end to end: the response carries a
+    non-empty `error`, nothing is stored, and the dialog can say why instead of a bare
+    'could not be set up'."""
+    stack.stub_control(fail_rpc="enroll_stake_credential")
+    res = stack.login(PRESIDENT.username, PRESIDENT.password, enroll=True)
+    assert res.status_code == 200, res.text
+    enroll = res.json()["enroll"]
+    # NB: the exception path returns {"error": ...} with no "stored" key at all — .get, not [].
+    assert enroll.get("stored") is not True
+    assert isinstance(enroll.get("error"), str) and enroll["error"]
+    assert "enroll RPC failed" in enroll["error"]
+    assert stack.stub_rows("stake_credentials") == []

@@ -93,6 +93,17 @@ def create_app(store: Store | None = None) -> FastAPI:
         db.reset()
         return {"ok": True}
 
+    @app.post("/__test/control")
+    async def control(request: Request):
+        """One-shot failure injection: {"fail_rpc": "enroll_stake_credential"} makes the NEXT
+        call to that RPC answer 500. Cleared by /__test/reset (and consumed on fire)."""
+        body = await request.json()
+        name = body.get("fail_rpc")
+        if not isinstance(name, str) or not name:
+            return JSONResponse({"error": "fail_rpc (rpc name) required"}, status_code=400)
+        db.fail_next_rpc.add(name)
+        return {"ok": True, "fail_next_rpc": sorted(db.fail_next_rpc)}
+
     @app.get("/__test/state")
     async def state():
         return {"tables": {t: len(r) for t, r in db.tables.items()},
@@ -153,6 +164,9 @@ def create_app(store: Store | None = None) -> FastAPI:
     # ---------------- PostgREST ---------------------------------------------------------
     @app.post("/rest/v1/rpc/enroll_stake_credential")
     async def rpc_enroll(request: Request):
+        if "enroll_stake_credential" in db.fail_next_rpc:
+            db.fail_next_rpc.discard("enroll_stake_credential")
+            return JSONResponse({"message": "injected stub failure"}, status_code=500)
         body = await request.json()
         stake_id = db.rpc_enroll_stake_credential(body)
         return JSONResponse(stake_id)  # PostgREST returns the scalar as a JSON string

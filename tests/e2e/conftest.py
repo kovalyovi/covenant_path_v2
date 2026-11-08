@@ -104,6 +104,10 @@ class Stack:
     def mock_state(self) -> dict:
         return self.http.get(f"{self.lcr_base}/__test/state", timeout=10).json()
 
+    def stub_control(self, **body) -> None:
+        r = self.http.post(f"{self.stub_base}/__test/control", json=body, timeout=10)
+        r.raise_for_status()
+
     def seed(self, **tables) -> None:
         r = self.http.post(f"{self.stub_base}/__test/seed", json=tables, timeout=10)
         r.raise_for_status()

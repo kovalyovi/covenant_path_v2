@@ -8,6 +8,7 @@ state, hence one object).
 
 Control plane (mounted on both hosts):
   POST /__test/control {"scenario": "healthy"|"lcr_5xx"|"identity_timeout"|"sso_reject"
+                        |"slow_access"|"empty_positions"
                         [, "sleep_seconds": float]}
   GET  /__test/state    -> scenario + per-path hit counters + session counts
   POST /__test/reset    -> healthy scenario, counters/transactions/sessions cleared
@@ -19,7 +20,8 @@ import secrets
 import threading
 from collections import Counter
 
-SCENARIOS = ("healthy", "lcr_5xx", "identity_timeout", "sso_reject", "slow_access")
+SCENARIOS = ("healthy", "lcr_5xx", "identity_timeout", "sso_reject", "slow_access",
+             "empty_positions")
 
 
 class MockChurchState:

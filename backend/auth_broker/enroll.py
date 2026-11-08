@@ -906,6 +906,17 @@ def evaluate_and_maybe_store(cookies: list[dict], identity: dict, store: bool, *
         logger.info("login %s (rank=%s unit=%s callings=%s); not enrolling",
                     reason, rank, ctx.unit_number, [p.get("name") for p in positions])
         _audit("blocked" if authorized is False else "undetermined")
+        # 2026-11-08 re-auth incident: a CONSENTED enroll (store=True) that stores nothing must
+        # ALWAYS say why — the dialog shows a bare "could not be set up" when `error` is absent,
+        # and the leader can't tell a transient LCR hiccup from a real access problem. (A plain
+        # login needs no error: nothing was supposed to be stored.)
+        if store:
+            base["error"] = (
+                "This Church account doesn't have access to covenant-path data, so the daily "
+                "sync couldn't be set up."
+                if authorized is False else
+                "LCR didn't return any callings for this sign-in, so we couldn't tell what the "
+                "daily sync may access. Your sign-in worked — please try again in a few minutes.")
         return base
     if not store:
         logger.info("authorized login for %s (%s) without sync consent — not storing credential",

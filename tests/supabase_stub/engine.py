@@ -102,6 +102,10 @@ class Store:
         self.tables: dict[str, list[dict]] = {}
         self.users: dict[str, dict] = {}   # email -> user row
         self.otps: dict[str, str] = {}     # email -> last issued otp
+        # One-shot RPC failure injection (set via POST /__test/control {"fail_rpc": name}):
+        # the next call to that RPC answers 500 instead of running. Lets e2e prove a failing
+        # enroll surfaces its reason to the client instead of a bare "could not be set up".
+        self.fail_next_rpc: set[str] = set()
 
     # ---- lifecycle -----------------------------------------------------------------
     def reset(self) -> None:
@@ -109,6 +113,7 @@ class Store:
             self.tables.clear()
             self.users.clear()
             self.otps.clear()
+            self.fail_next_rpc.clear()
 
     def seed(self, payload: dict) -> dict:
         """Replace the given tables' contents (only the tables present in the payload)."""

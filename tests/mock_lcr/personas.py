@@ -70,6 +70,16 @@ PERSONAS: dict[str, Persona] = {p.username: p for p in [
             "rls.president@example.org", "1000000001",
             "11111111-1111-4111-8111-111111111111", None,
             1, "Stake President", STAKE_UNIT, STAKE_NAME, is_stake=True),
+    # Stake-level but PARTIAL access (role 53: temple-recommend + patriarchal-blessing
+    # status missing -> no can_pull_all; 4 allowed features -> rank 4): the narrower
+    # re-auth for the D82 highest-wins backup path — a stake leader whose fresh session is
+    # strictly weaker than the stored credential is STORED as a standby, never refused.
+    # (Role 52 Stake Clerk is NOT narrower: it holds every covenant-path data feature,
+    # so it scrapes rank 1000 and would TAKE OVER instead of landing as a backup.)
+    Persona("assistantclerk.stake", "pw-aclerk", "Rowan Example", "Rowan", "Example",
+            "rls.assistantclerk@example.org", "1000000008",
+            "88888888-8888-4888-8888-888888888888", None,
+            53, "Stake Assistant Clerk", STAKE_UNIT, STAKE_NAME, is_stake=True),
     Persona("wardleader.partial", "pw-ward", "Blair Sample", "Blair", "Sample",
             "rls.bishop@example.org", "1000000002",
             "22222222-2222-4222-8222-222222222222", None,

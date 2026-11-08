@@ -108,7 +108,17 @@ def create_lcr_app(state: MockChurchState) -> FastAPI:
         username = _session_user(request)
         if username is None or username not in PERSONAS:
             return _login_redirect()
-        return JSONResponse(user_context(PERSONAS[username]))
+        payload = user_context(PERSONAS[username])
+        if state.scenario == "empty_positions":
+            # 2026-11-08 re-auth incident shape: the classic user-context legs still show the
+            # calling (activePosition / positions / children intact, so the calling gate passes)
+            # but the platform section carries NO positions — access.runner_positions reads []
+            # and the eval lands "undetermined" (authorized=None) instead of storing. The
+            # consented enroll must then surface a reason, never a bare "could not be set up".
+            target = payload["platformUserContext"]["user"]["targetUser"]
+            target["currentPosition"] = None
+            target["supportedPositions"] = []
+        return JSONResponse(payload)
 
     # ---- access matrix + leadership ---------------------------------------------------
     @app.get("/other/access-table")
