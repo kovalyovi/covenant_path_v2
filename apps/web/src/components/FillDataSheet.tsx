@@ -169,10 +169,15 @@ export function FillDataSheet({
     // "0 of 8 updated" reads like a completed run that simply found nothing. Trust the outcome the
     // worker recorded rather than re-deriving it from the counts: a dead session and a worklist of
     // members with no readable record both fill zero, and they need opposite advice.
+    // The "nothing left to fill" reading follows the server's `unfillable` flag — which the
+    // backend now scopes to the worklist that run actually tried (2026-11-08: a stale Oct 12
+    // verdict over 9 members must not label today's 80-member worklist). Do NOT re-derive it
+    // here from last total vs members_with_gaps: those are different counts in the sheet's
+    // own test fixtures, and the server is the authority.
     const zero = (p.total ?? 0) > 0 && (p.filled ?? 0) === 0;
     lastRun = zero && p.outcome === 'needs_reauth'
       ? t('fillData.lastRunNone', { when })
-      : zero
+      : zero && status.unfillable
         ? t('fillData.lastRunUnfillable', { when })
         : t('fillData.lastRun', { when, filled: p.filled ?? 0, total: p.total ?? 0 });
   }
@@ -256,7 +261,12 @@ export function FillDataSheet({
           <div className="banner banner--info" role="status">{t('fillData.unfillable')}</div>
         )}
 
-        {isLeader && !noAccess && !(unfillable && !needsReauth) && (
+        {/* The unfillable note is HISTORY about the last run's worklist, not a lock: when fields
+            are still missing now, Fill Now stays available — a fresh run off a live session is
+            exactly how a stale or wrong verdict gets corrected (2026-11-08: an Oct 12 verdict
+            hid the button while 80 patriarchal blessings were still missing). Re-auth is only
+            offered when the session is known dead (needsReauth), which is a different verdict. */}
+        {isLeader && !noAccess && (
           needsReauth ? (
             <Button onClick={onReauth}>{t('fillData.reauthNow')}</Button>
           ) : (

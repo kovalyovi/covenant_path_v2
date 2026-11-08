@@ -225,7 +225,15 @@ def _refresh_profile_worker(cookies: list[dict], unit_number: int, source: str =
         # while the original bug it replaced, a genuinely dead session reporting a cheerful
         # "0/8 members updated", stays fixed because fetch_failed still trips this.
         dead_session = reasons.get("fetch_failed", 0) > 0 and filled == 0
-        unfillable = bool(members) and filled == 0 and not dead_session
+        # "Unfillable" is a verdict about THIS run's worklist only: every member's profile
+        # 404'd (`not_found`) or has no uuid (`no_uuid`) — permanent facts no sign-in can
+        # change. An all-`empty` run (profile fetched fine, nothing new to write) is NOT
+        # unfillable: it is a data/permission question, not a dead end, and must never hide
+        # the Fill button. (2026-11-08: an Oct 12 run's unfillable verdict was carried to a
+        # different, 80-member worklist and the sheet told the leader "nothing left to fill"
+        # while 80 patriarchal blessings were still missing.)
+        unfillable = bool(members) and filled == 0 and not dead_session and bool(reasons) and \
+            all(r in ("not_found", "no_uuid") for r in reasons)
         state = "needs_reauth" if dead_session else "done"
         logger.info("profile refresh: filled fields for %d/%d members with gaps in stake %s -> %s "
                     "(%s)", filled, len(members), unit_number, state,
@@ -384,14 +392,25 @@ def profile_refresh_status(unit_number: int, stake_id: str) -> dict:
     # one — otherwise the sheet opens looking fillable and only a Fill Now click discovers the
     # dead session. Same for unfillable: a run that filled nothing because no member has a
     # readable record stays finished, not broken, across restarts.
+    # SCOPED to the same worklist, though: the verdict only covers the members THAT run tried
+    # (its `total`). A stale run's verdict must never label a DIFFERENT worklist — e.g. an
+    # Oct 12 run over 9 members must not tell today's 80-member worklist "nothing left to
+    # fill" (2026-11-08).
     last_payload = (last or {}).get("payload") or {}
     last_outcome = last_payload.get("outcome")
+    last_total = last_payload.get("total") or 0
+    # needs_reauth is SESSION-scoped (the stored session is dead), so it survives a worklist
+    # change. Unfillable is MEMBER-scoped (those members have no readable record), so it only
+    # covers the worklist that run actually tried — hence the same_worklist gate below.
     durable_needs_reauth = (not progress) and last_outcome == "needs_reauth"
-    durable_unfillable = ((not progress) and (
+    same_worklist = last_total > 0 and last_total == len(members)
+    durable_unfillable = ((not progress) and same_worklist and (
         last_payload.get("unfillable") is True
         or (last_outcome == "done" and (last_payload.get("filled") or 0) == 0
-            and (last_payload.get("total") or 0) > 0
-            and (last_payload.get("reasons") or {}).get("fetch_failed", 0) == 0)))
+            and (last_payload.get("reasons") or {}).get("fetch_failed", 0) == 0
+            and (last_payload.get("reasons") or {})
+            and all(r in ("not_found", "no_uuid")
+                    for r in (last_payload.get("reasons") or {})))))
     return {"running": progress.get("state") == "running",
             "progress": progress or None,
             # The last run couldn't reach /mlt -> the client should offer re-auth rather than

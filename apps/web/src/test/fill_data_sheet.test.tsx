@@ -193,6 +193,10 @@ describe('FillDataSheet', () => {
     expect(screen.queryByText(/stored Church session has expired/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /re-authorize/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/0\/9 members updated/i)).not.toBeInTheDocument();
+    // 2026-11-08: the unfillable note is history about the last run's worklist, not a lock —
+    // with fields still missing now, Fill Now stays available so a fresh run can correct a
+    // stale verdict (an Oct 12 verdict over 9 members hid it while 80 were still missing).
+    expect(screen.getByRole('button', { name: /fill missing data now/i })).toBeEnabled();
   });
 
   it('a genuine partial fill still reports its counts', async () => {

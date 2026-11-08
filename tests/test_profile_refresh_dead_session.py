@@ -146,6 +146,15 @@ def test_one_dead_fetch_among_unreadable_members_still_asks_for_reauth(worker_en
     assert prog["unfillable"] is False
 
 
+def test_an_all_empty_run_is_not_unfillable(worker_env, monkeypatch):
+    """Profiles fetched fine but nothing new to write ('empty') is NOT 'no readable record':
+    it must never label the worklist unfillable and hide the Fill button."""
+    prog = _run(monkeypatch, lambda client, row: ({}, "empty"))
+    assert prog["state"] == "done"
+    assert prog["unfillable"] is False
+    assert worker_env[-1].get("unfillable") is None
+
+
 def test_unfillable_run_reports_no_reauth_to_the_client(worker_env, monkeypatch):
     """The status route must carry the distinction through to the fill sheet."""
     _run(monkeypatch, lambda client, row: ({}, "not_found"))
@@ -161,9 +170,9 @@ def test_unfillable_run_reports_no_reauth_to_the_client(worker_env, monkeypatch)
 # open with no needs_reauth / unfillable signal at all — the leader had to click Fill Now to
 # discover the dead session. The durable last run in sync_diagnostics must carry it instead.
 
-def _status_with_last_run(monkeypatch, last_payload):
+def _status_with_last_run(monkeypatch, last_payload, worklist_n=8):
     monkeypatch.setattr(enroll, "_profile_worklist",
-                        lambda stake_id: [{"person_uuid": f"p{i}"} for i in range(8)])
+                        lambda stake_id: [{"person_uuid": f"p{i}"} for i in range(worklist_n)])
     monkeypatch.setattr(enroll.requests, "get", lambda *a, **k: _Resp())
     # profile_refresh_status reads the last run from sync_diagnostics via a different GET; the
     # worklist above is read via the members endpoint in the same fake — distinguish by URL.
@@ -195,6 +204,30 @@ def test_status_reports_unfillable_after_restart(monkeypatch):
                       "outcome": "done", "reasons": {"not_found": 8}, "unfillable": True})
     assert out["needs_reauth"] is False
     assert out["unfillable"] is True
+
+
+def test_status_does_not_carry_unfillable_to_a_larger_worklist(monkeypatch):
+    """2026-11-08, live: an Oct 12 run's unfillable verdict (9 members, all not_found) was
+    carried to a worklist of 80 members missing patriarchal blessing, and the sheet said
+    'nothing left to fill' while hiding the Fill button. Unfillable is member-scoped: it only
+    covers the worklist that run tried."""
+    out = _status_with_last_run(
+        monkeypatch, {"source": "on_demand", "total": 9, "filled": 0,
+                      "outcome": "done", "reasons": {"not_found": 9}, "unfillable": True},
+        worklist_n=80)
+    assert out["unfillable"] is False
+    assert out["members_with_gaps"] == 80
+    assert out["needs_reauth"] is False
+
+
+def test_status_needs_reauth_survives_a_worklist_change(monkeypatch):
+    """needs_reauth is session-scoped, not member-scoped: a dead session stays dead even when
+    the worklist grows, so it is NOT gated on the same total."""
+    out = _status_with_last_run(
+        monkeypatch, {"source": "on_demand", "total": 9, "filled": 0,
+                      "outcome": "needs_reauth", "reasons": {"fetch_failed": 9}},
+        worklist_n=80)
+    assert out["needs_reauth"] is True
 
 
 # --- guard 5: the provider is emailed once per streak ---------------------------------------------
