@@ -33,6 +33,6 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install dependencies
-        run: pip install psycopg2-binary
+        run: pip install -r requirements.txt
       - name: Apply migrations
         run: python -m backend.apply
