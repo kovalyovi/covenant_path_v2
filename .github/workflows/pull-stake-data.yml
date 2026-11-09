@@ -5,8 +5,14 @@ name: Pull stake data (LCR roster)
 # `python scripts/fetch_stake_data.py`, which waits for the run and downloads
 # the artifact into tools/output/stake_data.json.
 #
-# Auth: LCR_LOGIN / LCR_PASSWORD repo secrets (the script mints a Member Tools
-# token off a headless Okta login; no MFA prompt for accounts without 2SV).
+# Auth (D85, token-first): the workflow loads the stake's stored Member Tools
+# 45-day refresh token from Supabase (same store the daily sync uses) and
+# exports it as MEMBERTOOLS_REFRESH_TOKEN, so the pull renews its bearer
+# with NO headless Okta login — the headless login fails HTTP 428 at the IDX
+# identify step and broke every fetch_stake_data.py --refresh since Nov 6.
+# When no stored token exists the step is a no-op and the pull falls back to
+# the Okta login (LCR_LOGIN / LCR_PASSWORD repo secrets; no MFA prompt for
+# accounts without 2SV).
 
 on:
   workflow_dispatch: {}
@@ -25,6 +31,8 @@ jobs:
     env:
       LCR_LOGIN: ${{ secrets.LCR_LOGIN }}
       LCR_PASSWORD: ${{ secrets.LCR_PASSWORD }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      CP_TOKEN_KEY: ${{ secrets.CP_TOKEN_KEY }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
@@ -32,7 +40,20 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install pull dependencies
-        run: pip install requests python-dotenv
+        run: pip install requests python-dotenv psycopg2-binary cryptography
+
+      # D85: the stored 45-day token is the primary auth — the headless Okta
+      # login is 428-blocked. Best-effort: no token -> pull falls back to Okta.
+      - name: Load stored Member Tools token (skip Okta login)
+        run: |
+          if TOKEN=$(python scripts/get_membertools_token.py --stake 503991 2>token_err.log); then
+            echo "::add-mask::$TOKEN"
+            echo "MEMBERTOOLS_REFRESH_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+            echo "stored Member Tools token loaded (no Okta login needed)"
+          else
+            echo "no stored Member Tools token — pull falls back to Okta login"
+            cat token_err.log >&2 || true
+          fi
 
       - name: Pull whole-stake roster
         run: python scripts/pull_stake_data.py
