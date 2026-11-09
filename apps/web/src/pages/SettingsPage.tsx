@@ -17,8 +17,6 @@ import { AboutDialog, RulesDialog } from '../components/Disclaimer';
 import { LanguageSwitcher } from '../components/LanguageSwitcher';
 import { ContactDialog, FeedbackDialog, addPasskey } from './DashboardShell';
 import { useToast } from '../components/Toast';
-import { TableTab } from './tabs/TableTab';
-import { LeadershipTab } from './tabs/LeadershipTab';
 
 /** A resolved role row (user_roles + joined unit/stake names) for the account section. */
 interface AccountRole {
@@ -62,9 +60,6 @@ export function SettingsPage() {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [resolvedEmail, setResolvedEmail] = useState<string>('');
   const [roles, setRoles] = useState<AccountRole[] | null>(null);
-  // Table + Leaders used to be tabs (2026-11-08 they moved here, replaced by Families). They render
-  // in-sheet as sub-views — same components, same data — with a back tile to the settings list.
-  const [viewSection, setViewSection] = useState<'table' | 'leadership' | null>(null);
 
   // Resolve the signed-in email once.
   useEffect(() => {
@@ -102,32 +97,8 @@ export function SettingsPage() {
     };
   }, []);
 
-  if (viewSection === 'table') {
-    return (
-      <div style={{ paddingBottom: 24 }}>
-        <Tile icon="chevron_left" title="Back to Settings" onClick={() => setViewSection(null)} />
-        <hr className="divider" style={{ margin: 0 }} />
-        <TableTab />
-      </div>
-    );
-  }
-  if (viewSection === 'leadership') {
-    return (
-      <div style={{ paddingBottom: 24 }}>
-        <Tile icon="chevron_left" title="Back to Settings" onClick={() => setViewSection(null)} />
-        <hr className="divider" style={{ margin: 0 }} />
-        <LeadershipTab />
-      </div>
-    );
-  }
-
   return (
     <div style={{ paddingBottom: 24 }}>
-      <SectionHead>Views</SectionHead>
-      <Tile icon="grid_on" title="Table" subtitle="Every covenant-path field, sortable and filterable" onClick={() => setViewSection('table')} chevron />
-      <Tile icon="badge" title="Leaders" subtitle="Per-unit leadership, staffing gaps and missionaries" onClick={() => setViewSection('leadership')} chevron />
-      <hr className="divider" style={{ margin: 0 }} />
-
       <SectionHead>Appearance</SectionHead>
       <Tile icon="brightness" title="Theme" subtitle={theme.label} onClick={theme.cycle} chevron />
       <div style={{ padding: '12px 16px' }}><LanguageSwitcher /></div>
