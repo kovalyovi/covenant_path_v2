@@ -584,6 +584,7 @@ def _mint_and_sync(args, st: dict) -> None:
     if not cred or cred.get("revoked"):
         raise RuntimeError("no active credential for this stake")
     session = okta_login.session_from_cookies(cred["cookies"])
+    lcr_session_dead = False  # set when the renewal below fails but the MT token saves the sync
     # Three-tier LCR-session renewal: (1) stored LCR appSession (outlives Okta), (2) Okta re-SSO,
     # (3) OAuth refresh_token → silent SSO. If ALL fail, the LCR session is dead and can't be renewed
     # headlessly (MFA) — but the covenant-path CORE comes from the Member Tools 45-day token, which
@@ -605,6 +606,12 @@ def _mint_and_sync(args, st: dict) -> None:
                     raise RuntimeError(
                         "LCR session expired and no Member Tools sync token — needs re-authorization "
                         "(sign in with a Church password to mint a fresh 45-day token)") from renew_exc
+                # The sync continues on the Member Tools token — but the stored LCR session is DEAD,
+                # so the profile fill (which needs /mlt) silently stops. Remember that: after a
+                # healthy sync, _maybe_profile_reauth_probe asks the broker to probe + email the
+                # provider once per streak, so the dead session isn't silent until a leader happens
+                # to open the app (the Oct 12 → Nov 8 gap: 27 days, no email).
+                lcr_session_dead = True
                 logger.warning("stake %s: LCR session expired and can't renew headlessly — syncing "
                                "the covenant-path core via the Member Tools 45-day token (LCR-only "
                                "extras best-effort; a re-auth refreshes them)", st.get("unit_number"))
@@ -616,6 +623,7 @@ def _mint_and_sync(args, st: dict) -> None:
     res = _sync_one(args)
     _mark_succeeded(st["stake_id"])  # healthy sync → clear any prior failing/stale state (alert edge)
     _maybe_age_alert(st)             # B8: nudge the provider BEFORE an aging session dies
+    _maybe_profile_reauth_probe(st, lcr_session_dead)  # 2026-11-08: email FIRST when the fill is blocked
     print(f"[+] {st['name']} ({st['unit_number']}): {res['members']} members synced")
 
 
@@ -930,6 +938,57 @@ def _maybe_age_alert(st: dict) -> None:
                     name, days)
     except Exception as exc:  # noqa: BLE001
         logger.debug("age alert skipped: %s", exc)
+
+
+def _maybe_profile_reauth_probe(st: dict, lcr_session_dead: bool) -> None:
+    """Proactive needs-reauth email (2026-11-08): the daily sync succeeds on the Member Tools token
+    while the stored LCR session is dead, so the profile fill (which needs /mlt) silently stops —
+    Oct 12 → Nov 8 nothing emailed the provider; he only found out by opening the app. After a
+    healthy sync, when THIS run established the LCR session can't renew headlessly, ask the broker
+    to probe the stored session and email the provider once per streak (missing counts + /reauth
+    link) if it's dead and members still have profile gaps. The broker holds Resend + the probe
+    code; the sync job has neither, so this is one best-effort HTTP call, authenticated with the
+    Supabase service-role key the job already holds. Fully guarded — alerting never affects the
+    run: no gaps, an already-open streak, a missing key, or a broker failure all just skip."""
+    if not lcr_session_dead:
+        return
+    try:
+        from backend import db
+        from backend.auth_broker import enroll as _enroll
+        conn = db.connect()
+        try:
+            with conn.cursor() as cur:
+                cols = _enroll._PROFILE_REFRESH_COLUMNS
+                cur.execute(
+                    "select count(*) from members where stake_id = %s and kind <> 'investigator' "
+                    "and person_uuid is not null and ("
+                    + " or ".join(f"{c} is null" for c in cols) + ")",
+                    (st["stake_id"],))
+                if not (cur.fetchone() or [0])[0]:
+                    return
+                cur.execute(
+                    "select payload->>'outcome' from sync_diagnostics where stake_id = %s "
+                    "and kind = 'profile_refresh' order by run_at desc limit 1",
+                    (st["stake_id"],))
+                row = cur.fetchone()
+                if row and row[0] == "needs_reauth":
+                    return  # already nudged this streak
+        finally:
+            conn.close()
+        import requests as _requests
+        broker = os.environ.get("BROKER_URL",
+                                "https://covenant-path-broker.onrender.com").rstrip("/")
+        key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+        if not key:
+            return
+        r = _requests.post(f"{broker}/auth/profile-refresh/probe", timeout=150,
+                           headers={"Authorization": f"Bearer {key}",
+                                    "Content-Type": "application/json"},
+                           json={"unit_number": st["unit_number"], "stake_id": st["stake_id"]})
+        logger.info("profile-reauth probe for %s (%s): %s %s", st.get("name"),
+                    st.get("unit_number"), r.status_code, r.text[:120])
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("profile-reauth probe skipped: %s", exc)
 
 
 _NEEDS_REAUTH_SIGNALS = (

@@ -457,6 +457,30 @@ def auth_profile_refresh_status(authorization: str = Header(default="")) -> dict
     return out
 
 
+class ProfileProbeReq(BaseModel):
+    unit_number: int
+    stake_id: str
+
+
+@app.post("/auth/profile-refresh/probe")
+def auth_profile_refresh_probe(req: ProfileProbeReq,
+                               authorization: str = Header(default="")) -> dict:
+    """Proactive needs-reauth probe, called by the daily sync after a healthy roster sync
+    (2026-11-08): the sync succeeds on the Member Tools token while the stored LCR session is
+    dead, so the profile fill silently stops and nobody hears until a leader opens the app. When
+    the sync's own renewal attempt has already established the session is dead, it asks the broker
+    to probe the stored session; a dead session with members still missing profile details emails
+    the provider once per streak (missing counts + /reauth link) and records the needs_reauth
+    outcome. Service-key auth only — the sync holds SUPABASE_SERVICE_ROLE_KEY and has no user
+    session in that job (the user-facing start endpoint keeps its JWT + stake-leader gate). A dead
+    session is the EXPECTED answer here (needs_reauth), never an error."""
+    key = (authorization or "").removeprefix("Bearer ").strip()
+    if not admin.SERVICE_KEY or not secrets.compare_digest(key, admin.SERVICE_KEY):
+        raise HTTPException(status_code=401, detail="service key required")
+    from backend.auth_broker import enroll
+    return enroll.probe_profile_session(req.unit_number, req.stake_id)
+
+
 def _audit_okta_event(who: str, stage: str, error: str, rid: str,
                       duration_ms: int | None = None, phase: str | None = None) -> None:
     """Make OKTA-STAGE events visible in the admin console: a wrong password / failed MFA never

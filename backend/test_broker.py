@@ -504,6 +504,39 @@ def test_profile_refresh_on_demand_start_and_status() -> None:
           "status reports missing counts + progress")
 
 
+def test_profile_refresh_probe_endpoint_service_key_auth() -> None:
+    """POST /auth/profile-refresh/probe (2026-11-08, proactive needs-reauth email): service-key
+    auth ONLY — the daily sync holds SUPABASE_SERVICE_ROLE_KEY and has no user session in that
+    job; a missing/wrong key is 401, and a user JWT (or any other bearer) is 401 too. A correct
+    key reaches enroll.probe_profile_session with the sync's unit + stake."""
+    from backend.auth_broker import enroll as _enroll
+    saved = (admin.SERVICE_KEY, _enroll.probe_profile_session)
+    try:
+        admin.SERVICE_KEY = admin.SERVICE_KEY or "test-key"
+        seen: list = []
+        _enroll.probe_profile_session = (lambda unit, stake: seen.append((unit, stake)) or
+                                         {"status": "needs_reauth", "reason": "session_expired",
+                                          "members_with_gaps": 80})
+        # No key, wrong key, and a user-JWT-shaped bearer are all 401.
+        assert client.post("/auth/profile-refresh/probe",
+                           json={"unit_number": 503991, "stake_id": "stake-1"}).status_code == 401
+        assert client.post("/auth/profile-refresh/probe",
+                           json={"unit_number": 503991, "stake_id": "stake-1"},
+                           headers={"Authorization": "Bearer nope"}).status_code == 401
+        assert client.post("/auth/profile-refresh/probe",
+                           json={"unit_number": 503991, "stake_id": "stake-1"},
+                           headers={"Authorization": "Bearer eyJhbGciOiJIUzI1NiJ9.user"}).status_code == 401
+        # The service key gets through and the probe runs with the sync's identifiers.
+        r = client.post("/auth/profile-refresh/probe",
+                        json={"unit_number": 503991, "stake_id": "stake-1"},
+                        headers={"Authorization": f"Bearer {admin.SERVICE_KEY}"})
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "needs_reauth" and seen == [(503991, "stake-1")], r.json()
+    finally:
+        admin.SERVICE_KEY, _enroll.probe_profile_session = saved
+    print("  ok profile-refresh probe endpoint: service-key only; user JWT rejected; probe runs")
+
+
 def test_endpoint_health_trend() -> None:
     """The passive cross-run endpoint trend: aggregate sync_diagnostics across runs into per-endpoint
     calls/errors/error_pct + by-hour error rate, with route-pattern grouping and a verdict."""
@@ -2703,6 +2736,7 @@ def main() -> int:
     test_enrollment_status_patriarchal_signal()
     test_profile_refresh_worker_fills_via_live_session()
     test_profile_refresh_on_demand_start_and_status()
+    test_profile_refresh_probe_endpoint_service_key_auth()
     test_membertools_persist_verifies_after_patch()
     test_mint_misconfig()
     test_mint_empty_email()

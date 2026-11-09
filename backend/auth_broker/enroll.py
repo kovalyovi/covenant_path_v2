@@ -431,6 +431,97 @@ def profile_refresh_status(unit_number: int, stake_id: str) -> dict:
             "last_refresh": last}
 
 
+def _email_needs_reauth_once(stake_id: str, members: list[dict]) -> None:
+    """Email the credential provider about a dead /mlt session, once per streak. The viewer in the
+    app sees a needs_reauth answer — but the provider (who must do the re-authorizing) may be a
+    different leader, and may never open the sheet. No-op without RESEND_API_KEY, and no-op when
+    the last recorded outcome is already needs_reauth (the streak is open; the nudge went out)."""
+    if not os.environ.get("RESEND_API_KEY"):
+        return
+    if _last_profile_refresh_outcome(stake_id) == "needs_reauth":
+        return
+    _notify_profile_refresh(stake_id, outcome="needs_reauth", filled=0,
+                            total=len(members), missing=missing_counts(members))
+
+
+def _probe_stored_session(unit_number: int, stake_id: str,
+                          members: list[dict]) -> tuple[list[dict] | None, str | None]:
+    """Liveness probe of the STORED delegated session against /mlt. Returns (cookies, None) when
+    the session reaches a real member-profile page, else (None, reason) with reason in
+    no_credential / credential_unreadable / session_expired. Shared by the on-demand start and the
+    sync's proactive probe — one probe definition, two callers. Loads the EFFECTIVE credential
+    (REST — the broker has no psycopg2): highest live rank (0068), so the probe runs on the
+    broadest session, never a narrower standby's."""
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=_sb_h(),
+                     params={"stake_id": f"eq.{stake_id}", "select": "credential_enc,revoked",
+                             "revoked": "is.false",
+                             "order": "access_rank.desc.nullslast,updated_at.desc",
+                             "limit": "1"}, timeout=30)
+    rows = r.json() if r.status_code == 200 else []
+    if not rows or rows[0].get("revoked") or not rows[0].get("credential_enc"):
+        return None, "no_credential"
+    try:
+        from backend import credentials
+        secret = json.loads(credentials._decrypt_envelope(rows[0]["credential_enc"]).decode("utf-8"))
+        cookies = secret.get("cookies") or []
+    except Exception as exc:  # noqa: BLE001 — an undecryptable blob = effectively no credential
+        logger.warning("profile refresh: stored credential unreadable for stake %s: %s",
+                       unit_number, exc)
+        return None, "credential_unreadable"
+    # Fast liveness probe: GET the first gap member's /mlt profile PAGE. Live session → 200 HTML;
+    # dead session → redirect to the identity host (AuthExpiredError) or a 404 on the RSC route
+    # (observed in the 2026-07-06 sync logs) — both raise. This is the exact route the worker's
+    # profile actions replay, so a passing probe means the fill will actually work (a generic LCR
+    # page probe can pass while /mlt still bounces). NOT report.refresh_profile_fields: on a dead
+    # session that walks the ~75s action-id auto-discovery before giving up — far too slow for a
+    # synchronous POST.
+    try:
+        client = _client_from_cookies(cookies)
+        page = client.session.get_text(
+            f"https://lcr.churchofjesuschrist.org/mlt/records/member-profile/{members[0]['person_uuid']}")
+    except Exception:  # noqa: BLE001 — any failure = the stored session can't reach /mlt
+        return None, "session_expired"
+    # `get_text` only raises on 4xx/5xx or a redirect to the IDENTITY host. A dead LCR session can
+    # still answer 200 from lcr.churchofjesuschrist.org with a sign-in / empty app shell, which is
+    # how this probe passed on a dead session and let the worker grind through every member and fill
+    # nothing (2026-08-26). So check the page actually looks like a member profile.
+    if not _looks_like_member_profile(page):
+        logger.info("profile refresh: /mlt probe returned a non-profile page for stake %s "
+                    "(dead session answering 200)", unit_number)
+        return None, "session_expired"
+    return cookies, None
+
+
+def probe_profile_session(unit_number: int, stake_id: str) -> dict:
+    """Proactive needs-reauth probe for the daily sync (2026-11-08): the sync succeeds on the
+    Member Tools token while the stored LCR session is dead, so the profile fill silently stops
+    and nobody hears until a leader opens the app. After a healthy sync, the sync asks the broker
+    to probe the stored session; when it's dead and members still have profile gaps, email the
+    provider once per streak (missing counts + /reauth link) and record the needs_reauth outcome
+    so the app banner and the sync's own guard see the same streak. When the session is alive (or
+    there is nothing to fill) answer that and send nothing — the fill itself stays on-demand /
+    re-auth. Best-effort: never raises."""
+    try:
+        members = _profile_worklist(stake_id)
+        if not members:
+            return {"status": "nothing_to_fill", "members_with_gaps": 0}
+        if _last_profile_refresh_outcome(stake_id) == "needs_reauth":
+            return {"status": "needs_reauth", "reason": "already_notified",
+                    "members_with_gaps": len(members)}
+        _, reason = _probe_stored_session(unit_number, stake_id, members)
+        if reason is not None:
+            _email_needs_reauth_once(stake_id, members)
+            _record_profile_refresh(stake_id, {"source": "probe", "total": len(members),
+                                               "filled": 0, "outcome": "needs_reauth",
+                                               "reasons": {"session": reason}})
+            return {"status": "needs_reauth", "reason": reason,
+                    "members_with_gaps": len(members)}
+        return {"status": "alive", "members_with_gaps": len(members)}
+    except Exception as exc:  # noqa: BLE001 — a probe must never take down its caller
+        logger.warning("profile probe failed for stake %s: %s", unit_number, exc)
+        return {"status": "failed", "error": str(exc)[:200]}
+
+
 def start_profile_refresh(unit_number: int, stake_id: str) -> dict:
     """On-demand fill: try the STORED delegated credential first — if its LCR session can still
     reach `/mlt` (rare: the Okta sid usually dies within days), fill everything right now with no
@@ -445,55 +536,12 @@ def start_profile_refresh(unit_number: int, stake_id: str) -> dict:
         return {"status": "nothing_to_fill", "members_with_gaps": 0}
 
     def _needs(reason: str) -> dict:
-        # The viewer in the app sees this answer — but the credential's PROVIDER (who must do
-        # the re-authorizing) may be a different leader, and may never open the sheet. Email
-        # them once per streak, with the missing counts, so the dead session isn't silent.
-        if os.environ.get("RESEND_API_KEY"):
-            prev = _last_profile_refresh_outcome(stake_id)
-            if prev != "needs_reauth":
-                _notify_profile_refresh(stake_id, outcome="needs_reauth", filled=0,
-                                        total=len(members), missing=missing_counts(members))
+        _email_needs_reauth_once(stake_id, members)
         return {"status": "needs_reauth", "reason": reason,
                 "members_with_gaps": len(members)}
-    # Load + decrypt the EFFECTIVE credential (REST — the broker has no psycopg2): highest live
-    # rank (0068), so the fill runs on the broadest session, never a narrower standby's.
-    r = requests.get(f"{SUPABASE_URL}/rest/v1/stake_credentials", headers=_sb_h(),
-                     params={"stake_id": f"eq.{stake_id}", "select": "credential_enc,revoked",
-                             "revoked": "is.false",
-                             "order": "access_rank.desc.nullslast,updated_at.desc",
-                             "limit": "1"}, timeout=30)
-    rows = r.json() if r.status_code == 200 else []
-    if not rows or rows[0].get("revoked") or not rows[0].get("credential_enc"):
-        return _needs("no_credential")
-    try:
-        from backend import credentials
-        secret = json.loads(credentials._decrypt_envelope(rows[0]["credential_enc"]).decode("utf-8"))
-        cookies = secret.get("cookies") or []
-    except Exception as exc:  # noqa: BLE001 — an undecryptable blob = effectively no credential
-        logger.warning("profile refresh: stored credential unreadable for stake %s: %s",
-                       unit_number, exc)
-        return _needs("credential_unreadable")
-    # Fast liveness probe: GET the first gap member's /mlt profile PAGE. Live session → 200 HTML;
-    # dead session → redirect to the identity host (AuthExpiredError) or a 404 on the RSC route
-    # (observed in the 2026-07-06 sync logs) — both raise. This is the exact route the worker's
-    # profile actions replay, so a passing probe means the fill will actually work (a generic LCR
-    # page probe can pass while /mlt still bounces). NOT report.refresh_profile_fields: on a dead
-    # session that walks the ~75s action-id auto-discovery before giving up — far too slow for a
-    # synchronous POST.
-    try:
-        client = _client_from_cookies(cookies)
-        page = client.session.get_text(
-            f"https://lcr.churchofjesuschrist.org/mlt/records/member-profile/{members[0]['person_uuid']}")
-    except Exception:  # noqa: BLE001 — any failure = the stored session can't reach /mlt
-        return _needs("session_expired")
-    # `get_text` only raises on 4xx/5xx or a redirect to the IDENTITY host. A dead LCR session can
-    # still answer 200 from lcr.churchofjesuschrist.org with a sign-in / empty app shell, which is
-    # how this probe passed on a dead session and let the worker grind through every member and fill
-    # nothing (2026-08-26). So check the page actually looks like a member profile.
-    if not _looks_like_member_profile(page):
-        logger.info("profile refresh: /mlt probe returned a non-profile page for stake %s "
-                    "(dead session answering 200)", unit_number)
-        return _needs("session_expired")
+    cookies, reason = _probe_stored_session(unit_number, stake_id, members)
+    if reason is not None:
+        return _needs(reason)
     _refresh_profile_async(cookies, unit_number, source="on_demand")
     return {"status": "started", "members_with_gaps": len(members)}
 
