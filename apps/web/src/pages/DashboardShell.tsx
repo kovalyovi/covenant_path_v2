@@ -32,8 +32,6 @@ import { Button } from '../components/ui';
 import { AdminSkeleton } from '../components/Skeletons';
 import { SettingsPage } from './SettingsPage';
 import { PersonDetailBody, personLcrUrl } from './PersonDetailPage';
-import { TableTab } from './tabs/TableTab';
-import { LeadershipTab } from './tabs/LeadershipTab';
 
 // Settings + Admin render as side sheets OVER the dashboard (see router). The console is heavy
 // (dense tables) + rarely opened, so its content is code-split out of the dashboard bundle and lazy-
@@ -43,8 +41,9 @@ const AdminListPage = lazy(lazyWithReload(() => import('./AdminListPage').then((
 
 // The top-level tab routes that share the one scroll container (`main`). Each remembers its OWN
 // scroll offset across tab switches (overlay routes — settings/admin/person — aren't tabs and leave
-// the backdrop's scroll untouched).
-const TAB_PATHS = new Set(TABS.map((t) => `/${t.path}`));
+// the backdrop's scroll untouched). Table + Leaders are inline pages too (from the app-bar menu),
+// so they get their own scroll memory as well.
+const TAB_PATHS = new Set([...TABS.map((t) => `/${t.path}`), '/table', '/leadership']);
 
 export function DashboardShell() {
   const d = useDashboard();
@@ -91,10 +90,6 @@ export function DashboardShell() {
   // the user was on (remembered below), so the URL updates and Back/forward work.
   const path = location.pathname;
   const settingsOpen = path === '/settings';
-  // Table + Leaders open as side sheets from the app-bar menu (2026-11-08) — same URL-driven
-  // overlay pattern as Settings/Admin, not tabs and not Settings sub-views.
-  const tableOpen = path === '/table';
-  const leadersOpen = path === '/leadership';
   const adminOpen = path === '/admin' || path.startsWith('/admin/');
   const adminSection = path.startsWith('/admin/') ? path.slice('/admin/'.length) : '';
   // Person detail is a URL-landable side/bottom sheet too. Parse the id from the path (not useParams,
@@ -107,7 +102,7 @@ export function DashboardShell() {
     ? d.members.find((m) => String(m['person_uuid'] ?? '') === personId)
     : undefined;
   const personTitle = personMember ? String(personMember['name'] ?? 'Member') : 'Member';
-  const anyOverlay = settingsOpen || tableOpen || leadersOpen || adminOpen || personOpen;
+  const anyOverlay = settingsOpen || adminOpen || personOpen;
 
   // Remember the last real tab so closing a sheet returns there AND the sheet renders that tab as its
   // backdrop (BackgroundTab in router.tsx reads this) — opening Settings/Admin no longer resets the
@@ -252,7 +247,7 @@ export function DashboardShell() {
       case 'sync': return openSyncSettings();
       case 'report': return void generateReport();
       case 'invite': return setInviteOpen(true);
-      // Navigate so the URL updates → Table/Leaders open as URL-landable side sheets (Back/refresh work).
+      // Navigate so the URL updates → Table/Leaders open inline as pages (Back/refresh work).
       case 'table': return navigate('/table');
       case 'leaders': return navigate('/leadership');
       // Navigate so the URL updates → Settings/Admin open as URL-landable side sheets (Back/refresh work).
@@ -450,12 +445,6 @@ export function DashboardShell() {
 
       <Modal open={settingsOpen} side title="Settings" onClose={closeOverlay}>
         {settingsOpen && <SettingsPage />}
-      </Modal>
-      <Modal open={tableOpen} side title="Table" onClose={closeOverlay}>
-        {tableOpen && <TableTab />}
-      </Modal>
-      <Modal open={leadersOpen} side title="Leaders" onClose={closeOverlay}>
-        {leadersOpen && <LeadershipTab />}
       </Modal>
       {adminOpen && adminSection ? (
         // Admin sub-list (full history): its own app-bar acts as the header → render bare + wide.

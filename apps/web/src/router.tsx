@@ -1,12 +1,13 @@
 // App routing (React Router v7) — mirrors the Flutter go_router map (R1). Top-level: `/login` and
 // `/` (the dashboard shell) with the 5 tab children `/baptisms` · `/golden-hour` · `/needs` ·
-// `/kpis` · `/families`, plus `/table` · `/leadership` · `/person/:id`, `/settings`, `/invite`, `/admin`. Auth is enforced by a
+// `/kpis` · `/families`, plus `/table` · `/leadership` (inline pages from the app-bar menu) ·
+// `/person/:id`, `/settings`, `/invite`, `/admin`. Auth is enforced by a
 // guard that re-evaluates on every Supabase auth change (sign-in / sign-out / token refresh):
 // no session → /login; an authed user at /login → /. A no-access member is blocked at login (N2),
 // so they never reach a session here.
 //
-// Settings, Admin, Table, Leaders AND Person detail are SIDE/BOTTOM SHEETS that overlay the dashboard (not standalone
-// pages), yet stay URL-landable: `/settings` · `/admin` · `/admin/:section` · `/table` · `/leadership` · `/person/:id` are children
+// Settings, Admin AND Person detail are SIDE/BOTTOM SHEETS that overlay the dashboard (not standalone
+// pages), yet stay URL-landable: `/settings` · `/admin` · `/admin/:section` · `/person/:id` are children
 // of the DashboardShell that render the last-visited tab underneath (via BackgroundTab) with the sheet
 // open on top — so a refresh or a deep link lands on the dashboard + the open sheet, and closing the
 // sheet navigates back to the underlying tab. The shell reads the pathname to decide which to overlay.
@@ -111,10 +112,10 @@ export const router = createBrowserRouter([
           { path: 'needs', element: <NeedsTab /> },
           { path: 'kpis', element: <LazyRoute><KpisTab /></LazyRoute> },
           { path: 'families', element: <FamiliesTab /> },
-          // Table + Leaders open as URL-landable side sheets from the app-bar menu (2026-11-08):
-          // the route renders the last tab as backdrop; DashboardShell overlays the matching sheet.
-          { path: 'table', element: <BackgroundTab /> },
-          { path: 'leadership', element: <BackgroundTab /> },
+          // Table + Leaders render INLINE as pages from the app-bar menu (2026-11-08) — same as the
+          // other tabs, not side sheets and not Settings sub-views.
+          { path: 'table', element: <TableTab /> },
+          { path: 'leadership', element: <LazyRoute><LeadershipTab /></LazyRoute> },
           // "By Month" is no longer its own tab — the chart now lives at the bottom of KPIs (#1).
           { path: 'by-month', element: <Navigate to="/kpis" replace /> },
           // Settings + Admin overlay the dashboard as SIDE SHEETS but stay URL-landable: each renders
