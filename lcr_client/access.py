@@ -144,7 +144,20 @@ def fetch_access_matrix(session) -> AccessMatrix:
 
 
 def runner_positions(session) -> list[dict]:
-    """The running user's current callings: [{id, name, unit, unit_number}]."""
+    """The running user's current callings: [{id, name, unit, unit_number}].
+
+    PRIMARY source: platformUserContext.user.targetUser.{currentPosition,
+    supportedPositions} (positionType {id, name}).
+
+    FALLBACK (2026-11-08 re-auth incident): for some live sessions the platform
+    section is EMPTY while the classic user-context legs still show the calling
+    (activePosition / positions) — the eval then landed "undetermined" and a
+    consented re-auth failed with "LCR didn't return any callings". When the
+    platform section yields nothing, read the classic `positions[]` entries
+    (positionTypeId / positionTypeName) and, as a last resort, the single
+    activePosition / activePositionEnglish. Same role-id space as
+    positionType.id, so the access matrix applies unchanged.
+    """
     ctx = session.get_json(USER_CONTEXT_URL)
     user = ctx.get("platformUserContext", {}).get("user", {})
     target = user.get("targetUser", {}) or {}
@@ -169,6 +182,46 @@ def runner_positions(session) -> list[dict]:
     add(target.get("currentPosition"))
     for p in target.get("supportedPositions", []) or []:
         add(p)
+    if out:
+        return out
+
+    # Fallback: classic positions[] — same id space, flat or nested shape.
+    def add_classic(entry):
+        if not isinstance(entry, dict):
+            return
+        pt = entry.get("positionType") or {}
+        pid = (entry.get("positionTypeId") or pt.get("id") or entry.get("id"))
+        if pid is None or pid in seen:
+            return
+        seen.add(pid)
+        unit = entry.get("unit") or {}
+        out.append({
+            "id": pid,
+            "name": (entry.get("positionTypeName") or pt.get("name")
+                     or entry.get("name") or f"position {pid}"),
+            "unit": unit.get("name") or entry.get("unitName"),
+            "unit_number": unit.get("unitNumber") or entry.get("unitNumber"),
+        })
+
+    for entry in ctx.get("positions") or []:
+        add_classic(entry)
+    if out:
+        logger.info("runner_positions: platform section empty; fell back to classic "
+                    "positions (%d)", len(out))
+        return out
+
+    # Last resort: the single active position (int role id + English name).
+    active_id = ctx.get("activePosition")
+    if isinstance(active_id, int) and active_id not in seen:
+        seen.add(active_id)
+        unit = ctx.get("unit") or {}
+        out.append({
+            "id": active_id,
+            "name": ctx.get("activePositionEnglish") or f"position {active_id}",
+            "unit": unit.get("unitName"),
+            "unit_number": unit.get("unitNumber"),
+        })
+        logger.info("runner_positions: platform section empty; fell back to activePosition")
     return out
 
 

@@ -37,7 +37,7 @@ def main() -> int:
         print(f"  {p.username:<22} {p.password:<14} {p.mfa or '-':<8} {p.name} <{p.email}>")
     print(f"  user.locked            (any)          -        always-locked account")
     print(f"MFA test code: {MFA_CODE}")
-    print('scenarios: POST /__test/control {"scenario": "healthy|lcr_5xx|identity_timeout|sso_reject|slow_access|empty_positions"}')
+    print('scenarios: POST /__test/control {"scenario": "healthy|lcr_5xx|identity_timeout|sso_reject|slow_access|empty_positions|empty_all_positions"}')
 
     id_cfg = uvicorn.Config(create_identity_app(state), host=args.host,
                             port=args.identity_port, log_level="info")

@@ -118,6 +118,17 @@ def create_lcr_app(state: MockChurchState) -> FastAPI:
             target = payload["platformUserContext"]["user"]["targetUser"]
             target["currentPosition"] = None
             target["supportedPositions"] = []
+        if state.scenario == "empty_all_positions":
+            # The TRUE undetermined shape: the platform section is empty AND the classic legs
+            # carry no positions either — only the ward children keep the calling gate open.
+            # (With the classic-positions fallback, plain `empty_positions` now enrolls; this
+            # scenario keeps the D84 error-surfacing path testable.)
+            target = payload["platformUserContext"]["user"]["targetUser"]
+            target["currentPosition"] = None
+            target["supportedPositions"] = []
+            payload["activePosition"] = None
+            payload["activePositionEnglish"] = None
+            payload["positions"] = None
         return JSONResponse(payload)
 
     # ---- access matrix + leadership ---------------------------------------------------
