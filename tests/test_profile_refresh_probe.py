@@ -128,3 +128,32 @@ def test_probe_never_raises(probe_env, monkeypatch):
     monkeypatch.setattr(enroll, "_profile_worklist", lambda stake_id: 1 / 0)
     out = enroll.probe_profile_session(503991, "stake-1")
     assert out["status"] == "failed" and out.get("error"), out
+
+
+# --- the on-demand start records its dead-session discovery -------------------------------
+# 2026-11-08: the sheet latched the Oct 12 expired-session notice because the start's
+# needs_reauth answer was never recorded — the status had no row behind it, so nothing could
+# clear the banner after the 9:41pm fill completed. The start records the discovery now.
+
+def test_start_records_needs_reauth_discovery(probe_env, monkeypatch):
+    monkeypatch.setattr(enroll, "_client_from_cookies", _dead_client)
+    monkeypatch.setattr(enroll, "_refresh_profile_async", lambda *a, **k: None)
+    enroll._REFRESH_PROGRESS.pop(503991, None)
+    out = enroll.start_profile_refresh(503991, "stake-1")
+    assert out["status"] == "needs_reauth" and out["reason"] == "session_expired", out
+    assert len(probe_env["recorded"]) == 1, "the discovery is recorded for the status + the sync guard"
+    assert probe_env["recorded"][0]["outcome"] == "needs_reauth"
+    assert probe_env["recorded"][0]["source"] == "on_demand"
+    assert len(probe_env["notified"]) == 1, "the email still fires once per streak"
+
+
+def test_start_with_live_session_records_nothing(probe_env, monkeypatch):
+    """A start that spawns the worker records nothing itself — the worker records on completion."""
+    spawned: list = []
+    monkeypatch.setattr(enroll, "_client_from_cookies", _alive_client)
+    monkeypatch.setattr(enroll, "_refresh_profile_async",
+                        lambda cookies, unit, source="reauth": spawned.append((unit, source)))
+    enroll._REFRESH_PROGRESS.pop(503991, None)
+    out = enroll.start_profile_refresh(503991, "stake-1")
+    assert out["status"] == "started" and spawned == [(503991, "on_demand")], out
+    assert not probe_env["recorded"] and not probe_env["notified"]

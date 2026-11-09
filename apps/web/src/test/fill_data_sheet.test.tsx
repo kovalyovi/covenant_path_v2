@@ -229,4 +229,63 @@ describe('FillDataSheet', () => {
     expect(await screen.findByText(/doesn’t have access to member profiles/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /fill missing data now/i })).toBeNull();
   });
+
+  // 2026-11-08: the sheet latched the Oct 12 expired-session notice — once needsReauth was set
+  // true on open it stayed true after the 9:41pm fill finished 80/80, because nothing ever set it
+  // back to false. The banners are derived from the CURRENT status on every poll now, so a
+  // completed fill clears the notice. FAILS pre-fix (the notice stayed).
+  it('a re-auth notice clears once a later fill completes', async () => {
+    vi.useFakeTimers();
+    profileRefreshStatus
+      .mockResolvedValueOnce({
+        ...idleStatus, needs_reauth: true,
+        members_with_gaps: 8, missing: { patriarchal_blessing: 8 },
+      })
+      .mockResolvedValueOnce({
+        ...idleStatus, running: true,
+        progress: { state: 'running', total: 8, done: 3, filled: 3 },
+      })
+      .mockResolvedValue({
+        ...idleStatus, running: false, needs_reauth: false,
+        progress: { state: 'done', total: 8, done: 8, filled: 8 },
+        members_with_gaps: 0, missing: {},
+        last_refresh: {
+          run_at: '2026-11-09T02:41:10Z',
+          payload: { total: 8, filled: 8, outcome: 'done' },
+        },
+      });
+    const onFilled = vi.fn();
+    render(
+      <FillDataSheet open onClose={() => {}} onReauth={() => {}} enrollStatus={enrollStatus()} onFilled={onFilled} />,
+    );
+    // First poll: the stale notice shows.
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText(/session has expired/i)).toBeInTheDocument();
+    // Running, then done → the notice clears and the done banner shows.
+    await act(async () => { vi.advanceTimersByTime(2600); await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { vi.advanceTimersByTime(2600); await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByText(/session has expired/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/done — 8 of 8 members updated/i)).toBeInTheDocument();
+    expect(onFilled).toHaveBeenCalledTimes(1);
+  });
+
+  // 2026-11-08: a status poll that times out (Safari: "Fetch is aborted") made the sheet look
+  // frozen at 33/80 with a scary error banner, while the worker kept running server-side and
+  // finished 80/80. A transient abort is not an error — the next poll 2.5s later retries.
+  it('a timed-out status poll shows no error banner — the next poll retries', async () => {
+    vi.useFakeTimers();
+    profileRefreshStatus
+      .mockRejectedValueOnce(new DOMException('Fetch is aborted', 'AbortError'))
+      .mockResolvedValue(idleStatus);
+    render(
+      <FillDataSheet open onClose={() => {}} onReauth={() => {}} enrollStatus={enrollStatus()} onFilled={() => {}} />,
+    );
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    await act(async () => { vi.advanceTimersByTime(2600); await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText('Patriarchal blessing')).toBeInTheDocument();
+  });
 });

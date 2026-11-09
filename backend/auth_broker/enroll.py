@@ -537,6 +537,16 @@ def start_profile_refresh(unit_number: int, stake_id: str) -> dict:
 
     def _needs(reason: str) -> dict:
         _email_needs_reauth_once(stake_id, members)
+        # Record the discovery so the status (and the sync's guard) see the dead session: the
+        # client derives its re-auth banner from the status, and a notice with no record behind
+        # it can never clear — the sheet latched the Oct 12 notice because no run had recorded
+        # the discovery, then kept showing it after the 9:41pm fill completed (2026-11-08). A
+        # later successful fill records outcome 'done' and supersedes this row, so the banner
+        # clears on its own. (The worker's own needs_reauth outcome is recorded by the worker;
+        # this is the on-demand start's equivalent.)
+        _record_profile_refresh(stake_id, {"source": "on_demand", "total": len(members),
+                                           "filled": 0, "outcome": "needs_reauth",
+                                           "reasons": {"session": reason}})
         return {"status": "needs_reauth", "reason": reason,
                 "members_with_gaps": len(members)}
     cookies, reason = _probe_stored_session(unit_number, stake_id, members)

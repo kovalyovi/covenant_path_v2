@@ -85,12 +85,14 @@ export function FillDataSheet({
       const s = statusFromJson(await broker.profileRefreshStatus());
       setStatus(s);
       setError(null);
-      if (s.needsReauth) setNeedsReauth(true);
-      // A stale credential (sync last failed) or a durable needs_reauth outcome means the
-      // stored session is already known dead — offer re-auth on open, don't let Fill Now be
-      // the thing that discovers it.
-      if (s.credentialState === 'stale' || s.credentialState === 'revoked') setNeedsReauth(true);
-      if (s.unfillable) setUnfillable(true);
+      // Derive the banners from the CURRENT status on every poll — don't latch them. A re-auth
+      // notice latched true on open stayed true after the fill completed, because nothing ever
+      // set it back to false (2026-11-08: the sheet kept showing the stale Oct 12 expired-session
+      // notice + Re-authorize button after the 9:41pm fill finished 80/80). The server is the
+      // authority: the on-demand start now records its needs_reauth discovery, so the status
+      // reflects a dead session promptly, and a later successful fill records 'done' and clears it.
+      setNeedsReauth(s.needsReauth || s.credentialState === 'stale' || s.credentialState === 'revoked');
+      setUnfillable(s.unfillable);
       // Fire the reload exactly once, on the running→finished edge.
       if (wasRunning.current && !s.running) {
         wasRunning.current = false;
@@ -113,6 +115,13 @@ export function FillDataSheet({
         setFinished(null);
       }
     } catch (e) {
+      // A poll that times out (Safari reports it as "Fetch is aborted") is transient — the next
+      // poll 2.5s later retries, and the worker keeps running server-side either way. Don't turn
+      // it into a scary error banner that reads as if the fill itself died (2026-11-08: the sheet
+      // looked frozen at 33/80 with "Fetch is aborted" while the worker went on to finish 80/80).
+      // A real failure (4xx/5xx, not signed in) still surfaces as before. (DOMException is not
+      // an instanceof Error, so check the name directly.)
+      if ((e as { name?: unknown })?.name === 'AbortError') return;
       setError(e instanceof Error ? e.message : t('fillData.statusError'));
     } finally {
       if (!quiet) setLoading(false);
