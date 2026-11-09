@@ -21,15 +21,27 @@ describe('staffingGaps (#12 leadership/staffing gaps)', () => {
     expect(by.rs_pres.have).toBe(0);
   });
 
-  it('an assistant WML is not the WML; 1 of 2 missionaries is a gap', () => {
+  it('an assistant WML is not the WML; 1 missionary is enough (2026-11-09)', () => {
     const thin: StaffingMember[] = [
       { position: 'Assistant Ward Mission Leader', person: 'F' },
       { position: 'Ward Missionary', person: 'B' },
     ];
     const by = Object.fromEntries(staffingGaps(thin).map((r) => [r.key, r]));
     expect(by.wml.ok).toBe(false);
+    expect(by.ward_missionaries.ok).toBe(true); // one missionary fills the row
+    expect(gapCount(thin)).toBe(3); // wml, eq, rs unmet — missionaries met
+  });
+
+  it('no missionary at all is still a gap', () => {
+    const none: StaffingMember[] = [
+      { position: 'Ward Mission Leader', person: 'A' },
+      { position: 'Elders Quorum President', person: 'D' },
+      { position: 'Relief Society President', person: 'E' },
+    ];
+    const by = Object.fromEntries(staffingGaps(none).map((r) => [r.key, r]));
     expect(by.ward_missionaries.ok).toBe(false);
-    expect(gapCount(thin)).toBe(4); // wml, ward_missionaries, eq, rs all unmet
+    expect(by.ward_missionaries.have).toBe(0);
+    expect(gapCount(none)).toBe(1); // only the missionaries row unmet
   });
 
   it('a fully-staffed unit has zero gaps', () => {

@@ -1,6 +1,6 @@
 // Leadership / staffing gap rule (#12). Given a unit's roster of held callings (from the Member Tools
 // bulk payload, stored on units.staffing), determine which REQUIRED positions are filled and which are
-// gaps — "is there a ward mission leader? at least 2 ward missionaries? an EQ president? an RS
+// gaps — "is there a ward mission leader? at least 1 ward/branch missionary? an EQ president? an RS
 // president?". Pure → mirrored to native. The position strings are the LCR calling names.
 
 export interface StaffingMember {
@@ -34,7 +34,7 @@ export const REQUIRED_ROLES: RequiredRole[] = [
     match: (p) => /(ward|branch) mission leader/i.test(p) && !/assistant|asst/i.test(p),
   },
   {
-    key: 'ward_missionaries', label: 'Ward/branch missionaries', min: 2,
+    key: 'ward_missionaries', label: 'Ward/branch missionaries', min: 1,
     match: (p) => /(ward|branch) missionary/i.test(p),
   },
   {

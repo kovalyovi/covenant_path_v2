@@ -1,5 +1,5 @@
 // Leadership tab (#12) — per unit: who's serving in the tracked leadership callings, which REQUIRED
-// positions are GAPS (ward mission leader, ≥2 ward missionaries, EQ & RS presidents), and the assigned
+// positions are GAPS (ward mission leader, ≥1 ward/branch missionary, EQ & RS presidents), and the assigned
 // full-time missionaries. Reads units.staffing (RLS-scoped per unit by units_select — stake leaders see
 // every unit, a ward leader sees only their own) + the missionary roster the dashboard already loaded.
 
