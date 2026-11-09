@@ -146,71 +146,70 @@ def fetch_access_matrix(session) -> AccessMatrix:
 def runner_positions(session) -> list[dict]:
     """The running user's current callings: [{id, name, unit, unit_number}].
 
-    PRIMARY source: platformUserContext.user.targetUser.{currentPosition,
-    supportedPositions} (positionType {id, name}).
+    SOURCES, in order (first non-empty wins — LCR has restructured this payload
+    at least once, so every known location is read):
 
-    FALLBACK (2026-11-08 re-auth incident): for some live sessions the platform
-    section is EMPTY while the classic user-context legs still show the calling
-    (activePosition / positions) — the eval then landed "undetermined" and a
-    consented re-auth failed with "LCR didn't return any callings". When the
-    platform section yields nothing, read the classic `positions[]` entries
-    (positionTypeId / positionTypeName) and, as a last resort, the single
-    activePosition / activePositionEnglish. Same role-id space as
-    positionType.id, so the access matrix applies unchanged.
+    1. LIVE (2026-11-08, verified against a real session): the platform section's
+       SELECTED unit context — platformUserContext.user.targetUser
+       .selectedUnitContext.positions, plus supportedUnitContexts[].positions.
+       Entries carry positionType {id, name} and unit (null for the selected unit).
+       NOTE: positionType.id here is a position INSTANCE id (e.g. 3770599 for a
+       Stake Assistant Executive Secretary), NOT the access matrix's position-type
+       id — so the id may not resolve in the matrix, and the calling NAME is what
+       the always-allowed safety net matches on. Both id and name are returned.
+    2. LEGACY platform section: targetUser.currentPosition / supportedPositions.
+    3. LEGACY classic legs: top-level positions[] (positionTypeId/positionTypeName)
+       and the single activePosition / activePositionEnglish.
     """
     ctx = session.get_json(USER_CONTEXT_URL)
-    user = ctx.get("platformUserContext", {}).get("user", {})
-    target = user.get("targetUser", {}) or {}
+    target = (ctx.get("platformUserContext", {}).get("user", {})
+              .get("targetUser", {}) or {})
     seen, out = set(), []
 
     def add(pos):
-        if not pos:
+        if not pos or not isinstance(pos, dict):
             return
         pt = pos.get("positionType") or {}
-        pid = pt.get("id")
+        # Nested platform-style shape first; flat classic keys as fallback.
+        pid = pt.get("id") or pos.get("positionTypeId") or pos.get("id")
         if pid is None or pid in seen:
             return
         seen.add(pid)
         unit = pos.get("unit") or {}
         out.append({
             "id": pid,
-            "name": pt.get("name") or f"position {pid}",
-            "unit": unit.get("name"),
-            "unit_number": unit.get("unitNumber"),
+            "name": (pt.get("name") or pos.get("positionTypeName")
+                     or pos.get("name") or f"position {pid}"),
+            "unit": unit.get("name") or pos.get("unitName"),
+            "unit_number": unit.get("unitNumber") or pos.get("unitNumber"),
         })
 
-    add(target.get("currentPosition"))
-    for p in target.get("supportedPositions", []) or []:
-        add(p)
+    def add_many(entries):
+        for p in entries or []:
+            add(p)
+
+    # (1) Live shape: selected + supported unit contexts.
+    selected = target.get("selectedUnitContext") or {}
+    add_many(selected.get("positions"))
+    for supported in target.get("supportedUnitContexts") or []:
+        if isinstance(supported, dict):
+            add_many(supported.get("positions"))
     if out:
         return out
 
-    # Fallback: classic positions[] — same id space, flat or nested shape.
-    def add_classic(entry):
-        if not isinstance(entry, dict):
-            return
-        pt = entry.get("positionType") or {}
-        pid = (entry.get("positionTypeId") or pt.get("id") or entry.get("id"))
-        if pid is None or pid in seen:
-            return
-        seen.add(pid)
-        unit = entry.get("unit") or {}
-        out.append({
-            "id": pid,
-            "name": (entry.get("positionTypeName") or pt.get("name")
-                     or entry.get("name") or f"position {pid}"),
-            "unit": unit.get("name") or entry.get("unitName"),
-            "unit_number": unit.get("unitNumber") or entry.get("unitNumber"),
-        })
+    # (2) Legacy platform shape.
+    add(target.get("currentPosition"))
+    add_many(target.get("supportedPositions"))
+    if out:
+        return out
 
-    for entry in ctx.get("positions") or []:
-        add_classic(entry)
+    # (3) Legacy classic legs.
+    add_many(ctx.get("positions"))
     if out:
         logger.info("runner_positions: platform section empty; fell back to classic "
                     "positions (%d)", len(out))
         return out
 
-    # Last resort: the single active position (int role id + English name).
     active_id = ctx.get("activePosition")
     if isinstance(active_id, int) and active_id not in seen:
         seen.add(active_id)

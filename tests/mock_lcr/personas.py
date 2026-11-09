@@ -131,54 +131,91 @@ def auth_me(p: Persona) -> dict:
     }
 
 
-def _platform_positions(p: Persona) -> dict:
+def _target_user(p: Persona) -> dict:
+    """platformUserContext.user.targetUser — LIVE shape (2026-11-08, read from a real
+    session): selectedUnitContext.positions carries the callings (positionType
+    {id, name}); there is NO currentPosition / supportedPositions, and NO top-level
+    activePosition / positions. positionType.id here is the mock persona's role id
+    (so e2e rank assertions stay meaningful); live it may be a position instance
+    id — the `instance_ids` scenario rewrites ids to non-matrix values to cover
+    the name-based authorization path."""
     if p.role_id is None:
-        return {"currentPosition": None, "supportedPositions": None}
+        return {
+            "personUuid": f"pu-{p.cmis_id}",
+            "churchAccountId": None,
+            "mrn": p.cmis_id,
+            "legacyCmisId": int(p.cmis_id),
+            "username": p.username,
+            "spokenPreferredLocal": p.name,
+            "selectedUnitContext": {
+                "unit": {"unitName": p.unit_name, "unitNumber": p.unit_number},
+                "positions": None,
+                "membershipUnitNumber": p.unit_number,
+            },
+            "supportedUnitContexts": [],
+            "roles": [],
+        }
     return {
-        "currentPosition": {
-            "positionType": {"id": p.role_id, "name": p.calling},
-            "unit": {"name": p.unit_name, "unitNumber": p.unit_number},
-            "positionStatus": "ACTIVE_POSITION",
+        "personUuid": f"pu-{p.cmis_id}",
+        "churchAccountId": None,
+        "mrn": p.cmis_id,
+        "legacyCmisId": int(p.cmis_id),
+        "username": p.username,
+        "spokenPreferredLocal": p.name,
+        "selectedUnitContext": {
+            "unit": {"unitName": p.unit_name, "unitNumber": p.unit_number},
+            "positions": [{
+                "positionType": {"id": p.role_id, "name": p.calling},
+                "unit": None,
+            }],
+            "membershipUnitNumber": p.unit_number,
         },
-        "supportedPositions": [],
+        "supportedUnitContexts": [{
+            "unit": {"unitNumber": p.unit_number, "name": p.unit_name},
+            "positions": None,
+            "membershipUnitNumber": None,
+        }],
+        "roles": [f"FEATURE_{p.calling.upper().replace(' ', '_')}"],
     }
 
 
 def user_context(p: Persona) -> dict:
-    """GET /api/user-context body. One payload serves BOTH consumers:
-      - UserContext.from_api: individualId / activePosition(English) / unit{unitName,
-        unitNumber, children[]} / positions / roles
-      - access.runner_positions: platformUserContext.user.targetUser.currentPosition/
-        supportedPositions (positionType {id, name})
-    The no-calling persona mirrors the HAR-verified real shape: activePosition /
-    activePositionEnglish / positions / roles all null, no child units."""
-    if p.role_id is None:
-        return {
-            "individualId": f"ind-{p.cmis_id}",
-            "activePosition": None,
-            "activePositionEnglish": None,
-            "unit": {"unitName": p.unit_name, "unitNumber": p.unit_number, "children": None},
-            "positions": None,
-            "roles": None,
-            "platformUserContext": {"user": {"targetUser": _platform_positions(p)}},
-        }
+    """GET /api/user-context body — LIVE shape (2026-11-08, read from a real session):
+      - UserContext.from_api reads: individualId / unit{type, unitName, unitNumber,
+        children[]} / roles. There is NO top-level activePosition /
+        activePositionEnglish / positions — those keys do not exist.
+      - access.runner_positions reads: platformUserContext.user.targetUser
+        .selectedUnitContext.positions (positionType {id, name}) and
+        supportedUnitContexts[].positions. There is NO currentPosition /
+        supportedPositions.
+    The calling gate passes on child_units alone for a stake leader (the ward
+    children), so a stake leader with an empty platform section still passes the
+    gate and lands 'undetermined' — the 2026-11-08 re-auth incident. A ward
+    leader's unit children are its organizations (not wards), which is what marks
+    the session ward-scoped. The no-calling persona has no positions anywhere and
+    no children, so the gate blocks it."""
     children = []
     if p.is_stake:
         children = [
             {"unitName": WARD1_NAME, "unitNumber": WARD1_UNIT, "type": "WARD"},
             {"unitName": WARD2_NAME, "unitNumber": WARD2_UNIT, "type": "WARD"},
         ]
+    elif p.role_id is not None:
+        # A ward leader's children are its organizations — present (so the calling
+        # gate passes) but none of them wards (so the session reads ward-scoped).
+        children = [
+            {"unitName": "Elders Quorum", "unitNumber": p.unit_number,
+             "type": "ORGANIZATION"},
+        ]
     return {
         "individualId": f"ind-{p.cmis_id}",
-        "activePosition": p.role_id,
-        "activePositionEnglish": p.calling,
-        "unit": {"unitName": p.unit_name, "unitNumber": p.unit_number, "children": children},
-        "positions": [{
-            "positionTypeId": p.role_id, "positionTypeName": p.calling,
-            "unitNumber": p.unit_number, "unitName": p.unit_name,
-        }],
-        "roles": [p.calling.upper().replace(" ", "_")],
-        "platformUserContext": {"user": {"targetUser": _platform_positions(p)}},
+        "ldsAccountUsername": p.username,
+        "mrn": p.cmis_id,
+        "unit": {"type": "STAKE" if p.is_stake else "WARD",
+                 "unitName": p.unit_name, "unitNumber": p.unit_number,
+                 "children": children or None},
+        "roles": [p.calling.upper().replace(" ", "_")] if p.role_id is not None else None,
+        "platformUserContext": {"user": {"targetUser": _target_user(p)}},
     }
 
 

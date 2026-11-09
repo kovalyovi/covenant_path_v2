@@ -153,18 +153,18 @@ def test_narrower_reauth_stored_as_backup(stack):
     assert any(h["action"] == "stored_backup" for h in history)
 
 
-def test_platform_empty_but_classic_present_enrolls(stack):
-    """2026-11-08 live incident (H1): the broker's platform-positions scrape came back
-    empty for the provider's live session while the classic user-context legs still
-    showed his calling — the eval landed 'undetermined' and the re-auth failed. The
-    eval must now fall back to the classic positions, so the enroll stores."""
-    stack.scenario("empty_positions")
+def test_instance_id_positions_enroll_via_calling_name(stack):
+    """2026-11-08 live incident, the harder variant: the live user-context carries a
+    position INSTANCE id (e.g. 3770599), not a matrix role id — so no id resolves
+    in the access matrix and the rank reads 0. The enroll must still store via the
+    calling NAME (Stake President is always-allowed stewardship), with the stored
+    credential effective (the RPC preserves the broader rank on refresh)."""
+    stack.scenario("instance_ids")
     res = stack.login(PRESIDENT.username, PRESIDENT.password, enroll=True)
     assert res.status_code == 200, res.text
     enroll = res.json()["enroll"]
     assert enroll["authorized"] is True
-    assert enroll["access_rank"] == 1000
-    assert enroll["complete"] is True
+    assert enroll["access_rank"] == 0, "no id resolves in the matrix — the name carries it"
     assert enroll["stored"] is True
     assert enroll["is_effective"] is True
     creds = stack.stub_rows("stake_credentials")
@@ -172,12 +172,12 @@ def test_platform_empty_but_classic_present_enrolls(stack):
 
 
 def test_undetermined_access_enroll_surfaces_error(stack):
-    """2026-11-08 re-auth incident: neither the platform section nor the classic legs
-    return any callings (only the ward children keep the calling gate open) — the eval
-    lands 'undetermined' (authorized=None). A consented enroll must then carry a
-    non-empty error so the dialog says WHY nothing was stored, never a bare
-    'could not be set up'."""
-    stack.scenario("empty_all_positions")
+    """2026-11-08 re-auth incident: the selected unit context carries no positions
+    (and the live payload has nowhere else to read them from) — only the ward
+    children keep the calling gate open, so the eval lands 'undetermined'
+    (authorized=None). A consented enroll must then carry a non-empty error so
+    the dialog says WHY nothing was stored, never a bare 'could not be set up'."""
+    stack.scenario("empty_positions")
     res = stack.login(PRESIDENT.username, PRESIDENT.password, enroll=True)
     assert res.status_code == 200, res.text
     enroll = res.json()["enroll"]

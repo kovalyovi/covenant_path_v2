@@ -109,26 +109,32 @@ def create_lcr_app(state: MockChurchState) -> FastAPI:
         if username is None or username not in PERSONAS:
             return _login_redirect()
         payload = user_context(PERSONAS[username])
+        target = payload["platformUserContext"]["user"]["targetUser"]
         if state.scenario == "empty_positions":
-            # 2026-11-08 re-auth incident shape: the classic user-context legs still show the
-            # calling (activePosition / positions / children intact, so the calling gate passes)
-            # but the platform section carries NO positions — access.runner_positions reads []
-            # and the eval lands "undetermined" (authorized=None) instead of storing. The
-            # consented enroll must then surface a reason, never a bare "could not be set up".
-            target = payload["platformUserContext"]["user"]["targetUser"]
-            target["currentPosition"] = None
-            target["supportedPositions"] = []
-        if state.scenario == "empty_all_positions":
-            # The TRUE undetermined shape: the platform section is empty AND the classic legs
-            # carry no positions either — only the ward children keep the calling gate open.
-            # (With the classic-positions fallback, plain `empty_positions` now enrolls; this
-            # scenario keeps the D84 error-surfacing path testable.)
-            target = payload["platformUserContext"]["user"]["targetUser"]
-            target["currentPosition"] = None
-            target["supportedPositions"] = []
-            payload["activePosition"] = None
-            payload["activePositionEnglish"] = None
-            payload["positions"] = None
+            # 2026-11-08 re-auth incident shape: the selected unit context carries NO
+            # positions (and there is nowhere else for the broker to read them — the
+            # live payload has no currentPosition / supportedPositions / top-level
+            # positions / activePosition at all). The calling gate still passes on
+            # the ward children, so the eval lands "undetermined" (authorized=None)
+            # instead of storing — and the consented enroll must then surface a
+            # reason, never a bare "could not be set up".
+            target["selectedUnitContext"]["positions"] = None
+            for supported in target.get("supportedUnitContexts") or []:
+                supported["positions"] = None
+        if state.scenario == "instance_ids":
+            # Live-shape variant: positionType.id is a position INSTANCE id (e.g.
+            # 3770599 for a Stake Assistant Executive Secretary), NOT a matrix
+            # role id — so no id resolves in the access matrix and the rank reads
+            # 0. The enroll must still store via the calling NAME (always-allowed
+            # stewardship), with the stored credential's rank preserved by the RPC.
+            for ctx_entry in [target.get("selectedUnitContext")] + list(
+                    target.get("supportedUnitContexts") or []):
+                if not isinstance(ctx_entry, dict):
+                    continue
+                for pos in ctx_entry.get("positions") or []:
+                    pt = pos.get("positionType") or {}
+                    if isinstance(pt.get("id"), int):
+                        pt["id"] = 3770000 + pt["id"]
         return JSONResponse(payload)
 
     # ---- access matrix + leadership ---------------------------------------------------
